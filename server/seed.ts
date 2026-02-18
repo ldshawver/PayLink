@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { companies, workers, timeEntries, schedules } from "@shared/schema";
+import { companies, workers, timeEntries, schedules, taxesDeductions } from "@shared/schema";
 
 export async function seedDatabase() {
   try {
@@ -55,6 +55,8 @@ export async function seedDatabase() {
       payType: "hourly",
       hireDate: "2023-03-15",
       isActive: true,
+      employeeNumber: "1001",
+      pin: "1234",
     },
     {
       companyId: company1.id,
@@ -69,6 +71,8 @@ export async function seedDatabase() {
       payType: "salary",
       hireDate: "2022-08-01",
       isActive: true,
+      employeeNumber: "1002",
+      pin: "5678",
     },
     {
       companyId: company1.id,
@@ -83,6 +87,8 @@ export async function seedDatabase() {
       payType: "hourly",
       hireDate: "2024-01-10",
       isActive: true,
+      employeeNumber: "1003",
+      pin: "9012",
     },
     {
       companyId: company2.id,
@@ -97,6 +103,8 @@ export async function seedDatabase() {
       payType: "salary",
       hireDate: "2021-06-01",
       isActive: true,
+      employeeNumber: "2001",
+      pin: "1111",
     },
     {
       companyId: company2.id,
@@ -111,6 +119,8 @@ export async function seedDatabase() {
       payType: "hourly",
       hireDate: "2023-11-15",
       isActive: true,
+      employeeNumber: "2002",
+      pin: "2222",
     },
   ];
 
@@ -217,6 +227,83 @@ export async function seedDatabase() {
   }
 
   await db.insert(schedules).values(scheduleData);
+
+  await db.insert(taxesDeductions).values([
+    {
+      companyId: company1.id,
+      name: "Federal Income Tax",
+      type: "tax",
+      calculationType: "percentage",
+      rate: "12.00",
+      isActive: true,
+      isEmployerPaid: false,
+    },
+    {
+      companyId: company1.id,
+      name: "Social Security (FICA)",
+      type: "tax",
+      calculationType: "percentage",
+      rate: "6.20",
+      maxAmount: "160200",
+      isActive: true,
+      isEmployerPaid: false,
+    },
+    {
+      companyId: company1.id,
+      name: "Medicare",
+      type: "tax",
+      calculationType: "percentage",
+      rate: "1.45",
+      isActive: true,
+      isEmployerPaid: false,
+    },
+    {
+      companyId: company1.id,
+      name: "State Income Tax (TX)",
+      type: "tax",
+      calculationType: "percentage",
+      rate: "0.00",
+      isActive: true,
+      isEmployerPaid: false,
+    },
+    {
+      companyId: company2.id,
+      name: "Federal Income Tax",
+      type: "tax",
+      calculationType: "percentage",
+      rate: "10.00",
+      isActive: true,
+      isEmployerPaid: false,
+    },
+    {
+      companyId: company2.id,
+      name: "Social Security (FICA)",
+      type: "tax",
+      calculationType: "percentage",
+      rate: "6.20",
+      maxAmount: "160200",
+      isActive: true,
+      isEmployerPaid: false,
+    },
+    {
+      companyId: company2.id,
+      name: "Medicare",
+      type: "tax",
+      calculationType: "percentage",
+      rate: "1.45",
+      isActive: true,
+      isEmployerPaid: false,
+    },
+    {
+      companyId: company2.id,
+      name: "CO State Income Tax",
+      type: "tax",
+      calculationType: "percentage",
+      rate: "4.40",
+      isActive: true,
+      isEmployerPaid: false,
+    },
+  ]);
 
   console.log("Database seeded successfully");
 }

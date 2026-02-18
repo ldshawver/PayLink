@@ -71,13 +71,19 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import paylinkLogo from "@assets/PayLink_Logo_1771389912551.png";
+import paylinkLogo from "@assets/PayLink_Logo_(1)_1771395758335.png";
 
 const navSections = [
   {
     label: "Dashboard",
     icon: LayoutDashboard,
     url: "/",
+    items: [],
+  },
+  {
+    label: "Time Clock",
+    icon: Timer,
+    url: "/time-clock",
     items: [],
   },
   {
@@ -236,7 +242,7 @@ export function AppSidebar() {
       <SidebarHeader className="p-4">
         <Link href="/">
           <div className="flex items-center gap-3 cursor-pointer" data-testid="link-logo">
-            <img src={paylinkLogo} alt="PayLink" className="h-9 w-9 rounded-md" />
+            <img src={paylinkLogo} alt="PayLink" className="h-12 w-12 rounded-md object-contain" />
             <div className="flex flex-col">
               <span className="text-sm font-semibold tracking-tight">PayLink</span>
               <span className="text-xs text-sidebar-foreground/60">HR & Payroll</span>

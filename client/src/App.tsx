@@ -17,11 +17,15 @@ import PayrollPage from "@/pages/payroll";
 import PolicyPage from "@/pages/policy";
 import HRPage from "@/pages/hr";
 import ReportsPage from "@/pages/reports";
+import TimeClock from "@/pages/time-clock";
+import PrintCheckPage from "@/pages/print-check";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
+      <Route path="/time-clock" component={TimeClock} />
+      <Route path="/print-check/:runId" component={PrintCheckPage} />
       <Route path="/attendance" component={AttendancePage} />
       <Route path="/schedule" component={SchedulePage} />
       <Route path="/employee" component={EmployeePage} />
