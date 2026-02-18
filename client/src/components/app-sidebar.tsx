@@ -71,7 +71,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import paylinkLogo from "@assets/PayLink_Logo_(1)_1771395758335.png";
+import paylinkLogo from "@assets/PayLink_Logo_(2)_1771399651639.png";
 
 const navSections = [
   {
@@ -242,7 +242,7 @@ export function AppSidebar() {
       <SidebarHeader className="p-4">
         <Link href="/">
           <div className="flex items-center gap-3 cursor-pointer" data-testid="link-logo">
-            <img src={paylinkLogo} alt="PayLink" className="h-12 w-12 rounded-md object-contain" />
+            <img src={paylinkLogo} alt="PayLink" className="h-12 w-12 object-contain" />
             <div className="flex flex-col">
               <span className="text-sm font-semibold tracking-tight">PayLink</span>
               <span className="text-xs text-sidebar-foreground/60">HR & Payroll</span>
@@ -261,7 +261,7 @@ export function AppSidebar() {
                     <SidebarMenuItem key={section.label}>
                       <SidebarMenuButton asChild isActive={isActive(section.url)}>
                         <Link href={section.url} data-testid={`link-nav-${section.label.toLowerCase()}`}>
-                          <section.icon className="h-4 w-4" />
+                          <section.icon className="h-4 w-4 text-teal-accent" />
                           <span>{section.label}</span>
                         </Link>
                       </SidebarMenuButton>
@@ -274,7 +274,7 @@ export function AppSidebar() {
                     <SidebarMenuItem>
                       <CollapsibleTrigger asChild>
                         <SidebarMenuButton isActive={isActive(section.url)} data-testid={`link-nav-${section.label.toLowerCase()}`}>
-                          <section.icon className="h-4 w-4" />
+                          <section.icon className="h-4 w-4 text-teal-accent" />
                           <span>{section.label}</span>
                           <ChevronDown className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
                         </SidebarMenuButton>
