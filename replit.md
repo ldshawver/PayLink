@@ -65,6 +65,13 @@ Extended tables:
 - `reviews` - Performance reviews with ratings
 - `recurring_schedules` - Repeating weekly schedules
 - `users` - System users
+- `remittance_sources` - Bank accounts/payment sources for paying employees
+- `remittance_agencies` - Government entities for tax filings/payments
+- `remittance_agency_events` - Scheduled events (payments/filings) for agencies
+- `pay_stub_accounts` - Pay stub line item categories (earnings/deductions/benefits)
+- `pay_stub_amendments` - One-time pay adjustments per worker
+- `pay_stub_transactions` - Payment transaction records
+- `pay_period_schedules` - Recurring pay period schedule definitions
 
 ## API Routes
 Company: GET/POST /api/companies, PATCH /api/companies/:id
@@ -83,6 +90,13 @@ Policies: GET/POST/PATCH/DELETE /api/policy-groups, /api/pay-codes
 Holidays: GET/POST/PATCH/DELETE /api/holidays
 HR: GET/POST/PATCH/DELETE /api/qualifications, /api/reviews
 Recurring: GET/POST/PATCH/DELETE /api/recurring-schedules
+Remittance Sources: GET/POST/PATCH/DELETE /api/remittance-sources
+Remittance Agencies: GET/POST/PATCH/DELETE /api/remittance-agencies
+Agency Events: GET/POST/PATCH/DELETE /api/remittance-agency-events (filtered by agencyId)
+Pay Stub Accounts: GET/POST/PATCH/DELETE /api/pay-stub-accounts
+Pay Stub Amendments: GET/POST/PATCH/DELETE /api/pay-stub-amendments
+Pay Stub Transactions: GET/POST/PATCH /api/pay-stub-transactions
+Pay Period Schedules: GET/POST/PATCH/DELETE /api/pay-period-schedules
 Dashboard: GET /api/dashboard/stats
 
 ## Color Theme
