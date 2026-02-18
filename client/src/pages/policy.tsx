@@ -589,7 +589,7 @@ export default function PolicyPage() {
   return (
     <div className="p-4 md:p-6 space-y-6">
       <div className="flex items-center gap-2 flex-wrap">
-        <Shield className="w-6 h-6" />
+        <Shield className="w-6 h-6 text-blue-accent" />
         <h1 className="text-2xl font-bold" data-testid="text-policy-title">Policy</h1>
       </div>
 

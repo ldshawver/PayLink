@@ -20,7 +20,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Worker, Company, TimePunch } from "@shared/schema";
-import paylinkLogo from "@assets/PayLink_Logo_(2)_1771399651639.png";
+import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
 
 function LiveClock() {
   const [time, setTime] = useState(new Date());
@@ -239,7 +239,7 @@ export default function TimeClock() {
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="empNum" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-                    <Hash className="h-3.5 w-3.5 text-teal-accent" /> Employee Number
+                    <Hash className="h-3.5 w-3.5 text-blue-accent" /> Employee Number
                   </Label>
                   <Input
                     id="empNum"
@@ -255,7 +255,7 @@ export default function TimeClock() {
 
                 <div className="space-y-2">
                   <Label htmlFor="pin" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-                    <Lock className="h-3.5 w-3.5 text-teal-accent" /> PIN
+                    <Lock className="h-3.5 w-3.5 text-blue-accent" /> PIN
                   </Label>
                   <Input
                     id="pin"

@@ -604,7 +604,7 @@ export default function HRPage() {
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center gap-2 flex-wrap">
-        <ClipboardList className="h-6 w-6" />
+        <ClipboardList className="h-6 w-6 text-blue-accent" />
         <h1 className="text-2xl font-bold" data-testid="text-hr-title">HR</h1>
       </div>
 

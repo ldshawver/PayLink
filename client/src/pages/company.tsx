@@ -711,7 +711,7 @@ export default function CompanyPage() {
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center gap-3">
-        <Building2 className="h-6 w-6" />
+        <Building2 className="h-6 w-6 text-blue-accent" />
         <h1 className="text-2xl font-bold" data-testid="text-page-title">Company</h1>
       </div>
 

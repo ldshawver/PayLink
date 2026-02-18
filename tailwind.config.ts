@@ -78,6 +78,9 @@ export default {
         "teal-accent": {
           DEFAULT: "hsl(var(--teal-accent) / <alpha-value>)",
         },
+        "blue-accent": {
+          DEFAULT: "hsl(var(--blue-accent) / <alpha-value>)",
+        },
         status: {
           online: "rgb(34 197 94)",
           away: "rgb(245 158 11)",
