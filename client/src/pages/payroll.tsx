@@ -19,7 +19,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Link } from "wouter";
 import {
   DollarSign, Clock, Calendar, ChevronDown, ChevronUp, Plus, Download, Printer,
-  Calculator, FileText, CreditCard, CalendarDays, Settings, Building, Receipt, Zap
+  Calculator, FileText, CreditCard, CalendarDays, Settings, Building, Receipt, Zap,
+  ChevronLeft, ChevronRight, Check, AlertCircle, ArrowRight, Pencil, Trash2
 } from "lucide-react";
 
 function useTabParam(): [string, (tab: string) => void] {
@@ -995,62 +996,168 @@ function RemittanceAgenciesTab() {
   );
 }
 
+const WIZARD_STEPS = [
+  { id: "select", label: "Select Events", icon: Calendar },
+  { id: "review", label: "Review & Verify", icon: FileText },
+  { id: "submit", label: "Submit", icon: ArrowRight },
+  { id: "complete", label: "Complete", icon: Check },
+] as const;
+
+type WizardStepId = typeof WIZARD_STEPS[number]["id"];
+
 function TaxWizardTab() {
   const { toast } = useToast();
-  const [selectedAgencyId, setSelectedAgencyId] = useState("");
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [wizardStep, setWizardStep] = useState<WizardStepId>("select");
+  const [selectedEventIds, setSelectedEventIds] = useState<Set<string>>(new Set());
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [editingEvent, setEditingEvent] = useState<RemittanceAgencyEvent | null>(null);
   const [formData, setFormData] = useState({
     agencyId: "", type: "payment", status: "enabled", frequency: "quarterly",
     dueDateDelayDays: 0, effectiveDate: "", reminderDays: 7,
   });
 
   const { data: agencies = [], isLoading: agenciesLoading } = useQuery<RemittanceAgency[]>({ queryKey: ["/api/remittance-agencies"] });
-  const { data: events = [], isLoading: eventsLoading } = useQuery<RemittanceAgencyEvent[]>({
-    queryKey: ["/api/remittance-agency-events", selectedAgencyId],
+
+  const allEventsQueries = agencies.map(a => a.id);
+  const { data: allEvents = [], isLoading: eventsLoading } = useQuery<RemittanceAgencyEvent[]>({
+    queryKey: ["/api/remittance-agency-events", "all"],
     queryFn: async () => {
-      const res = await fetch(`/api/remittance-agency-events?agencyId=${selectedAgencyId}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch events");
-      return res.json();
+      const results: RemittanceAgencyEvent[] = [];
+      for (const agencyId of allEventsQueries) {
+        const res = await fetch(`/api/remittance-agency-events?agencyId=${agencyId}`, { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          results.push(...data);
+        }
+      }
+      return results;
     },
-    enabled: !!selectedAgencyId,
+    enabled: agencies.length > 0,
   });
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
       const res = await apiRequest("POST", "/api/remittance-agency-events", {
-        ...data,
-        effectiveDate: data.effectiveDate || null,
+        ...data, effectiveDate: data.effectiveDate || null,
       });
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/remittance-agency-events", selectedAgencyId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/remittance-agency-events", "all"] });
       toast({ title: "Agency event created" });
-      setDialogOpen(false);
+      setAddDialogOpen(false);
       setFormData({ agencyId: "", type: "payment", status: "enabled", frequency: "quarterly", dueDateDelayDays: 0, effectiveDate: "", reminderDays: 7 });
     },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) => {
+      const res = await apiRequest("PATCH", `/api/remittance-agency-events/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/remittance-agency-events", "all"] });
+      toast({ title: "Event updated" });
+      setEditDialogOpen(false);
+      setEditingEvent(null);
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/remittance-agency-events/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/remittance-agency-events", "all"] });
+      toast({ title: "Event deleted" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const today = new Date();
+  const sortedEvents = [...allEvents].sort((a, b) => {
+    const dateA = a.effectiveDate ? new Date(a.effectiveDate).getTime() : 0;
+    const dateB = b.effectiveDate ? new Date(b.effectiveDate).getTime() : 0;
+    return dateA - dateB;
+  });
+
+  const getAgencyName = (agencyId: string) => agencies.find(a => a.id === agencyId)?.name || "Unknown";
+
+  const isEventPastDue = (ev: RemittanceAgencyEvent) => {
+    if (!ev.effectiveDate) return true;
+    return new Date(ev.effectiveDate) <= today;
+  };
+
+  const selectedEvents = sortedEvents.filter(e => selectedEventIds.has(e.id));
+
+  const toggleEvent = (id: string) => {
+    setSelectedEventIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const currentStepIndex = WIZARD_STEPS.findIndex(s => s.id === wizardStep);
+  const canGoNext = wizardStep === "select" ? selectedEventIds.size > 0 : true;
+  const goNext = () => {
+    if (currentStepIndex < WIZARD_STEPS.length - 1) setWizardStep(WIZARD_STEPS[currentStepIndex + 1].id);
+  };
+  const goPrev = () => {
+    if (currentStepIndex > 0) setWizardStep(WIZARD_STEPS[currentStepIndex - 1].id);
+  };
+  const resetWizard = () => {
+    setWizardStep("select");
+    setSelectedEventIds(new Set());
+  };
+
+  const openEditDialog = (ev: RemittanceAgencyEvent) => {
+    setEditingEvent(ev);
+    setEditDialogOpen(true);
+  };
 
   if (agenciesLoading) return <div data-testid="loading-tax-wizard"><Skeleton className="h-64 w-full" /></div>;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-4 flex-wrap">
-        <div className="space-y-2">
-          <Label>Select Agency</Label>
-          <Select value={selectedAgencyId} onValueChange={setSelectedAgencyId}>
-            <SelectTrigger data-testid="select-tw-agency" className="w-64"><SelectValue placeholder="Select an agency" /></SelectTrigger>
-            <SelectContent>
-              {agencies.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        {selectedAgencyId && (
-          <div className="ml-auto">
-            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+    <div className="space-y-6" data-testid="tax-wizard">
+      <div className="flex items-center gap-2 flex-wrap">
+        {WIZARD_STEPS.map((step, idx) => {
+          const StepIcon = step.icon;
+          const isActive = step.id === wizardStep;
+          const isCompleted = idx < currentStepIndex;
+          return (
+            <div key={step.id} className="flex items-center gap-2">
+              {idx > 0 && <div className={`h-px w-6 ${isCompleted ? "bg-primary" : "bg-border"}`} />}
+              <button
+                data-testid={`wizard-step-${step.id}`}
+                onClick={() => {
+                  if (idx <= currentStepIndex || (wizardStep === "select" && selectedEventIds.size > 0))
+                    setWizardStep(step.id);
+                }}
+                className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                  isActive ? "bg-primary text-primary-foreground" : isCompleted ? "bg-primary/10 text-primary" : "text-muted-foreground"
+                }`}
+              >
+                {isCompleted ? <Check className="h-4 w-4" /> : <StepIcon className="h-4 w-4" />}
+                {step.label}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {wizardStep === "select" && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <h3 className="text-lg font-semibold">Select Remittance Events</h3>
+              <p className="text-sm text-muted-foreground">Choose the events to process. Future events are disabled until their date arrives.</p>
+            </div>
+            <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
               <DialogTrigger asChild>
                 <Button data-testid="button-add-agency-event"><Plus className="mr-2 h-4 w-4" />Add Event</Button>
               </DialogTrigger>
@@ -1058,55 +1165,70 @@ function TaxWizardTab() {
                 <DialogHeader><DialogTitle>Add Agency Event</DialogTitle></DialogHeader>
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label>Type</Label>
-                    <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
-                      <SelectTrigger data-testid="select-ae-type"><SelectValue /></SelectTrigger>
+                    <Label>Agency</Label>
+                    <Select value={formData.agencyId} onValueChange={v => setFormData(p => ({ ...p, agencyId: v }))}>
+                      <SelectTrigger data-testid="select-ae-agency"><SelectValue placeholder="Select agency" /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="payment">Payment</SelectItem>
-                        <SelectItem value="filing">Filing</SelectItem>
-                        <SelectItem value="reporting">Reporting</SelectItem>
+                        {agencies.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2">
-                    <Label>Status</Label>
-                    <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
-                      <SelectTrigger data-testid="select-ae-status"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="enabled">Enabled</SelectItem>
-                        <SelectItem value="disabled">Disabled</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Type</Label>
+                      <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
+                        <SelectTrigger data-testid="select-ae-type"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="payment">Payment</SelectItem>
+                          <SelectItem value="filing">Filing</SelectItem>
+                          <SelectItem value="reporting">Reporting</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Status</Label>
+                      <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
+                        <SelectTrigger data-testid="select-ae-status"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="enabled">Enabled</SelectItem>
+                          <SelectItem value="disabled">Disabled</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label>Frequency</Label>
-                    <Select value={formData.frequency} onValueChange={v => setFormData(p => ({ ...p, frequency: v }))}>
-                      <SelectTrigger data-testid="select-ae-frequency"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="quarterly">Quarterly</SelectItem>
-                        <SelectItem value="monthly">Monthly</SelectItem>
-                        <SelectItem value="annually">Annually</SelectItem>
-                        <SelectItem value="semi_annually">Semi-Annually</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Frequency</Label>
+                      <Select value={formData.frequency} onValueChange={v => setFormData(p => ({ ...p, frequency: v }))}>
+                        <SelectTrigger data-testid="select-ae-frequency"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="quarterly">Quarterly</SelectItem>
+                          <SelectItem value="monthly">Monthly</SelectItem>
+                          <SelectItem value="annually">Annually</SelectItem>
+                          <SelectItem value="semi_annually">Semi-Annually</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Due Date Delay (Days)</Label>
+                      <Input type="number" data-testid="input-ae-delay" value={formData.dueDateDelayDays} onChange={e => setFormData(p => ({ ...p, dueDateDelayDays: Number(e.target.value) }))} />
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label>Due Date Delay (Days)</Label>
-                    <Input type="number" data-testid="input-ae-delay" value={formData.dueDateDelayDays} onChange={e => setFormData(p => ({ ...p, dueDateDelayDays: Number(e.target.value) }))} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Effective Date</Label>
-                    <Input type="date" data-testid="input-ae-effective-date" value={formData.effectiveDate} onChange={e => setFormData(p => ({ ...p, effectiveDate: e.target.value }))} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Reminder Days</Label>
-                    <Input type="number" data-testid="input-ae-reminder" value={formData.reminderDays} onChange={e => setFormData(p => ({ ...p, reminderDays: Number(e.target.value) }))} />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Effective Date</Label>
+                      <Input type="date" data-testid="input-ae-effective-date" value={formData.effectiveDate} onChange={e => setFormData(p => ({ ...p, effectiveDate: e.target.value }))} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Reminder Days</Label>
+                      <Input type="number" data-testid="input-ae-reminder" value={formData.reminderDays} onChange={e => setFormData(p => ({ ...p, reminderDays: Number(e.target.value) }))} />
+                    </div>
                   </div>
                   <Button
                     className="w-full"
                     data-testid="button-submit-agency-event"
-                    disabled={createMutation.isPending}
-                    onClick={() => createMutation.mutate({ ...formData, agencyId: selectedAgencyId })}
+                    disabled={createMutation.isPending || !formData.agencyId}
+                    onClick={() => createMutation.mutate(formData)}
                   >
                     {createMutation.isPending ? "Creating..." : "Create Event"}
                   </Button>
@@ -1114,62 +1236,301 @@ function TaxWizardTab() {
               </DialogContent>
             </Dialog>
           </div>
-        )}
-      </div>
-      {selectedAgencyId && (
-        <Card>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              {eventsLoading ? (
-                <div data-testid="loading-agency-events"><Skeleton className="h-32 w-full" /></div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Frequency</TableHead>
-                      <TableHead>Due Date Delay</TableHead>
-                      <TableHead>Effective Date</TableHead>
-                      <TableHead>Reminder Days</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {events.map(ev => (
-                      <TableRow key={ev.id} data-testid={`row-agency-event-${ev.id}`}>
-                        <TableCell>
-                          <Badge variant={ev.type === "payment" ? "default" : ev.type === "filing" ? "secondary" : "outline"} data-testid={`badge-ae-type-${ev.id}`}>
+
+          {eventsLoading ? (
+            <Skeleton className="h-48 w-full" />
+          ) : sortedEvents.length === 0 ? (
+            <Card>
+              <CardContent className="p-6 text-center text-muted-foreground">
+                No remittance events found. Add events to agencies first.
+              </CardContent>
+            </Card>
+          ) : (
+            <Card>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-12"></TableHead>
+                        <TableHead>Agency</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Frequency</TableHead>
+                        <TableHead>Due Date</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {sortedEvents.map(ev => {
+                        const pastDue = isEventPastDue(ev);
+                        const isSelected = selectedEventIds.has(ev.id);
+                        return (
+                          <TableRow
+                            key={ev.id}
+                            data-testid={`row-wizard-event-${ev.id}`}
+                            className={!pastDue ? "opacity-50" : isSelected ? "bg-primary/5" : ""}
+                          >
+                            <TableCell>
+                              <Checkbox
+                                data-testid={`checkbox-event-${ev.id}`}
+                                checked={isSelected}
+                                disabled={!pastDue}
+                                onCheckedChange={() => toggleEvent(ev.id)}
+                              />
+                            </TableCell>
+                            <TableCell className="font-medium">{getAgencyName(ev.agencyId)}</TableCell>
+                            <TableCell>
+                              <Badge variant={ev.type === "payment" ? "default" : ev.type === "filing" ? "secondary" : "outline"}>
+                                {ev.type}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="capitalize">{ev.frequency?.replace("_", " ") || "—"}</TableCell>
+                            <TableCell>
+                              {ev.effectiveDate ? (
+                                <span className={pastDue ? "text-destructive font-medium" : ""}>
+                                  {new Date(ev.effectiveDate).toLocaleDateString()}
+                                </span>
+                              ) : "—"}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={ev.status === "enabled" ? "default" : "outline"} className="text-xs">
+                                {ev.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex gap-1">
+                                <Button size="icon" variant="ghost" data-testid={`button-edit-event-${ev.id}`} onClick={() => openEditDialog(ev)}>
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                                <Button size="icon" variant="ghost" data-testid={`button-delete-event-${ev.id}`} onClick={() => deleteMutation.mutate(ev.id)}>
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {wizardStep === "review" && (
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-lg font-semibold">Review & Verify</h3>
+            <p className="text-sm text-muted-foreground">Review the selected events before submitting. Click an event to edit its details.</p>
+          </div>
+          {selectedEvents.length === 0 ? (
+            <Card>
+              <CardContent className="p-6 text-center text-muted-foreground">
+                <AlertCircle className="h-8 w-8 mx-auto mb-2" />
+                No events selected. Go back to select events.
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-3">
+              {selectedEvents.map((ev, idx) => (
+                <Card key={ev.id} className="hover-elevate cursor-pointer" onClick={() => openEditDialog(ev)} data-testid={`card-review-event-${ev.id}`}>
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-4 flex-wrap">
+                      <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary font-semibold text-sm">
+                        {idx + 1}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium">{getAgencyName(ev.agencyId)}</span>
+                          <Badge variant={ev.type === "payment" ? "default" : ev.type === "filing" ? "secondary" : "outline"} className="text-xs">
                             {ev.type}
                           </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={ev.status === "enabled" ? "default" : "outline"} data-testid={`badge-ae-status-${ev.id}`}>
-                            {ev.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>{ev.frequency || "—"}</TableCell>
-                        <TableCell>{ev.dueDateDelayDays ?? 0} days</TableCell>
-                        <TableCell>{ev.effectiveDate || "—"}</TableCell>
-                        <TableCell>{ev.reminderDays ?? 7}</TableCell>
-                      </TableRow>
-                    ))}
-                    {events.length === 0 && (
-                      <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">No events for this agency</TableCell></TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              )}
+                          <Badge variant="outline" className="text-xs capitalize">{ev.frequency?.replace("_", " ")}</Badge>
+                        </div>
+                        <div className="text-sm text-muted-foreground mt-1">
+                          Due: {ev.effectiveDate ? new Date(ev.effectiveDate).toLocaleDateString() : "No date"} · Delay: {ev.dueDateDelayDays ?? 0} days · Reminder: {ev.reminderDays ?? 7} days
+                        </div>
+                      </div>
+                      <Pencil className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
-          </CardContent>
-        </Card>
+          )}
+        </div>
       )}
-      {!selectedAgencyId && (
-        <Card>
-          <CardContent className="p-6 text-center text-muted-foreground">
-            Select an agency above to view and manage its events.
-          </CardContent>
-        </Card>
+
+      {wizardStep === "submit" && (
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-lg font-semibold">Submit Events</h3>
+            <p className="text-sm text-muted-foreground">Confirm submission of {selectedEvents.length} event(s) for processing.</p>
+          </div>
+          <Card>
+            <CardContent className="p-6">
+              <div className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
+                    <FileText className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <div className="font-semibold">{selectedEvents.length} Event(s) Ready</div>
+                    <div className="text-sm text-muted-foreground">
+                      {selectedEvents.filter(e => e.type === "payment").length} payments, {selectedEvents.filter(e => e.type === "filing").length} filings, {selectedEvents.filter(e => e.type === "reporting").length} reports
+                    </div>
+                  </div>
+                </div>
+                <div className="border-t pt-4">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Agency</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Due Date</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {selectedEvents.map(ev => (
+                        <TableRow key={ev.id} data-testid={`row-submit-event-${ev.id}`}>
+                          <TableCell className="font-medium">{getAgencyName(ev.agencyId)}</TableCell>
+                          <TableCell><Badge variant="outline" className="text-xs">{ev.type}</Badge></TableCell>
+                          <TableCell>{ev.effectiveDate ? new Date(ev.effectiveDate).toLocaleDateString() : "—"}</TableCell>
+                          <TableCell><Badge variant="default" className="text-xs">Ready</Badge></TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       )}
+
+      {wizardStep === "complete" && (
+        <div className="space-y-4">
+          <Card>
+            <CardContent className="p-8 text-center">
+              <div className="flex items-center justify-center w-16 h-16 rounded-full bg-green-100 dark:bg-green-900/30 mx-auto mb-4">
+                <Check className="h-8 w-8 text-green-600 dark:text-green-400" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2">Processing Complete</h3>
+              <p className="text-muted-foreground mb-6">
+                {selectedEvents.length} remittance event(s) have been successfully processed and submitted.
+              </p>
+              <Button data-testid="button-wizard-restart" onClick={resetWizard}>
+                Process More Events
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {wizardStep !== "complete" && (
+        <div className="flex items-center justify-between gap-4">
+          <Button
+            variant="outline"
+            data-testid="button-wizard-prev"
+            disabled={currentStepIndex === 0}
+            onClick={goPrev}
+          >
+            <ChevronLeft className="mr-2 h-4 w-4" />
+            Back
+          </Button>
+          <Button
+            data-testid="button-wizard-next"
+            disabled={!canGoNext}
+            onClick={goNext}
+          >
+            {wizardStep === "submit" ? "Complete" : "Next"}
+            <ChevronRight className="ml-2 h-4 w-4" />
+          </Button>
+        </div>
+      )}
+
+      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Edit Agency Event</DialogTitle></DialogHeader>
+          {editingEvent && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Type</Label>
+                  <Select value={editingEvent.type} onValueChange={v => setEditingEvent({ ...editingEvent, type: v })}>
+                    <SelectTrigger data-testid="select-edit-ae-type"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="payment">Payment</SelectItem>
+                      <SelectItem value="filing">Filing</SelectItem>
+                      <SelectItem value="reporting">Reporting</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Status</Label>
+                  <Select value={editingEvent.status} onValueChange={v => setEditingEvent({ ...editingEvent, status: v })}>
+                    <SelectTrigger data-testid="select-edit-ae-status"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="enabled">Enabled</SelectItem>
+                      <SelectItem value="disabled">Disabled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Frequency</Label>
+                  <Select value={editingEvent.frequency || "quarterly"} onValueChange={v => setEditingEvent({ ...editingEvent, frequency: v })}>
+                    <SelectTrigger data-testid="select-edit-ae-frequency"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="quarterly">Quarterly</SelectItem>
+                      <SelectItem value="monthly">Monthly</SelectItem>
+                      <SelectItem value="annually">Annually</SelectItem>
+                      <SelectItem value="semi_annually">Semi-Annually</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Due Date Delay (Days)</Label>
+                  <Input type="number" data-testid="input-edit-ae-delay" value={editingEvent.dueDateDelayDays ?? 0} onChange={e => setEditingEvent({ ...editingEvent, dueDateDelayDays: Number(e.target.value) })} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Effective Date</Label>
+                  <Input type="date" data-testid="input-edit-ae-effective-date" value={editingEvent.effectiveDate || ""} onChange={e => setEditingEvent({ ...editingEvent, effectiveDate: e.target.value })} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Reminder Days</Label>
+                  <Input type="number" data-testid="input-edit-ae-reminder" value={editingEvent.reminderDays ?? 7} onChange={e => setEditingEvent({ ...editingEvent, reminderDays: Number(e.target.value) })} />
+                </div>
+              </div>
+              <Button
+                className="w-full"
+                data-testid="button-save-edit-event"
+                disabled={updateMutation.isPending}
+                onClick={() => updateMutation.mutate({
+                  id: editingEvent.id,
+                  data: {
+                    type: editingEvent.type,
+                    status: editingEvent.status,
+                    frequency: editingEvent.frequency,
+                    dueDateDelayDays: editingEvent.dueDateDelayDays,
+                    effectiveDate: editingEvent.effectiveDate || null,
+                    reminderDays: editingEvent.reminderDays,
+                  },
+                })}
+              >
+                {updateMutation.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

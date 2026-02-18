@@ -2072,5 +2072,51 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/legal-entities", async (_req, res) => {
+    try {
+      const items = await storage.getLegalEntities();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch legal entities" });
+    }
+  });
+
+  app.post("/api/legal-entities", async (req, res) => {
+    try {
+      const data = { ...req.body };
+      if (data.startDate === "") data.startDate = null;
+      if (data.endDate === "") data.endDate = null;
+      if (data.classificationCode === "") data.classificationCode = null;
+      const item = await storage.createLegalEntity(data);
+      res.status(201).json(item);
+    } catch (error: any) {
+      console.error("Legal entity creation error:", error?.message || error);
+      res.status(500).json({ message: "Failed to create legal entity" });
+    }
+  });
+
+  app.patch("/api/legal-entities/:id", async (req, res) => {
+    try {
+      const data = { ...req.body };
+      if (data.startDate === "") data.startDate = null;
+      if (data.endDate === "") data.endDate = null;
+      if (data.classificationCode === "") data.classificationCode = null;
+      const item = await storage.updateLegalEntity(req.params.id, data);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update legal entity" });
+    }
+  });
+
+  app.delete("/api/legal-entities/:id", async (req, res) => {
+    try {
+      await storage.deleteLegalEntity(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete legal entity" });
+    }
+  });
+
   return httpServer;
 }

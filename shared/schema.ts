@@ -40,6 +40,25 @@ export const companies = pgTable("companies", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const legalEntities = pgTable("legal_entities", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  status: text("status").default("active"),
+  type: text("type").default("corporation"),
+  classificationCode: text("classification_code"),
+  legalName: text("legal_name").notNull(),
+  tradeName: text("trade_name"),
+  startDate: date("start_date"),
+  endDate: date("end_date"),
+  address: text("address"),
+  city: text("city"),
+  state: text("state"),
+  zip: text("zip"),
+  country: text("country").default("US"),
+  phone: text("phone"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const workers = pgTable("workers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id),
@@ -800,6 +819,7 @@ export const insertAccrualPolicyMilestoneSchema = createInsertSchema(accrualPoli
 export const insertAbsencePolicySchema = createInsertSchema(absencePolicies).omit({ id: true, createdAt: true });
 export const insertHolidayPolicySchema = createInsertSchema(holidayPolicies).omit({ id: true, createdAt: true });
 export const insertRoundingPolicySchema = createInsertSchema(roundingPolicies).omit({ id: true, createdAt: true });
+export const insertLegalEntitySchema = createInsertSchema(legalEntities).omit({ id: true, createdAt: true });
 
 export type Company = typeof companies.$inferSelect;
 export type InsertCompany = z.infer<typeof insertCompanySchema>;
@@ -897,3 +917,5 @@ export type HolidayPolicy = typeof holidayPolicies.$inferSelect;
 export type InsertHolidayPolicy = z.infer<typeof insertHolidayPolicySchema>;
 export type RoundingPolicy = typeof roundingPolicies.$inferSelect;
 export type InsertRoundingPolicy = z.infer<typeof insertRoundingPolicySchema>;
+export type LegalEntity = typeof legalEntities.$inferSelect;
+export type InsertLegalEntity = z.infer<typeof insertLegalEntitySchema>;

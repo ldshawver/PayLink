@@ -11,6 +11,7 @@ import {
   mealPolicies, breakPolicies, schedulePolicies,
   exceptionPolicies, accrualPolicies, accrualPolicyMilestones,
   absencePolicies, holidayPolicies, roundingPolicies,
+  legalEntities,
   type Company, type InsertCompany,
   type Worker, type InsertWorker,
   type TimePunch, type InsertTimePunch,
@@ -59,6 +60,7 @@ import {
   type AbsencePolicy, type InsertAbsencePolicy,
   type HolidayPolicy, type InsertHolidayPolicy,
   type RoundingPolicy, type InsertRoundingPolicy,
+  type LegalEntity, type InsertLegalEntity,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -1109,6 +1111,22 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteRoundingPolicy(id: string): Promise<void> {
     await db.delete(roundingPolicies).where(eq(roundingPolicies.id, id));
+  }
+
+  async getLegalEntities(companyId?: string): Promise<LegalEntity[]> {
+    if (companyId) return db.select().from(legalEntities).where(eq(legalEntities.companyId, companyId)).orderBy(legalEntities.legalName);
+    return db.select().from(legalEntities).orderBy(legalEntities.legalName);
+  }
+  async createLegalEntity(data: InsertLegalEntity): Promise<LegalEntity> {
+    const [r] = await db.insert(legalEntities).values(data).returning();
+    return r;
+  }
+  async updateLegalEntity(id: string, data: Partial<LegalEntity>): Promise<LegalEntity | undefined> {
+    const [r] = await db.update(legalEntities).set(data).where(eq(legalEntities.id, id)).returning();
+    return r;
+  }
+  async deleteLegalEntity(id: string): Promise<void> {
+    await db.delete(legalEntities).where(eq(legalEntities.id, id));
   }
 }
 
