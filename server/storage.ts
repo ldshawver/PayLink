@@ -6,6 +6,11 @@ import {
   payPeriods, taxesDeductions, policyGroups, payCodes, holidays, qualifications, reviews, recurringSchedules,
   remittanceSources, remittanceAgencies, remittanceAgencyEvents, payStubAccounts, payStubAmendments, payStubTransactions, payPeriodSchedules,
   employeeTitles, employeeGroups, wageHistory, newHireDefaults,
+  payFormulas, contributingPayCodes, contributingShifts,
+  regularTimePolicies, overtimePolicies, premiumPolicies,
+  mealPolicies, breakPolicies, schedulePolicies,
+  exceptionPolicies, accrualPolicies, accrualPolicyMilestones,
+  absencePolicies, holidayPolicies, roundingPolicies,
   type Company, type InsertCompany,
   type Worker, type InsertWorker,
   type TimePunch, type InsertTimePunch,
@@ -39,6 +44,21 @@ import {
   type EmployeeGroup, type InsertEmployeeGroup,
   type WageHistory, type InsertWageHistory,
   type NewHireDefault, type InsertNewHireDefault,
+  type PayFormula, type InsertPayFormula,
+  type ContributingPayCode, type InsertContributingPayCode,
+  type ContributingShift, type InsertContributingShift,
+  type RegularTimePolicy, type InsertRegularTimePolicy,
+  type OvertimePolicy, type InsertOvertimePolicy,
+  type PremiumPolicy, type InsertPremiumPolicy,
+  type MealPolicy, type InsertMealPolicy,
+  type BreakPolicy, type InsertBreakPolicy,
+  type SchedulePolicy, type InsertSchedulePolicy,
+  type ExceptionPolicy, type InsertExceptionPolicy,
+  type AccrualPolicy, type InsertAccrualPolicy,
+  type AccrualPolicyMilestone, type InsertAccrualPolicyMilestone,
+  type AbsencePolicy, type InsertAbsencePolicy,
+  type HolidayPolicy, type InsertHolidayPolicy,
+  type RoundingPolicy, type InsertRoundingPolicy,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -196,6 +216,80 @@ export interface IStorage {
   createNewHireDefault(data: InsertNewHireDefault): Promise<NewHireDefault>;
   updateNewHireDefault(id: string, data: Partial<NewHireDefault>): Promise<NewHireDefault | undefined>;
   deleteNewHireDefault(id: string): Promise<void>;
+
+  getPayFormulas(companyId?: string): Promise<PayFormula[]>;
+  createPayFormula(data: InsertPayFormula): Promise<PayFormula>;
+  updatePayFormula(id: string, data: Partial<PayFormula>): Promise<PayFormula | undefined>;
+  deletePayFormula(id: string): Promise<void>;
+
+  getContributingPayCodes(companyId?: string): Promise<ContributingPayCode[]>;
+  createContributingPayCode(data: InsertContributingPayCode): Promise<ContributingPayCode>;
+  updateContributingPayCode(id: string, data: Partial<ContributingPayCode>): Promise<ContributingPayCode | undefined>;
+  deleteContributingPayCode(id: string): Promise<void>;
+
+  getContributingShifts(companyId?: string): Promise<ContributingShift[]>;
+  createContributingShift(data: InsertContributingShift): Promise<ContributingShift>;
+  updateContributingShift(id: string, data: Partial<ContributingShift>): Promise<ContributingShift | undefined>;
+  deleteContributingShift(id: string): Promise<void>;
+
+  getRegularTimePolicies(companyId?: string): Promise<RegularTimePolicy[]>;
+  createRegularTimePolicy(data: InsertRegularTimePolicy): Promise<RegularTimePolicy>;
+  updateRegularTimePolicy(id: string, data: Partial<RegularTimePolicy>): Promise<RegularTimePolicy | undefined>;
+  deleteRegularTimePolicy(id: string): Promise<void>;
+
+  getOvertimePolicies(companyId?: string): Promise<OvertimePolicy[]>;
+  createOvertimePolicy(data: InsertOvertimePolicy): Promise<OvertimePolicy>;
+  updateOvertimePolicy(id: string, data: Partial<OvertimePolicy>): Promise<OvertimePolicy | undefined>;
+  deleteOvertimePolicy(id: string): Promise<void>;
+
+  getPremiumPolicies(companyId?: string): Promise<PremiumPolicy[]>;
+  createPremiumPolicy(data: InsertPremiumPolicy): Promise<PremiumPolicy>;
+  updatePremiumPolicy(id: string, data: Partial<PremiumPolicy>): Promise<PremiumPolicy | undefined>;
+  deletePremiumPolicy(id: string): Promise<void>;
+
+  getMealPolicies(companyId?: string): Promise<MealPolicy[]>;
+  createMealPolicy(data: InsertMealPolicy): Promise<MealPolicy>;
+  updateMealPolicy(id: string, data: Partial<MealPolicy>): Promise<MealPolicy | undefined>;
+  deleteMealPolicy(id: string): Promise<void>;
+
+  getBreakPolicies(companyId?: string): Promise<BreakPolicy[]>;
+  createBreakPolicy(data: InsertBreakPolicy): Promise<BreakPolicy>;
+  updateBreakPolicy(id: string, data: Partial<BreakPolicy>): Promise<BreakPolicy | undefined>;
+  deleteBreakPolicy(id: string): Promise<void>;
+
+  getSchedulePolicies(companyId?: string): Promise<SchedulePolicy[]>;
+  createSchedulePolicy(data: InsertSchedulePolicy): Promise<SchedulePolicy>;
+  updateSchedulePolicy(id: string, data: Partial<SchedulePolicy>): Promise<SchedulePolicy | undefined>;
+  deleteSchedulePolicy(id: string): Promise<void>;
+
+  getExceptionPolicies(companyId?: string): Promise<ExceptionPolicy[]>;
+  createExceptionPolicy(data: InsertExceptionPolicy): Promise<ExceptionPolicy>;
+  updateExceptionPolicy(id: string, data: Partial<ExceptionPolicy>): Promise<ExceptionPolicy | undefined>;
+  deleteExceptionPolicy(id: string): Promise<void>;
+
+  getAccrualPolicies(companyId?: string): Promise<AccrualPolicy[]>;
+  createAccrualPolicy(data: InsertAccrualPolicy): Promise<AccrualPolicy>;
+  updateAccrualPolicy(id: string, data: Partial<AccrualPolicy>): Promise<AccrualPolicy | undefined>;
+  deleteAccrualPolicy(id: string): Promise<void>;
+
+  getAccrualPolicyMilestones(accrualPolicyId: string): Promise<AccrualPolicyMilestone[]>;
+  createAccrualPolicyMilestone(data: InsertAccrualPolicyMilestone): Promise<AccrualPolicyMilestone>;
+  deleteAccrualPolicyMilestone(id: string): Promise<void>;
+
+  getAbsencePolicies(companyId?: string): Promise<AbsencePolicy[]>;
+  createAbsencePolicy(data: InsertAbsencePolicy): Promise<AbsencePolicy>;
+  updateAbsencePolicy(id: string, data: Partial<AbsencePolicy>): Promise<AbsencePolicy | undefined>;
+  deleteAbsencePolicy(id: string): Promise<void>;
+
+  getHolidayPolicies(companyId?: string): Promise<HolidayPolicy[]>;
+  createHolidayPolicy(data: InsertHolidayPolicy): Promise<HolidayPolicy>;
+  updateHolidayPolicy(id: string, data: Partial<HolidayPolicy>): Promise<HolidayPolicy | undefined>;
+  deleteHolidayPolicy(id: string): Promise<void>;
+
+  getRoundingPolicies(companyId?: string): Promise<RoundingPolicy[]>;
+  createRoundingPolicy(data: InsertRoundingPolicy): Promise<RoundingPolicy>;
+  updateRoundingPolicy(id: string, data: Partial<RoundingPolicy>): Promise<RoundingPolicy | undefined>;
+  deleteRoundingPolicy(id: string): Promise<void>;
 
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
@@ -379,6 +473,10 @@ export class DatabaseStorage implements IStorage {
   async updateAccrualAccount(id: string, data: Partial<AccrualAccount>): Promise<AccrualAccount | undefined> {
     const [a] = await db.update(accrualAccounts).set(data).where(eq(accrualAccounts.id, id)).returning();
     return a;
+  }
+  async deleteAccrualAccount(id: string): Promise<boolean> {
+    const [a] = await db.delete(accrualAccounts).where(eq(accrualAccounts.id, id)).returning();
+    return !!a;
   }
 
   async getAccrualBalances(workerId?: string): Promise<AccrualBalance[]> {
@@ -776,6 +874,241 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteNewHireDefault(id: string): Promise<void> {
     await db.delete(newHireDefaults).where(eq(newHireDefaults.id, id));
+  }
+
+  async getPayFormulas(companyId?: string): Promise<PayFormula[]> {
+    if (companyId) return db.select().from(payFormulas).where(eq(payFormulas.companyId, companyId)).orderBy(payFormulas.name);
+    return db.select().from(payFormulas).orderBy(payFormulas.name);
+  }
+  async createPayFormula(data: InsertPayFormula): Promise<PayFormula> {
+    const [r] = await db.insert(payFormulas).values(data).returning();
+    return r;
+  }
+  async updatePayFormula(id: string, data: Partial<PayFormula>): Promise<PayFormula | undefined> {
+    const [r] = await db.update(payFormulas).set(data).where(eq(payFormulas.id, id)).returning();
+    return r;
+  }
+  async deletePayFormula(id: string): Promise<void> {
+    await db.delete(payFormulas).where(eq(payFormulas.id, id));
+  }
+
+  async getContributingPayCodes(companyId?: string): Promise<ContributingPayCode[]> {
+    if (companyId) return db.select().from(contributingPayCodes).where(eq(contributingPayCodes.companyId, companyId)).orderBy(contributingPayCodes.name);
+    return db.select().from(contributingPayCodes).orderBy(contributingPayCodes.name);
+  }
+  async createContributingPayCode(data: InsertContributingPayCode): Promise<ContributingPayCode> {
+    const [r] = await db.insert(contributingPayCodes).values(data).returning();
+    return r;
+  }
+  async updateContributingPayCode(id: string, data: Partial<ContributingPayCode>): Promise<ContributingPayCode | undefined> {
+    const [r] = await db.update(contributingPayCodes).set(data).where(eq(contributingPayCodes.id, id)).returning();
+    return r;
+  }
+  async deleteContributingPayCode(id: string): Promise<void> {
+    await db.delete(contributingPayCodes).where(eq(contributingPayCodes.id, id));
+  }
+
+  async getContributingShifts(companyId?: string): Promise<ContributingShift[]> {
+    if (companyId) return db.select().from(contributingShifts).where(eq(contributingShifts.companyId, companyId)).orderBy(contributingShifts.name);
+    return db.select().from(contributingShifts).orderBy(contributingShifts.name);
+  }
+  async createContributingShift(data: InsertContributingShift): Promise<ContributingShift> {
+    const [r] = await db.insert(contributingShifts).values(data).returning();
+    return r;
+  }
+  async updateContributingShift(id: string, data: Partial<ContributingShift>): Promise<ContributingShift | undefined> {
+    const [r] = await db.update(contributingShifts).set(data).where(eq(contributingShifts.id, id)).returning();
+    return r;
+  }
+  async deleteContributingShift(id: string): Promise<void> {
+    await db.delete(contributingShifts).where(eq(contributingShifts.id, id));
+  }
+
+  async getRegularTimePolicies(companyId?: string): Promise<RegularTimePolicy[]> {
+    if (companyId) return db.select().from(regularTimePolicies).where(eq(regularTimePolicies.companyId, companyId)).orderBy(regularTimePolicies.name);
+    return db.select().from(regularTimePolicies).orderBy(regularTimePolicies.name);
+  }
+  async createRegularTimePolicy(data: InsertRegularTimePolicy): Promise<RegularTimePolicy> {
+    const [r] = await db.insert(regularTimePolicies).values(data).returning();
+    return r;
+  }
+  async updateRegularTimePolicy(id: string, data: Partial<RegularTimePolicy>): Promise<RegularTimePolicy | undefined> {
+    const [r] = await db.update(regularTimePolicies).set(data).where(eq(regularTimePolicies.id, id)).returning();
+    return r;
+  }
+  async deleteRegularTimePolicy(id: string): Promise<void> {
+    await db.delete(regularTimePolicies).where(eq(regularTimePolicies.id, id));
+  }
+
+  async getOvertimePolicies(companyId?: string): Promise<OvertimePolicy[]> {
+    if (companyId) return db.select().from(overtimePolicies).where(eq(overtimePolicies.companyId, companyId)).orderBy(overtimePolicies.name);
+    return db.select().from(overtimePolicies).orderBy(overtimePolicies.name);
+  }
+  async createOvertimePolicy(data: InsertOvertimePolicy): Promise<OvertimePolicy> {
+    const [r] = await db.insert(overtimePolicies).values(data).returning();
+    return r;
+  }
+  async updateOvertimePolicy(id: string, data: Partial<OvertimePolicy>): Promise<OvertimePolicy | undefined> {
+    const [r] = await db.update(overtimePolicies).set(data).where(eq(overtimePolicies.id, id)).returning();
+    return r;
+  }
+  async deleteOvertimePolicy(id: string): Promise<void> {
+    await db.delete(overtimePolicies).where(eq(overtimePolicies.id, id));
+  }
+
+  async getPremiumPolicies(companyId?: string): Promise<PremiumPolicy[]> {
+    if (companyId) return db.select().from(premiumPolicies).where(eq(premiumPolicies.companyId, companyId)).orderBy(premiumPolicies.name);
+    return db.select().from(premiumPolicies).orderBy(premiumPolicies.name);
+  }
+  async createPremiumPolicy(data: InsertPremiumPolicy): Promise<PremiumPolicy> {
+    const [r] = await db.insert(premiumPolicies).values(data).returning();
+    return r;
+  }
+  async updatePremiumPolicy(id: string, data: Partial<PremiumPolicy>): Promise<PremiumPolicy | undefined> {
+    const [r] = await db.update(premiumPolicies).set(data).where(eq(premiumPolicies.id, id)).returning();
+    return r;
+  }
+  async deletePremiumPolicy(id: string): Promise<void> {
+    await db.delete(premiumPolicies).where(eq(premiumPolicies.id, id));
+  }
+
+  async getMealPolicies(companyId?: string): Promise<MealPolicy[]> {
+    if (companyId) return db.select().from(mealPolicies).where(eq(mealPolicies.companyId, companyId)).orderBy(mealPolicies.name);
+    return db.select().from(mealPolicies).orderBy(mealPolicies.name);
+  }
+  async createMealPolicy(data: InsertMealPolicy): Promise<MealPolicy> {
+    const [r] = await db.insert(mealPolicies).values(data).returning();
+    return r;
+  }
+  async updateMealPolicy(id: string, data: Partial<MealPolicy>): Promise<MealPolicy | undefined> {
+    const [r] = await db.update(mealPolicies).set(data).where(eq(mealPolicies.id, id)).returning();
+    return r;
+  }
+  async deleteMealPolicy(id: string): Promise<void> {
+    await db.delete(mealPolicies).where(eq(mealPolicies.id, id));
+  }
+
+  async getBreakPolicies(companyId?: string): Promise<BreakPolicy[]> {
+    if (companyId) return db.select().from(breakPolicies).where(eq(breakPolicies.companyId, companyId)).orderBy(breakPolicies.name);
+    return db.select().from(breakPolicies).orderBy(breakPolicies.name);
+  }
+  async createBreakPolicy(data: InsertBreakPolicy): Promise<BreakPolicy> {
+    const [r] = await db.insert(breakPolicies).values(data).returning();
+    return r;
+  }
+  async updateBreakPolicy(id: string, data: Partial<BreakPolicy>): Promise<BreakPolicy | undefined> {
+    const [r] = await db.update(breakPolicies).set(data).where(eq(breakPolicies.id, id)).returning();
+    return r;
+  }
+  async deleteBreakPolicy(id: string): Promise<void> {
+    await db.delete(breakPolicies).where(eq(breakPolicies.id, id));
+  }
+
+  async getSchedulePolicies(companyId?: string): Promise<SchedulePolicy[]> {
+    if (companyId) return db.select().from(schedulePolicies).where(eq(schedulePolicies.companyId, companyId)).orderBy(schedulePolicies.name);
+    return db.select().from(schedulePolicies).orderBy(schedulePolicies.name);
+  }
+  async createSchedulePolicy(data: InsertSchedulePolicy): Promise<SchedulePolicy> {
+    const [r] = await db.insert(schedulePolicies).values(data).returning();
+    return r;
+  }
+  async updateSchedulePolicy(id: string, data: Partial<SchedulePolicy>): Promise<SchedulePolicy | undefined> {
+    const [r] = await db.update(schedulePolicies).set(data).where(eq(schedulePolicies.id, id)).returning();
+    return r;
+  }
+  async deleteSchedulePolicy(id: string): Promise<void> {
+    await db.delete(schedulePolicies).where(eq(schedulePolicies.id, id));
+  }
+
+  async getExceptionPolicies(companyId?: string): Promise<ExceptionPolicy[]> {
+    if (companyId) return db.select().from(exceptionPolicies).where(eq(exceptionPolicies.companyId, companyId)).orderBy(exceptionPolicies.name);
+    return db.select().from(exceptionPolicies).orderBy(exceptionPolicies.name);
+  }
+  async createExceptionPolicy(data: InsertExceptionPolicy): Promise<ExceptionPolicy> {
+    const [r] = await db.insert(exceptionPolicies).values(data).returning();
+    return r;
+  }
+  async updateExceptionPolicy(id: string, data: Partial<ExceptionPolicy>): Promise<ExceptionPolicy | undefined> {
+    const [r] = await db.update(exceptionPolicies).set(data).where(eq(exceptionPolicies.id, id)).returning();
+    return r;
+  }
+  async deleteExceptionPolicy(id: string): Promise<void> {
+    await db.delete(exceptionPolicies).where(eq(exceptionPolicies.id, id));
+  }
+
+  async getAccrualPolicies(companyId?: string): Promise<AccrualPolicy[]> {
+    if (companyId) return db.select().from(accrualPolicies).where(eq(accrualPolicies.companyId, companyId)).orderBy(accrualPolicies.name);
+    return db.select().from(accrualPolicies).orderBy(accrualPolicies.name);
+  }
+  async createAccrualPolicy(data: InsertAccrualPolicy): Promise<AccrualPolicy> {
+    const [r] = await db.insert(accrualPolicies).values(data).returning();
+    return r;
+  }
+  async updateAccrualPolicy(id: string, data: Partial<AccrualPolicy>): Promise<AccrualPolicy | undefined> {
+    const [r] = await db.update(accrualPolicies).set(data).where(eq(accrualPolicies.id, id)).returning();
+    return r;
+  }
+  async deleteAccrualPolicy(id: string): Promise<void> {
+    await db.delete(accrualPolicies).where(eq(accrualPolicies.id, id));
+  }
+
+  async getAccrualPolicyMilestones(accrualPolicyId: string): Promise<AccrualPolicyMilestone[]> {
+    return db.select().from(accrualPolicyMilestones).where(eq(accrualPolicyMilestones.accrualPolicyId, accrualPolicyId));
+  }
+  async createAccrualPolicyMilestone(data: InsertAccrualPolicyMilestone): Promise<AccrualPolicyMilestone> {
+    const [r] = await db.insert(accrualPolicyMilestones).values(data).returning();
+    return r;
+  }
+  async deleteAccrualPolicyMilestone(id: string): Promise<void> {
+    await db.delete(accrualPolicyMilestones).where(eq(accrualPolicyMilestones.id, id));
+  }
+
+  async getAbsencePolicies(companyId?: string): Promise<AbsencePolicy[]> {
+    if (companyId) return db.select().from(absencePolicies).where(eq(absencePolicies.companyId, companyId)).orderBy(absencePolicies.name);
+    return db.select().from(absencePolicies).orderBy(absencePolicies.name);
+  }
+  async createAbsencePolicy(data: InsertAbsencePolicy): Promise<AbsencePolicy> {
+    const [r] = await db.insert(absencePolicies).values(data).returning();
+    return r;
+  }
+  async updateAbsencePolicy(id: string, data: Partial<AbsencePolicy>): Promise<AbsencePolicy | undefined> {
+    const [r] = await db.update(absencePolicies).set(data).where(eq(absencePolicies.id, id)).returning();
+    return r;
+  }
+  async deleteAbsencePolicy(id: string): Promise<void> {
+    await db.delete(absencePolicies).where(eq(absencePolicies.id, id));
+  }
+
+  async getHolidayPolicies(companyId?: string): Promise<HolidayPolicy[]> {
+    if (companyId) return db.select().from(holidayPolicies).where(eq(holidayPolicies.companyId, companyId)).orderBy(holidayPolicies.name);
+    return db.select().from(holidayPolicies).orderBy(holidayPolicies.name);
+  }
+  async createHolidayPolicy(data: InsertHolidayPolicy): Promise<HolidayPolicy> {
+    const [r] = await db.insert(holidayPolicies).values(data).returning();
+    return r;
+  }
+  async updateHolidayPolicy(id: string, data: Partial<HolidayPolicy>): Promise<HolidayPolicy | undefined> {
+    const [r] = await db.update(holidayPolicies).set(data).where(eq(holidayPolicies.id, id)).returning();
+    return r;
+  }
+  async deleteHolidayPolicy(id: string): Promise<void> {
+    await db.delete(holidayPolicies).where(eq(holidayPolicies.id, id));
+  }
+
+  async getRoundingPolicies(companyId?: string): Promise<RoundingPolicy[]> {
+    if (companyId) return db.select().from(roundingPolicies).where(eq(roundingPolicies.companyId, companyId)).orderBy(roundingPolicies.name);
+    return db.select().from(roundingPolicies).orderBy(roundingPolicies.name);
+  }
+  async createRoundingPolicy(data: InsertRoundingPolicy): Promise<RoundingPolicy> {
+    const [r] = await db.insert(roundingPolicies).values(data).returning();
+    return r;
+  }
+  async updateRoundingPolicy(id: string, data: Partial<RoundingPolicy>): Promise<RoundingPolicy | undefined> {
+    const [r] = await db.update(roundingPolicies).set(data).where(eq(roundingPolicies.id, id)).returning();
+    return r;
+  }
+  async deleteRoundingPolicy(id: string): Promise<void> {
+    await db.delete(roundingPolicies).where(eq(roundingPolicies.id, id));
   }
 }
 

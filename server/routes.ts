@@ -649,6 +649,18 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/accrual-accounts/:id", async (req, res) => {
+    try {
+      const deleted = await storage.deleteAccrualAccount(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Accrual account not found" });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete accrual account" });
+    }
+  });
+
   // Accrual Balances
   app.get("/api/accrual-balances", async (req, res) => {
     try {
@@ -1495,6 +1507,568 @@ export async function registerRoutes(
       res.json({ message: "Deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete new hire default" });
+    }
+  });
+
+  // Pay Formulas
+  app.get("/api/pay-formulas", async (_req, res) => {
+    try {
+      const items = await storage.getPayFormulas();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch pay formulas" });
+    }
+  });
+
+  app.post("/api/pay-formulas", async (req, res) => {
+    try {
+      const item = await storage.createPayFormula(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create pay formula" });
+    }
+  });
+
+  app.patch("/api/pay-formulas/:id", async (req, res) => {
+    try {
+      const item = await storage.updatePayFormula(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update pay formula" });
+    }
+  });
+
+  app.delete("/api/pay-formulas/:id", async (req, res) => {
+    try {
+      await storage.deletePayFormula(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete pay formula" });
+    }
+  });
+
+  // Contributing Pay Codes
+  app.get("/api/contributing-pay-codes", async (_req, res) => {
+    try {
+      const items = await storage.getContributingPayCodes();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch contributing pay codes" });
+    }
+  });
+
+  app.post("/api/contributing-pay-codes", async (req, res) => {
+    try {
+      const item = await storage.createContributingPayCode(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create contributing pay code" });
+    }
+  });
+
+  app.patch("/api/contributing-pay-codes/:id", async (req, res) => {
+    try {
+      const item = await storage.updateContributingPayCode(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update contributing pay code" });
+    }
+  });
+
+  app.delete("/api/contributing-pay-codes/:id", async (req, res) => {
+    try {
+      await storage.deleteContributingPayCode(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete contributing pay code" });
+    }
+  });
+
+  // Contributing Shifts
+  app.get("/api/contributing-shifts", async (_req, res) => {
+    try {
+      const items = await storage.getContributingShifts();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch contributing shifts" });
+    }
+  });
+
+  app.post("/api/contributing-shifts", async (req, res) => {
+    try {
+      const item = await storage.createContributingShift(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create contributing shift" });
+    }
+  });
+
+  app.patch("/api/contributing-shifts/:id", async (req, res) => {
+    try {
+      const item = await storage.updateContributingShift(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update contributing shift" });
+    }
+  });
+
+  app.delete("/api/contributing-shifts/:id", async (req, res) => {
+    try {
+      await storage.deleteContributingShift(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete contributing shift" });
+    }
+  });
+
+  // Regular Time Policies
+  app.get("/api/regular-time-policies", async (_req, res) => {
+    try {
+      const items = await storage.getRegularTimePolicies();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch regular time policies" });
+    }
+  });
+
+  app.post("/api/regular-time-policies", async (req, res) => {
+    try {
+      const item = await storage.createRegularTimePolicy(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create regular time policy" });
+    }
+  });
+
+  app.patch("/api/regular-time-policies/:id", async (req, res) => {
+    try {
+      const item = await storage.updateRegularTimePolicy(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update regular time policy" });
+    }
+  });
+
+  app.delete("/api/regular-time-policies/:id", async (req, res) => {
+    try {
+      await storage.deleteRegularTimePolicy(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete regular time policy" });
+    }
+  });
+
+  // Overtime Policies
+  app.get("/api/overtime-policies", async (_req, res) => {
+    try {
+      const items = await storage.getOvertimePolicies();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch overtime policies" });
+    }
+  });
+
+  app.post("/api/overtime-policies", async (req, res) => {
+    try {
+      const item = await storage.createOvertimePolicy(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create overtime policy" });
+    }
+  });
+
+  app.patch("/api/overtime-policies/:id", async (req, res) => {
+    try {
+      const item = await storage.updateOvertimePolicy(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update overtime policy" });
+    }
+  });
+
+  app.delete("/api/overtime-policies/:id", async (req, res) => {
+    try {
+      await storage.deleteOvertimePolicy(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete overtime policy" });
+    }
+  });
+
+  // Premium Policies
+  app.get("/api/premium-policies", async (_req, res) => {
+    try {
+      const items = await storage.getPremiumPolicies();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch premium policies" });
+    }
+  });
+
+  app.post("/api/premium-policies", async (req, res) => {
+    try {
+      const item = await storage.createPremiumPolicy(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create premium policy" });
+    }
+  });
+
+  app.patch("/api/premium-policies/:id", async (req, res) => {
+    try {
+      const item = await storage.updatePremiumPolicy(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update premium policy" });
+    }
+  });
+
+  app.delete("/api/premium-policies/:id", async (req, res) => {
+    try {
+      await storage.deletePremiumPolicy(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete premium policy" });
+    }
+  });
+
+  // Meal Policies
+  app.get("/api/meal-policies", async (_req, res) => {
+    try {
+      const items = await storage.getMealPolicies();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch meal policies" });
+    }
+  });
+
+  app.post("/api/meal-policies", async (req, res) => {
+    try {
+      const item = await storage.createMealPolicy(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create meal policy" });
+    }
+  });
+
+  app.patch("/api/meal-policies/:id", async (req, res) => {
+    try {
+      const item = await storage.updateMealPolicy(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update meal policy" });
+    }
+  });
+
+  app.delete("/api/meal-policies/:id", async (req, res) => {
+    try {
+      await storage.deleteMealPolicy(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete meal policy" });
+    }
+  });
+
+  // Break Policies
+  app.get("/api/break-policies", async (_req, res) => {
+    try {
+      const items = await storage.getBreakPolicies();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch break policies" });
+    }
+  });
+
+  app.post("/api/break-policies", async (req, res) => {
+    try {
+      const item = await storage.createBreakPolicy(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create break policy" });
+    }
+  });
+
+  app.patch("/api/break-policies/:id", async (req, res) => {
+    try {
+      const item = await storage.updateBreakPolicy(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update break policy" });
+    }
+  });
+
+  app.delete("/api/break-policies/:id", async (req, res) => {
+    try {
+      await storage.deleteBreakPolicy(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete break policy" });
+    }
+  });
+
+  // Schedule Policies
+  app.get("/api/schedule-policies", async (_req, res) => {
+    try {
+      const items = await storage.getSchedulePolicies();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch schedule policies" });
+    }
+  });
+
+  app.post("/api/schedule-policies", async (req, res) => {
+    try {
+      const item = await storage.createSchedulePolicy(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create schedule policy" });
+    }
+  });
+
+  app.patch("/api/schedule-policies/:id", async (req, res) => {
+    try {
+      const item = await storage.updateSchedulePolicy(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update schedule policy" });
+    }
+  });
+
+  app.delete("/api/schedule-policies/:id", async (req, res) => {
+    try {
+      await storage.deleteSchedulePolicy(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete schedule policy" });
+    }
+  });
+
+  // Exception Policies
+  app.get("/api/exception-policies", async (_req, res) => {
+    try {
+      const items = await storage.getExceptionPolicies();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch exception policies" });
+    }
+  });
+
+  app.post("/api/exception-policies", async (req, res) => {
+    try {
+      const item = await storage.createExceptionPolicy(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create exception policy" });
+    }
+  });
+
+  app.patch("/api/exception-policies/:id", async (req, res) => {
+    try {
+      const item = await storage.updateExceptionPolicy(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update exception policy" });
+    }
+  });
+
+  app.delete("/api/exception-policies/:id", async (req, res) => {
+    try {
+      await storage.deleteExceptionPolicy(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete exception policy" });
+    }
+  });
+
+  // Accrual Policies
+  app.get("/api/accrual-policies", async (_req, res) => {
+    try {
+      const items = await storage.getAccrualPolicies();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch accrual policies" });
+    }
+  });
+
+  app.post("/api/accrual-policies", async (req, res) => {
+    try {
+      const item = await storage.createAccrualPolicy(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create accrual policy" });
+    }
+  });
+
+  app.patch("/api/accrual-policies/:id", async (req, res) => {
+    try {
+      const item = await storage.updateAccrualPolicy(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update accrual policy" });
+    }
+  });
+
+  app.delete("/api/accrual-policies/:id", async (req, res) => {
+    try {
+      await storage.deleteAccrualPolicy(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete accrual policy" });
+    }
+  });
+
+  // Accrual Policy Milestones
+  app.get("/api/accrual-policy-milestones", async (req, res) => {
+    try {
+      const accrualPolicyId = req.query.accrualPolicyId as string;
+      if (!accrualPolicyId) return res.status(400).json({ message: "accrualPolicyId required" });
+      const items = await storage.getAccrualPolicyMilestones(accrualPolicyId);
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch milestones" });
+    }
+  });
+
+  app.post("/api/accrual-policy-milestones", async (req, res) => {
+    try {
+      const item = await storage.createAccrualPolicyMilestone(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create milestone" });
+    }
+  });
+
+  app.delete("/api/accrual-policy-milestones/:id", async (req, res) => {
+    try {
+      await storage.deleteAccrualPolicyMilestone(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete milestone" });
+    }
+  });
+
+  // Absence Policies
+  app.get("/api/absence-policies", async (_req, res) => {
+    try {
+      const items = await storage.getAbsencePolicies();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch absence policies" });
+    }
+  });
+
+  app.post("/api/absence-policies", async (req, res) => {
+    try {
+      const item = await storage.createAbsencePolicy(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create absence policy" });
+    }
+  });
+
+  app.patch("/api/absence-policies/:id", async (req, res) => {
+    try {
+      const item = await storage.updateAbsencePolicy(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update absence policy" });
+    }
+  });
+
+  app.delete("/api/absence-policies/:id", async (req, res) => {
+    try {
+      await storage.deleteAbsencePolicy(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete absence policy" });
+    }
+  });
+
+  // Holiday Policies
+  app.get("/api/holiday-policies", async (_req, res) => {
+    try {
+      const items = await storage.getHolidayPolicies();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch holiday policies" });
+    }
+  });
+
+  app.post("/api/holiday-policies", async (req, res) => {
+    try {
+      const item = await storage.createHolidayPolicy(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create holiday policy" });
+    }
+  });
+
+  app.patch("/api/holiday-policies/:id", async (req, res) => {
+    try {
+      const item = await storage.updateHolidayPolicy(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update holiday policy" });
+    }
+  });
+
+  app.delete("/api/holiday-policies/:id", async (req, res) => {
+    try {
+      await storage.deleteHolidayPolicy(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete holiday policy" });
+    }
+  });
+
+  // Rounding Policies
+  app.get("/api/rounding-policies", async (_req, res) => {
+    try {
+      const items = await storage.getRoundingPolicies();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch rounding policies" });
+    }
+  });
+
+  app.post("/api/rounding-policies", async (req, res) => {
+    try {
+      const item = await storage.createRoundingPolicy(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create rounding policy" });
+    }
+  });
+
+  app.patch("/api/rounding-policies/:id", async (req, res) => {
+    try {
+      const item = await storage.updateRoundingPolicy(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update rounding policy" });
+    }
+  });
+
+  app.delete("/api/rounding-policies/:id", async (req, res) => {
+    try {
+      await storage.deleteRoundingPolicy(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete rounding policy" });
     }
   });
 
