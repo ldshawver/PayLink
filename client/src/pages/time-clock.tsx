@@ -9,6 +9,8 @@ import {
   LogOut,
   Hash,
   Lock,
+  Fingerprint,
+  Activity,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,7 +20,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Worker, Company, TimePunch } from "@shared/schema";
-import paylinkLogo from "@assets/PayLink_Logo_(1)_1771395758335.png";
+import paylinkLogo from "@assets/PayLink_Logo_(2)_1771399651639.png";
 
 function LiveClock() {
   const [time, setTime] = useState(new Date());
@@ -29,16 +31,18 @@ function LiveClock() {
   }, []);
 
   return (
-    <div className="text-center">
-      <p className="text-6xl font-bold tracking-tight tabular-nums" data-testid="text-live-clock">
-        {time.toLocaleTimeString("en-US", {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-          hour12: true,
-        })}
-      </p>
-      <p className="text-sm text-muted-foreground mt-2">
+    <div className="text-center" data-testid="text-live-clock">
+      <div className="flex items-baseline justify-center gap-1">
+        <span className="text-7xl font-light tracking-tight tabular-nums">
+          {time.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })}
+        </span>
+        <div className="flex flex-col items-start">
+          <span className="text-2xl font-light tabular-nums text-teal-accent">
+            {time.getSeconds().toString().padStart(2, "0")}
+          </span>
+        </div>
+      </div>
+      <p className="text-sm text-muted-foreground mt-3 tracking-wide uppercase">
         {time.toLocaleDateString("en-US", {
           weekday: "long",
           month: "long",
@@ -57,12 +61,12 @@ function NumPad({ onInput, onClear, onBackspace }: {
 }) {
   const digits = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "<"];
   return (
-    <div className="grid grid-cols-3 gap-2 max-w-[240px] mx-auto">
+    <div className="grid grid-cols-3 gap-2 max-w-[260px] mx-auto">
       {digits.map((d) => (
         <Button
           key={d}
           variant={d === "C" ? "destructive" : d === "<" ? "secondary" : "outline"}
-          size="lg"
+          className="text-lg font-medium"
           onClick={() => {
             if (d === "C") onClear();
             else if (d === "<") onBackspace();
@@ -218,95 +222,104 @@ export default function TimeClock() {
 
   if (!authenticatedWorker) {
     return (
-      <div className="flex items-center justify-center min-h-[calc(100vh-60px)] p-4">
-        <Card className="w-full max-w-md">
-          <CardContent className="p-8 space-y-6">
-            <div className="flex flex-col items-center gap-3">
-              <img src={paylinkLogo} alt="PayLink" className="h-16 w-16 object-contain" />
-              <h1 className="text-2xl font-bold" data-testid="text-timeclock-title">Time Clock</h1>
-            </div>
+      <div className="flex items-center justify-center min-h-[calc(100vh-60px)] p-4 bg-gradient-to-br from-background via-background to-muted/50">
+        <div className="w-full max-w-md space-y-6">
+          <div className="flex flex-col items-center gap-2">
+            <img src={paylinkLogo} alt="PayLink" className="h-20 w-20 object-contain" />
+            <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-timeclock-title">Time Clock</h1>
+            <p className="text-sm text-muted-foreground">Enter your credentials to punch in or out</p>
+          </div>
 
-            <LiveClock />
+          <Card>
+            <CardContent className="p-6 space-y-6">
+              <LiveClock />
 
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="empNum" className="flex items-center gap-2">
-                  <Hash className="h-4 w-4" /> Employee Number
-                </Label>
-                <Input
-                  id="empNum"
-                  value={employeeNumber}
-                  onChange={(e) => setEmployeeNumber(e.target.value)}
-                  onFocus={() => setActiveField("empNum")}
-                  placeholder="Enter employee number"
-                  autoComplete="off"
-                  data-testid="input-employee-number"
-                  className={activeField === "empNum" ? "ring-2 ring-primary" : ""}
+              <div className="h-px bg-border" />
+
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="empNum" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                    <Hash className="h-3.5 w-3.5 text-teal-accent" /> Employee Number
+                  </Label>
+                  <Input
+                    id="empNum"
+                    value={employeeNumber}
+                    onChange={(e) => setEmployeeNumber(e.target.value)}
+                    onFocus={() => setActiveField("empNum")}
+                    placeholder="Enter employee number"
+                    autoComplete="off"
+                    data-testid="input-employee-number"
+                    className={activeField === "empNum" ? "ring-2 ring-teal-accent/50 border-teal-accent" : ""}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="pin" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                    <Lock className="h-3.5 w-3.5 text-teal-accent" /> PIN
+                  </Label>
+                  <Input
+                    id="pin"
+                    type="password"
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value)}
+                    onFocus={() => setActiveField("pin")}
+                    placeholder="Enter PIN"
+                    autoComplete="off"
+                    data-testid="input-pin"
+                    className={activeField === "pin" ? "ring-2 ring-teal-accent/50 border-teal-accent" : ""}
+                  />
+                </div>
+
+                <NumPad
+                  onInput={handleNumInput}
+                  onClear={handleClear}
+                  onBackspace={handleBackspace}
                 />
-              </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="pin" className="flex items-center gap-2">
-                  <Lock className="h-4 w-4" /> PIN
-                </Label>
-                <Input
-                  id="pin"
-                  type="password"
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  onFocus={() => setActiveField("pin")}
-                  placeholder="Enter PIN"
-                  autoComplete="off"
-                  data-testid="input-pin"
-                  className={activeField === "pin" ? "ring-2 ring-primary" : ""}
-                />
-              </div>
+                {authError && (
+                  <p className="text-sm text-destructive text-center" data-testid="text-auth-error">
+                    {authError}
+                  </p>
+                )}
 
-              <NumPad
-                onInput={handleNumInput}
-                onClear={handleClear}
-                onBackspace={handleBackspace}
-              />
-
-              {authError && (
-                <p className="text-sm text-destructive text-center" data-testid="text-auth-error">
-                  {authError}
-                </p>
-              )}
-
-              <Button
-                type="submit"
-                size="lg"
-                className="w-full"
-                disabled={authMutation.isPending || !employeeNumber || !pin}
-                data-testid="button-clock-login"
-              >
-                <Clock className="h-5 w-5 mr-2" />
-                {authMutation.isPending ? "Authenticating..." : "Sign In"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
+                <Button
+                  type="submit"
+                  size="lg"
+                  className="w-full"
+                  disabled={authMutation.isPending || !employeeNumber || !pin}
+                  data-testid="button-clock-login"
+                >
+                  <Fingerprint className="h-5 w-5 mr-2" />
+                  {authMutation.isPending ? "Authenticating..." : "Sign In"}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex items-center justify-center min-h-[calc(100vh-60px)] p-4">
+    <div className="flex items-center justify-center min-h-[calc(100vh-60px)] p-4 bg-gradient-to-br from-background via-background to-muted/50">
       <div className="w-full max-w-lg space-y-4">
         <Card>
-          <CardContent className="p-8 space-y-6">
+          <CardContent className="p-6 space-y-6">
             <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div>
-                <h2 className="text-xl font-bold" data-testid="text-worker-name">
-                  {authenticatedWorker.firstName} {authenticatedWorker.lastName}
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  {authenticatedWorker.jobTitle} {authenticatedCompany && `- ${authenticatedCompany.name}`}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Employee #{authenticatedWorker.employeeNumber}
-                </p>
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                  <span className="text-sm font-semibold text-teal-accent">
+                    {authenticatedWorker.firstName?.[0]}{authenticatedWorker.lastName?.[0]}
+                  </span>
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold" data-testid="text-worker-name">
+                    {authenticatedWorker.firstName} {authenticatedWorker.lastName}
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    {authenticatedWorker.jobTitle} {authenticatedCompany && `\u00B7 ${authenticatedCompany.name}`}
+                  </p>
+                </div>
               </div>
               <Button
                 variant="ghost"
@@ -314,15 +327,20 @@ export default function TimeClock() {
                 onClick={handleLogout}
                 data-testid="button-clock-logout"
               >
-                <LogOut className="h-5 w-5" />
+                <LogOut className="h-4 w-4" />
               </Button>
             </div>
 
             <LiveClock />
 
-            <div className="flex items-center justify-center gap-2">
+            <div className="flex items-center justify-center gap-3">
+              <div className={`h-2.5 w-2.5 rounded-full ${
+                isClockedIn ? "bg-green-500 animate-pulse" :
+                isOnBreak ? "bg-amber-500 animate-pulse" :
+                "bg-muted-foreground/40"
+              }`} />
               <Badge
-                variant={isClockedIn ? "default" : isOnBreak ? "secondary" : "destructive"}
+                variant={isClockedIn ? "default" : isOnBreak ? "secondary" : "outline"}
                 data-testid="badge-clock-status"
               >
                 {isClockedIn ? "Clocked In" : isOnBreak ? "On Break" : "Clocked Out"}
@@ -383,27 +401,30 @@ export default function TimeClock() {
         {workerPunches.length > 0 && (
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold">Today's Activity</CardTitle>
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <Activity className="h-4 w-4 text-teal-accent" />
+                Today's Activity
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-2">
+              <div className="space-y-1">
                 {workerPunches.slice(0, 10).map((punch) => (
                   <div
                     key={punch.id}
-                    className="flex items-center justify-between py-2 border-b last:border-0"
+                    className="flex items-center justify-between py-2.5 border-b last:border-0"
                     data-testid={`row-punch-${punch.id}`}
                   >
                     <div className="flex items-center gap-3">
                       <div className={`h-2 w-2 rounded-full ${
                         punch.punchType === "clock_in" ? "bg-green-500" :
                         punch.punchType === "clock_out" ? "bg-red-500" :
-                        "bg-yellow-500"
+                        "bg-amber-500"
                       }`} />
-                      <span className="text-sm font-medium capitalize">
+                      <span className="text-sm capitalize">
                         {punch.punchType.replace(/_/g, " ")}
                       </span>
                     </div>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-xs text-muted-foreground tabular-nums">
                       {new Date(punch.punchTime).toLocaleTimeString("en-US", {
                         hour: "numeric",
                         minute: "2-digit",

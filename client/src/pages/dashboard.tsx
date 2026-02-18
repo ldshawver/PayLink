@@ -102,7 +102,7 @@ function NewsDashlet() {
     <Card data-testid="dashlet-news">
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
-          <Newspaper className="h-4 w-4 text-muted-foreground" />
+          <Newspaper className="h-4 w-4 text-teal-accent" />
           PayLink Updates
         </CardTitle>
       </CardHeader>
@@ -136,7 +136,7 @@ function ExceptionSummaryDashlet() {
     <Card data-testid="dashlet-exception-summary">
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
-          <AlertTriangle className="h-4 w-4 text-muted-foreground" />
+          <AlertTriangle className="h-4 w-4 text-teal-accent" />
           Exception Summary
         </CardTitle>
       </CardHeader>
@@ -167,7 +167,7 @@ function MessagesDashlet() {
     <Card data-testid="dashlet-messages">
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
-          <Mail className="h-4 w-4 text-muted-foreground" />
+          <Mail className="h-4 w-4 text-teal-accent" />
           Messages
         </CardTitle>
       </CardHeader>
@@ -186,7 +186,7 @@ function RequestsDashlet() {
     <Card data-testid="dashlet-requests">
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
-          <Inbox className="h-4 w-4 text-muted-foreground" />
+          <Inbox className="h-4 w-4 text-teal-accent" />
           Requests
         </CardTitle>
       </CardHeader>
@@ -205,7 +205,7 @@ function RequestAuthorizationsDashlet() {
     <Card data-testid="dashlet-request-authorizations">
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
-          <CheckSquare className="h-4 w-4 text-muted-foreground" />
+          <CheckSquare className="h-4 w-4 text-teal-accent" />
           Request Authorizations
         </CardTitle>
       </CardHeader>
@@ -239,7 +239,7 @@ function ExceptionsDashlet({ label, testId }: { label: string; testId: string })
     <Card data-testid={testId}>
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
-          <AlertTriangle className="h-4 w-4 text-muted-foreground" />
+          <AlertTriangle className="h-4 w-4 text-teal-accent" />
           {label}
         </CardTitle>
       </CardHeader>
@@ -297,7 +297,7 @@ function ScheduleSummarySubordinatesDashlet() {
     <Card data-testid="dashlet-schedule-summary-subordinates">
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
-          <CalendarDays className="h-4 w-4 text-muted-foreground" />
+          <CalendarDays className="h-4 w-4 text-teal-accent" />
           Schedule Summary (Subordinates)
         </CardTitle>
       </CardHeader>
@@ -348,7 +348,7 @@ function ScheduleSummaryDashlet() {
     <Card data-testid="dashlet-schedule-summary">
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
-          <Clock className="h-4 w-4 text-muted-foreground" />
+          <Clock className="h-4 w-4 text-teal-accent" />
           Schedule Summary
         </CardTitle>
       </CardHeader>
@@ -394,7 +394,7 @@ function WhosInOutDashlet() {
     <Card data-testid="dashlet-whos-in-out">
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
-          <Users className="h-4 w-4 text-muted-foreground" />
+          <Users className="h-4 w-4 text-teal-accent" />
           Who's In/Out
         </CardTitle>
         <div className="flex items-center gap-2 flex-wrap">
@@ -447,7 +447,7 @@ function TimesheetSummaryDashlet() {
     <Card data-testid="dashlet-timesheet-summary">
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
-          <FileText className="h-4 w-4 text-muted-foreground" />
+          <FileText className="h-4 w-4 text-teal-accent" />
           Timesheet Summary
         </CardTitle>
       </CardHeader>
@@ -509,7 +509,7 @@ export default function Dashboard() {
     <div className="p-4 md:p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-dashboard-title">
-          <LayoutDashboard className="h-6 w-6" />
+          <LayoutDashboard className="h-6 w-6 text-teal-accent" />
           Dashboard
         </h1>
         <Dialog>
