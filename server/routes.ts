@@ -333,6 +333,62 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/schedules/:id", async (req, res) => {
+    try {
+      const schedule = await storage.updateSchedule(req.params.id, req.body);
+      if (!schedule) {
+        return res.status(404).json({ message: "Schedule not found" });
+      }
+      res.json(schedule);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update schedule" });
+    }
+  });
+
+  app.delete("/api/schedules/:id", async (req, res) => {
+    try {
+      await storage.deleteSchedule(req.params.id);
+      res.json({ message: "Schedule deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete schedule" });
+    }
+  });
+
+  app.post("/api/schedules/generate", async (req, res) => {
+    try {
+      const { companyId, startDate, endDate } = req.body;
+      if (!companyId || !startDate || !endDate) {
+        return res.status(400).json({ message: "companyId, startDate, endDate required" });
+      }
+      const recurring = await storage.getRecurringSchedules(companyId);
+      const activeRecurring = recurring.filter(r => r.isActive);
+      const created: any[] = [];
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      for (let d = new Date(start.getFullYear(), start.getMonth(), start.getDate()); d <= end; d.setDate(d.getDate() + 1)) {
+        const dayOfWeek = d.getDay();
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        for (const rs of activeRecurring) {
+          if (rs.dayOfWeek !== dayOfWeek) continue;
+          if (rs.effectiveFrom && dateStr < rs.effectiveFrom) continue;
+          if (rs.effectiveTo && dateStr > rs.effectiveTo) continue;
+          const schedule = await storage.createSchedule({
+            companyId,
+            workerId: rs.workerId,
+            date: dateStr,
+            startTime: rs.startTime,
+            endTime: rs.endTime,
+            status: "draft",
+          });
+          created.push(schedule);
+        }
+      }
+      res.status(201).json({ created: created.length, schedules: created });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to generate schedules" });
+    }
+  });
+
   app.get("/api/payroll-runs", async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;

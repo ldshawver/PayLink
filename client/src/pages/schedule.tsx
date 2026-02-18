@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -14,7 +14,18 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogFooter,
+  DialogClose,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+} from "@/components/ui/dropdown-menu";
 import {
   Select,
   SelectContent,
@@ -40,9 +51,29 @@ import {
   Plus,
   Clock,
   FileText,
-  Users,
   RefreshCw,
+  Settings,
+  Printer,
+  Search,
+  Pencil,
+  Trash2,
+  Download,
+  X,
 } from "lucide-react";
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+function formatDate(d: Date): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatShortDate(d: Date): string {
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
 
 function getWeekDates(baseDate: Date): Date[] {
   const start = new Date(baseDate);
@@ -57,20 +88,33 @@ function getWeekDates(baseDate: Date): Date[] {
   return dates;
 }
 
-function formatDate(d: Date): string {
-  return d.toISOString().split("T")[0];
+function getMonthDates(baseDate: Date): Date[] {
+  const year = baseDate.getFullYear();
+  const month = baseDate.getMonth();
+  const first = new Date(year, month, 1);
+  const last = new Date(year, month + 1, 0);
+  const dates: Date[] = [];
+  for (let d = new Date(first); d <= last; d.setDate(d.getDate() + 1)) {
+    dates.push(new Date(d));
+  }
+  return dates;
 }
 
-function formatDayHeader(d: Date): string {
-  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  return `${days[d.getDay()]} ${d.getMonth() + 1}/${d.getDate()}`;
+function getDayDates(baseDate: Date): Date[] {
+  return [new Date(baseDate)];
 }
 
-const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function parseTimeToHours(startTime: string, endTime: string): number {
+  const [sh, sm] = startTime.split(":").map(Number);
+  const [eh, em] = endTime.split(":").map(Number);
+  let hours = (eh * 60 + em - sh * 60 - sm) / 60;
+  if (hours < 0) hours += 24;
+  return Math.round(hours * 100) / 100;
+}
 
 function getWorkerName(workers: Worker[], workerId: string): string {
   const w = workers.find((w) => w.id === workerId);
-  return w ? `${w.firstName} ${w.lastName}` : "Unknown";
+  return w ? `${w.lastName}, ${w.firstName}` : "Unknown";
 }
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -84,12 +128,24 @@ function useTabParam(defaultTab: string): [string, (tab: string) => void] {
   return [tab, setTab];
 }
 
+type ViewMode = "day" | "week" | "month";
+
 export default function SchedulePage() {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useTabParam("schedules");
-  const [weekOffset, setWeekOffset] = useState(0);
+  const [viewMode, setViewMode] = useState<ViewMode>("week");
+  const [dateOffset, setDateOffset] = useState(0);
+  const [selectedCompany, setSelectedCompany] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showDailyTotals, setShowDailyTotals] = useState(true);
+  const [showWeeklyTotals, setShowWeeklyTotals] = useState(false);
+  const [showUnscheduled, setShowUnscheduled] = useState(false);
   const [addScheduleOpen, setAddScheduleOpen] = useState(false);
+  const [editScheduleOpen, setEditScheduleOpen] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [addRecurringOpen, setAddRecurringOpen] = useState(false);
+  const [generateOpen, setGenerateOpen] = useState(false);
 
   const [scheduleForm, setScheduleForm] = useState({
     workerId: "",
@@ -99,6 +155,14 @@ export default function SchedulePage() {
     endTime: "",
     department: "",
     note: "",
+  });
+
+  const [editForm, setEditForm] = useState({
+    startTime: "",
+    endTime: "",
+    department: "",
+    note: "",
+    status: "draft" as string,
   });
 
   const [recurringForm, setRecurringForm] = useState({
@@ -111,9 +175,37 @@ export default function SchedulePage() {
     effectiveTo: "",
   });
 
+  const [generateForm, setGenerateForm] = useState({
+    companyId: "",
+    startDate: "",
+    endDate: "",
+  });
+
   const baseDate = new Date();
-  baseDate.setDate(baseDate.getDate() + weekOffset * 7);
-  const weekDates = getWeekDates(baseDate);
+  if (viewMode === "week") {
+    baseDate.setDate(baseDate.getDate() + dateOffset * 7);
+  } else if (viewMode === "month") {
+    baseDate.setMonth(baseDate.getMonth() + dateOffset);
+  } else {
+    baseDate.setDate(baseDate.getDate() + dateOffset);
+  }
+
+  const viewDates = useMemo(() => {
+    if (viewMode === "week") return getWeekDates(baseDate);
+    if (viewMode === "month") return getMonthDates(baseDate);
+    return getDayDates(baseDate);
+  }, [viewMode, dateOffset]);
+
+  const dateRangeLabel = useMemo(() => {
+    if (viewMode === "day") {
+      const d = viewDates[0];
+      return `${DAY_NAMES[d.getDay()]}, ${MONTH_NAMES[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+    }
+    if (viewMode === "week") {
+      return `${formatShortDate(viewDates[0])} - ${formatShortDate(viewDates[6])}`;
+    }
+    return `${MONTH_NAMES[baseDate.getMonth()]} ${baseDate.getFullYear()}`;
+  }, [viewMode, viewDates]);
 
   const { data: schedules = [], isLoading: schedulesLoading } = useQuery<Schedule[]>({
     queryKey: ["/api/schedules"],
@@ -131,6 +223,41 @@ export default function SchedulePage() {
     queryKey: ["/api/recurring-schedules"],
   });
 
+  const filteredWorkers = useMemo(() => {
+    let w = workers.filter(w => w.isActive);
+    if (selectedCompany !== "all") {
+      w = w.filter(w => w.companyId === selectedCompany);
+    }
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      w = w.filter(w =>
+        `${w.firstName} ${w.lastName}`.toLowerCase().includes(q) ||
+        w.employeeNumber?.toLowerCase().includes(q) ||
+        w.department?.toLowerCase().includes(q)
+      );
+    }
+    return w.sort((a, b) => a.lastName.localeCompare(b.lastName));
+  }, [workers, selectedCompany, searchQuery]);
+
+  const dateStrings = useMemo(() => viewDates.map(formatDate), [viewDates]);
+
+  const scheduledWorkerIds = useMemo(() => {
+    const ids = new Set<string>();
+    schedules.forEach(s => {
+      if (dateStrings.includes(s.date)) {
+        if (selectedCompany === "all" || s.companyId === selectedCompany) {
+          ids.add(s.workerId);
+        }
+      }
+    });
+    return ids;
+  }, [schedules, dateStrings, selectedCompany]);
+
+  const displayWorkers = useMemo(() => {
+    if (showUnscheduled) return filteredWorkers;
+    return filteredWorkers.filter(w => scheduledWorkerIds.has(w.id));
+  }, [filteredWorkers, scheduledWorkerIds, showUnscheduled]);
+
   const addScheduleMutation = useMutation({
     mutationFn: async (data: typeof scheduleForm) => {
       await apiRequest("POST", "/api/schedules", data);
@@ -139,7 +266,35 @@ export default function SchedulePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
       setAddScheduleOpen(false);
       setScheduleForm({ workerId: "", companyId: "", date: "", startTime: "", endTime: "", department: "", note: "" });
-      toast({ title: "Schedule added", description: "The schedule has been created." });
+      toast({ title: "Schedule added" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const updateScheduleMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: typeof editForm }) => {
+      await apiRequest("PATCH", `/api/schedules/${id}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
+      setEditScheduleOpen(false);
+      setEditingSchedule(null);
+      toast({ title: "Schedule updated" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const deleteScheduleMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/schedules/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
+      toast({ title: "Schedule deleted" });
     },
     onError: (error: Error) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -157,18 +312,81 @@ export default function SchedulePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-schedules"] });
       setAddRecurringOpen(false);
       setRecurringForm({ companyId: "", workerId: "", dayOfWeek: "", startTime: "", endTime: "", effectiveFrom: "", effectiveTo: "" });
-      toast({ title: "Recurring schedule added", description: "The recurring schedule has been created." });
+      toast({ title: "Recurring schedule added" });
     },
     onError: (error: Error) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
 
+  const generateMutation = useMutation({
+    mutationFn: async (data: typeof generateForm) => {
+      const res = await apiRequest("POST", "/api/schedules/generate", data);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
+      setGenerateOpen(false);
+      toast({ title: "Schedules generated", description: `Created ${data.created} schedule entries from recurring templates.` });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const deleteRecurringMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/recurring-schedules/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/recurring-schedules"] });
+      toast({ title: "Recurring schedule deleted" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const openEditSchedule = (s: Schedule) => {
+    setEditingSchedule(s);
+    setEditForm({
+      startTime: s.startTime,
+      endTime: s.endTime,
+      department: s.department || "",
+      note: s.note || "",
+      status: s.status || "draft",
+    });
+    setEditScheduleOpen(true);
+  };
+
   const handleTabChange = (value: string) => {
     setActiveTab(value);
-    const url = value === "schedules" ? "/schedule" : `/schedule?tab=${value}`;
-    setLocation(url);
+    setLocation(value === "schedules" ? "/schedule" : `/schedule?tab=${value}`);
   };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  const dailyTotals = useMemo(() => {
+    const totals: Record<string, { shifts: number; hours: number }> = {};
+    dateStrings.forEach(ds => {
+      const daySchedules = schedules.filter(s => s.date === ds && (selectedCompany === "all" || s.companyId === selectedCompany));
+      const hours = daySchedules.reduce((sum, s) => sum + parseTimeToHours(s.startTime, s.endTime), 0);
+      totals[ds] = { shifts: daySchedules.length, hours };
+    });
+    return totals;
+  }, [schedules, dateStrings, selectedCompany]);
+
+  const weeklyTotal = useMemo(() => {
+    let shifts = 0;
+    let hours = 0;
+    Object.values(dailyTotals).forEach(t => {
+      shifts += t.shifts;
+      hours += t.hours;
+    });
+    return { shifts, hours: Math.round(hours * 100) / 100 };
+  }, [dailyTotals]);
 
   const isLoading = schedulesLoading || workersLoading || companiesLoading;
 
@@ -177,7 +395,7 @@ export default function SchedulePage() {
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
           <Calendar className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-2xl font-bold" data-testid="text-page-title">Schedule</h1>
+          <h1 className="text-2xl font-bold" data-testid="text-page-title">Schedules</h1>
         </div>
       </div>
 
@@ -201,203 +419,386 @@ export default function SchedulePage() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="schedules" className="space-y-4">
+        <TabsContent value="schedules" className="space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1 border rounded-md overflow-visible">
+                <Button
+                  variant={viewMode === "day" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => { setViewMode("day"); setDateOffset(0); }}
+                  data-testid="button-view-day"
+                >
+                  Day
+                </Button>
+                <Button
+                  variant={viewMode === "week" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => { setViewMode("week"); setDateOffset(0); }}
+                  data-testid="button-view-week"
+                >
+                  Week
+                </Button>
+                <Button
+                  variant={viewMode === "month" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => { setViewMode("month"); setDateOffset(0); }}
+                  data-testid="button-view-month"
+                >
+                  Month
+                </Button>
+              </div>
+
               <Button
                 size="icon"
                 variant="outline"
-                onClick={() => setWeekOffset((w) => w - 1)}
-                data-testid="button-prev-week"
+                onClick={() => setDateOffset((d) => d - 1)}
+                data-testid="button-prev-period"
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              <span className="text-sm font-medium" data-testid="text-week-range">
-                {formatDate(weekDates[0])} — {formatDate(weekDates[6])}
+              <span className="text-sm font-medium min-w-[120px] text-center" data-testid="text-date-range">
+                {dateRangeLabel}
               </span>
               <Button
                 size="icon"
                 variant="outline"
-                onClick={() => setWeekOffset((w) => w + 1)}
-                data-testid="button-next-week"
+                onClick={() => setDateOffset((d) => d + 1)}
+                data-testid="button-next-period"
               >
                 <ChevronRight className="h-4 w-4" />
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setWeekOffset(0)}
+                onClick={() => setDateOffset(0)}
                 data-testid="button-today"
               >
                 Today
               </Button>
             </div>
 
-            <Dialog open={addScheduleOpen} onOpenChange={setAddScheduleOpen}>
-              <DialogTrigger asChild>
-                <Button data-testid="button-add-schedule">
-                  <Plus className="h-4 w-4 mr-1" />
-                  Add Schedule
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Add Schedule</DialogTitle>
-                </DialogHeader>
-                <div className="space-y-3">
-                  <div>
-                    <Label>Employee</Label>
-                    <Select
-                      value={scheduleForm.workerId}
-                      onValueChange={(v) => setScheduleForm((f) => ({ ...f, workerId: v }))}
-                    >
-                      <SelectTrigger data-testid="select-schedule-worker">
-                        <SelectValue placeholder="Select employee" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {workers.map((w) => (
-                          <SelectItem key={w.id} value={w.id}>
-                            {w.firstName} {w.lastName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label>Company</Label>
-                    <Select
-                      value={scheduleForm.companyId}
-                      onValueChange={(v) => setScheduleForm((f) => ({ ...f, companyId: v }))}
-                    >
-                      <SelectTrigger data-testid="select-schedule-company">
-                        <SelectValue placeholder="Select company" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {companies.map((c) => (
-                          <SelectItem key={c.id} value={c.id}>
-                            {c.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label>Date</Label>
-                    <Input
-                      type="date"
-                      value={scheduleForm.date}
-                      onChange={(e) => setScheduleForm((f) => ({ ...f, date: e.target.value }))}
-                      data-testid="input-schedule-date"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <Label>Start Time</Label>
-                      <Input
-                        type="time"
-                        value={scheduleForm.startTime}
-                        onChange={(e) => setScheduleForm((f) => ({ ...f, startTime: e.target.value }))}
-                        data-testid="input-schedule-start-time"
-                      />
-                    </div>
-                    <div>
-                      <Label>End Time</Label>
-                      <Input
-                        type="time"
-                        value={scheduleForm.endTime}
-                        onChange={(e) => setScheduleForm((f) => ({ ...f, endTime: e.target.value }))}
-                        data-testid="input-schedule-end-time"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <Label>Department</Label>
-                    <Input
-                      value={scheduleForm.department}
-                      onChange={(e) => setScheduleForm((f) => ({ ...f, department: e.target.value }))}
-                      placeholder="Department"
-                      data-testid="input-schedule-department"
-                    />
-                  </div>
-                  <div>
-                    <Label>Note</Label>
-                    <Input
-                      value={scheduleForm.note}
-                      onChange={(e) => setScheduleForm((f) => ({ ...f, note: e.target.value }))}
-                      placeholder="Optional note"
-                      data-testid="input-schedule-note"
-                    />
-                  </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search employees..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-8 w-[180px]"
+                  data-testid="input-search-schedule"
+                />
+                {searchQuery && (
                   <Button
-                    className="w-full"
-                    onClick={() => addScheduleMutation.mutate(scheduleForm)}
-                    disabled={addScheduleMutation.isPending || !scheduleForm.workerId || !scheduleForm.companyId || !scheduleForm.date || !scheduleForm.startTime || !scheduleForm.endTime}
-                    data-testid="button-submit-schedule"
+                    size="icon"
+                    variant="ghost"
+                    className="absolute right-0 top-0"
+                    onClick={() => setSearchQuery("")}
+                    data-testid="button-clear-search"
                   >
-                    {addScheduleMutation.isPending ? "Adding..." : "Add Schedule"}
+                    <X className="h-3 w-3" />
                   </Button>
-                </div>
-              </DialogContent>
-            </Dialog>
+                )}
+              </div>
+
+              <Select value={selectedCompany} onValueChange={setSelectedCompany}>
+                <SelectTrigger className="w-[180px]" data-testid="select-company-filter">
+                  <SelectValue placeholder="All Companies" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Companies</SelectItem>
+                  {companies.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="icon" variant="outline" data-testid="button-schedule-settings">
+                    <Settings className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>Schedule Settings</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuCheckboxItem
+                    checked={showDailyTotals}
+                    onCheckedChange={setShowDailyTotals}
+                    data-testid="checkbox-daily-totals"
+                  >
+                    Daily Totals
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={showWeeklyTotals}
+                    onCheckedChange={setShowWeeklyTotals}
+                    data-testid="checkbox-weekly-totals"
+                  >
+                    Weekly Totals
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={showUnscheduled}
+                    onCheckedChange={setShowUnscheduled}
+                    data-testid="checkbox-show-unscheduled"
+                  >
+                    Show Unscheduled Employees
+                  </DropdownMenuCheckboxItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <Button variant="outline" size="icon" onClick={handlePrint} data-testid="button-print-schedule">
+                <Printer className="h-4 w-4" />
+              </Button>
+
+              <Dialog open={addScheduleOpen} onOpenChange={setAddScheduleOpen}>
+                <DialogTrigger asChild>
+                  <Button data-testid="button-add-schedule">
+                    <Plus className="h-4 w-4 mr-1" />
+                    Add Shift
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Add Scheduled Shift</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    <div>
+                      <Label>Employee</Label>
+                      <Select
+                        value={scheduleForm.workerId}
+                        onValueChange={(v) => setScheduleForm((f) => ({ ...f, workerId: v }))}
+                      >
+                        <SelectTrigger data-testid="select-schedule-worker">
+                          <SelectValue placeholder="Select employee" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {workers.map((w) => (
+                            <SelectItem key={w.id} value={w.id}>
+                              {w.lastName}, {w.firstName}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>Company</Label>
+                      <Select
+                        value={scheduleForm.companyId}
+                        onValueChange={(v) => setScheduleForm((f) => ({ ...f, companyId: v }))}
+                      >
+                        <SelectTrigger data-testid="select-schedule-company">
+                          <SelectValue placeholder="Select company" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {companies.map((c) => (
+                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>Date</Label>
+                      <Input
+                        type="date"
+                        value={scheduleForm.date}
+                        onChange={(e) => setScheduleForm((f) => ({ ...f, date: e.target.value }))}
+                        data-testid="input-schedule-date"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label>Start Time</Label>
+                        <Input
+                          type="time"
+                          value={scheduleForm.startTime}
+                          onChange={(e) => setScheduleForm((f) => ({ ...f, startTime: e.target.value }))}
+                          data-testid="input-schedule-start-time"
+                        />
+                      </div>
+                      <div>
+                        <Label>End Time</Label>
+                        <Input
+                          type="time"
+                          value={scheduleForm.endTime}
+                          onChange={(e) => setScheduleForm((f) => ({ ...f, endTime: e.target.value }))}
+                          data-testid="input-schedule-end-time"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label>Department</Label>
+                      <Input
+                        value={scheduleForm.department}
+                        onChange={(e) => setScheduleForm((f) => ({ ...f, department: e.target.value }))}
+                        placeholder="Department"
+                        data-testid="input-schedule-department"
+                      />
+                    </div>
+                    <div>
+                      <Label>Note</Label>
+                      <Input
+                        value={scheduleForm.note}
+                        onChange={(e) => setScheduleForm((f) => ({ ...f, note: e.target.value }))}
+                        placeholder="Optional note"
+                        data-testid="input-schedule-note"
+                      />
+                    </div>
+                    <Button
+                      className="w-full"
+                      onClick={() => addScheduleMutation.mutate(scheduleForm)}
+                      disabled={addScheduleMutation.isPending || !scheduleForm.workerId || !scheduleForm.companyId || !scheduleForm.date || !scheduleForm.startTime || !scheduleForm.endTime}
+                      data-testid="button-submit-schedule"
+                    >
+                      {addScheduleMutation.isPending ? "Adding..." : "Add Shift"}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
           </div>
 
           {isLoading ? (
-            <div className="grid grid-cols-7 gap-2" data-testid="skeleton-week-view">
-              {Array.from({ length: 7 }).map((_, i) => (
-                <Skeleton key={i} className="h-40 rounded-md" />
+            <div className="space-y-2" data-testid="skeleton-schedule-grid">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
               ))}
             </div>
           ) : (
-            <div className="grid grid-cols-7 gap-2">
-              {weekDates.map((date) => {
-                const dateStr = formatDate(date);
-                const daySchedules = schedules.filter((s) => s.date === dateStr);
-                const isToday = formatDate(new Date()) === dateStr;
-
-                return (
-                  <Card
-                    key={dateStr}
-                    className={isToday ? "border-primary" : ""}
-                    data-testid={`card-day-${dateStr}`}
-                  >
-                    <CardHeader className="p-2 pb-1">
-                      <CardTitle className="text-xs font-medium">
-                        {formatDayHeader(date)}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-2 pt-0 space-y-1">
-                      {daySchedules.length === 0 ? (
-                        <p className="text-xs text-muted-foreground">No shifts</p>
-                      ) : (
-                        daySchedules.map((s) => (
-                          <div
-                            key={s.id}
-                            className="rounded-md bg-muted p-1.5 space-y-0.5"
-                            data-testid={`schedule-entry-${s.id}`}
+            <Card>
+              <CardContent className="p-0 overflow-x-auto">
+                <Table data-testid="table-schedule-grid">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="min-w-[160px] sticky left-0 bg-card z-10 border-r" data-testid="header-employee">
+                        Employee
+                      </TableHead>
+                      {viewDates.map((d) => {
+                        const ds = formatDate(d);
+                        const isToday = formatDate(new Date()) === ds;
+                        return (
+                          <TableHead
+                            key={ds}
+                            className={`min-w-[120px] text-center ${isToday ? "bg-primary/10 font-bold" : ""}`}
+                            data-testid={`header-day-${ds}`}
                           >
-                            <div className="flex items-center gap-1 flex-wrap">
-                              <Users className="h-3 w-3 text-muted-foreground shrink-0" />
-                              <span className="text-xs font-medium truncate">
-                                {getWorkerName(workers, s.workerId)}
-                              </span>
-                            </div>
-                            <p className="text-xs text-muted-foreground">
-                              {s.startTime} - {s.endTime}
-                            </p>
-                            {s.department && (
-                              <p className="text-xs text-muted-foreground truncate">{s.department}</p>
-                            )}
-                            <Badge variant="secondary" className="text-[10px]" data-testid={`badge-status-${s.id}`}>
-                              {s.status}
-                            </Badge>
-                          </div>
-                        ))
+                            <div className="text-xs">{DAY_NAMES[d.getDay()]}</div>
+                            <div>{formatShortDate(d)}</div>
+                          </TableHead>
+                        );
+                      })}
+                      {showWeeklyTotals && viewMode === "week" && (
+                        <TableHead className="min-w-[80px] text-center font-bold" data-testid="header-weekly-total">
+                          Total
+                        </TableHead>
                       )}
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {displayWorkers.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={viewDates.length + 1 + (showWeeklyTotals && viewMode === "week" ? 1 : 0)} className="text-center text-muted-foreground py-8">
+                          {showUnscheduled ? "No employees found." : "No scheduled employees. Enable 'Show Unscheduled Employees' in settings to see all employees."}
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      displayWorkers.map((worker) => {
+                        let workerWeekHours = 0;
+                        let workerWeekShifts = 0;
+                        return (
+                          <TableRow key={worker.id} data-testid={`row-worker-${worker.id}`}>
+                            <TableCell className="sticky left-0 bg-card z-10 border-r font-medium" data-testid={`text-worker-name-${worker.id}`}>
+                              <div className="text-sm">{worker.lastName}, {worker.firstName}</div>
+                              {worker.jobTitle && <div className="text-xs text-muted-foreground">{worker.jobTitle}</div>}
+                            </TableCell>
+                            {viewDates.map((d) => {
+                              const ds = formatDate(d);
+                              const isToday = formatDate(new Date()) === ds;
+                              const cellSchedules = schedules.filter(
+                                (s) => s.date === ds && s.workerId === worker.id && (selectedCompany === "all" || s.companyId === selectedCompany)
+                              );
+                              cellSchedules.forEach(s => {
+                                const h = parseTimeToHours(s.startTime, s.endTime);
+                                workerWeekHours += h;
+                                workerWeekShifts++;
+                              });
+                              return (
+                                <TableCell
+                                  key={ds}
+                                  className={`text-center p-1 ${isToday ? "bg-primary/5" : ""}`}
+                                  data-testid={`cell-${worker.id}-${ds}`}
+                                >
+                                  {cellSchedules.length === 0 ? (
+                                    <span className="text-xs text-muted-foreground">-</span>
+                                  ) : (
+                                    <div className="space-y-1">
+                                      {cellSchedules.map((s) => (
+                                        <div
+                                          key={s.id}
+                                          className="group relative rounded bg-primary/10 px-1 py-0.5 text-xs cursor-pointer hover-elevate"
+                                          data-testid={`shift-${s.id}`}
+                                        >
+                                          <div className="font-medium">{s.startTime} - {s.endTime}</div>
+                                          <div className="text-muted-foreground">{parseTimeToHours(s.startTime, s.endTime)}h</div>
+                                          <div className="invisible group-hover:visible absolute top-0 right-0 flex gap-0.5 z-20">
+                                            <Button
+                                              size="icon"
+                                              variant="ghost"
+                                              onClick={(e) => { e.stopPropagation(); openEditSchedule(s); }}
+                                              data-testid={`button-edit-shift-${s.id}`}
+                                            >
+                                              <Pencil className="h-3 w-3" />
+                                            </Button>
+                                            <Button
+                                              size="icon"
+                                              variant="ghost"
+                                              onClick={(e) => { e.stopPropagation(); deleteScheduleMutation.mutate(s.id); }}
+                                              data-testid={`button-delete-shift-${s.id}`}
+                                            >
+                                              <Trash2 className="h-3 w-3" />
+                                            </Button>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </TableCell>
+                              );
+                            })}
+                            {showWeeklyTotals && viewMode === "week" && (
+                              <TableCell className="text-center font-medium" data-testid={`total-worker-${worker.id}`}>
+                                <div className="text-xs">{workerWeekShifts} shifts</div>
+                                <div className="text-sm font-bold">{Math.round(workerWeekHours * 100) / 100}h</div>
+                              </TableCell>
+                            )}
+                          </TableRow>
+                        );
+                      })
+                    )}
+                    {showDailyTotals && displayWorkers.length > 0 && (
+                      <TableRow className="border-t-2 font-bold" data-testid="row-daily-totals">
+                        <TableCell className="sticky left-0 bg-card z-10 border-r text-sm">Daily Totals</TableCell>
+                        {viewDates.map((d) => {
+                          const ds = formatDate(d);
+                          const t = dailyTotals[ds] || { shifts: 0, hours: 0 };
+                          return (
+                            <TableCell key={ds} className="text-center" data-testid={`daily-total-${ds}`}>
+                              <div className="text-xs">{t.shifts} shifts</div>
+                              <div className="text-sm">{t.hours}h</div>
+                            </TableCell>
+                          );
+                        })}
+                        {showWeeklyTotals && viewMode === "week" && (
+                          <TableCell className="text-center" data-testid="grand-total">
+                            <div className="text-xs">{weeklyTotal.shifts} shifts</div>
+                            <div className="text-sm">{weeklyTotal.hours}h</div>
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
           )}
         </TabsContent>
 
@@ -408,6 +809,19 @@ export default function SchedulePage() {
                 <Clock className="h-5 w-5" />
                 Scheduled Shifts
               </CardTitle>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Select value={selectedCompany} onValueChange={setSelectedCompany}>
+                  <SelectTrigger className="w-[180px]" data-testid="select-shifts-company">
+                    <SelectValue placeholder="All Companies" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Companies</SelectItem>
+                    {companies.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </CardHeader>
             <CardContent>
               {isLoading ? (
@@ -424,37 +838,62 @@ export default function SchedulePage() {
                       <TableHead>Date</TableHead>
                       <TableHead>Start Time</TableHead>
                       <TableHead>End Time</TableHead>
+                      <TableHead>Hours</TableHead>
                       <TableHead>Department</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {schedules.length === 0 ? (
+                    {schedules.filter(s => selectedCompany === "all" || s.companyId === selectedCompany).length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={6} className="text-center text-muted-foreground">
+                        <TableCell colSpan={8} className="text-center text-muted-foreground">
                           No scheduled shifts found.
                         </TableCell>
                       </TableRow>
                     ) : (
-                      schedules.map((s) => (
-                        <TableRow key={s.id} data-testid={`row-shift-${s.id}`}>
-                          <TableCell data-testid={`text-employee-${s.id}`}>
-                            {getWorkerName(workers, s.workerId)}
-                          </TableCell>
-                          <TableCell>{s.date}</TableCell>
-                          <TableCell>{s.startTime}</TableCell>
-                          <TableCell>{s.endTime}</TableCell>
-                          <TableCell>{s.department || "—"}</TableCell>
-                          <TableCell>
-                            <Badge
-                              variant={s.status === "published" ? "default" : "secondary"}
-                              data-testid={`badge-shift-status-${s.id}`}
-                            >
-                              {s.status}
-                            </Badge>
-                          </TableCell>
-                        </TableRow>
-                      ))
+                      schedules
+                        .filter(s => selectedCompany === "all" || s.companyId === selectedCompany)
+                        .map((s) => (
+                          <TableRow key={s.id} data-testid={`row-shift-${s.id}`}>
+                            <TableCell data-testid={`text-employee-${s.id}`}>
+                              {getWorkerName(workers, s.workerId)}
+                            </TableCell>
+                            <TableCell>{s.date}</TableCell>
+                            <TableCell>{s.startTime}</TableCell>
+                            <TableCell>{s.endTime}</TableCell>
+                            <TableCell>{parseTimeToHours(s.startTime, s.endTime)}h</TableCell>
+                            <TableCell>{s.department || "-"}</TableCell>
+                            <TableCell>
+                              <Badge
+                                variant={s.status === "published" ? "default" : "secondary"}
+                                data-testid={`badge-shift-status-${s.id}`}
+                              >
+                                {s.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => openEditSchedule(s)}
+                                  data-testid={`button-edit-${s.id}`}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => deleteScheduleMutation.mutate(s.id)}
+                                  data-testid={`button-delete-${s.id}`}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))
                     )}
                   </TableBody>
                 </Table>
@@ -469,123 +908,184 @@ export default function SchedulePage() {
               <RefreshCw className="h-5 w-5" />
               Recurring Schedules
             </h2>
-            <Dialog open={addRecurringOpen} onOpenChange={setAddRecurringOpen}>
-              <DialogTrigger asChild>
-                <Button data-testid="button-add-recurring">
-                  <Plus className="h-4 w-4 mr-1" />
-                  Add Recurring Schedule
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Add Recurring Schedule</DialogTitle>
-                </DialogHeader>
-                <div className="space-y-3">
-                  <div>
-                    <Label>Company</Label>
-                    <Select
-                      value={recurringForm.companyId}
-                      onValueChange={(v) => setRecurringForm((f) => ({ ...f, companyId: v }))}
-                    >
-                      <SelectTrigger data-testid="select-recurring-company">
-                        <SelectValue placeholder="Select company" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {companies.map((c) => (
-                          <SelectItem key={c.id} value={c.id}>
-                            {c.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label>Employee</Label>
-                    <Select
-                      value={recurringForm.workerId}
-                      onValueChange={(v) => setRecurringForm((f) => ({ ...f, workerId: v }))}
-                    >
-                      <SelectTrigger data-testid="select-recurring-worker">
-                        <SelectValue placeholder="Select employee" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {workers.map((w) => (
-                          <SelectItem key={w.id} value={w.id}>
-                            {w.firstName} {w.lastName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label>Day of Week</Label>
-                    <Select
-                      value={recurringForm.dayOfWeek}
-                      onValueChange={(v) => setRecurringForm((f) => ({ ...f, dayOfWeek: v }))}
-                    >
-                      <SelectTrigger data-testid="select-recurring-day">
-                        <SelectValue placeholder="Select day" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {DAY_NAMES.map((name, i) => (
-                          <SelectItem key={i} value={String(i)}>
-                            {name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <Label>Start Time</Label>
-                      <Input
-                        type="time"
-                        value={recurringForm.startTime}
-                        onChange={(e) => setRecurringForm((f) => ({ ...f, startTime: e.target.value }))}
-                        data-testid="input-recurring-start-time"
-                      />
-                    </div>
-                    <div>
-                      <Label>End Time</Label>
-                      <Input
-                        type="time"
-                        value={recurringForm.endTime}
-                        onChange={(e) => setRecurringForm((f) => ({ ...f, endTime: e.target.value }))}
-                        data-testid="input-recurring-end-time"
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <Label>Effective From</Label>
-                      <Input
-                        type="date"
-                        value={recurringForm.effectiveFrom}
-                        onChange={(e) => setRecurringForm((f) => ({ ...f, effectiveFrom: e.target.value }))}
-                        data-testid="input-recurring-effective-from"
-                      />
-                    </div>
-                    <div>
-                      <Label>Effective To</Label>
-                      <Input
-                        type="date"
-                        value={recurringForm.effectiveTo}
-                        onChange={(e) => setRecurringForm((f) => ({ ...f, effectiveTo: e.target.value }))}
-                        data-testid="input-recurring-effective-to"
-                      />
-                    </div>
-                  </div>
-                  <Button
-                    className="w-full"
-                    onClick={() => addRecurringMutation.mutate(recurringForm)}
-                    disabled={addRecurringMutation.isPending || !recurringForm.companyId || !recurringForm.workerId || !recurringForm.dayOfWeek || !recurringForm.startTime || !recurringForm.endTime}
-                    data-testid="button-submit-recurring"
-                  >
-                    {addRecurringMutation.isPending ? "Adding..." : "Add Recurring Schedule"}
+            <div className="flex items-center gap-2 flex-wrap">
+              <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" data-testid="button-generate-schedules">
+                    <Download className="h-4 w-4 mr-1" />
+                    Generate Schedules
                   </Button>
-                </div>
-              </DialogContent>
-            </Dialog>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Generate Schedules from Templates</DialogTitle>
+                  </DialogHeader>
+                  <p className="text-sm text-muted-foreground">
+                    Create schedule entries from active recurring templates for a date range.
+                  </p>
+                  <div className="space-y-3">
+                    <div>
+                      <Label>Company</Label>
+                      <Select
+                        value={generateForm.companyId}
+                        onValueChange={(v) => setGenerateForm((f) => ({ ...f, companyId: v }))}
+                      >
+                        <SelectTrigger data-testid="select-generate-company">
+                          <SelectValue placeholder="Select company" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {companies.map((c) => (
+                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label>Start Date</Label>
+                        <Input
+                          type="date"
+                          value={generateForm.startDate}
+                          onChange={(e) => setGenerateForm((f) => ({ ...f, startDate: e.target.value }))}
+                          data-testid="input-generate-start"
+                        />
+                      </div>
+                      <div>
+                        <Label>End Date</Label>
+                        <Input
+                          type="date"
+                          value={generateForm.endDate}
+                          onChange={(e) => setGenerateForm((f) => ({ ...f, endDate: e.target.value }))}
+                          data-testid="input-generate-end"
+                        />
+                      </div>
+                    </div>
+                    <Button
+                      className="w-full"
+                      onClick={() => generateMutation.mutate(generateForm)}
+                      disabled={generateMutation.isPending || !generateForm.companyId || !generateForm.startDate || !generateForm.endDate}
+                      data-testid="button-submit-generate"
+                    >
+                      {generateMutation.isPending ? "Generating..." : "Generate Schedules"}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+
+              <Dialog open={addRecurringOpen} onOpenChange={setAddRecurringOpen}>
+                <DialogTrigger asChild>
+                  <Button data-testid="button-add-recurring">
+                    <Plus className="h-4 w-4 mr-1" />
+                    Add Recurring Schedule
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Add Recurring Schedule</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    <div>
+                      <Label>Company</Label>
+                      <Select
+                        value={recurringForm.companyId}
+                        onValueChange={(v) => setRecurringForm((f) => ({ ...f, companyId: v }))}
+                      >
+                        <SelectTrigger data-testid="select-recurring-company">
+                          <SelectValue placeholder="Select company" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {companies.map((c) => (
+                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>Employee</Label>
+                      <Select
+                        value={recurringForm.workerId}
+                        onValueChange={(v) => setRecurringForm((f) => ({ ...f, workerId: v }))}
+                      >
+                        <SelectTrigger data-testid="select-recurring-worker">
+                          <SelectValue placeholder="Select employee" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {workers.map((w) => (
+                            <SelectItem key={w.id} value={w.id}>
+                              {w.lastName}, {w.firstName}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>Day of Week</Label>
+                      <Select
+                        value={recurringForm.dayOfWeek}
+                        onValueChange={(v) => setRecurringForm((f) => ({ ...f, dayOfWeek: v }))}
+                      >
+                        <SelectTrigger data-testid="select-recurring-day">
+                          <SelectValue placeholder="Select day" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {DAY_NAMES.map((name, i) => (
+                            <SelectItem key={i} value={String(i)}>{name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label>Start Time</Label>
+                        <Input
+                          type="time"
+                          value={recurringForm.startTime}
+                          onChange={(e) => setRecurringForm((f) => ({ ...f, startTime: e.target.value }))}
+                          data-testid="input-recurring-start-time"
+                        />
+                      </div>
+                      <div>
+                        <Label>End Time</Label>
+                        <Input
+                          type="time"
+                          value={recurringForm.endTime}
+                          onChange={(e) => setRecurringForm((f) => ({ ...f, endTime: e.target.value }))}
+                          data-testid="input-recurring-end-time"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label>Effective From</Label>
+                        <Input
+                          type="date"
+                          value={recurringForm.effectiveFrom}
+                          onChange={(e) => setRecurringForm((f) => ({ ...f, effectiveFrom: e.target.value }))}
+                          data-testid="input-recurring-effective-from"
+                        />
+                      </div>
+                      <div>
+                        <Label>Effective To</Label>
+                        <Input
+                          type="date"
+                          value={recurringForm.effectiveTo}
+                          onChange={(e) => setRecurringForm((f) => ({ ...f, effectiveTo: e.target.value }))}
+                          data-testid="input-recurring-effective-to"
+                        />
+                      </div>
+                    </div>
+                    <Button
+                      className="w-full"
+                      onClick={() => addRecurringMutation.mutate(recurringForm)}
+                      disabled={addRecurringMutation.isPending || !recurringForm.companyId || !recurringForm.workerId || !recurringForm.dayOfWeek || !recurringForm.startTime || !recurringForm.endTime}
+                      data-testid="button-submit-recurring"
+                    >
+                      {addRecurringMutation.isPending ? "Adding..." : "Add Recurring Schedule"}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
           </div>
 
           <Card>
@@ -604,15 +1104,17 @@ export default function SchedulePage() {
                       <TableHead>Day of Week</TableHead>
                       <TableHead>Start Time</TableHead>
                       <TableHead>End Time</TableHead>
+                      <TableHead>Hours</TableHead>
                       <TableHead>Effective From</TableHead>
                       <TableHead>Effective To</TableHead>
                       <TableHead>Active</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {recurringSchedules.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7} className="text-center text-muted-foreground">
+                        <TableCell colSpan={9} className="text-center text-muted-foreground">
                           No recurring schedules found.
                         </TableCell>
                       </TableRow>
@@ -625,8 +1127,9 @@ export default function SchedulePage() {
                           <TableCell>{DAY_NAMES[rs.dayOfWeek] || rs.dayOfWeek}</TableCell>
                           <TableCell>{rs.startTime}</TableCell>
                           <TableCell>{rs.endTime}</TableCell>
-                          <TableCell>{rs.effectiveFrom || "—"}</TableCell>
-                          <TableCell>{rs.effectiveTo || "—"}</TableCell>
+                          <TableCell>{parseTimeToHours(rs.startTime, rs.endTime)}h</TableCell>
+                          <TableCell>{rs.effectiveFrom || "-"}</TableCell>
+                          <TableCell>{rs.effectiveTo || "-"}</TableCell>
                           <TableCell>
                             <Badge
                               variant={rs.isActive ? "default" : "secondary"}
@@ -634,6 +1137,16 @@ export default function SchedulePage() {
                             >
                               {rs.isActive ? "Active" : "Inactive"}
                             </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => deleteRecurringMutation.mutate(rs.id)}
+                              data-testid={`button-delete-recurring-${rs.id}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           </TableCell>
                         </TableRow>
                       ))
@@ -647,20 +1160,132 @@ export default function SchedulePage() {
 
         <TabsContent value="templates">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between gap-2">
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5" />
                 Recurring Templates
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-muted-foreground" data-testid="text-templates-placeholder">
-                Recurring schedule templates for common shift patterns.
+              <p className="text-sm text-muted-foreground mb-4" data-testid="text-templates-info">
+                Use the Recurring Schedule tab to define weekly shift templates, then use "Generate Schedules" to auto-create shifts for a date range.
               </p>
+              {recurringLoading || workersLoading ? (
+                <Skeleton className="h-40 w-full" />
+              ) : recurringSchedules.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <RefreshCw className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p>No recurring templates defined yet.</p>
+                  <Button variant="outline" className="mt-3" onClick={() => handleTabChange("recurring")} data-testid="button-go-recurring">
+                    Set Up Recurring Schedules
+                  </Button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-7 gap-2">
+                  {DAY_NAMES.map((day, dayIndex) => {
+                    const dayTemplates = recurringSchedules.filter(rs => rs.dayOfWeek === dayIndex && rs.isActive);
+                    return (
+                      <Card key={dayIndex} className={dayTemplates.length > 0 ? "border-primary/30" : ""}>
+                        <CardHeader className="p-2 pb-1">
+                          <CardTitle className="text-xs font-medium text-center">{day}</CardTitle>
+                        </CardHeader>
+                        <CardContent className="p-2 pt-0 space-y-1">
+                          {dayTemplates.length === 0 ? (
+                            <p className="text-xs text-muted-foreground text-center">-</p>
+                          ) : (
+                            dayTemplates.map(rs => (
+                              <div key={rs.id} className="rounded bg-primary/10 p-1 text-xs">
+                                <div className="font-medium truncate">{getWorkerName(workers, rs.workerId)}</div>
+                                <div className="text-muted-foreground">{rs.startTime} - {rs.endTime}</div>
+                              </div>
+                            ))
+                          )}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={editScheduleOpen} onOpenChange={setEditScheduleOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Shift</DialogTitle>
+          </DialogHeader>
+          {editingSchedule && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                {getWorkerName(workers, editingSchedule.workerId)} - {editingSchedule.date}
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label>Start Time</Label>
+                  <Input
+                    type="time"
+                    value={editForm.startTime}
+                    onChange={(e) => setEditForm((f) => ({ ...f, startTime: e.target.value }))}
+                    data-testid="input-edit-start-time"
+                  />
+                </div>
+                <div>
+                  <Label>End Time</Label>
+                  <Input
+                    type="time"
+                    value={editForm.endTime}
+                    onChange={(e) => setEditForm((f) => ({ ...f, endTime: e.target.value }))}
+                    data-testid="input-edit-end-time"
+                  />
+                </div>
+              </div>
+              <div>
+                <Label>Status</Label>
+                <Select
+                  value={editForm.status}
+                  onValueChange={(v) => setEditForm((f) => ({ ...f, status: v }))}
+                >
+                  <SelectTrigger data-testid="select-edit-status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="draft">Draft</SelectItem>
+                    <SelectItem value="published">Published</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Department</Label>
+                <Input
+                  value={editForm.department}
+                  onChange={(e) => setEditForm((f) => ({ ...f, department: e.target.value }))}
+                  placeholder="Department"
+                  data-testid="input-edit-department"
+                />
+              </div>
+              <div>
+                <Label>Note</Label>
+                <Input
+                  value={editForm.note}
+                  onChange={(e) => setEditForm((f) => ({ ...f, note: e.target.value }))}
+                  placeholder="Optional note"
+                  data-testid="input-edit-note"
+                />
+              </div>
+              <Button
+                className="w-full"
+                onClick={() => updateScheduleMutation.mutate({ id: editingSchedule.id, data: editForm })}
+                disabled={updateScheduleMutation.isPending}
+                data-testid="button-submit-edit"
+              >
+                {updateScheduleMutation.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
