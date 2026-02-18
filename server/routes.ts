@@ -1083,5 +1083,263 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/remittance-sources", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const sources = await storage.getRemittanceSources(companyId);
+      res.json(sources);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch remittance sources" });
+    }
+  });
+
+  app.post("/api/remittance-sources", async (req, res) => {
+    try {
+      const source = await storage.createRemittanceSource(req.body);
+      res.status(201).json(source);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create remittance source" });
+    }
+  });
+
+  app.patch("/api/remittance-sources/:id", async (req, res) => {
+    try {
+      const source = await storage.updateRemittanceSource(req.params.id, req.body);
+      if (!source) return res.status(404).json({ message: "Not found" });
+      res.json(source);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update remittance source" });
+    }
+  });
+
+  app.delete("/api/remittance-sources/:id", async (req, res) => {
+    try {
+      await storage.deleteRemittanceSource(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete remittance source" });
+    }
+  });
+
+  app.get("/api/remittance-agencies", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const agencies = await storage.getRemittanceAgencies(companyId);
+      res.json(agencies);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch remittance agencies" });
+    }
+  });
+
+  app.post("/api/remittance-agencies", async (req, res) => {
+    try {
+      const agency = await storage.createRemittanceAgency(req.body);
+      res.status(201).json(agency);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create remittance agency" });
+    }
+  });
+
+  app.patch("/api/remittance-agencies/:id", async (req, res) => {
+    try {
+      const agency = await storage.updateRemittanceAgency(req.params.id, req.body);
+      if (!agency) return res.status(404).json({ message: "Not found" });
+      res.json(agency);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update remittance agency" });
+    }
+  });
+
+  app.delete("/api/remittance-agencies/:id", async (req, res) => {
+    try {
+      await storage.deleteRemittanceAgency(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete remittance agency" });
+    }
+  });
+
+  app.get("/api/remittance-agency-events", async (req, res) => {
+    try {
+      const agencyId = req.query.agencyId as string;
+      if (!agencyId) return res.status(400).json({ message: "agencyId required" });
+      const events = await storage.getRemittanceAgencyEvents(agencyId);
+      res.json(events);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch events" });
+    }
+  });
+
+  app.post("/api/remittance-agency-events", async (req, res) => {
+    try {
+      const event = await storage.createRemittanceAgencyEvent(req.body);
+      res.status(201).json(event);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create event" });
+    }
+  });
+
+  app.patch("/api/remittance-agency-events/:id", async (req, res) => {
+    try {
+      const event = await storage.updateRemittanceAgencyEvent(req.params.id, req.body);
+      if (!event) return res.status(404).json({ message: "Not found" });
+      res.json(event);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update event" });
+    }
+  });
+
+  app.delete("/api/remittance-agency-events/:id", async (req, res) => {
+    try {
+      await storage.deleteRemittanceAgencyEvent(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete event" });
+    }
+  });
+
+  app.get("/api/pay-stub-accounts", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const accounts = await storage.getPayStubAccounts(companyId);
+      res.json(accounts);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch pay stub accounts" });
+    }
+  });
+
+  app.post("/api/pay-stub-accounts", async (req, res) => {
+    try {
+      const account = await storage.createPayStubAccount(req.body);
+      res.status(201).json(account);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create pay stub account" });
+    }
+  });
+
+  app.patch("/api/pay-stub-accounts/:id", async (req, res) => {
+    try {
+      const account = await storage.updatePayStubAccount(req.params.id, req.body);
+      if (!account) return res.status(404).json({ message: "Not found" });
+      res.json(account);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update pay stub account" });
+    }
+  });
+
+  app.delete("/api/pay-stub-accounts/:id", async (req, res) => {
+    try {
+      await storage.deletePayStubAccount(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete pay stub account" });
+    }
+  });
+
+  app.get("/api/pay-stub-amendments", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const amendments = await storage.getPayStubAmendments(companyId);
+      res.json(amendments);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch pay stub amendments" });
+    }
+  });
+
+  app.post("/api/pay-stub-amendments", async (req, res) => {
+    try {
+      const amendment = await storage.createPayStubAmendment(req.body);
+      res.status(201).json(amendment);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create pay stub amendment" });
+    }
+  });
+
+  app.patch("/api/pay-stub-amendments/:id", async (req, res) => {
+    try {
+      const amendment = await storage.updatePayStubAmendment(req.params.id, req.body);
+      if (!amendment) return res.status(404).json({ message: "Not found" });
+      res.json(amendment);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update pay stub amendment" });
+    }
+  });
+
+  app.delete("/api/pay-stub-amendments/:id", async (req, res) => {
+    try {
+      await storage.deletePayStubAmendment(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete pay stub amendment" });
+    }
+  });
+
+  app.get("/api/pay-stub-transactions", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const transactions = await storage.getPayStubTransactions(companyId);
+      res.json(transactions);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch pay stub transactions" });
+    }
+  });
+
+  app.post("/api/pay-stub-transactions", async (req, res) => {
+    try {
+      const transaction = await storage.createPayStubTransaction(req.body);
+      res.status(201).json(transaction);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create pay stub transaction" });
+    }
+  });
+
+  app.patch("/api/pay-stub-transactions/:id", async (req, res) => {
+    try {
+      const transaction = await storage.updatePayStubTransaction(req.params.id, req.body);
+      if (!transaction) return res.status(404).json({ message: "Not found" });
+      res.json(transaction);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update pay stub transaction" });
+    }
+  });
+
+  app.get("/api/pay-period-schedules", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const schedules = await storage.getPayPeriodSchedules(companyId);
+      res.json(schedules);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch pay period schedules" });
+    }
+  });
+
+  app.post("/api/pay-period-schedules", async (req, res) => {
+    try {
+      const schedule = await storage.createPayPeriodSchedule(req.body);
+      res.status(201).json(schedule);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create pay period schedule" });
+    }
+  });
+
+  app.patch("/api/pay-period-schedules/:id", async (req, res) => {
+    try {
+      const schedule = await storage.updatePayPeriodSchedule(req.params.id, req.body);
+      if (!schedule) return res.status(404).json({ message: "Not found" });
+      res.json(schedule);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update pay period schedule" });
+    }
+  });
+
+  app.delete("/api/pay-period-schedules/:id", async (req, res) => {
+    try {
+      await storage.deletePayPeriodSchedule(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete pay period schedule" });
+    }
+  });
+
   return httpServer;
 }

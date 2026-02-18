@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Company, Worker, PayrollRun, PayrollItem, PayPeriod, TaxDeduction } from "@shared/schema";
+import type { Company, Worker, PayrollRun, PayrollItem, PayPeriod, TaxDeduction, RemittanceSource, RemittanceAgency, RemittanceAgencyEvent, PayStubAccount, PayStubAmendment, PayStubTransaction, PayPeriodSchedule } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Link } from "wouter";
 import {
@@ -673,6 +674,1147 @@ function TaxesDeductionsTab() {
   );
 }
 
+function RemittanceSourcesTab() {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [formData, setFormData] = useState({
+    companyId: "", name: "", type: "check", status: "enabled",
+    country: "US", currency: "USD", routingNumber: "", accountNumber: "",
+    institution: "", lastCheckNumber: 0,
+  });
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: remittanceSources = [], isLoading } = useQuery<RemittanceSource[]>({ queryKey: ["/api/remittance-sources"] });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: typeof formData) => {
+      const res = await apiRequest("POST", "/api/remittance-sources", {
+        ...data,
+        routingNumber: data.routingNumber || null,
+        accountNumber: data.accountNumber || null,
+        institution: data.institution || null,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/remittance-sources"] });
+      toast({ title: "Remittance source created" });
+      setDialogOpen(false);
+      setFormData({ companyId: "", name: "", type: "check", status: "enabled", country: "US", currency: "USD", routingNumber: "", accountNumber: "", institution: "", lastCheckNumber: 0 });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  if (isLoading) return <div data-testid="loading-remittance-sources"><Skeleton className="h-64 w-full" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button data-testid="button-add-remittance-source"><Plus className="mr-2 h-4 w-4" />Add Remittance Source</Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Add Remittance Source</DialogTitle></DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Company</Label>
+                <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v }))}>
+                  <SelectTrigger data-testid="select-rs-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                  <SelectContent>
+                    {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Name</Label>
+                <Input data-testid="input-rs-name" value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Type</Label>
+                <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
+                  <SelectTrigger data-testid="select-rs-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="check">Check</SelectItem>
+                    <SelectItem value="direct_deposit">Direct Deposit</SelectItem>
+                    <SelectItem value="ach">ACH</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
+                  <SelectTrigger data-testid="select-rs-status"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="enabled">Enabled</SelectItem>
+                    <SelectItem value="disabled">Disabled</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Country</Label>
+                <Input data-testid="input-rs-country" value={formData.country} onChange={e => setFormData(p => ({ ...p, country: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Currency</Label>
+                <Input data-testid="input-rs-currency" value={formData.currency} onChange={e => setFormData(p => ({ ...p, currency: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Routing Number</Label>
+                <Input data-testid="input-rs-routing" value={formData.routingNumber} onChange={e => setFormData(p => ({ ...p, routingNumber: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Account Number</Label>
+                <Input data-testid="input-rs-account" value={formData.accountNumber} onChange={e => setFormData(p => ({ ...p, accountNumber: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Institution</Label>
+                <Input data-testid="input-rs-institution" value={formData.institution} onChange={e => setFormData(p => ({ ...p, institution: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Last Check Number</Label>
+                <Input type="number" data-testid="input-rs-last-check" value={formData.lastCheckNumber} onChange={e => setFormData(p => ({ ...p, lastCheckNumber: Number(e.target.value) }))} />
+              </div>
+              <Button
+                className="w-full"
+                data-testid="button-submit-remittance-source"
+                disabled={createMutation.isPending}
+                onClick={() => createMutation.mutate(formData)}
+              >
+                {createMutation.isPending ? "Creating..." : "Create Remittance Source"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Country</TableHead>
+                  <TableHead>Currency</TableHead>
+                  <TableHead>Institution</TableHead>
+                  <TableHead>Last Check #</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {remittanceSources.map(rs => (
+                  <TableRow key={rs.id} data-testid={`row-remittance-source-${rs.id}`}>
+                    <TableCell className="font-medium">{rs.name}</TableCell>
+                    <TableCell>
+                      <Badge variant={rs.type === "check" ? "default" : rs.type === "direct_deposit" ? "secondary" : "outline"} data-testid={`badge-rs-type-${rs.id}`}>
+                        {rs.type}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={rs.status === "enabled" ? "default" : "outline"} data-testid={`badge-rs-status-${rs.id}`}>
+                        {rs.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{rs.country || "—"}</TableCell>
+                    <TableCell>{rs.currency || "—"}</TableCell>
+                    <TableCell>{rs.institution || "—"}</TableCell>
+                    <TableCell>{rs.lastCheckNumber || 0}</TableCell>
+                  </TableRow>
+                ))}
+                {remittanceSources.length === 0 && (
+                  <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">No remittance sources configured</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function RemittanceAgenciesTab() {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [formData, setFormData] = useState({
+    companyId: "", name: "", type: "federal", status: "enabled",
+    country: "US", provinceState: "", agency: "", startDate: "", endDate: "",
+  });
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: remittanceAgencies = [], isLoading } = useQuery<RemittanceAgency[]>({ queryKey: ["/api/remittance-agencies"] });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: typeof formData) => {
+      const res = await apiRequest("POST", "/api/remittance-agencies", {
+        ...data,
+        startDate: data.startDate || null,
+        endDate: data.endDate || null,
+        provinceState: data.provinceState || null,
+        agency: data.agency || null,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/remittance-agencies"] });
+      toast({ title: "Remittance agency created" });
+      setDialogOpen(false);
+      setFormData({ companyId: "", name: "", type: "federal", status: "enabled", country: "US", provinceState: "", agency: "", startDate: "", endDate: "" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  if (isLoading) return <div data-testid="loading-remittance-agencies"><Skeleton className="h-64 w-full" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button data-testid="button-add-remittance-agency"><Plus className="mr-2 h-4 w-4" />Add Remittance Agency</Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Add Remittance Agency</DialogTitle></DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Company</Label>
+                <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v }))}>
+                  <SelectTrigger data-testid="select-ra-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                  <SelectContent>
+                    {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Name</Label>
+                <Input data-testid="input-ra-name" value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Type</Label>
+                <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
+                  <SelectTrigger data-testid="select-ra-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="federal">Federal</SelectItem>
+                    <SelectItem value="state">State</SelectItem>
+                    <SelectItem value="local">Local</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
+                  <SelectTrigger data-testid="select-ra-status"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="enabled">Enabled</SelectItem>
+                    <SelectItem value="disabled">Disabled</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Country</Label>
+                <Input data-testid="input-ra-country" value={formData.country} onChange={e => setFormData(p => ({ ...p, country: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Province/State</Label>
+                <Input data-testid="input-ra-province" value={formData.provinceState} onChange={e => setFormData(p => ({ ...p, provinceState: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Agency</Label>
+                <Input data-testid="input-ra-agency" value={formData.agency} onChange={e => setFormData(p => ({ ...p, agency: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Start Date</Label>
+                <Input type="date" data-testid="input-ra-start-date" value={formData.startDate} onChange={e => setFormData(p => ({ ...p, startDate: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>End Date</Label>
+                <Input type="date" data-testid="input-ra-end-date" value={formData.endDate} onChange={e => setFormData(p => ({ ...p, endDate: e.target.value }))} />
+              </div>
+              <Button
+                className="w-full"
+                data-testid="button-submit-remittance-agency"
+                disabled={createMutation.isPending}
+                onClick={() => createMutation.mutate(formData)}
+              >
+                {createMutation.isPending ? "Creating..." : "Create Remittance Agency"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Country</TableHead>
+                  <TableHead>Province/State</TableHead>
+                  <TableHead>Start Date</TableHead>
+                  <TableHead>End Date</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {remittanceAgencies.map(ra => (
+                  <TableRow key={ra.id} data-testid={`row-remittance-agency-${ra.id}`}>
+                    <TableCell className="font-medium">{ra.name}</TableCell>
+                    <TableCell>
+                      <Badge variant={ra.type === "federal" ? "default" : ra.type === "state" ? "secondary" : "outline"} data-testid={`badge-ra-type-${ra.id}`}>
+                        {ra.type}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={ra.status === "enabled" ? "default" : "outline"} data-testid={`badge-ra-status-${ra.id}`}>
+                        {ra.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{ra.country || "—"}</TableCell>
+                    <TableCell>{ra.provinceState || "—"}</TableCell>
+                    <TableCell>{ra.startDate || "—"}</TableCell>
+                    <TableCell>{ra.endDate || "—"}</TableCell>
+                  </TableRow>
+                ))}
+                {remittanceAgencies.length === 0 && (
+                  <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">No remittance agencies configured</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function TaxWizardTab() {
+  const { toast } = useToast();
+  const [selectedAgencyId, setSelectedAgencyId] = useState("");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [formData, setFormData] = useState({
+    agencyId: "", type: "payment", status: "enabled", frequency: "quarterly",
+    dueDateDelayDays: 0, effectiveDate: "", reminderDays: 7,
+  });
+
+  const { data: agencies = [], isLoading: agenciesLoading } = useQuery<RemittanceAgency[]>({ queryKey: ["/api/remittance-agencies"] });
+  const { data: events = [], isLoading: eventsLoading } = useQuery<RemittanceAgencyEvent[]>({
+    queryKey: ["/api/remittance-agency-events", selectedAgencyId],
+    queryFn: async () => {
+      const res = await fetch(`/api/remittance-agency-events?agencyId=${selectedAgencyId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch events");
+      return res.json();
+    },
+    enabled: !!selectedAgencyId,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: typeof formData) => {
+      const res = await apiRequest("POST", "/api/remittance-agency-events", {
+        ...data,
+        effectiveDate: data.effectiveDate || null,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/remittance-agency-events", selectedAgencyId] });
+      toast({ title: "Agency event created" });
+      setDialogOpen(false);
+      setFormData({ agencyId: "", type: "payment", status: "enabled", frequency: "quarterly", dueDateDelayDays: 0, effectiveDate: "", reminderDays: 7 });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  if (agenciesLoading) return <div data-testid="loading-tax-wizard"><Skeleton className="h-64 w-full" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="space-y-2">
+          <Label>Select Agency</Label>
+          <Select value={selectedAgencyId} onValueChange={setSelectedAgencyId}>
+            <SelectTrigger data-testid="select-tw-agency" className="w-64"><SelectValue placeholder="Select an agency" /></SelectTrigger>
+            <SelectContent>
+              {agencies.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        {selectedAgencyId && (
+          <div className="ml-auto">
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-add-agency-event"><Plus className="mr-2 h-4 w-4" />Add Event</Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader><DialogTitle>Add Agency Event</DialogTitle></DialogHeader>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Type</Label>
+                    <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
+                      <SelectTrigger data-testid="select-ae-type"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="payment">Payment</SelectItem>
+                        <SelectItem value="filing">Filing</SelectItem>
+                        <SelectItem value="reporting">Reporting</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Status</Label>
+                    <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
+                      <SelectTrigger data-testid="select-ae-status"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="enabled">Enabled</SelectItem>
+                        <SelectItem value="disabled">Disabled</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Frequency</Label>
+                    <Select value={formData.frequency} onValueChange={v => setFormData(p => ({ ...p, frequency: v }))}>
+                      <SelectTrigger data-testid="select-ae-frequency"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="quarterly">Quarterly</SelectItem>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                        <SelectItem value="annually">Annually</SelectItem>
+                        <SelectItem value="semi_annually">Semi-Annually</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Due Date Delay (Days)</Label>
+                    <Input type="number" data-testid="input-ae-delay" value={formData.dueDateDelayDays} onChange={e => setFormData(p => ({ ...p, dueDateDelayDays: Number(e.target.value) }))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Effective Date</Label>
+                    <Input type="date" data-testid="input-ae-effective-date" value={formData.effectiveDate} onChange={e => setFormData(p => ({ ...p, effectiveDate: e.target.value }))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Reminder Days</Label>
+                    <Input type="number" data-testid="input-ae-reminder" value={formData.reminderDays} onChange={e => setFormData(p => ({ ...p, reminderDays: Number(e.target.value) }))} />
+                  </div>
+                  <Button
+                    className="w-full"
+                    data-testid="button-submit-agency-event"
+                    disabled={createMutation.isPending}
+                    onClick={() => createMutation.mutate({ ...formData, agencyId: selectedAgencyId })}
+                  >
+                    {createMutation.isPending ? "Creating..." : "Create Event"}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
+        )}
+      </div>
+      {selectedAgencyId && (
+        <Card>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              {eventsLoading ? (
+                <div data-testid="loading-agency-events"><Skeleton className="h-32 w-full" /></div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Frequency</TableHead>
+                      <TableHead>Due Date Delay</TableHead>
+                      <TableHead>Effective Date</TableHead>
+                      <TableHead>Reminder Days</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {events.map(ev => (
+                      <TableRow key={ev.id} data-testid={`row-agency-event-${ev.id}`}>
+                        <TableCell>
+                          <Badge variant={ev.type === "payment" ? "default" : ev.type === "filing" ? "secondary" : "outline"} data-testid={`badge-ae-type-${ev.id}`}>
+                            {ev.type}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={ev.status === "enabled" ? "default" : "outline"} data-testid={`badge-ae-status-${ev.id}`}>
+                            {ev.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>{ev.frequency || "—"}</TableCell>
+                        <TableCell>{ev.dueDateDelayDays ?? 0} days</TableCell>
+                        <TableCell>{ev.effectiveDate || "—"}</TableCell>
+                        <TableCell>{ev.reminderDays ?? 7}</TableCell>
+                      </TableRow>
+                    ))}
+                    {events.length === 0 && (
+                      <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">No events for this agency</TableCell></TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      {!selectedAgencyId && (
+        <Card>
+          <CardContent className="p-6 text-center text-muted-foreground">
+            Select an agency above to view and manage its events.
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function PayStubAccountsTab() {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [formData, setFormData] = useState({
+    companyId: "", name: "", type: "earning", status: "enabled",
+    displayOrder: 0, debitAccount: "", creditAccount: "",
+  });
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: payStubAccounts = [], isLoading } = useQuery<PayStubAccount[]>({ queryKey: ["/api/pay-stub-accounts"] });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: typeof formData) => {
+      const res = await apiRequest("POST", "/api/pay-stub-accounts", {
+        ...data,
+        debitAccount: data.debitAccount || null,
+        creditAccount: data.creditAccount || null,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-stub-accounts"] });
+      toast({ title: "Pay stub account created" });
+      setDialogOpen(false);
+      setFormData({ companyId: "", name: "", type: "earning", status: "enabled", displayOrder: 0, debitAccount: "", creditAccount: "" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  if (isLoading) return <div data-testid="loading-pay-stub-accounts"><Skeleton className="h-64 w-full" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button data-testid="button-add-pay-stub-account"><Plus className="mr-2 h-4 w-4" />Add Pay Stub Account</Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Add Pay Stub Account</DialogTitle></DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Company</Label>
+                <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v }))}>
+                  <SelectTrigger data-testid="select-psa-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                  <SelectContent>
+                    {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Name</Label>
+                <Input data-testid="input-psa-name" value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Type</Label>
+                <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
+                  <SelectTrigger data-testid="select-psa-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="earning">Earning</SelectItem>
+                    <SelectItem value="deduction">Deduction</SelectItem>
+                    <SelectItem value="benefit">Benefit</SelectItem>
+                    <SelectItem value="employer_contribution">Employer Contribution</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
+                  <SelectTrigger data-testid="select-psa-status"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="enabled">Enabled</SelectItem>
+                    <SelectItem value="disabled">Disabled</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Display Order</Label>
+                <Input type="number" data-testid="input-psa-display-order" value={formData.displayOrder} onChange={e => setFormData(p => ({ ...p, displayOrder: Number(e.target.value) }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Debit Account</Label>
+                <Input data-testid="input-psa-debit" value={formData.debitAccount} onChange={e => setFormData(p => ({ ...p, debitAccount: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Credit Account</Label>
+                <Input data-testid="input-psa-credit" value={formData.creditAccount} onChange={e => setFormData(p => ({ ...p, creditAccount: e.target.value }))} />
+              </div>
+              <Button
+                className="w-full"
+                data-testid="button-submit-pay-stub-account"
+                disabled={createMutation.isPending}
+                onClick={() => createMutation.mutate(formData)}
+              >
+                {createMutation.isPending ? "Creating..." : "Create Pay Stub Account"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Display Order</TableHead>
+                  <TableHead>Debit Account</TableHead>
+                  <TableHead>Credit Account</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {payStubAccounts.map(psa => (
+                  <TableRow key={psa.id} data-testid={`row-pay-stub-account-${psa.id}`}>
+                    <TableCell className="font-medium">{psa.name}</TableCell>
+                    <TableCell>
+                      <Badge variant={psa.type === "earning" ? "default" : psa.type === "deduction" ? "secondary" : "outline"} data-testid={`badge-psa-type-${psa.id}`}>
+                        {psa.type}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={psa.status === "enabled" ? "default" : "outline"} data-testid={`badge-psa-status-${psa.id}`}>
+                        {psa.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{psa.displayOrder ?? 0}</TableCell>
+                    <TableCell>{psa.debitAccount || "—"}</TableCell>
+                    <TableCell>{psa.creditAccount || "—"}</TableCell>
+                  </TableRow>
+                ))}
+                {payStubAccounts.length === 0 && (
+                  <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">No pay stub accounts configured</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function PayStubAmendmentsTab() {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [formData, setFormData] = useState({
+    companyId: "", workerId: "", payStubAccountId: "", amountType: "fixed",
+    amount: "", rate: "", units: "", percent: "", effectiveDate: "", description: "",
+  });
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
+  const { data: payStubAccountsList = [] } = useQuery<PayStubAccount[]>({ queryKey: ["/api/pay-stub-accounts"] });
+  const { data: amendments = [], isLoading } = useQuery<PayStubAmendment[]>({ queryKey: ["/api/pay-stub-amendments"] });
+
+  const getWorkerName = (id: string) => { const w = workers.find(w => w.id === id); return w ? `${w.firstName} ${w.lastName}` : id; };
+  const getAccountName = (id: string) => payStubAccountsList.find(a => a.id === id)?.name || id;
+  const filteredWorkers = formData.companyId ? workers.filter(w => w.companyId === formData.companyId) : workers;
+
+  const createMutation = useMutation({
+    mutationFn: async (data: typeof formData) => {
+      const res = await apiRequest("POST", "/api/pay-stub-amendments", {
+        ...data,
+        amount: data.amount ? String(data.amount) : "0",
+        rate: data.rate ? String(data.rate) : "0",
+        units: data.units ? String(data.units) : "0",
+        percent: data.percent ? String(data.percent) : "0",
+        effectiveDate: data.effectiveDate || null,
+        description: data.description || null,
+        payStubAccountId: data.payStubAccountId || null,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-stub-amendments"] });
+      toast({ title: "Pay stub amendment created" });
+      setDialogOpen(false);
+      setFormData({ companyId: "", workerId: "", payStubAccountId: "", amountType: "fixed", amount: "", rate: "", units: "", percent: "", effectiveDate: "", description: "" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  if (isLoading) return <div data-testid="loading-pay-stub-amendments"><Skeleton className="h-64 w-full" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button data-testid="button-add-pay-stub-amendment"><Plus className="mr-2 h-4 w-4" />Add Amendment</Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Add Pay Stub Amendment</DialogTitle></DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Company</Label>
+                <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v, workerId: "" }))}>
+                  <SelectTrigger data-testid="select-psam-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                  <SelectContent>
+                    {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Worker</Label>
+                <Select value={formData.workerId} onValueChange={v => setFormData(p => ({ ...p, workerId: v }))}>
+                  <SelectTrigger data-testid="select-psam-worker"><SelectValue placeholder="Select worker" /></SelectTrigger>
+                  <SelectContent>
+                    {filteredWorkers.map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Pay Stub Account</Label>
+                <Select value={formData.payStubAccountId} onValueChange={v => setFormData(p => ({ ...p, payStubAccountId: v }))}>
+                  <SelectTrigger data-testid="select-psam-account"><SelectValue placeholder="Select account" /></SelectTrigger>
+                  <SelectContent>
+                    {payStubAccountsList.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Amount Type</Label>
+                <Select value={formData.amountType} onValueChange={v => setFormData(p => ({ ...p, amountType: v }))}>
+                  <SelectTrigger data-testid="select-psam-amount-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="fixed">Fixed</SelectItem>
+                    <SelectItem value="percentage">Percentage</SelectItem>
+                    <SelectItem value="units">Units</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Amount</Label>
+                <Input type="number" step="0.01" data-testid="input-psam-amount" value={formData.amount} onChange={e => setFormData(p => ({ ...p, amount: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Rate</Label>
+                <Input type="number" step="0.01" data-testid="input-psam-rate" value={formData.rate} onChange={e => setFormData(p => ({ ...p, rate: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Units</Label>
+                <Input type="number" step="0.01" data-testid="input-psam-units" value={formData.units} onChange={e => setFormData(p => ({ ...p, units: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Percent</Label>
+                <Input type="number" step="0.01" data-testid="input-psam-percent" value={formData.percent} onChange={e => setFormData(p => ({ ...p, percent: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Effective Date</Label>
+                <Input type="date" data-testid="input-psam-effective-date" value={formData.effectiveDate} onChange={e => setFormData(p => ({ ...p, effectiveDate: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Description</Label>
+                <Textarea data-testid="input-psam-description" value={formData.description} onChange={e => setFormData(p => ({ ...p, description: e.target.value }))} />
+              </div>
+              <Button
+                className="w-full"
+                data-testid="button-submit-pay-stub-amendment"
+                disabled={createMutation.isPending}
+                onClick={() => createMutation.mutate(formData)}
+              >
+                {createMutation.isPending ? "Creating..." : "Create Amendment"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Worker</TableHead>
+                  <TableHead>Account</TableHead>
+                  <TableHead>Amount Type</TableHead>
+                  <TableHead>Amount</TableHead>
+                  <TableHead>Rate</TableHead>
+                  <TableHead>Effective Date</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {amendments.map(am => (
+                  <TableRow key={am.id} data-testid={`row-pay-stub-amendment-${am.id}`}>
+                    <TableCell>{getWorkerName(am.workerId)}</TableCell>
+                    <TableCell>{am.payStubAccountId ? getAccountName(am.payStubAccountId) : "—"}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline" data-testid={`badge-psam-type-${am.id}`}>{am.amountType}</Badge>
+                    </TableCell>
+                    <TableCell>${Number(am.amount || 0).toFixed(2)}</TableCell>
+                    <TableCell>${Number(am.rate || 0).toFixed(2)}</TableCell>
+                    <TableCell>{am.effectiveDate || "—"}</TableCell>
+                    <TableCell>
+                      <Badge variant={am.status === "active" ? "default" : "outline"} data-testid={`badge-psam-status-${am.id}`}>
+                        {am.status}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {amendments.length === 0 && (
+                  <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">No pay stub amendments</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function PayStubTransactionsTab() {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [formData, setFormData] = useState({
+    companyId: "", workerId: "", status: "pending", paymentMethod: "check",
+    amount: "", transactionDate: "", checkNumber: "", reference: "",
+  });
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
+  const { data: transactions = [], isLoading } = useQuery<PayStubTransaction[]>({ queryKey: ["/api/pay-stub-transactions"] });
+
+  const getWorkerName = (id: string) => { const w = workers.find(w => w.id === id); return w ? `${w.firstName} ${w.lastName}` : id; };
+
+  const createMutation = useMutation({
+    mutationFn: async (data: typeof formData) => {
+      const res = await apiRequest("POST", "/api/pay-stub-transactions", {
+        ...data,
+        amount: data.amount ? String(data.amount) : "0",
+        transactionDate: data.transactionDate || null,
+        checkNumber: data.checkNumber || null,
+        reference: data.reference || null,
+        remittanceSourceId: data.remittanceSourceId || null,
+        payrollItemId: data.payrollItemId || null,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-stub-transactions"] });
+      toast({ title: "Transaction created" });
+      setDialogOpen(false);
+      setFormData({ companyId: "", workerId: "", status: "pending", paymentMethod: "check", amount: "", transactionDate: "", checkNumber: "", reference: "" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  if (isLoading) return <div data-testid="loading-pay-stub-transactions"><Skeleton className="h-64 w-full" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button data-testid="button-add-pay-stub-transaction"><Plus className="mr-2 h-4 w-4" />Add Transaction</Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Add Pay Stub Transaction</DialogTitle></DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Company</Label>
+                <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v }))}>
+                  <SelectTrigger data-testid="select-pst-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                  <SelectContent>
+                    {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Worker</Label>
+                <Select value={formData.workerId} onValueChange={v => setFormData(p => ({ ...p, workerId: v }))}>
+                  <SelectTrigger data-testid="select-pst-worker"><SelectValue placeholder="Select worker" /></SelectTrigger>
+                  <SelectContent>
+                    {workers.map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
+                  <SelectTrigger data-testid="select-pst-status"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="completed">Completed</SelectItem>
+                    <SelectItem value="voided">Voided</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Payment Method</Label>
+                <Select value={formData.paymentMethod} onValueChange={v => setFormData(p => ({ ...p, paymentMethod: v }))}>
+                  <SelectTrigger data-testid="select-pst-payment-method"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="check">Check</SelectItem>
+                    <SelectItem value="direct_deposit">Direct Deposit</SelectItem>
+                    <SelectItem value="ach">ACH</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Amount</Label>
+                <Input type="number" step="0.01" data-testid="input-pst-amount" value={formData.amount} onChange={e => setFormData(p => ({ ...p, amount: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Transaction Date</Label>
+                <Input type="date" data-testid="input-pst-date" value={formData.transactionDate} onChange={e => setFormData(p => ({ ...p, transactionDate: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Check Number</Label>
+                <Input data-testid="input-pst-check-number" value={formData.checkNumber} onChange={e => setFormData(p => ({ ...p, checkNumber: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Reference</Label>
+                <Input data-testid="input-pst-reference" value={formData.reference} onChange={e => setFormData(p => ({ ...p, reference: e.target.value }))} />
+              </div>
+              <Button
+                className="w-full"
+                data-testid="button-submit-pay-stub-transaction"
+                disabled={createMutation.isPending}
+                onClick={() => createMutation.mutate(formData)}
+              >
+                {createMutation.isPending ? "Creating..." : "Create Transaction"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Worker</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Payment Method</TableHead>
+                  <TableHead>Amount</TableHead>
+                  <TableHead>Check #</TableHead>
+                  <TableHead>Transaction Date</TableHead>
+                  <TableHead>Reference</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {transactions.map(tx => (
+                  <TableRow key={tx.id} data-testid={`row-pay-stub-transaction-${tx.id}`}>
+                    <TableCell>{getWorkerName(tx.workerId)}</TableCell>
+                    <TableCell>
+                      <Badge variant={tx.status === "completed" ? "default" : tx.status === "pending" ? "secondary" : "outline"} data-testid={`badge-pst-status-${tx.id}`}>
+                        {tx.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" data-testid={`badge-pst-method-${tx.id}`}>{tx.paymentMethod}</Badge>
+                    </TableCell>
+                    <TableCell>${Number(tx.amount || 0).toFixed(2)}</TableCell>
+                    <TableCell>{tx.checkNumber || "—"}</TableCell>
+                    <TableCell>{tx.transactionDate || "—"}</TableCell>
+                    <TableCell>{tx.reference || "—"}</TableCell>
+                  </TableRow>
+                ))}
+                {transactions.length === 0 && (
+                  <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">No pay stub transactions</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function PayPeriodSchedulesTab() {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [formData, setFormData] = useState({
+    companyId: "", name: "", description: "", type: "biweekly",
+    anchorDate: "", transactionDayOffset: 3, semiMonthlyDay1: 1,
+    semiMonthlyDay2: 15, isActive: true,
+  });
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: schedules = [], isLoading } = useQuery<PayPeriodSchedule[]>({ queryKey: ["/api/pay-period-schedules"] });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: typeof formData) => {
+      const res = await apiRequest("POST", "/api/pay-period-schedules", {
+        ...data,
+        anchorDate: data.anchorDate || null,
+        description: data.description || null,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-period-schedules"] });
+      toast({ title: "Pay period schedule created" });
+      setDialogOpen(false);
+      setFormData({ companyId: "", name: "", description: "", type: "biweekly", anchorDate: "", transactionDayOffset: 3, semiMonthlyDay1: 1, semiMonthlyDay2: 15, isActive: true });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  if (isLoading) return <div data-testid="loading-pay-period-schedules"><Skeleton className="h-64 w-full" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button data-testid="button-add-pay-period-schedule"><Plus className="mr-2 h-4 w-4" />Add Schedule</Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Add Pay Period Schedule</DialogTitle></DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Company</Label>
+                <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v }))}>
+                  <SelectTrigger data-testid="select-pps-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                  <SelectContent>
+                    {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Name</Label>
+                <Input data-testid="input-pps-name" value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Description</Label>
+                <Textarea data-testid="input-pps-description" value={formData.description} onChange={e => setFormData(p => ({ ...p, description: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Type</Label>
+                <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
+                  <SelectTrigger data-testid="select-pps-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="biweekly">Biweekly</SelectItem>
+                    <SelectItem value="semi_monthly">Semi-Monthly</SelectItem>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Anchor Date</Label>
+                <Input type="date" data-testid="input-pps-anchor-date" value={formData.anchorDate} onChange={e => setFormData(p => ({ ...p, anchorDate: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Transaction Day Offset</Label>
+                <Input type="number" data-testid="input-pps-offset" value={formData.transactionDayOffset} onChange={e => setFormData(p => ({ ...p, transactionDayOffset: Number(e.target.value) }))} />
+              </div>
+              {formData.type === "semi_monthly" && (
+                <>
+                  <div className="space-y-2">
+                    <Label>Semi-Monthly Day 1</Label>
+                    <Input type="number" data-testid="input-pps-semi-day1" value={formData.semiMonthlyDay1} onChange={e => setFormData(p => ({ ...p, semiMonthlyDay1: Number(e.target.value) }))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Semi-Monthly Day 2</Label>
+                    <Input type="number" data-testid="input-pps-semi-day2" value={formData.semiMonthlyDay2} onChange={e => setFormData(p => ({ ...p, semiMonthlyDay2: Number(e.target.value) }))} />
+                  </div>
+                </>
+              )}
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="isActivePPS"
+                  data-testid="checkbox-pps-active"
+                  checked={formData.isActive}
+                  onCheckedChange={(checked) => setFormData(p => ({ ...p, isActive: checked === true }))}
+                />
+                <Label htmlFor="isActivePPS">Active</Label>
+              </div>
+              <Button
+                className="w-full"
+                data-testid="button-submit-pay-period-schedule"
+                disabled={createMutation.isPending}
+                onClick={() => createMutation.mutate(formData)}
+              >
+                {createMutation.isPending ? "Creating..." : "Create Schedule"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Anchor Date</TableHead>
+                  <TableHead>Transaction Day Offset</TableHead>
+                  <TableHead>Active</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {schedules.map(s => (
+                  <TableRow key={s.id} data-testid={`row-pay-period-schedule-${s.id}`}>
+                    <TableCell className="font-medium">{s.name}</TableCell>
+                    <TableCell>
+                      <Badge variant={s.type === "biweekly" ? "default" : s.type === "weekly" ? "secondary" : "outline"} data-testid={`badge-pps-type-${s.id}`}>
+                        {s.type}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{s.anchorDate || "—"}</TableCell>
+                    <TableCell>{s.transactionDayOffset ?? 3}</TableCell>
+                    <TableCell>
+                      <Badge variant={s.isActive ? "default" : "outline"} data-testid={`badge-pps-active-${s.id}`}>
+                        {s.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {schedules.length === 0 && (
+                  <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground">No pay period schedules configured</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function PlaceholderTab({ icon: Icon, message }: { icon: typeof Calculator; message: string }) {
   return (
     <Card>
@@ -718,30 +1860,16 @@ export default function PayrollPage() {
         </div>
 
         <TabsContent value="process"><ProcessPayrollTab /></TabsContent>
-        <TabsContent value="tax-wizard">
-          <PlaceholderTab icon={Calculator} message="Tax setup wizard helps configure federal, state, and local tax settings." />
-        </TabsContent>
+        <TabsContent value="tax-wizard"><TaxWizardTab /></TabsContent>
         <TabsContent value="pay-stubs"><PayStubsTab /></TabsContent>
-        <TabsContent value="pay-stub-transactions">
-          <PlaceholderTab icon={Receipt} message="Pay stub transaction history coming soon." />
-        </TabsContent>
+        <TabsContent value="pay-stub-transactions"><PayStubTransactionsTab /></TabsContent>
         <TabsContent value="pay-periods"><PayPeriodsTab /></TabsContent>
-        <TabsContent value="pay-stub-amendments">
-          <PlaceholderTab icon={FileText} message="Pay stub amendments for adjustments coming soon." />
-        </TabsContent>
-        <TabsContent value="pay-period-schedules">
-          <PlaceholderTab icon={CalendarDays} message="Automated pay period schedule generation coming soon." />
-        </TabsContent>
-        <TabsContent value="pay-stub-accounts">
-          <PlaceholderTab icon={CreditCard} message="Configure pay stub account categories coming soon." />
-        </TabsContent>
+        <TabsContent value="pay-stub-amendments"><PayStubAmendmentsTab /></TabsContent>
+        <TabsContent value="pay-period-schedules"><PayPeriodSchedulesTab /></TabsContent>
+        <TabsContent value="pay-stub-accounts"><PayStubAccountsTab /></TabsContent>
         <TabsContent value="taxes-deductions"><TaxesDeductionsTab /></TabsContent>
-        <TabsContent value="remittance-agencies">
-          <PlaceholderTab icon={Building} message="Remittance agency configuration coming soon." />
-        </TabsContent>
-        <TabsContent value="remittance-sources">
-          <PlaceholderTab icon={Settings} message="Remittance source configuration coming soon." />
-        </TabsContent>
+        <TabsContent value="remittance-agencies"><RemittanceAgenciesTab /></TabsContent>
+        <TabsContent value="remittance-sources"><RemittanceSourcesTab /></TabsContent>
       </Tabs>
     </div>
   );
