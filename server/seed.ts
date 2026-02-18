@@ -1,5 +1,6 @@
 import { db } from "./db";
-import { companies, workers, timeEntries, schedules, taxesDeductions } from "@shared/schema";
+import { companies, workers, timeEntries, schedules, taxesDeductions, users } from "@shared/schema";
+import bcrypt from "bcrypt";
 
 export async function seedDatabase() {
   try {
@@ -304,6 +305,17 @@ export async function seedDatabase() {
       isEmployerPaid: false,
     },
   ]);
+
+  const existingUsers = await db.select().from(users);
+  if (existingUsers.length === 0) {
+    const hashedPassword = await bcrypt.hash("admin", 10);
+    await db.insert(users).values({
+      username: "admin",
+      password: hashedPassword,
+      role: "admin",
+      companyId: company1.id,
+    });
+  }
 
   console.log("Database seeded successfully");
 }

@@ -71,6 +71,9 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { useAuth } from "@/hooks/use-auth";
+import { Button } from "@/components/ui/button";
+import { LogOut } from "lucide-react";
 import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
 
 const navSections = [
@@ -78,12 +81,6 @@ const navSections = [
     label: "Dashboard",
     icon: LayoutDashboard,
     url: "/",
-    items: [],
-  },
-  {
-    label: "Time Clock",
-    icon: Timer,
-    url: "/time-clock",
     items: [],
   },
   {
@@ -130,7 +127,7 @@ const navSections = [
     url: "/company",
     items: [
       { title: "Company Information", url: "/company?tab=info", icon: Building2 },
-      { title: "Legal Entity", url: "/company?tab=legal-entity", icon: Briefcase },
+      { title: "Legal Entity", url: "/company?tab=legal", icon: Briefcase },
       { title: "Branches", url: "/company?tab=branches", icon: Building },
       { title: "Departments", url: "/company?tab=departments", icon: GitBranch },
       { title: "Hierarchy", url: "/company?tab=hierarchy", icon: Network },
@@ -139,7 +136,7 @@ const navSections = [
       { title: "Permission Groups", url: "/company?tab=permissions", icon: Shield },
       { title: "Currencies", url: "/company?tab=currencies", icon: Banknote },
       { title: "Import", url: "/company?tab=import", icon: Import },
-      { title: "Quick Start", url: "/company?tab=quick-start", icon: Zap },
+      { title: "Quick Start", url: "/company?tab=quickstart", icon: Zap },
     ],
   },
   {
@@ -215,6 +212,26 @@ const navSections = [
     ],
   },
 ];
+
+function LogoutButton() {
+  const { user, logout } = useAuth();
+  return (
+    <div className="flex items-center justify-between gap-2 flex-wrap">
+      <span className="text-xs text-sidebar-foreground/70 truncate">
+        {user?.username}
+      </span>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => logout()}
+        data-testid="button-logout"
+      >
+        <LogOut className="h-4 w-4 mr-1" />
+        <span className="text-xs">Logout</span>
+      </Button>
+    </div>
+  );
+}
 
 export function AppSidebar() {
   const [location] = useLocation();
@@ -301,7 +318,8 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="p-4">
+      <SidebarFooter className="p-4 space-y-3">
+        <LogoutButton />
         <div className="text-xs text-sidebar-foreground/50">
           PayLink v2.0
         </div>
