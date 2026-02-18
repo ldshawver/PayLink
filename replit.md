@@ -33,8 +33,8 @@ Sidebar with collapsible sections:
 2. **Attendance** - Timesheet, Punches, Accrual Balances, Accruals (tabs)
 3. **Schedule** - Schedules (week view), Scheduled Shifts, Recurring Schedule, Recurring Templates (tabs)
 4. **Employee** - Employee list/CRUD (enhanced form with Employment/Identity/Contact/Payroll/Notes sections), Contacts, Preferences, Wages (wage history with effective dates), Pay Methods (with remittance source/priority/amount type), Titles (CRUD), Employee Groups (CRUD with hierarchy), Ethnic Groups, New Hire Defaults (CRUD)
-5. **Company** - Company Info, Legal Entity, Branches, Departments, Hierarchy, Permissions, Import (tabs)
-6. **Payroll** - Process Payroll, Tax Wizard, Pay Stubs, Pay Periods, Taxes & Deductions, Remittance (tabs)
+5. **Company** - Company Info, Legal Entity (full CRUD with status/type/classification/address), Branches, Departments, Hierarchy, Permissions, Import (tabs)
+6. **Payroll** - Process Payroll, Tax Wizard (4-step wizard: Select Events → Review/Verify → Submit → Complete), Pay Stubs, Pay Periods, Taxes & Deductions, Remittance (tabs)
 7. **Policy** - Policy Groups, Pay Codes, Accrual Accounts, Recurring Holidays, Pay Formulas, Contributing Pay Codes, Contributing Shifts, Regular Time, Overtime, Premium, Meal, Break, Schedule, Exception, Accrual, Absence, Holiday, Rounding policies (18 tabs, all with full CRUD)
 8. **HR** - Reviews, Qualifications, KPI Groups, Skills, Education, Memberships, Licenses, Languages (tabs)
 9. **Report** - Saved Reports, Employee Reports (Who's In, Employee Info, Audit Trail), Timesheet Reports (Schedule/Timesheet Summary/Detail, Punch Summary, Accrual Balance, Exception Summary), Payroll Reports (Paystub Summary, Payroll Export, General Ledger), Tax Reports, HR Reports (Qualification/Review Summary) - all with CSV export
@@ -54,6 +54,7 @@ Extended tables:
 - `branches` - Company branch locations
 - `accrual_accounts` - PTO/sick/vacation accrual types
 - `accrual_balances` - Per-worker accrual balances
+- `legal_entities` - Legal/tax entities under a company (status, type, classification, addresses)
 - `employee_contacts` - Emergency/personal contacts
 - `pay_methods` - Direct deposit/check payment methods
 - `pay_periods` - Pay period definitions
@@ -102,6 +103,7 @@ Schedules: GET/POST /api/schedules
 Payroll: GET/POST /api/payroll-runs, GET /api/payroll-runs/:id/items, PATCH /api/payroll-runs/:id
 Departments: GET/POST/PATCH/DELETE /api/departments
 Branches: GET/POST/PATCH/DELETE /api/branches
+Legal Entities: GET/POST/PATCH/DELETE /api/legal-entities
 Accruals: GET/POST/PATCH /api/accrual-accounts, /api/accrual-balances
 Contacts: GET/POST/PATCH/DELETE /api/employee-contacts
 Pay Methods: GET/POST/PATCH/DELETE /api/pay-methods

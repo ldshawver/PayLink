@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Company, Department, Branch } from "@shared/schema";
+import type { Company, Department, Branch, LegalEntity } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -46,6 +46,15 @@ const PAY_FREQ_LABELS: Record<string, string> = {
   biweekly: "Bi-Weekly",
   semimonthly: "Semi-Monthly",
   monthly: "Monthly",
+};
+
+const LEGAL_ENTITY_TYPES: Record<string, string> = {
+  sole_proprietorship: "Sole Proprietorship",
+  partnership: "Partnership",
+  corporation: "Corporation",
+  s_corporation: "S Corporation",
+  llc: "LLC",
+  nonprofit: "Nonprofit",
 };
 
 function CompanyFormFields({
@@ -299,9 +308,125 @@ function CompanyInfoTab() {
 }
 
 function LegalEntityTab() {
-  const { data: companies, isLoading } = useQuery<Company[]>({
+  const { toast } = useToast();
+  const [addOpen, setAddOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editItem, setEditItem] = useState<LegalEntity | null>(null);
+  const [form, setForm] = useState({
+    companyId: "",
+    status: "active",
+    type: "corporation",
+    classificationCode: "",
+    legalName: "",
+    tradeName: "",
+    startDate: "",
+    endDate: "",
+    address: "",
+    city: "",
+    state: "",
+    zip: "",
+    country: "US",
+    phone: "",
+  });
+
+  const { data: legalEntities, isLoading } = useQuery<LegalEntity[]>({
+    queryKey: ["/api/legal-entities"],
+  });
+  const { data: companies } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
   });
+
+  const addMutation = useMutation({
+    mutationFn: async (data: typeof form) => {
+      await apiRequest("POST", "/api/legal-entities", data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/legal-entities"] });
+      setAddOpen(false);
+      setForm({
+        companyId: "",
+        status: "active",
+        type: "corporation",
+        classificationCode: "",
+        legalName: "",
+        tradeName: "",
+        startDate: "",
+        endDate: "",
+        address: "",
+        city: "",
+        state: "",
+        zip: "",
+        country: "US",
+        phone: "",
+      });
+      toast({ title: "Legal entity added successfully" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const editMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: typeof form }) => {
+      await apiRequest("PATCH", `/api/legal-entities/${id}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/legal-entities"] });
+      setEditOpen(false);
+      setEditItem(null);
+      setForm({
+        companyId: "",
+        status: "active",
+        type: "corporation",
+        classificationCode: "",
+        legalName: "",
+        tradeName: "",
+        startDate: "",
+        endDate: "",
+        address: "",
+        city: "",
+        state: "",
+        zip: "",
+        country: "US",
+        phone: "",
+      });
+      toast({ title: "Legal entity updated successfully" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/legal-entities/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/legal-entities"] });
+      toast({ title: "Legal entity deleted" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const set = (key: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm({ ...form, [key]: e.target.value });
+
+  const handleEdit = (item: LegalEntity) => {
+    setEditItem(item);
+    setForm({
+      companyId: item.companyId || "",
+      status: item.status || "active",
+      type: item.type || "corporation",
+      classificationCode: item.classificationCode || "",
+      legalName: item.legalName || "",
+      tradeName: item.tradeName || "",
+      startDate: item.startDate || "",
+      endDate: item.endDate || "",
+      address: item.address || "",
+      city: item.city || "",
+      state: item.state || "",
+      zip: item.zip || "",
+      country: item.country || "US",
+      phone: item.phone || "",
+    });
+    setEditOpen(true);
+  };
 
   if (isLoading) {
     return (
@@ -312,42 +437,402 @@ function LegalEntityTab() {
   }
 
   return (
-    <Card>
-      <CardHeader><CardTitle>Legal Entities</CardTitle></CardHeader>
-      <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Company Name</TableHead>
-              <TableHead>Legal Name</TableHead>
-              <TableHead>Entity Type</TableHead>
-              <TableHead>EIN</TableHead>
-              <TableHead>State</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {companies?.map((c) => (
-              <TableRow key={c.id} data-testid={`row-legal-entity-${c.id}`}>
-                <TableCell className="font-medium">{c.name}</TableCell>
-                <TableCell>{c.legalName || "-"}</TableCell>
-                <TableCell>
-                  {c.entityType ? (
-                    <Badge variant="secondary">{ENTITY_TYPE_LABELS[c.entityType] || c.entityType}</Badge>
-                  ) : "-"}
-                </TableCell>
-                <TableCell>{c.ein || "-"}</TableCell>
-                <TableCell>{c.state || "-"}</TableCell>
-              </TableRow>
-            ))}
-            {companies?.length === 0 && (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <h2 className="text-lg font-semibold">Legal Entities</h2>
+        <Dialog open={addOpen} onOpenChange={setAddOpen}>
+          <DialogTrigger asChild>
+            <Button data-testid="button-add-legal-entity"><Plus className="mr-2 h-4 w-4" />Add Legal Entity</Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+            <DialogHeader><DialogTitle>Add Legal Entity</DialogTitle></DialogHeader>
+            <div className="grid gap-4">
+              <div className="grid gap-2">
+                <Label>Company *</Label>
+                <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
+                  <SelectTrigger data-testid="select-legal-entity-company">
+                    <SelectValue placeholder="Select company" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {companies?.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label>Status</Label>
+                  <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
+                    <SelectTrigger data-testid="select-legal-entity-status">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active">Active</SelectItem>
+                      <SelectItem value="closed">Closed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  <Label>Type</Label>
+                  <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
+                    <SelectTrigger data-testid="select-legal-entity-type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(LEGAL_ENTITY_TYPES).map(([k, v]) => (
+                        <SelectItem key={k} value={k}>{v}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="legal-entity-legalName">Legal Name *</Label>
+                <Input
+                  id="legal-entity-legalName"
+                  data-testid="input-legal-entity-legalName"
+                  value={form.legalName}
+                  onChange={set("legalName")}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="legal-entity-tradeName">Trade Name (DBA)</Label>
+                <Input
+                  id="legal-entity-tradeName"
+                  data-testid="input-legal-entity-tradeName"
+                  value={form.tradeName}
+                  onChange={set("tradeName")}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="legal-entity-classificationCode">NAICS Code</Label>
+                <Input
+                  id="legal-entity-classificationCode"
+                  data-testid="input-legal-entity-classificationCode"
+                  value={form.classificationCode}
+                  onChange={set("classificationCode")}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="legal-entity-startDate">Start Date</Label>
+                  <Input
+                    id="legal-entity-startDate"
+                    data-testid="input-legal-entity-startDate"
+                    type="date"
+                    value={form.startDate}
+                    onChange={set("startDate")}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="legal-entity-endDate">End Date</Label>
+                  <Input
+                    id="legal-entity-endDate"
+                    data-testid="input-legal-entity-endDate"
+                    type="date"
+                    value={form.endDate}
+                    onChange={set("endDate")}
+                  />
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="legal-entity-address">Address</Label>
+                <Input
+                  id="legal-entity-address"
+                  data-testid="input-legal-entity-address"
+                  value={form.address}
+                  onChange={set("address")}
+                />
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="legal-entity-city">City</Label>
+                  <Input
+                    id="legal-entity-city"
+                    data-testid="input-legal-entity-city"
+                    value={form.city}
+                    onChange={set("city")}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="legal-entity-state">State</Label>
+                  <Input
+                    id="legal-entity-state"
+                    data-testid="input-legal-entity-state"
+                    value={form.state}
+                    onChange={set("state")}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="legal-entity-zip">Zip</Label>
+                  <Input
+                    id="legal-entity-zip"
+                    data-testid="input-legal-entity-zip"
+                    value={form.zip}
+                    onChange={set("zip")}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="legal-entity-country">Country</Label>
+                  <Input
+                    id="legal-entity-country"
+                    data-testid="input-legal-entity-country"
+                    value={form.country}
+                    onChange={set("country")}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="legal-entity-phone">Phone</Label>
+                  <Input
+                    id="legal-entity-phone"
+                    data-testid="input-legal-entity-phone"
+                    value={form.phone}
+                    onChange={set("phone")}
+                  />
+                </div>
+              </div>
+            </div>
+            <Button
+              data-testid="button-submit-legal-entity"
+              className="w-full mt-2"
+              disabled={!form.legalName || !form.companyId || addMutation.isPending}
+              onClick={() => addMutation.mutate(form)}
+            >
+              {addMutation.isPending ? "Adding..." : "Add Legal Entity"}
+            </Button>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Edit Legal Entity</DialogTitle></DialogHeader>
+          <div className="grid gap-4">
+            <div className="grid gap-2">
+              <Label>Company *</Label>
+              <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
+                <SelectTrigger data-testid="select-legal-entity-company-edit">
+                  <SelectValue placeholder="Select company" />
+                </SelectTrigger>
+                <SelectContent>
+                  {companies?.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label>Status</Label>
+                <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
+                  <SelectTrigger data-testid="select-legal-entity-status-edit">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="closed">Closed</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Type</Label>
+                <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
+                  <SelectTrigger data-testid="select-legal-entity-type-edit">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(LEGAL_ENTITY_TYPES).map(([k, v]) => (
+                      <SelectItem key={k} value={k}>{v}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="legal-entity-legalName-edit">Legal Name *</Label>
+              <Input
+                id="legal-entity-legalName-edit"
+                data-testid="input-legal-entity-legalName-edit"
+                value={form.legalName}
+                onChange={set("legalName")}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="legal-entity-tradeName-edit">Trade Name (DBA)</Label>
+              <Input
+                id="legal-entity-tradeName-edit"
+                data-testid="input-legal-entity-tradeName-edit"
+                value={form.tradeName}
+                onChange={set("tradeName")}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="legal-entity-classificationCode-edit">NAICS Code</Label>
+              <Input
+                id="legal-entity-classificationCode-edit"
+                data-testid="input-legal-entity-classificationCode-edit"
+                value={form.classificationCode}
+                onChange={set("classificationCode")}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="legal-entity-startDate-edit">Start Date</Label>
+                <Input
+                  id="legal-entity-startDate-edit"
+                  data-testid="input-legal-entity-startDate-edit"
+                  type="date"
+                  value={form.startDate}
+                  onChange={set("startDate")}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="legal-entity-endDate-edit">End Date</Label>
+                <Input
+                  id="legal-entity-endDate-edit"
+                  data-testid="input-legal-entity-endDate-edit"
+                  type="date"
+                  value={form.endDate}
+                  onChange={set("endDate")}
+                />
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="legal-entity-address-edit">Address</Label>
+              <Input
+                id="legal-entity-address-edit"
+                data-testid="input-legal-entity-address-edit"
+                value={form.address}
+                onChange={set("address")}
+              />
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="legal-entity-city-edit">City</Label>
+                <Input
+                  id="legal-entity-city-edit"
+                  data-testid="input-legal-entity-city-edit"
+                  value={form.city}
+                  onChange={set("city")}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="legal-entity-state-edit">State</Label>
+                <Input
+                  id="legal-entity-state-edit"
+                  data-testid="input-legal-entity-state-edit"
+                  value={form.state}
+                  onChange={set("state")}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="legal-entity-zip-edit">Zip</Label>
+                <Input
+                  id="legal-entity-zip-edit"
+                  data-testid="input-legal-entity-zip-edit"
+                  value={form.zip}
+                  onChange={set("zip")}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="legal-entity-country-edit">Country</Label>
+                <Input
+                  id="legal-entity-country-edit"
+                  data-testid="input-legal-entity-country-edit"
+                  value={form.country}
+                  onChange={set("country")}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="legal-entity-phone-edit">Phone</Label>
+                <Input
+                  id="legal-entity-phone-edit"
+                  data-testid="input-legal-entity-phone-edit"
+                  value={form.phone}
+                  onChange={set("phone")}
+                />
+              </div>
+            </div>
+          </div>
+          <Button
+            data-testid="button-save-legal-entity"
+            className="w-full mt-2"
+            disabled={!form.legalName || !form.companyId || editMutation.isPending}
+            onClick={() => editItem && editMutation.mutate({ id: editItem.id, data: form })}
+          >
+            {editMutation.isPending ? "Saving..." : "Save Changes"}
+          </Button>
+        </DialogContent>
+      </Dialog>
+
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground py-8">No legal entities found.</TableCell>
+                <TableHead>Legal Name</TableHead>
+                <TableHead>Trade Name</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Company</TableHead>
+                <TableHead className="w-24"></TableHead>
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+            </TableHeader>
+            <TableBody>
+              {legalEntities?.map((item) => {
+                const company = companies?.find((c) => c.id === item.companyId);
+                return (
+                  <TableRow key={item.id} data-testid={`row-legal-entity-${item.id}`}>
+                    <TableCell className="font-medium">{item.legalName}</TableCell>
+                    <TableCell>{item.tradeName || "-"}</TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{LEGAL_ENTITY_TYPES[item.type] || item.type}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={item.status === "active" ? "default" : "secondary"}>
+                        {item.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{company?.name || "-"}</TableCell>
+                    <TableCell className="flex gap-1">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        data-testid={`button-edit-legal-entity-${item.id}`}
+                        onClick={() => handleEdit(item)}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        data-testid={`button-delete-legal-entity-${item.id}`}
+                        onClick={() => deleteMutation.mutate(item.id)}
+                        disabled={deleteMutation.isPending}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {legalEntities?.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                    No legal entities found.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
