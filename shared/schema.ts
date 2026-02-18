@@ -4,6 +4,8 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 export const workerTypeEnum = pgEnum("worker_type", ["employee", "contractor"]);
+export const workerStatusEnum = pgEnum("worker_status", ["active", "inactive_temporary", "leave_illness", "leave_maternity", "leave_other", "terminated"]);
+export const genderEnum = pgEnum("gender", ["unspecified", "male", "female"]);
 export const payFrequencyEnum = pgEnum("pay_frequency", ["weekly", "biweekly", "semimonthly", "monthly"]);
 export const entityTypeEnum = pgEnum("entity_type", ["c_corp", "s_corp", "llc", "sole_prop", "nonprofit_501c3", "partnership"]);
 export const punchTypeEnum = pgEnum("punch_type", ["clock_in", "clock_out", "break_start", "break_end"]);
@@ -42,25 +44,49 @@ export const workers = pgTable("workers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id),
   firstName: text("first_name").notNull(),
+  middleName: text("middle_name"),
   lastName: text("last_name").notNull(),
   email: text("email"),
   phone: text("phone"),
   workerType: workerTypeEnum("worker_type").notNull().default("employee"),
+  status: workerStatusEnum("status").default("active"),
   jobTitle: text("job_title"),
   department: text("department"),
   payRate: numeric("pay_rate").notNull().default("0"),
   payType: text("pay_type").default("hourly"),
   hireDate: date("hire_date"),
+  terminationDate: date("termination_date"),
+  birthDate: date("birth_date"),
   isActive: boolean("is_active").default(true),
   isShareholder: boolean("is_shareholder").default(false),
+  gender: genderEnum("gender").default("unspecified"),
   address: text("address"),
+  address2: text("address_2"),
   city: text("city"),
   state: text("state"),
   zip: text("zip"),
+  country: text("country").default("US"),
   ssn: text("ssn"),
   ethnicity: text("ethnicity"),
   employeeNumber: text("employee_number"),
   pin: text("pin"),
+  currency: text("currency").default("USD"),
+  workPhone: text("work_phone"),
+  workPhoneExt: text("work_phone_ext"),
+  homePhone: text("home_phone"),
+  mobilePhone: text("mobile_phone"),
+  fax: text("fax"),
+  workEmail: text("work_email"),
+  homeEmail: text("home_email"),
+  note: text("note"),
+  preferences: text("preferences"),
+  tags: text("tags"),
+  defaultBranchId: varchar("default_branch_id"),
+  defaultDepartmentId: varchar("default_department_id"),
+  policyGroupId: varchar("policy_group_id"),
+  payPeriodScheduleId: varchar("pay_period_schedule_id"),
+  groupId: varchar("group_id"),
+  titleId: varchar("title_id"),
   emergencyContactName: text("emergency_contact_name"),
   emergencyContactPhone: text("emergency_contact_phone"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -216,6 +242,10 @@ export const payMethods = pgTable("pay_methods", {
   accountNumber: text("account_number"),
   isPrimary: boolean("is_primary").default(false),
   isActive: boolean("is_active").default(true),
+  remittanceSourceId: varchar("remittance_source_id"),
+  priority: integer("priority").default(1),
+  amountType: text("amount_type").default("remainder"),
+  amountValue: numeric("amount_value"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -437,6 +467,50 @@ export const payPeriodSchedules = pgTable("pay_period_schedules", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const employeeTitles = pgTable("employee_titles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const employeeGroups = pgTable("employee_groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  parentId: varchar("parent_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const wageHistory = pgTable("wage_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  wageType: text("wage_type").notNull().default("hourly"),
+  wage: numeric("wage").notNull().default("0"),
+  effectiveDate: date("effective_date").notNull(),
+  averageHoursPerWeek: numeric("average_hours_per_week").default("40"),
+  laborBurdenPercent: numeric("labor_burden_percent").default("0"),
+  note: text("note"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const newHireDefaults = pgTable("new_hire_defaults", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  displayOrder: integer("display_order").default(0),
+  defaultWorkerType: text("default_worker_type").default("employee"),
+  defaultPayType: text("default_pay_type").default("hourly"),
+  defaultDepartment: text("default_department"),
+  defaultBranchId: varchar("default_branch_id"),
+  defaultPolicyGroupId: varchar("default_policy_group_id"),
+  defaultPayPeriodScheduleId: varchar("default_pay_period_schedule_id"),
+  defaultCurrency: text("default_currency").default("USD"),
+  defaultCountry: text("default_country").default("US"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const insertCompanySchema = createInsertSchema(companies).omit({ id: true, createdAt: true });
 export const insertWorkerSchema = createInsertSchema(workers).omit({ id: true, createdAt: true });
 export const insertTimePunchSchema = createInsertSchema(timePunches).omit({ id: true, createdAt: true });
@@ -466,6 +540,10 @@ export const insertPayStubAccountSchema = createInsertSchema(payStubAccounts).om
 export const insertPayStubAmendmentSchema = createInsertSchema(payStubAmendments).omit({ id: true, createdAt: true });
 export const insertPayStubTransactionSchema = createInsertSchema(payStubTransactions).omit({ id: true, createdAt: true });
 export const insertPayPeriodScheduleSchema = createInsertSchema(payPeriodSchedules).omit({ id: true, createdAt: true });
+export const insertEmployeeTitleSchema = createInsertSchema(employeeTitles).omit({ id: true, createdAt: true });
+export const insertEmployeeGroupSchema = createInsertSchema(employeeGroups).omit({ id: true, createdAt: true });
+export const insertWageHistorySchema = createInsertSchema(wageHistory).omit({ id: true, createdAt: true });
+export const insertNewHireDefaultsSchema = createInsertSchema(newHireDefaults).omit({ id: true, createdAt: true });
 
 export type Company = typeof companies.$inferSelect;
 export type InsertCompany = z.infer<typeof insertCompanySchema>;
@@ -525,3 +603,11 @@ export type PayStubTransaction = typeof payStubTransactions.$inferSelect;
 export type InsertPayStubTransaction = z.infer<typeof insertPayStubTransactionSchema>;
 export type PayPeriodSchedule = typeof payPeriodSchedules.$inferSelect;
 export type InsertPayPeriodSchedule = z.infer<typeof insertPayPeriodScheduleSchema>;
+export type EmployeeTitle = typeof employeeTitles.$inferSelect;
+export type InsertEmployeeTitle = z.infer<typeof insertEmployeeTitleSchema>;
+export type EmployeeGroup = typeof employeeGroups.$inferSelect;
+export type InsertEmployeeGroup = z.infer<typeof insertEmployeeGroupSchema>;
+export type WageHistory = typeof wageHistory.$inferSelect;
+export type InsertWageHistory = z.infer<typeof insertWageHistorySchema>;
+export type NewHireDefault = typeof newHireDefaults.$inferSelect;
+export type InsertNewHireDefault = z.infer<typeof insertNewHireDefaultsSchema>;

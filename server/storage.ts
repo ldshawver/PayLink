@@ -5,6 +5,7 @@ import {
   departments, branches, accrualAccounts, accrualBalances, employeeContacts, payMethods,
   payPeriods, taxesDeductions, policyGroups, payCodes, holidays, qualifications, reviews, recurringSchedules,
   remittanceSources, remittanceAgencies, remittanceAgencyEvents, payStubAccounts, payStubAmendments, payStubTransactions, payPeriodSchedules,
+  employeeTitles, employeeGroups, wageHistory, newHireDefaults,
   type Company, type InsertCompany,
   type Worker, type InsertWorker,
   type TimePunch, type InsertTimePunch,
@@ -34,6 +35,10 @@ import {
   type PayStubAmendment, type InsertPayStubAmendment,
   type PayStubTransaction, type InsertPayStubTransaction,
   type PayPeriodSchedule, type InsertPayPeriodSchedule,
+  type EmployeeTitle, type InsertEmployeeTitle,
+  type EmployeeGroup, type InsertEmployeeGroup,
+  type WageHistory, type InsertWageHistory,
+  type NewHireDefault, type InsertNewHireDefault,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -171,6 +176,26 @@ export interface IStorage {
   createPayPeriodSchedule(data: InsertPayPeriodSchedule): Promise<PayPeriodSchedule>;
   updatePayPeriodSchedule(id: string, data: Partial<PayPeriodSchedule>): Promise<PayPeriodSchedule | undefined>;
   deletePayPeriodSchedule(id: string): Promise<void>;
+
+  getEmployeeTitles(companyId?: string): Promise<EmployeeTitle[]>;
+  createEmployeeTitle(data: InsertEmployeeTitle): Promise<EmployeeTitle>;
+  updateEmployeeTitle(id: string, data: Partial<EmployeeTitle>): Promise<EmployeeTitle | undefined>;
+  deleteEmployeeTitle(id: string): Promise<void>;
+
+  getEmployeeGroups(companyId?: string): Promise<EmployeeGroup[]>;
+  createEmployeeGroup(data: InsertEmployeeGroup): Promise<EmployeeGroup>;
+  updateEmployeeGroup(id: string, data: Partial<EmployeeGroup>): Promise<EmployeeGroup | undefined>;
+  deleteEmployeeGroup(id: string): Promise<void>;
+
+  getWageHistory(workerId?: string): Promise<WageHistory[]>;
+  createWageHistory(data: InsertWageHistory): Promise<WageHistory>;
+  updateWageHistory(id: string, data: Partial<WageHistory>): Promise<WageHistory | undefined>;
+  deleteWageHistory(id: string): Promise<void>;
+
+  getNewHireDefaults(companyId?: string): Promise<NewHireDefault[]>;
+  createNewHireDefault(data: InsertNewHireDefault): Promise<NewHireDefault>;
+  updateNewHireDefault(id: string, data: Partial<NewHireDefault>): Promise<NewHireDefault | undefined>;
+  deleteNewHireDefault(id: string): Promise<void>;
 
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
@@ -679,6 +704,78 @@ export class DatabaseStorage implements IStorage {
       totalHoursThisWeek,
       overtimeHoursThisWeek,
     };
+  }
+
+  async getEmployeeTitles(companyId?: string): Promise<EmployeeTitle[]> {
+    if (companyId) {
+      return db.select().from(employeeTitles).where(eq(employeeTitles.companyId, companyId)).orderBy(employeeTitles.name);
+    }
+    return db.select().from(employeeTitles).orderBy(employeeTitles.name);
+  }
+  async createEmployeeTitle(data: InsertEmployeeTitle): Promise<EmployeeTitle> {
+    const [title] = await db.insert(employeeTitles).values(data).returning();
+    return title;
+  }
+  async updateEmployeeTitle(id: string, data: Partial<EmployeeTitle>): Promise<EmployeeTitle | undefined> {
+    const [title] = await db.update(employeeTitles).set(data).where(eq(employeeTitles.id, id)).returning();
+    return title;
+  }
+  async deleteEmployeeTitle(id: string): Promise<void> {
+    await db.delete(employeeTitles).where(eq(employeeTitles.id, id));
+  }
+
+  async getEmployeeGroups(companyId?: string): Promise<EmployeeGroup[]> {
+    if (companyId) {
+      return db.select().from(employeeGroups).where(eq(employeeGroups.companyId, companyId)).orderBy(employeeGroups.name);
+    }
+    return db.select().from(employeeGroups).orderBy(employeeGroups.name);
+  }
+  async createEmployeeGroup(data: InsertEmployeeGroup): Promise<EmployeeGroup> {
+    const [group] = await db.insert(employeeGroups).values(data).returning();
+    return group;
+  }
+  async updateEmployeeGroup(id: string, data: Partial<EmployeeGroup>): Promise<EmployeeGroup | undefined> {
+    const [group] = await db.update(employeeGroups).set(data).where(eq(employeeGroups.id, id)).returning();
+    return group;
+  }
+  async deleteEmployeeGroup(id: string): Promise<void> {
+    await db.delete(employeeGroups).where(eq(employeeGroups.id, id));
+  }
+
+  async getWageHistory(workerId?: string): Promise<WageHistory[]> {
+    if (workerId) {
+      return db.select().from(wageHistory).where(eq(wageHistory.workerId, workerId)).orderBy(desc(wageHistory.effectiveDate));
+    }
+    return db.select().from(wageHistory).orderBy(desc(wageHistory.effectiveDate));
+  }
+  async createWageHistory(data: InsertWageHistory): Promise<WageHistory> {
+    const [entry] = await db.insert(wageHistory).values(data).returning();
+    return entry;
+  }
+  async updateWageHistory(id: string, data: Partial<WageHistory>): Promise<WageHistory | undefined> {
+    const [entry] = await db.update(wageHistory).set(data).where(eq(wageHistory.id, id)).returning();
+    return entry;
+  }
+  async deleteWageHistory(id: string): Promise<void> {
+    await db.delete(wageHistory).where(eq(wageHistory.id, id));
+  }
+
+  async getNewHireDefaults(companyId?: string): Promise<NewHireDefault[]> {
+    if (companyId) {
+      return db.select().from(newHireDefaults).where(eq(newHireDefaults.companyId, companyId)).orderBy(newHireDefaults.displayOrder);
+    }
+    return db.select().from(newHireDefaults).orderBy(newHireDefaults.displayOrder);
+  }
+  async createNewHireDefault(data: InsertNewHireDefault): Promise<NewHireDefault> {
+    const [entry] = await db.insert(newHireDefaults).values(data).returning();
+    return entry;
+  }
+  async updateNewHireDefault(id: string, data: Partial<NewHireDefault>): Promise<NewHireDefault | undefined> {
+    const [entry] = await db.update(newHireDefaults).set(data).where(eq(newHireDefaults.id, id)).returning();
+    return entry;
+  }
+  async deleteNewHireDefault(id: string): Promise<void> {
+    await db.delete(newHireDefaults).where(eq(newHireDefaults.id, id));
   }
 }
 

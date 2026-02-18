@@ -58,9 +58,10 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/workers", async (_req, res) => {
+  app.get("/api/workers", async (req, res) => {
     try {
-      const workers = await storage.getWorkers();
+      const companyId = req.query.companyId as string | undefined;
+      const workers = await storage.getWorkers(companyId);
       res.json(workers);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch workers" });
@@ -1338,6 +1339,162 @@ export async function registerRoutes(
       res.json({ message: "Deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete pay period schedule" });
+    }
+  });
+
+  // Employee Titles
+  app.get("/api/employee-titles", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const titles = await storage.getEmployeeTitles(companyId);
+      res.json(titles);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch employee titles" });
+    }
+  });
+
+  app.post("/api/employee-titles", async (req, res) => {
+    try {
+      const title = await storage.createEmployeeTitle(req.body);
+      res.status(201).json(title);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create employee title" });
+    }
+  });
+
+  app.patch("/api/employee-titles/:id", async (req, res) => {
+    try {
+      const title = await storage.updateEmployeeTitle(req.params.id, req.body);
+      if (!title) return res.status(404).json({ message: "Not found" });
+      res.json(title);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update employee title" });
+    }
+  });
+
+  app.delete("/api/employee-titles/:id", async (req, res) => {
+    try {
+      await storage.deleteEmployeeTitle(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete employee title" });
+    }
+  });
+
+  // Employee Groups
+  app.get("/api/employee-groups", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const groups = await storage.getEmployeeGroups(companyId);
+      res.json(groups);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch employee groups" });
+    }
+  });
+
+  app.post("/api/employee-groups", async (req, res) => {
+    try {
+      const group = await storage.createEmployeeGroup(req.body);
+      res.status(201).json(group);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create employee group" });
+    }
+  });
+
+  app.patch("/api/employee-groups/:id", async (req, res) => {
+    try {
+      const group = await storage.updateEmployeeGroup(req.params.id, req.body);
+      if (!group) return res.status(404).json({ message: "Not found" });
+      res.json(group);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update employee group" });
+    }
+  });
+
+  app.delete("/api/employee-groups/:id", async (req, res) => {
+    try {
+      await storage.deleteEmployeeGroup(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete employee group" });
+    }
+  });
+
+  // Wage History
+  app.get("/api/wage-history", async (req, res) => {
+    try {
+      const workerId = req.query.workerId as string | undefined;
+      const entries = await storage.getWageHistory(workerId);
+      res.json(entries);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch wage history" });
+    }
+  });
+
+  app.post("/api/wage-history", async (req, res) => {
+    try {
+      const entry = await storage.createWageHistory(req.body);
+      res.status(201).json(entry);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create wage history entry" });
+    }
+  });
+
+  app.patch("/api/wage-history/:id", async (req, res) => {
+    try {
+      const entry = await storage.updateWageHistory(req.params.id, req.body);
+      if (!entry) return res.status(404).json({ message: "Not found" });
+      res.json(entry);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update wage history entry" });
+    }
+  });
+
+  app.delete("/api/wage-history/:id", async (req, res) => {
+    try {
+      await storage.deleteWageHistory(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete wage history entry" });
+    }
+  });
+
+  // New Hire Defaults
+  app.get("/api/new-hire-defaults", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const defaults = await storage.getNewHireDefaults(companyId);
+      res.json(defaults);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch new hire defaults" });
+    }
+  });
+
+  app.post("/api/new-hire-defaults", async (req, res) => {
+    try {
+      const entry = await storage.createNewHireDefault(req.body);
+      res.status(201).json(entry);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create new hire default" });
+    }
+  });
+
+  app.patch("/api/new-hire-defaults/:id", async (req, res) => {
+    try {
+      const entry = await storage.updateNewHireDefault(req.params.id, req.body);
+      if (!entry) return res.status(404).json({ message: "Not found" });
+      res.json(entry);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update new hire default" });
+    }
+  });
+
+  app.delete("/api/new-hire-defaults/:id", async (req, res) => {
+    try {
+      await storage.deleteNewHireDefault(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete new hire default" });
     }
   });
 
