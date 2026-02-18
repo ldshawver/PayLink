@@ -15,9 +15,10 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Link } from "wouter";
 import {
   DollarSign, Clock, Calendar, ChevronDown, ChevronUp, Plus, Download, Printer,
-  Calculator, FileText, CreditCard, CalendarDays, Settings, Building, Receipt
+  Calculator, FileText, CreditCard, CalendarDays, Settings, Building, Receipt, Zap
 } from "lucide-react";
 
 function useTabParam(): [string, (tab: string) => void] {
@@ -73,7 +74,7 @@ function ProcessPayrollTab() {
   };
 
   const exportCSV = (run: PayrollRun, items: PayrollItem[]) => {
-    const headers = ["Worker", "Type", "Rate", "Reg Hrs", "OT Hrs", "Reg Pay", "OT Pay", "Gross"];
+    const headers = ["Worker", "Type", "Rate", "Reg Hrs", "OT Hrs", "Reg Pay", "OT Pay", "Gross", "Deductions", "Net Pay", "Check #"];
     const rows = items.map(item => [
       getWorkerName(item.workerId),
       item.payType || "hourly",
@@ -83,6 +84,9 @@ function ProcessPayrollTab() {
       item.regularPay,
       item.overtimePay,
       item.grossPay,
+      item.deductions,
+      item.netPay,
+      item.checkNumber || "",
     ]);
     const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
@@ -92,10 +96,6 @@ function ProcessPayrollTab() {
     a.download = `payroll-run-${run.id}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  };
-
-  const handlePrint = () => {
-    window.print();
   };
 
   if (isLoading) {
@@ -195,7 +195,6 @@ function ProcessPayrollTab() {
             onToggle={() => setExpandedRun(expandedRun === run.id ? null : run.id)}
             getWorkerName={getWorkerName}
             onExportCSV={exportCSV}
-            onPrint={handlePrint}
           />
         ))}
         {payrollRuns.length === 0 && (
@@ -211,7 +210,7 @@ function ProcessPayrollTab() {
 }
 
 function PayrollRunCard({
-  run, companyName, expanded, onToggle, getWorkerName, onExportCSV, onPrint,
+  run, companyName, expanded, onToggle, getWorkerName, onExportCSV,
 }: {
   run: PayrollRun;
   companyName: string;
@@ -219,8 +218,8 @@ function PayrollRunCard({
   onToggle: () => void;
   getWorkerName: (id: string) => string;
   onExportCSV: (run: PayrollRun, items: PayrollItem[]) => void;
-  onPrint: () => void;
 }) {
+  const { toast } = useToast();
   const { data: items = [], isLoading } = useQuery<PayrollItem[]>({
     queryKey: ["/api/payroll-runs", run.id, "items"],
     queryFn: async () => {
@@ -229,6 +228,21 @@ function PayrollRunCard({
       return res.json();
     },
     enabled: expanded,
+  });
+
+  const processMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/payroll-runs/${run.id}/process`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs", run.id, "items"] });
+      toast({ title: "Payroll processed successfully" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
   });
 
   const statusVariant = run.status === "paid" ? "default" : run.status === "processed" ? "secondary" : "outline";
@@ -259,11 +273,26 @@ function PayrollRunCard({
           ) : (
             <>
               <div className="flex gap-2 mb-4 flex-wrap">
+                {run.status === "draft" && (
+                  <Button
+                    size="sm"
+                    data-testid={`button-process-run-${run.id}`}
+                    disabled={processMutation.isPending}
+                    onClick={() => processMutation.mutate()}
+                  >
+                    <Zap className="mr-2 h-4 w-4" />
+                    {processMutation.isPending ? "Processing..." : "Process Payroll"}
+                  </Button>
+                )}
+                {run.status === "processed" && (
+                  <Link href={`/print-check/${run.id}`}>
+                    <Button variant="outline" size="sm" data-testid={`button-print-checks-${run.id}`}>
+                      <Printer className="mr-2 h-4 w-4" />Print Checks
+                    </Button>
+                  </Link>
+                )}
                 <Button variant="outline" size="sm" data-testid={`button-export-csv-${run.id}`} onClick={() => onExportCSV(run, items)}>
                   <Download className="mr-2 h-4 w-4" />Export CSV
-                </Button>
-                <Button variant="outline" size="sm" data-testid={`button-print-${run.id}`} onClick={onPrint}>
-                  <Printer className="mr-2 h-4 w-4" />Print
                 </Button>
               </div>
               <div className="overflow-x-auto">
@@ -278,6 +307,9 @@ function PayrollRunCard({
                       <TableHead>Reg Pay</TableHead>
                       <TableHead>OT Pay</TableHead>
                       <TableHead>Gross</TableHead>
+                      <TableHead>Deductions</TableHead>
+                      <TableHead>Net Pay</TableHead>
+                      <TableHead>Check #</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -291,10 +323,13 @@ function PayrollRunCard({
                         <TableCell>${Number(item.regularPay || 0).toFixed(2)}</TableCell>
                         <TableCell>${Number(item.overtimePay || 0).toFixed(2)}</TableCell>
                         <TableCell className="font-medium">${Number(item.grossPay || 0).toFixed(2)}</TableCell>
+                        <TableCell>${Number(item.deductions || 0).toFixed(2)}</TableCell>
+                        <TableCell className="font-medium">${Number(item.netPay || 0).toFixed(2)}</TableCell>
+                        <TableCell>{item.checkNumber || "—"}</TableCell>
                       </TableRow>
                     ))}
                     {items.length === 0 && (
-                      <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground">No items</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground">No items</TableCell></TableRow>
                     )}
                   </TableBody>
                 </Table>

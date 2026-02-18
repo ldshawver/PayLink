@@ -1,0 +1,843 @@
+The Payroll features allow you to configure, edit, and save the information specific to your company's payroll. Pay Stubs and Pay Stub Amendments can be created and managed. You can enter pay periods on a manual schedule or setup recurring pay period schedules.
+In addition, taxes and deductions can be configured and pay stub accounts established to link to the company's accounting system.
+Once all payroll configurations are made, the Payroll Processing Wizard simplifies generating your payroll.
+ 
+A Remittance Source is for your own company's pay information. It defines where funds originate from including necessary information such as account identification details, currency, and the formats for printing checks or generating direct deposit files. Remittance Sources allow employees to be paid fully or partially from different company bank accounts. For example, salaried employees can be paid from one company bank account and hourly employees can be paid from another company bank account.
+To add a Remittance Source:
+	Click Payroll, then click Remittance Sources in the main menu.
+	Complete the fields on the Remittance Source Account tab and if the source type selected is EFT/ACH, then complete the required fields on the Advanced tab.
+	Click Save in the button bar to save your changes or click Cancel to discard the changes
+See the Basic Operation section for details on viewing, adding, editing and deleting.
+ 
+Remittance Source Account Tab
+FIELD	DESCRIPTION
+Legal Entity	The legal entity for this remittance source.
+Status	The status from the drop-down field.
+STATUS	DESCRIPTION
+Enabled	The remittance source is active and can be used for payments.
+Disabled	The remittance source is inactive and cannot be used for payments.
+
+
+Type	Select the type or method of payment.
+TYPE	DESCRIPTION
+Check	Choose if paying by paper check.
+EFT/ACH (Direct Deposit)	Choose if transferring money from one account to another by Automatic Clearing House (ACH) for United States or Electronic Funds Transfer (EFT) for Canada.
+
+Country	The country of the remittance source.
+Currency	The currency this source account is based in.
+Format	If the type selected is Check choose the format to match your pre-printed blank check stock. If the type selected is EFT/ACH choose the format to match your banks EFT/ACH (Direct Deposit) file format specifications.
+Last Batch Number/Last Check Number	The number of the last EFT/ACH (Direct Deposit) payment batch generated or check number printed.
+Routing and Account	If Type is EFT/ACH and Country is United States enter the Routing and Bank Account numbers for the source account .
+Institution, Bank Transit and Account	If Type is EFT/ACH and Country is Canada, enter the Institution, Bank Transit and Bank Account numbers for the source account.
+
+ 
+The Advanced Tab for EFT/ACH types is for entering additional information for electronic transactions.
+Advanced Tab ( ACH - United States )
+FIELD	DESCRIPTION
+Business Number	Required field. Provided by your bank.
+Immediate Origin	Required field. Provided by your bank.
+Immediate Origin Name	Required field. Provided by your bank.
+Immediate Dest.	Required field. Provided by your bank.
+Immediate Dest. Name	Required field. Provided by your bank.
+Trace Number	May be provided by your bank, if required.
+Offset Transaction	May be provided by your bank, if required.
+File Header Line	May be provided by your bank, if required.
+File Trailer Line	May be provided by your bank, if required.
+ 
+Advanced Tab ( EFT - Canada )
+FIELD	DESCRIPTION
+Originator ID	Required field. Provided by your bank.
+Originator Name	Required field. Provided by your bank.
+Data Center ID	Required field. Provided by your bank.
+Return Institution	May be provided by your bank, if required.
+Return Transit	May be provided by your bank, if required.
+Return Account	May be provided by your bank, if required.
+File Header Line	May be provided by your bank, if required.
+File Trailer Line	May be provided by your bank, if required.
+
+ 
+The Advanced Tab for Check type is for adjusting the alignment and adding a printed signature.
+Advanced Tab ( Check )
+FIELD	DESCRIPTION
+Vertical Alignment	When printing checks, this adjusts the alignment so the data prints in the proper place on the check stock. Print a Sample File on blank check stock and use the grid to calculate how much the check alignment needs to be adjusted. Enter the number of millimeters (mm) using a minus (-) number to adjust up or a positive number to adjust down.
+Horizontal Alignment	See above. Enter the number of millimeters (mm) using a minus (-) number to adjust left or a positive number to adjust right.
+Signature	This field is available once the remittance source account has been saved. If desired, upload a signature image to be printed on each check.
+
+ Remittance Agencies are government entities, and other agencies such as insurance providers that receive funds or information as a part of payroll. Each remittance agency is assigned one or more Events that specify the exact dates that a payment or filing is required. For any enabled events an email reminder notice is sent to a specified contact employee on a date prior to the event due date.
+For many Remittance Agencies there is a default list of specific events and due dates for each payment or filing, based on the legal entity's country and province/state. The most common events are enabled by default.
+ 
+During initial setup, review each Remittance Agency Event from the list to see if it applies. Ensure any events that apply are Enabled and those that don't apply are Disabled. Refer to your federal, state/province and local government agencies to confirm which events apply to your company.
+NOTE:  It is recommended to disable events rather than delete them, as it is possible the agency may change requirements in the future and it is easier to re-enable events rather than add the event again.
+If you must modify the frequency of an event, disable the event, add a new event by using the Copy as New function then edit the new event Frequency and change the Status to 'Enabled'.
+To process remittance agency events (payment or filing) see the Tax Wizard.
+ 
+To add a Remittance Agency:
+	Click Payroll, then click Remittance Agencies in the main menu.
+	Complete the available fields on both the Remittance Agency tab and the Events tab.
+	Click Save in the button bar to save your changes or click Cancel to discard the changes
+See the Basic Operation section for details on viewing, adding, editing and deleting.
+ 
+Remittance Agency Tab
+FIELD	DESCRIPTION
+Legal Entity	The legal entity that will be reporting to this agency.
+Status	Select the status.
+STATUS	DESCRIPTION
+Enabled	Filing site links and reminders are available.
+Disabled	Filing is unavailable and no reminders will be sent.
+
+Type	Select the type of remittance agency.
+TYPE	DESCRIPTION
+Federal	An agency operated by the Federal or the country's government.
+Provincial / State	An agency operated by a Province or State government.
+Local (City / District / County)	An Agency operated by a City, District or County government.
+3rd Party	A private or 3rd party agency which is not a federal, provincial/state or local (city/district/county) government agency.
+
+Country, Province/State, District	The location of the remittance agency. The number fields displayed depends on the Type of remittance agency selected.
+Agency	The specific agency title that best describes this remittance agency.
+Start Date (Optional)	The date you begin reporting to this remittance agency in TimeTrex.
+End Date (Optional)	The date you are no longer reporting to this remittance agency in TimeTrex.
+Contact	The contact person provided to this remittance agency and who receives event reminders.
+Remittance Source Account	The legal entity bank account from which the remittance agency payments will be withdrawn.
+Events Always On Business Day	Select how the event dates are derived.
+EVENTS ALWAYS ON BUSINESS DAY	DESCRIPTION
+No	No adjustments are made.
+Yes - Previous Business Day	The date is set for the business day previous to the due date.
+Yes - Next Business Day	The date is set for the next business day.
+Yes - Closest Business Day	The date is set for the closest business day on either side of the actual due date.
+
+Recurring Holidays	Select the recurring holidays that may affect the due dates.
+
+ 
+Remittance Agency Event Tab
+FIELD	DESCRIPTION
+Status	Select the status for this event.
+STATUS	DESCRIPTION
+Enabled - Self Service	Enabled events will appear in the Tax Wizard and reminder notices will be emailed.
+Enabled - Full Service	Select if you subscribe to TimeTrex full service payroll.
+Disabled	Disabled events will not appear in the Tax Wizard, nor will reminder notices be emailed.
+
+Type	Choose a type of event.
+Frequency	Select how often the event occurs.
+FREQUENCY	DESCRIPTION
+Each Pay Period	Select if event happens for every pay period
+EACH PAY PERIOD	DESCRIPTION
+Pay Period Schedule	For pay period frequency events select the pay period schedule(s) that apply to this event.
+
+Annually	Once a year.
+Annual (YTD)	January 1st to the specified date (Year-To-Date)
+Semi-Annually	Twice a year.
+SEMI-ANNUALLY	DESCRIPTION
+Primary Month	The month of the first semi-annual period for this event.
+Primary Day of Month	The day within the primary month that the event is due.
+Secondary Month	The month of the second semi-annual period for this event.
+Secondary Day of Month	The day within the secondary month that the event is due.
+
+Quarterly	Every quarter or four times per year.
+QUARTERLY	DESCRIPTION
+Day of Month	The day within the month of the quarter that the event is due.
+Month of Quarter	Which of the three months within the quarter that the event is due.
+
+Monthly	Every month or twelve times per year.
+Semi-Monthly	Twice a month.
+SEMI-MONTHLY	DESCRIPTION
+Primary Day of Month	The first day within any month that the event is due.
+Secondary Day of Month	The second day within any month that the event is due.
+
+Weekly	Every week.
+CA - Accelerated (Threshold 1)	Canadian government - up to two times per month.
+CA - Accelerated (Threshold 2)	Canadian government - up to four times per month.
+US - Quarterly (1-3 Only)	United States - the first three quarters of the year only.
+US - Monthly (15th, 30th on Last MoQ)	United States - the 15th of every month, except the 30th of the last month of each quarter.
+US - Monthly (15th, skip Last MoQ)	United States - the 15th of every month, but skip the last month of the quarter.
+US - Twice (2x) Monthly	United States - two times per month.
+US - Quarter (4x) Monthly	United States - four times per month.
+US - Eighth (8x) Monthly	United States - eight times per month.
+US - Semi-Weekly	United States - twice a week.
+Upon Hire	On the hire date for an employee(s).
+Upon Termination	On the termination date for an employee(s).
+Upon Termination (Pay Period End)	After the end date of the pay period the employee was terminated in.
+
+Due Date Delay Days	Enter the number of days delay between the end of the time period and the due date.
+Effective Date	The date the event first begins. Leave blank for most cases.
+Send Reminder To	The employee who receives the event reminders.
+Reminder Days	The number of days prior to the event due date that a reminder will be triggered.
+Recalculate Dates	To change the Start, End and Due Dates retroactively, check the box then specify a date to Recalculate Dates From.
+Start Date, End Date, Due Date and Reminder Date	A preview of the dates that are calculated based on the above information.
+
+
+ 
+
+Before you can generate pay stubs or properly configure policies, you must first setup pay stub accounts. Pay stub accounts are similar to line item accounts in a general ledger. Employee earnings are deposited into Earning pay stub accounts and deductions go into either Employee or Employer deduction accounts.
+As you prepare to configure your pay stub accounts, remember that earning accounts withdraw from accruals, and deduction accounts deposit into accruals. This feature is commonly used for keeping track of accruing vacation pay.
+For example, you would create a Vacation Accrual account of type Accrual and a Vacation Accrual Release account of type Earning with Vacation Accrual set as the accrual account. Then Vacation Accrual Release amounts are automatically withdrawn from Vacation Accrual. This method can also be used to keep track of employee loans.
+NOTE:  Avoid using 'Other' for an earning or deduction pay stub account. If you use it for miscellaneous items, such as a special employee award, a cell phone charge, or reimbursement for travel expenses, you will not be able to break down and calculate an accurate total for each line item.
+As an option, you can enter values for Debit Account and Credit Account fields. These identifiers are for mapping the TimeTrex accounts to account numbers in your general ledger (GL) of your accounting system. You do not need to map all TimeTrex accounts to individual GL accounts. If you want to combine two or more TimeTrex accounts in to a single GL account, you enter the same account number.
+	Example 1: If you want Provincial/State and Federal income tax to be combined in to a single GL account, you would give them the same account number, such as 2330.
+	Example 2: If you combine all the TimeTrex earnings accounts in to a single GL account number of 2300, enter 2300 for the TimeTrex "Total Gross" account.
+To add a new Pay Stub Account:
+	Click Payroll, then click Pay Stub Accounts in the main menu.
+	Click New in the button bar.
+	Complete the fields.
+	Click Save in the button bar to save your changes, or click Cancel to discard the changes.
+See the Basic Operation section for details on viewing, adding, editing and deleting.
+ 
+Pay Stub Account Tab
+FIELD	DESCRIPTION
+Status	Select a status from the drop-down box.
+STATUS	DESCRIPTION
+ENABLED	This pay stub account is active.
+DISABLED	This pay stub account is inactive.
+
+
+Type	Select a type from the drop-down box.
+TYPE	DESCRIPTION
+Earning	Employee earnings, such as wages, commissions, bonuses, etc.
+Employee Deduction	Employee deductions for taxes, uniforms, etc.
+Employer Deduction	Employer contributions for retirement plans, vacation, Medicare, etc.. Employer deductions do not appear on employee pay stubs.
+Total	Used by the application.
+Accrual	Indicates that this type is an accrual account, and it maps to another pay stub account.
+Miscellaneous	Neither an earning or a deduction. Often used for tracking purposes. Miscellaneous accounts appear on employee pay stubs.
+
+
+Name	Enter a descriptive name for this pay stub account.
+Order	Enter a value for the order in which the accounts appear on the pay stub. The lower the order, the higher up on the pay stub the account will appear in its own section.
+Accrual	Choose an Accrual for the pay stub account where all amounts are deposited or withdrawn for the purposes of keeping a running balance.
+NOTE:  If Accrual was selected in the Type field, this field will not appear.
+Debit Account	Enter the account name or number for the Debit Account in your existing General Ledger. See General Ledger Mapping. Supports the use of variables for advanced functionality.
+Credit Account	Enter the account name or number for the Credit Account in your existing General Ledger. See General Ledger Mapping. Supports the use of variables for advanced functionality.
+
+ The Taxes and Deductions feature allows you to define specific calculations, or formulas, and apply them to employee pay stubs. However, this feature encompasses more than taxes or deductions. It includes many other aspects of employee pay stubs, such as earnings, employer deductions, and accruals. By default, Taxes and Deductions apply to every pay period. If necessary, you can assign them to individual employees. In addition, they can be ignored if the eligibility criteria are not met, or if the calculation formula results in a zero value.
+The taxes and deductions that you configure here will apply to your employees, and will appear in the Tax tab for each employee in the Employees listing (Employee -> Employees). Before you configure a tax or deduction item, you should review the definitions and examples of the different calculation types.
+To add a new Taxes & Deductions type:
+	Click Payroll, then click Taxes & Deductions in the main menu.
+	Click New in the button bar. An inset page will appear which contains several tabs: Tax / Deductions, Eligibility, and Employee Settings.
+	Complete the fields in all tabs.
+	Click Save in the button bar to save your changes, or click Cancel to discard.
+See the Basic Operation section for details on viewing, adding, editing and deleting.
+Tax / Deductions Tab
+FIELD	DESCRIPTION
+Status	Select a status from the drop-down.
+STATUS	DESCRIPTION
+Enabled	This tax or deduction is active.
+Disabled	This tax or deduction is inactive.
+
+
+Type	Select a type for this item.
+TYPE	DESCRIPTION
+Tax	This item is a tax.
+Deduction	This item is a deduction.
+Other	This is a miscellaneous item not classified as either a tax or deduction.
+
+
+Name	Enter a descriptive name for the item.
+Calculation	Choose a calculation formula for this item. There are many choices; see the definitions and examples for an explanation of each type of calculation.
+CALCULATIONS	DESCRIPTION
+Percent	Enter a simple percentage, such as 1.00% or 5.00%.
+Advanced Percent	This is an advanced calculation with two additional criteria: Annual Wage Base/Maximum Earnings and Annual Deduction Amount.
+ADVANCED PERCENT	DESCRIPTION
+Percent	Enter a simple percentage.
+Annual Wage Base/Maximum Earnings	This is the maximum annual limit to which the percentage will apply.
+For example, setting this value to $40,000 will cause this calculation to disable after the employee has earned this amount during the year.
+Annual Deduction Amount	This is the annual amount that deducts from the calculation.
+For example, if you set this value to $5,000, this calculation will not apply to the first $5,000 of the employee’s earnings.
+
+
+Advanced Percent (w/Target)	This is a advanced calculation with two additional criteria: Target Amount Limit and Target YTD Limit/Balance. The calculation applies up to the Target Amount Limit on a single pay stub and the Target year to date (YTD) Limit of the Pay Stub Account.
+For example, you could use this formula to calculate a 401K contribution of 10% of the employee's wages to a limit of $300 per pay stub and an annual contribution limit of $18,000.
+ADVANCED PERCENT (W/TARGET)	DESCRIPTION
+Percent	Enter a simple percentage of the Include and Exclude Pay Stub Accounts.
+Target Amount Limit	This is the amount limit on a single pay stub for the selected pay stub account .
+Target YTD Limit/Balance	This is the year to date (YTD) target limit or balance amount for the selected pay stub account.
+
+Advanced Percent (Range Bracket)	This advanced percentage calculation requires four additional criteria: Annual Deduction Amount, Annual Amount Greater Than, Annual Amount Less Than, and Annual Fixed Amount. The calculation only applies when the annual amount is higher than the value given in Annual Amount Greater Than and lower than the Annual Amount Less Than value. You may employ multiple Advanced Percent (Range Bracket) deductions together to calculate amounts for one or more brackets.
+ADVANCED PERCENT (RANGE BRACKET)	DESCRIPTION
+Percent	Enter a simple percentage.
+Annual Deduction Amount	Enter the amount of the deduction.
+Annual Amount Greater Than	Enter the lowest amount for the range.
+Annual Amount Less Than	Enter the highest amount for the range.
+Annual Fixed Amount	Enter a fixed amount for this deduction.
+
+For example:
+Greater Than	Less Than	Percent
+$5,000	$10,000	1%
+$10,000	$20,000	2%
+$20,000	$30,000	3%
+
+Advanced Percent (Tax Bracket)	This is another advanced percentage calculation similar to the Advanced Percent (Range Bracket) calculation. The difference is that this calculation is done when the value for Deduction Amount exceeds the value for Annual Exempt Amount. You can use multiple Advanced Percent (Tax Bracket) deductions to act as a complete tax formula. This calculation causes TimeTrex to forgo calculation if the estimate is that the employee will earn less than $1,000 for the entire year. If the employee actually earns more, then a calculation of 8% will apply against any amounts between $1,000-9,999, 8.5% on any amounts between $10,000-19,999, and 9.0% on any amounts over $20,000.
+ADVANCED PERCENT (TAX BRACKET)	DESCRIPTION
+Percent	Enter a simple percentage.
+Annual Wage Base/Maximum Earnings	Enter the base wage or maximum annual earnings.
+Annual Deduction Amount	Enter the deduction amount.
+Annual Exempt Amount	Enter the amount that is exempt.
+
+For example:
+Name	Exempt Amount	Wage Base Amount	Percent
+Bracket 1	$1,000	$9,999	8.0%
+Bracket 2	$10,000	$19,999	8.5%
+Bracket 3	$20,000	$0	9.0%
+
+Advanced Percent (Tax Bracket Alt.)	This is another advanced tax bracket calculation. The calculation only applies when the annual amount is less than the Annual Deduction Amount, higher than the Annual Amount Greater Than value, and lower then the Annual Amount Less Than value. After the calculation, the value for Annual Fixed Amount is added to the end result. This calculation is different from the Advanced Percent (Tax Bracket) because only a single bracket in a group may apply to an employee. Each individual bracket is designed to be the entire tax formula and function on its own. The final result is the same as an Advanced Percent (Tax Bracket), but it is just a different way to get there.
+ADVANCED PERCENT (TAX BRACKET ALT.)	DESCRIPTION
+Percent	Enter a simple percentage.
+Annual Deduction Amount	Enter the amount of the annual deduction.
+Annual Amount Greater Than	Enter the lowest amount for the range.
+Annual Amount Less Than	Enter the highest amount for the range.
+Annual Fixed Amount	Enter the annual fixed amount.
+
+For example:
+Name	Greater Than	Less Than	Percent	Fixed Amount
+Bracket 1	$0	$10,000	5.0%	$0
+Bracket 2	$10,001	$20,000	10.0%	$500
+Bracket 3	$20,001	$999,999	15.0%	$1500
+In this example, TimeTrex will calculate 5% if the employee earned between $0 and $10,000. If the employee earns more than this, there will be no calculation for the first bracket and TimeTrex moves on to the next bracket. If the employee earns between $10,001 and $20,000, then 10% would be calculated on the amount earned between 10,000 and $20,000 with the Fixed Amount being added at the end. Only a single bracket is ever applied because the fixed amount is always the total tax amount that would be calculated from all previous brackets.
+Fixed Amount	Enter an amount that is fixed.
+Fixed Amount (Range Bracket)	This fixed-amount calculation has multiple criteria: Amount, Annual Deduction Amount, Annual Amount Greater Than, and Annual Amount Less Than. The fixed amount only applies when the Amount minus the Annual Deduction Amount is higher than the value of Annual Amount Greater Than and lower than the Annual Amount Less Than value.
+FIXED AMOUNT (RANGE BRACKET)	DESCRIPTION
+Amount	Enter a fixed amount.
+Annual Deduction Amount	Enter the annual fixed amount.
+Annual Amount Greater Than	Enter the lowest amount for the range.
+Annual Amount Less Than	Enter the highest amount for the range.
+
+
+Fixed Amount (w/Target)	This fixed-amount calculation only applies when the amount of the Included/Excluded Pay Stub Accounts is less than the amount of the Target YTD Limit/Balance. When specifying Include or Exclude Pay Stub Accounts, the Pay Stub Account Value should be set to 'YTD Amount'. This calculation is useful for automatic processing of loans.
+For example, you can deduct $100 from an employee's pay stub until the Loan Accrual value reaches $0. Another example would be for uniform reimbursements where you reimburse each employee $10 on each pay stub until they have been paid a total of $100.
+FIXED AMOUNT (W/TARGET)	DESCRIPTION
+Amount	Enter a fixed amount.
+Target YTD Limit/Balance	Enter the year to date target limit or balance amount.
+
+
+Custom Formula	You can customize a calculation formula if the none of the other pre-defined calculations fit your requirements.
+US-Medicare Formula (Employee)	Use for the employee's Medicare deduction.
+FILING STATUS	DESCRIPTION
+Single or Head of Household	Employee is single or head of a household.
+Married w/o Spouse	Employee is married and filing without spouse
+Married w Spouse	Employee is married and filing with spouse.
+
+
+US-Medicare Formula(Employer)	Use for the employer's Medicare deduction.
+US-Social Security Formula(Employee)	Use for the employee's Social Security deduction.
+US-Social Security Formula(Employer)	Use for the employer's Social Security deduction.
+US-Federal Unemployment Insurance (Employer)	Use for employer's Federal Unemployment Insurance deduction.
+Canada-CPP Formula	Use to calculate CPP (Pension) in Canada.
+Canada-CPP2 Formula	Use to calculate additional CPP2 (Pension) in Canada. Effective January 1, 2024
+Canada-EI Formula	Use to calculate EI (Employment Insurance) in Canada.
+Federal Income Tax Formula	This is a formula based on the specific country that you choose. Depending on the country, there may be additional fields (such as Marital Status or Allowances) that require input. The values set here are used as defaults. However, you can configure these fields separately for each employee. The settings such as filing status or claim amounts can be set separately for each employee by going to Wages.
+FEDERAL INCOME TAX FORMULA	DESCRIPTION
+Country	Select the country for the tax.
+
+
+Province/State Income Tax Formula	This is the formula based on the specific province or state that you choose. Depending on the choice of province or state there may be additional fields (such as filing status or allowances) that require input.
+PROVINCE/STATE INCOME TAX FORMULA	DESCRIPTION
+Country	Select the country for the tax.
+Province/State	Select the province or state.
+
+
+US-State Unemployment Insurance (Employer)	Use for employer's State Unemployment Insurance deduction.
+Local (City/District/County) Income Tax Formula	This is a formula that depends on the specific city, district or county that you choose. Depending on the choice, there may be additional fields that require input.
+LOCAL (CITY/DISTRICT/COUNTY) INCOME TAX FORMULA	DESCRIPTION
+District/County Name	Enter the name as required by the tax authority. Where applicable, use the following format to specify codes and region types: [<CODE><REGION>] <NAME>
+
+For example, for Ohio, it might be the following (without quotes):
+"[023R] Aberdeen" when an employee resides in Aberdeen.
+"[023C] Aberdeen" when an employee works in Aberdeen.
+
+For Indiana, it might be:
+"[92] White" when the employee resides in White County.
+District/County Rate	Enter the tax rate.
+
+
+Negative Net Pay Resolution	Triggered when an employee’s pay stub results in a negative net pay for the purposes of resolving such situations automatically. The Include/Exclude Pay Stub Accounts selection determines how the adjustment is calculated and applied to balance the net pay to $0. The adjustment is recorded in the specified Pay Stub Account.
+Example 1: Single Adjustment
+If the net pay is $-105.54, and the selected Pay Stub Account is "Earning - Loan", the system will add an additional entry to the pay stub:
+Earning - Loan: $105.54
+This adjustment balances the net pay to $0.00 and places the amount in a Loan account to be repaid at a later date.
+ 
+Example 2: Multiple Adjustments
+You can use multiple Negative Net Pay Tax/Deduction records to split the adjustment across different accounts.
+Tax/Deduction Record 1:
+Pay Stub Account: "Earning - Health Insurance Loan"
+Include: "Employee Deduction - Health Insurance"
+Tax/Deduction Record 2:
+Pay Stub Account: "Earning - Loan"
+Include: "Total Gross"
+If the net pay is $-150.15, and the employee has a health insurance deduction of $100.00, the system will create two adjustments:
+Earning - Health Insurance Loan: $100.00
+Earning - Loan: $50.15
+These adjustments collectively bring the net pay to $0.00 and places the amounts in separate Loan accounts to be repaid at a later date.
+ 
+Example 3: Single Adjustment to Reverse Out Deduction
+You can also use this to reverse out a deduction completely, essentially disabling it.
+Pay Stub Account: "Employee Deduction - Health Insurance"
+Include: "Employee Deduction - Health Insurance"
+This adjustment will bring the net pay to $0.00 and reverses out the "Health Insurance" deduction completely.
+
+
+Formula Type	Only available if the selected Calculation is Federal, Province/State, or Local Income Tax Formula.
+FORMULA TYPE	DESCRIPTION
+Based on Payroll Run Type	Formula type is automatically chosen based on the Payroll Run Type that is being processed.
+Always Regular (Non-Averaging)	Always uses the Regular (Non-Averaging) formula type, regardless of the Payroll Run Type that is being processed. This is the formula primarily used by most governments, however it can be inaccurate if employee wages fluctuate significantly throughout the year, such as for part-time employees or employees who receive commissions or bonuses.
+Always Special (Cumulative Averaging)	Always uses the Special (Cumulative Averaging) formula type, regardless of the Payroll Run Type that is being processed. This is a special formula that uses a cumulative averaging process to try to more accurately determine the employees wage for calculating income tax. This formula is often much more accurate if employee wages fluctuate significantly throughout the year. Due to its higher accuracy, by default this formula is automatically chosen when processing an Out-Of-Cycle payroll run.
+
+
+Pay Stub Account	The Pay Stub Account (line item) that the resulting calculation will appear as on employees pay stubs.
+Calculation Order	Defines the order that calculations should be performed only in extremely rare cases where a circular dependency may occur. In most cases you can use the default value, or any value that is not already used by another Tax/Deduction.
+Include Pay Stub Accounts	Select the pay stub accounts to be used as input values to the selected calculation. This is required for any calculation that is not a fixed amount.
+For example with a percentage calculation the defined percent is calculated on the Included Pay Stub Accounts minus any Excluded Pay Stub Accounts.
+INCLUDE ACCOUNTS	DESCRIPTION
+Pay Stub Account Value	Select a value to include (ie: Amount, Units/Hours, YTD Amount, YTD Unit/Hours).
+Selection	Select the item and move it to the right column.
+
+
+Exclude Pay Stub Accounts	Select the pay stub accounts to exclude from the calculation. This is normally only used when the Include Pay Stub Accounts defined above are Total accounts.
+For example, you could include the Total Gross account then exclude the Expense Reimbursement account.
+EXCLUDE ACCOUNTS	DESCRIPTION
+Pay Stub Account Value	Select a value to exclude (ie: Amount, Units/Hours, YTD Amount, YTD Unit/Hours).
+Selection	Select the item and move it to the right column.
+
+
+Employees	Select the employees that this calculation will be applied to and move them to the right column.
+
+
+Eligibility Tab
+FIELD	DESCRIPTION
+Apply Frequency	How often this Tax/Deduction calculation is applied. Selecting Hire Date or Termination Date means that it will only apply once if the employees hire date or termination date falls within the pay period.
+Payroll Run Type	Defines which Payroll Run Types this applies to.
+Start Date	Select a start date from the calendar, or leave it blank.
+End Date	Select an end date from the calendar. If you leave the field blank, it will continue indefinitely.
+Start/End Dates Based On	Select which date the above specified Start Date and End Date criteria are based on. For e.g. If Pay Stub Transaction Date is selected then the Tax/Deduction will be eligible if the pay stub transaction date falls between the Start Date and End Date selected.
+Minimum Length of Service	Enter the minimum length of employee service for this tax or deduction. This uses a 'greater than or equal to' (>=) comparison. See example in Maximum Length of Service.
+MIN. SERVICE	DESCRIPTION
+Number	Enter an amount to represent the Minimum Length of Service.
+Time Unit	Select the unit of time (e.g. years, days, etc.).
+
+
+Maximum Length of Service	Enter the maximum length of employee service for this tax or deduction. This uses a 'less than' (<) comparison. Example using Minimum and Maximum Length of Service : Milestone 1: >= 0 years and < 4 and Milestone 2: >= 4 years and < 8 years.
+MAX. SERVICE	DESCRIPTION
+Number	Enter an amount to represent the Maximum Length of Service.
+Time Unit	Select the unit of time (ie: years, days, etc.).
+
+
+Minimum Employee Age	Enter the minimum employee age (ie: 18 years).
+Maximum Employee Age	Enter the Maximum employee age (ie: 70 years).
+
+
+Employee Settings Tab
+FIELD	DESCRIPTION
+Filing Status	Use this field to indicate the employee's marital status.
+FILING STATUS	DESCRIPTION
+Single	Select this value if the employee is single.
+Married	Select this value if the employee is married.
+
+
+
+ 
+TIP:  To ensure US State/Local Taxes appear on W2's, an employee must be assigned to the Tax / Deductions record when generating a W2. Therefore when an employee moves between States/Localities or a tax or deduction no longer applies moving forward, keep the employee assigned to the Tax / Deductions record and specify an eligibility End Date when the tax or deduction is to stop. For more information see Multi-State Payroll.
+
+Multi-State Payroll refers to the following situations:
+	If an employee works in one state and resides in another state.
+	If a business operates in more than one state.
+	If an employee works in multiple states.
+It’s important to understand your business presence or nexus rules and any reciprocity agreements between states. These agreements may exempt employees from tax withholding in the state where they work. Refer to the state tax agencies that apply to your business.
+TimeTrex calculates withholding taxes by referencing the Tax Remittance Agency name and the name of the tax. If employment taxes or deductions from multiple states or localities are required, verify that the Taxes and Deductions for the Remittance Agency has been added and add all applicable Tax/Deductions to Employees.
+ 
+If a Tax or Deduction no longer applies (i.e. when an employee moves between States/Localities)
+To ensure the US State/Local Taxes appear properly on the W2's, keep the employee assigned to the Tax / Deductions record and specify an Eligibility End Date when the tax is to stop being deducted for that employee.
+To Edit Start and End Dates for Tax / Deductions, use the following steps:
+	Click on Payroll, Taxes & Deductions
+	Select the Tax or Deduction record, then click Edit in the button bar.
+	Click on the Eligibility tab.
+	Enter a Start Date if there isn't already one. The Start Date can be a past date such as when the company began doing business in this State.
+NOTE:   This Start Date will effect all employees who are using this tax. Once the Start Date for a particular Tax/Deduction is entered it will allow a Start and End Date field to appear in each employee's tax record, which can be edited to suit their circumstances.
+	Click Save in the button bar to save your changes.
+	In the main menu, click Employee, then Employees.
+	Select the Employee, click the Edit button and then click on the Tax tab.
+	Select the Tax or Deduction that will no longer apply to this employee and click the Edit button.
+	Enter an End Date, the last date the tax or deduction will apply to this employee.
+	Add a New Tax /Deductions for the employee and add a Start Date, which would be the next date after the End Date entered in the step above.
+Repeat these steps for all State/Local tax or deductions that are no longer applicable to the employee, as well as for those that are newly applicable.
+ 
+TIP:   If the employee has moved residence, edit the employees address in the Employee, Employees menu, Contact Info tab or request the employee to update it through their Employee Profile menu, Contact Information.
+
+Pay Stub Amendments provide a method for making specific, individual changes to employee pay stubs that cannot be performed automatically within the Taxes / Deductions feature. By default, Taxes/Deductions apply to every pay period.
+Pay stub amendments allow you to define specific calculations, or formulas, and apply them to all employee pay stubs or to individual employees. In addition, they may be ignored if the eligibility criteria are not met or if the calculation formula results in a zero value. Examples of such changes are: bonuses, pay advances, employee loans, and reimbursements to petty cash.
+ 
+To add a new Pay Stub Amendment, do the following:
+	Click Payroll, then click Pay Stub Amendments in the main menu.
+	Click New in the button bar.
+	Complete the fields in the Pay Stub Amendment tab.
+	Click Save in the button bar to save your changes, or click Cancel to discard.
+See the Basic Operation section for details on viewing, adding, editing and deleting.
+ 
+NOTE:  Post dating "Pay Stub Amendments" is common practice and can be useful when you enter a holiday bonus several weeks in advance. When generating pay stubs, any amendments having effective dates set between the pay period start and end date will be used.
+ 
+WARNING:  Anytime you add or modify pay stub amendments, you must recalculate employee pay stubs for those changes to take effect. Under normal circumstances, you should enter all pay stub amendments for all employees at one time and then generate pay stubs when you finish. However, if you enter them individually or generate pay stubs multiple times, you need to recalculate the pay stubs each time.
+ 
+Pay Stub Amendment Tab
+FIELD	DESCRIPTION
+Employee(s)	Select one or more employee names to which this pay stub amendment will apply. Move names to the Selected Items column on the right.
+Pay Stub Account	Choose the Pay Stub Account that will be affected by this amendment.
+Amount Type	Decide whether the Amount is to be Fixed or a Percent, and select an amount type.
+AMOUNT TYPE	DESCRIPTION
+Fixed	Complete the following fields.
+FIXED	DESCRIPTION
+Rate	Enter the rate of pay this amendment will use.
+Units	Enter the units, which is the value that will be multiplied by the Rate to get the total Amount of this amendment. In most cases, Units usually refers to hours, but it can refer to anything else, such as miles traveled or items purchased.
+Rate	Enter the rate or click on Get Hourly Rate to automatically fill in the hourly rate of the selected employee.
+Amount	This is the calculated amount for this amendment. If you enter Rate and Units, then an automatic calculation of Amount is done for you. Otherwise, you must specify a value for Amount.
+
+
+Percent	Complete the following fields.
+PERCENT	DESCRIPTION
+Percent	Enter a percentage of pay this amendment will use.
+Percent Of	Select the item (ie: regular pay, bonus, etc.) for the percent calculation.
+
+
+
+
+Pay Stub Note (Public)	Enter a note describing this amendment that will appear on the employee's pay stub to help the employee understand why the adjustment was made.
+Description (Private)	Enter a private description that the employee will not see for your own internal accounting purposes.
+Effective Date	Select the date the pay stub amendment becomes effective. This date must fall in an open pay period. It can be post-dated if necessary.
+
+ 
+Cost Centers Tab
+Only when the pay stub accounts are allocated to the specified cost centers (Branch, Department, Job, Task) will they flow through to the General Ledger.
+ Pay Stub Transactions are the payments to employees that are associated with a pay stub and are automatically created when pay stubs are generated, based on the employee's pay methods.
+In the event of a problem with a payment, such as a check being lost or an EFT/ACH transaction being returned, see Stop Payments.
+A pay stub cannot be deleted if any transactions for that pay stub are marked "Paid".
+ 
+To edit or view a Pay Stub Transaction:
+	Click Payroll, then click Pay Stub Transactions in the main menu.
+	Select a transaction, then click the View or Edit buttons.
+ 
+See the Basic Operation section for details on viewing and editing.
+ 
+Pay Stub Transaction Tab
+FIELD	DESCRIPTION
+Status	Select the status for the pay stub transaction.
+STATUS	DESCRIPTION
+Pending	The transaction has been generated and is now waiting to be processed/marked as paid.
+Paid	The transaction has been processed/paid.
+Stop Payment	The payment is stopped and there is no intention to reissue the same payment, with the same pay method.
+Stop Payment - Reissue	The payment is stopped and the intention is to reissue the same payment, with the same pay method.
+
+
+Transaction Date	The date set for the payment to be made.
+
+ 
+
+After a Pay Stub is generated, but prior to the associated direct deposit being received by the employee or a check being cashed, certain circumstances may make it necessary to process either:
+	Stop Payment - Reissue
+To reissue a replacement check or direct deposit. TimeTrex automatically stops the payment and recreates another pay stub transaction for the same amount and the same payment method ready for processing again.
+Use when:
+	An issued check becomes lost.
+	A check gets ruined in the printing process.
+	A direct deposit ACH/EFT file gets lost,returned or rejected.
+OR
+	Stop Payment
+To stop a payment and create a new pay stub transaction with a different amount or pay method from the original.
+Use when:
+	The employee pay method for this particular pay stub was the wrong 'Type', i.e. Check rather than EFT/ACH (direct deposit).
+	The pay method amounts on the original transaction were incorrect.
+	The bank returns a direct deposit for a reason such as, the bank account was incorrect or closed. In this case, corrections must be made to the Employees Pay Method before reissuing.
+ 
+Process a Stop Payment - Reissue
+This process reissues a payment transaction for the same amount and the same pay method as the original. If you need to make changes to the amount or pay method see Process a Stop Payment and Create a New Pay Stub Transaction.
+ 
+To be able to make these adjustments, first ensure that the status for the specific pay period and pay stub(s) that will be affected are set as follows:
+	The Pay Period Status is either "Open" or set to "Post Adjustment".
+	The Pay Stub(s) Status is "Open".
+Then follow the steps below:
+	Click Payroll, then Pay Stub Transactions in the main menu.
+	Select the specific pay stub transaction(s) you want to reissue.
+	Click Edit in the button bar and change the status of the transaction to "Stop Payment - Reissue" .
+	Click Save in the button bar.
+ 
+	Click the Jump To button and click on Pay Stubs and then select the displayed Pay Stub(s).
+	Click the three-dot More button   and click on Process Transactions, verify the transactions are what you expect and then click the green checkmark  .
+ 
+	You may now "Close" the Pay Period or edit the Pay Stub(s) and set the Status to "Paid" and then click, Save in the button bar.
+ 
+Process a Stop Payment and Create a New Pay Stub Transaction
+This procedure stops a payment and creates a new pay stub transaction with a different amount and/or pay method.
+ 
+To be able to make these adjustments, first ensure that the status for the specific pay period and pay stub(s) that will be affected are set as follows:
+	The Pay Period Status is either "Open" or set to "Post Adjustment".
+	The Pay Stub(s) Status is "Open".
+and
+	If necessary, the Employee Pay Method is corrected or a new pay method is added.
+Then follow the steps below:
+	Click Payroll, then Pay Stub Transactions in the main menu.
+	Select the specific transaction(s) you want to stop.
+	Click Edit in the button bar and change the status of the transaction to "Stop Payment" and then click Save in the button bar.
+	Click the Jump To button and click on Pay Stubs and select the displayed Pay Stub.
+	Click Edit in the button bar and then Edit in the sub-button bar in the details section on the Pay Stub tab.
+	In the Transaction section near the bottom of the screen, click the plus button ,  to add another transaction. (See the red arrow in the image below.)
+ 
+	Select the necessary Payment Method from the drop-down menu, enter the Payment Date and Amount then click Save in the button bar.
+	Click the three-dot More button   and click on Process Transactions, verify the transactions are what you expect and then click the green checkmark  .
+	You may now "Close" the Pay Period or edit the Pay Stub(s) and set the Status to "Paid" and then click Save in the button bar.
+NOTE:  Other than stop payment processing, the recommended method to make changes to a pay stub is to use a Pay Stub Amendment. When editing a pay stub, tax amounts are no longer automatically calculated, so you are responsible for any changes made.
+ 	Government Documents are produced as required by government agencies when using the payroll component of TimeTrex. For example, Wage and Tax Statements such as W2 (US), T4 (Canada) and Record of Employment (ROE) (Canada).
+To View Government Documents, do the following:
+	Click Payroll, then Government Documents in the main menu.
+	Select the document in the listing details or use the Search Panel to find the document and then select it.
+	Click View in the button bar and the document file will automatically download onto your computer or device.
+	Open the government document file on your computer or device to view it and or print it.
+
+Pay period schedules are critical to the operation of TimeTrex because they define when a pay period begins and ends. In addition, the schedule defines the transaction date, which is the date that employees are paid. While most companies use only a single pay period schedule, TimeTrex allows for multiple pay period schedules. However, you can only assign an employee to one pay period schedule at a time.
+Pay period schedules constantly repeat themselves, similar to recurring schedules for employees. When you add a new pay period schedule, you define one or two full pay period start and transaction days. TimeTrex automatically determines the schedule pattern and repeats it indefinitely.
+If you pay by check, you should set at least one day between the end of the pay period and the transaction date. If you pay by direct deposit, you should allow two business days. This gives the supervisors and employees enough time to submit requests and complete any outstanding authorizations before payment is finalized. If a holiday falls at the end of a pay period, you should leave a buffer of 5 to 7 days.
+To create a Pay Period Schedule, perform these steps:
+	Click Payroll, then click Pay Period Schedules in the main menu.
+	Click New in the button bar. An inset page will appear with two tabs: Pay Period Schedule and Advanced.
+	Complete the fields.
+	Click Save in the button bar to save your changes, or click Cancel to discard the changes.
+See the Basic Operation section for details on viewing, adding, editing and deleting.
+ 
+Pay Period Schedule Tab
+FIELD	DESCRIPTION
+Name	Enter a name for the pay period schedule.
+Description	Enter a description.
+Type	Select the type of pay period from the drop-down box.
+TYPE	DESCRIPTION
+Manual	Determined by customer.
+MANUAL	DESCRIPTION
+Annual Pay Periods	Enter the number of pay periods per year.
+
+
+Weekly (52/year)	52 pay periods per year.
+Weekly (53/year)	53 pay periods per year for the years that actually have 53 weeks in the year.
+Bi-weekly (26/year)	26 pay periods per year.
+Bi-weekly (27/year)	27 pay periods per year for the years that actually have 27 bi-weekly periods in the year.
+Semi-Monthly (24/year)	24 pay periods per year.
+The procedure for a semi-monthly schedule is slightly different from other schedules. For this pay period type, you must define the day of the month the primary and secondary pay periods start on, and which day the transaction date occurs on for both periods.
+PRIMARY	DESCRIPTION
+Pay Period Start Day of Month	Select the day of the month to indicate the first Pay Period Start Day of Month.
+Transaction Day of Month	Select the day of the month to indicate the day of the month AFTER the first pay period ends.
+
+SECONDARY	DESCRIPTION
+Pay Period Start Day of Month	Select the day of the month to indicate the second Pay Period Start Day of Month.
+Transaction Day of Month	Specify the day of the month AFTER the second pay period ends.
+
+For example, if employees are paid on the 1st and 15th for the prior month's work, the start days would be 1 and 16. The transaction days would be 1 and 15.
+Start	End	Transaction
+01-Nov-12	15-Nov-12	01-Dec-12
+16-Nov-12	30-Nov-12	15-Dec-12
+
+Monthly (12/year)	12 pay periods per year
+
+
+Pay Period Starts On	Select the day the pay period starts.
+Transaction Date	Select the number of days after the end of the pay period.
+Transaction Always on Business Day	Specify how to handle the cases where the transaction date falls on a weekend or holiday. Make your selection to cause TimeTrex to do nothing (No), or automatically move the transaction date to the Previous Business Day, Next Business Day, or Closest Business Day.
+Create Initial Pay Periods From	The date used to create initial pay periods from. This field only appears when creating new pay period schedules and is critical when creating bi-weekly pay periods specifically. If you wish to enter historical information into TimeTrex set this date on or before the first date that you wish to start entering data for.
+Employees	Select employees to include in this pay period schedule by clicking on the Employees drop-down listing and moving them into the Selected Items column.
+
+For more precision and flexibility, there are a number of options you can configure on the Advanced tab.
+Advanced Tab
+FIELD	DESCRIPTION
+Overtime Week	Select the start and end of a week with respect to overtime or premium policies.
+For example, if an employee is eligible for overtime after working 40 hours, this setting specifies the day on which the overtime hours will begin. It does not need to coincide with your pay period dates.
+NOTE:  These settings are entirely different from the Calendar Starts On setting found in Employee Profile-> Preferences. That setting is a display option for each employee, and it doesn’t affect the calculation of overtime.
+Time Zone	Select the time zone used for this pay period schedule. TimeTrex is a 24-hour system, capable of operating in any country around the world. This feature is very important for a company having locations in different time zones, where they need to define the exact time that overtime and each pay period starts and ends.
+Minimum Time-off Between Shifts	Enter the minimum amount of time that must occur between out and in punches before TimeTrex will start a new shift for an employee. It is only used for shifts that span midnight.
+For example, if an employee punches out on 15-Jan-12 at 11:30 PM for lunch and punches back in on 16-Jan-12 (the next day) at 12:30 AM, in order to combine these two sets of times into a single shift, the Minimum Time-Off Between Shifts must be set to at least 1 hour. If your employees work split shifts around midnight, or leave for extended breaks, this setting should be high enough to include the longest break that any employee may take and still continue their shift.
+Maximum Shift Time	Enter the maximum time that a single shift can extend. It also defines how many prior hours that TimeTrex will search when trying to pair punches. It is important that this setting is not too high or too low. If this option is set too high (such as 24:00), there could be some confusion.
+For example, when an employee punches in at 8:00 AM and forgets to punch out at 5:00 PM, and then comes in the next morning at 8:00 AM, TimeTrex will search backwards to 24 hours to determine if there is an in-punch without a matching out-punch. If it finds one, it would incorrectly calculate that the employee is punching out for a long shift and the employee's timesheet would be incorrect. Therefore, it is very important that Maximum Shift Time be set to a value that is no more than one hour longer than the longest possible shift an employee may work, usually no more than 16 hours.
+When training employees, you should emphasize that while making a punch, the employee is given the opportunity to set the punch type/status. The employee can avoid the situation described in the previous example by forcing the punch status to IN rather than leaving the TimeTrex default that is specified as OUT.
+Assign Shifts To	Specify the day a shift is assigned to when it spans midnight.
+ASSIGN SHIFTS TO	DESCRIPTION
+Day They Start On	The shift is assigned to the day when the first in punch occurs.
+Day They End On	The shift is assigned to the day when the last in punch occurs.
+Day With Most Time Worked	The shift is assigned to the day when most of the hours worked occurs.
+Each Day (Split At Midnight)	The shift is split and any time worked is assigned to the day when it actually occurred.
+
+NOTE:  These settings can significantly affect overtime calculations, so use them carefully.
+Create Pay Periods	Specify the number of days in advance to create pay periods. Typically this is just one or two pay periods in advance. This is not required even if you want to enter schedules and punches into the future when no pay period exists. Future pay periods can be viewed under Payroll -> Pay Periods, turn on the "Show Future Pay Periods" in the "Advanced Search" filter.
+Auto Close	Specify the number of days after the transaction date, to automatically close the pay period.
+TimeSheet Verification	Select who will do the verification from the drop-down box.
+TIMESHEET VERIFICATION	DESCRIPTION
+Disabled	Timesheet Verification is not in use.
+Employee Only	Employees (Subordinates) are only required to verify their timesheets.
+Superior Only	Superiors, as defined in the hierarchy, are only required to verify subordinates timesheets.
+Both Employee & Superior	Both employee and Superior are required to verify timesheets.
+
+By default, employees can only verify timesheets after the pay period ends and before the transaction date. However, you can specify the number of days when the Verification Window Starts and Verification Window Ends, and use negative values here to extend the window in either direction. TimeSheets cannot be verified if any critical severity exceptions or pending requests exist for the employee within the pay period .
+FIELD	DESCRIPTION
+Verification Window Starts	Enter the number of days before the pay period end date.
+Verification Window Ends	Enter the number of days before the transaction date.
+Agreement	Enter a custom statement that will be displayed in the TimeSheet Verification pop-up box, which the employee can choose to Agree or Disagree with this statement.
+Variables supported:
+#first_name#
+#middle_name#
+#last_name#
+#full_name#
+#current_date#
+#pay_period_start_date#
+#pay_period_end_date#
+#pay_period_transaction_date#
+
+
+
+ Permission groups allow employers to grant or restrict access to TimeTrex features for the employees assigned to that group. You can restrict access to documents so employees can read them, but not edit them. You can grant edit access to supervisors only.
+NOTE:   When creating a permission group, you specify a Level for that group. Level is extremely important for security because any employee having access to modify a permission group can only change their permission group to another group with a lower level than their own.
+For example, a supervisor having a permission group of Level 10 can assign their subordinates to any Level of 10 or lower, but not assign anyone or themselves to a higher level group. Permission levels should start at Level 1 for the lowest access (Terminated Employee) and go to Level 100 for the highest access (Administrator).
+TimeTrex has a granular permissions system with hundreds of different permissions that interface with each another. The following are the standard permission groups that are useful for most companies.
+	Terminated Employee: Used only for viewing historical data, such as government documents(T4/W2) and pay stubs after the employee has been terminated.
+	Regular Employee (Punch In/Out): Punch in/out and view their own timesheets, schedules, accrual balances, government documents and pay stubs.
+	Regular Employee (Manual Punch): Manually enter punch times and view their own timesheets, schedules, accrual balances, government documents and pay stubs.
+	Regular Employee (Manual TimeSheet): Manually enter total time worked per day and view their own timesheets, schedules, accrual balances, government documents and pay stubs.
+	Supervisor (Subordinates Only): View and edit the timesheets, punches, schedules, and requests of their subordinates, based on the established hierarchy.
+	Supervisor (All Employees): Identical to the previous supervisor group, except that it can view and edit the timesheets, punches, schedules, and requests of all employees.
+	HR Manager: View and edit qualifications and recruitment information for job applicants. They are restricted from changing policies.
+	Payroll Administrator: View and edit all timesheets, punches, etc., for all employees. They are restricted from changing policies.
+	Administrator: Full rights to everything.
+It is recommended to modify permissions only when consulting a support representative. If you make any changes, verify the outcome to ensure your overall system configuration remains intact.
+ 
+NOTE:  You can assign an employee to only one permission group at a time.
+See the Basic Operation section for details on viewing, adding, editing and deleting.
+ 
+To add a Permission Group, do the following:
+	Click Company, then click Permission Groups in the main menu.
+	Click New in the button bar.
+	Complete the fields on the inset page (for a description of all the fields see the table below).
+	In the Employees drop-down, choose the employees that belong to this permission group by moving the names of the employees into the Selected Items box.
+	Choose Permissions by moving the permissions into the Selected Items box or use the Permission Wizard by clicking on the three-dot More button  in the top-right corner of the screen.
+	Click Save in the button bar to save your changes, or click Cancel to discard the changes.
+ 
+Permission Group Tab
+FIELD	DESCRIPTION
+Name	Enter a name for the permission group.
+Description	Enter a description.
+Level	Select a level. Level 1 is the lowest (Terminated Employee) and 100 has the highest (Administrator)
+Employees	Select the employees that belong to this permission group. Move the names of the employees into the Selected Items column.
+Permissions	Select the permissions to assign to the group.
+
+WARNING:   Use extreme caution when editing your own group so you don't remove the permissions you need to administer TimeTrex.
+ 
+Permission Actions
+ACTIONS	DESCRIPTION
+Add	Permission to add for all employees.
+View	Permission to view for all employees.
+View Own	Permission to view only your own.
+View Subordinate	Permission to view for all subordinates, as set up in the Hierarchy.
+Edit	Permission to edit for all employees.
+Edit Own	Permission to edit only your own.
+Edit Subordinate	Permission to edit for all subordinates, as set up in the Hierarchy.
+Delete	Permission to delete for all employees.
+Delete Own	Permission to delete only your own.
+Delete Subordinate	Permission to delete for all subordinates, as set up in the Hierarchy.
+Permission Wizard
+The Permission Wizard is a filtering system that streamlines the process of customizing Permission Groups, making it significantly more efficient than manually selecting from the hundreds of available permission objects within TimeTrex.
+ 
+NOTE:  Before using the Permission Wizard, it is recommended that you review the Permission Groups and Hierarchy topics and consider consulting a support representative to avoid inadvertently removing any critical permissions.
+Using the Permission Wizard to add or edit permissions:
+	In the main menu, click on Company, then Permission Groups.
+	To add a new Permission Group, click New.
+or
+	To edit a Permission Group, select a Permission Group then click Edit.
+	Click on the three-dot More button  in the top-right corner of the screen, then select Permission Wizard.
+	Follow the steps in the Permission Wizard as shown in the table below. After completing each step, click on the blue right arrow   at the bottom of the screen to move forward to the next step. To revisit a previous step, use the blue left arrow  . These arrows are solely for navigating between steps.
+Permission Wizard
+STEPS	DESCRIPTION
+Choose role and permission actions	From the Role drop-down menu, select a role that closely matches how you want to customize permissions. For example, if you want to add scheduling permissions to a supervisor you might choose Supervisor (All Employees).
+From the Permissions drop-down menu, select permission actions such as Add, View, Edit.
+Choose modules and sub-modules	Permissions available for the features or modules and sub-modules available within the system.
+Would you like to allow, deny or simply highlight the chosen permissions	OPTION	DESCRIPTION
+Allow	Allow the permissions chosen in the wizard.
+Deny	Denies the permissions chosen in the wizard. Used for deselecting permissions.
+Highlight Only	Permissions matching the criteria specified in the wizard are highlighted. These highlighted permissions may appear in either drop-down box and can be easily moved between them by selecting or deselecting the desired permissions. It is recommended to use the Highlight Only option if you intend on editing more than one or two permissions because it gives you the opportunity to view and double check before actually allowing or denying the permissions.
+
+
+Complete the wizard	Click on the green checkmark   to finish setting up permissions in the wizard.
+
+	Click on the Save button to save the permissions you selected or Cancel to ignore the changes.
+ 
+The following are examples of how to use the Permission Wizard to select permissions:
+Example 1:
+If you want Regular Employees to be able to see all employee's schedules:
+	Select a preset Regular Employee Permission Group and then click Edit.
+	Open the Permission Wizard and choose the following:
+	Role = CUSTOM
+	Permissions = "View"
+	Modules = "Schedule"
+	Sub-Modules = "Schedule"
+	Select "Highlight Only" to highlight those permissions that match the criteria chosen.
+	In this example the highlighted schedule permissions are displayed in the Selected Items box. You can manually move the any highlighted permissions to the Unselected box if needed since they are only highlighted. The "Allow" option will automatically select the permissions and "Deny" will remove the permissions.
+	Click on the green checkmark   to close the wizard.
+	Click on Save.
+ 
+Example 2:
+If you want to add Job Tracking permissions for a Supervisor (Subordinates Only):
+	Double click the preset Role "Supervisor (Subordinates Only)" permission group
+	Open the Permission Wizard and choose the following:
+	Permissions = "Add, View Subordinate, Edit Subordinate"
+	Modules = "Job Tracking"
+	Sub-Modules = "Jobs, Job Tasks and Job Reports"
+	Select "Highlight Only" to highlight those permissions that match the criteria chosen
+	Move any of the highlighted permissions you want to allow, to the Selected Items box.
+	Click on the green checkmark   to close the wizard.
+	Click on Save.
+ Custom Fields can be used to record additional data for specific object types. For example, re-hire dates on employee records or custom general ledger codes on Branches/Departments.
+See the Basic Operation section for details on viewing, adding, editing and deleting.
+To add a new Custom Field:
+	In the main menu, click Company, then click Custom Fields
+	Click New in the button bar.
+	Fill in the fields and click the Save button.
+ 
+Custom Field Tab
+FIELD	DESCRIPTION
+Status	Select a status from the drop-down.
+STATUS	DESCRIPTION
+Enabled	Allowed to be used by employees.
+Disabled	Not allowed to be used by employees.
+
+
+Name	Enter a name for the custom field.
+Object Type	Where the field will appear i.e. Branch, Employee record.
+Field Type	Type of data that can stored in this field i.e. text, numeric value.
+Display Order	Maintains the specific order custom fields are displayed.
+Enable Search	Check to allow searches on this field.
+Validation Rules
+Default Value	Value appears as default when creating a new record.
+Required	If the field is required to be filled out.
+
+
+You can import data into TimeTrex by using a step-by-step tool called the Import Wizard. The source data must reside in a comma-separated value (CSV) text file, which you export from Excel or most other spreadsheet software. During the process, you will need to know the location of the file, and then specify how much of the data you want to import.
+To import data, do the following:
+	Click Company, then click Import in the main menu.
+	An inset page will appear containing a progress bar at the top and a drop-down menu where you choose the type of data to import.
+	After choosing the type of data, click the blue right arrow,   and then follow the remaining steps in the wizard.
+TIP:  It is recommended to import one record first, as a test to ensure the import process works as desired and does not return any errors.
+ 
+Example of Importing Employees using the Import Wizard:
+STEP	ACTION
+Confirm new hire defaults	Prior to importing employees, confirm that the new hire defaults are accurate by going to Employee -> New Hire Defaults
+Open Import Wizard	Company -> Import
+Select the type of objects to import	Select 'Employees' from the drop-down box.
+Click on 'Download example Employees CSV file' and open the downloaded file to see an example of the format and use it as a template.
+Click the blue right arrow,   to go to the next step.
+Upload .CSV (Comma Separated Value) or .XLSX (Spreadsheet) file	Choose the .CSV or .XLSX file which contains your employee data.
+Click the blue right arrow,   to go to the next step.
+Map columns from the uploaded file	Mapping relates the data in the .CSV of .XLSX file to the fields in TimeTrex. TimeTrex tries to automatically match similar fields, however you should always make sure the mapping is correct to avoid data being imported into the incorrect field, e.g. a Last Name being imported into a First Name field. Refer to the Sample Row column which displays the first row of your data for your convenience.
+Check that each field in the Field column (in TimeTrex) correctly corresponds with the name in the File Column (.CSV or .XLSX file) in each row. If there are any fields you don't want to use, select "None" from the drop-down. Change any formats necessary in the Parse Hint column such as date formats and if data is expressed as a code rather than a name e.g. Branch = 3. Before you can import employees that are assigned to specific departments or branches they must already exist or be imported in TimeTrex.
+TIP:  The same file can be used to import branches and departments by just mapping the relevant fields.
+When importing an Address a City, Country, Province/State and Postal Code/Zip Code are required.
+NOTE:  Employee Number and User Name will be auto-generated, if not supplied.
+Enter a Name to Save the Mapping for future use.
+Click the blue right arrow,   to go to the next step.
+Select Import settings	For this example, there is no need to check off any of these import settings. See below for more information regarding import settings.
+Click the blue right arrow,   to go to the next step.
+Verification	If the verification is successful, "Data verification successful" is displayed, then click the blue right arrow,   to go to the next step.
+If the Data Verification failed, reasons why it failed and on what row the failure occurred on are listed. Fix the failed records by editing the CSV or XLSX file, re-saving it, then click the blue left arrow,   to go to the Upload CSV or XLSX text file step, upload the updated file and continue through the wizard again. Alternatively skip importing the invalid records by clicking the blue right arrow,   to continue to the next step and fix the failed records within TimeTrex later.
+Import Successful	If the Import failed, fix the issues then verify and import again until the import is successful.
+Click the green checkmark,   to complete the Import.
+ 
+SELECT IMPORT SETTINGS (EMPLOYEES)	DESCRIPTION
+Enable smart matching.	Finds the closest match allowing for minor spelling errors or formatting differences.
+Update existing records based on User Name, Employee Number, or SIN/SSN.	When updating existing records connect the records by a unique field such as the User Name, Employee Number or SIN/SSN. If more than one of these fields are specified, only one is chosen, and in the order mentioned. Only the mapped fields are updated.
+For importing en masse see FAQ - How do I update employee User Names or Employee Numbers for existing records en masse?
+Create groups that don't already exist.	Create Employee Groups that don't already exist in TimeTrex.
+Create ethnic groups that don't already exist.	Create Ethic Groups that don't already exist in TimeTrex.
+Create titles that don't already exist.	Create Employee Titles that don't already exist in TimeTrex.
+ 

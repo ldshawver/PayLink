@@ -88,6 +88,159 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/time-clock/auth", async (req, res) => {
+    try {
+      const { employeeNumber, pin } = req.body;
+      if (!employeeNumber || !pin) {
+        return res.status(400).json({ message: "Employee number and PIN are required" });
+      }
+      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
+      if (!worker || worker.pin !== pin) {
+        return res.status(401).json({ message: "Invalid employee number or PIN" });
+      }
+      if (!worker.isActive) {
+        return res.status(403).json({ message: "This employee account is inactive" });
+      }
+      const company = await storage.getCompany(worker.companyId);
+      res.json({ worker, company });
+    } catch (error) {
+      res.status(500).json({ message: "Authentication failed" });
+    }
+  });
+
+  app.post("/api/payroll-runs/:id/process", async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+
+      const company = await storage.getCompany(run.companyId);
+      if (!company) return res.status(404).json({ message: "Company not found" });
+
+      const entries = await storage.getTimeEntriesByDateRange(
+        run.companyId, run.periodStart, run.periodEnd
+      );
+      const allWorkers = await storage.getWorkers(run.companyId);
+      const activeWorkers = allWorkers.filter(w => w.isActive);
+
+      const companyDeductions = await storage.getTaxesDeductions(run.companyId);
+      const activeDeductions = companyDeductions.filter(d => d.isActive && !d.isEmployerPaid);
+
+      const existingItems = await storage.getPayrollItems(run.id);
+      const existingYtdByWorker: Record<string, { gross: number; deductions: number; net: number }> = {};
+
+      const allRuns = await storage.getPayrollRuns(run.companyId);
+      const priorRuns = allRuns.filter(r =>
+        r.status !== "draft" && r.id !== run.id && r.periodEnd < run.periodStart
+      );
+
+      for (const worker of activeWorkers) {
+        let ytdGross = 0, ytdDeductions = 0, ytdNet = 0;
+        for (const pr of priorRuns) {
+          const priorItems = await storage.getPayrollItems(pr.id);
+          const workerItem = priorItems.find(i => i.workerId === worker.id);
+          if (workerItem) {
+            ytdGross += parseFloat(workerItem.grossPay || "0");
+            ytdDeductions += parseFloat(workerItem.deductions || "0");
+            ytdNet += parseFloat(workerItem.netPay || "0");
+          }
+        }
+        existingYtdByWorker[worker.id] = { gross: ytdGross, deductions: ytdDeductions, net: ytdNet };
+      }
+
+      let totalGross = 0, totalNet = 0, totalHours = 0, totalOT = 0;
+      let checkNum = 1001;
+      const items: any[] = [];
+
+      for (const worker of activeWorkers) {
+        const workerEntries = entries.filter(e => e.workerId === worker.id);
+        let regHrs = 0, otHrs = 0;
+        for (const e of workerEntries) {
+          regHrs += parseFloat(e.totalHours || "0") - parseFloat(e.overtimeHours || "0");
+          otHrs += parseFloat(e.overtimeHours || "0");
+        }
+
+        const rate = parseFloat(worker.payRate || "0");
+        let regPay = 0, otPay = 0, grossPay = 0;
+
+        if (worker.payType === "salary") {
+          const periodDays = Math.max(1,
+            (new Date(run.periodEnd).getTime() - new Date(run.periodStart).getTime()) / (1000 * 60 * 60 * 24) + 1
+          );
+          let periodsPerYear = 26;
+          if (company.payFrequency === "weekly") periodsPerYear = 52;
+          else if (company.payFrequency === "monthly") periodsPerYear = 12;
+          else if (company.payFrequency === "semimonthly") periodsPerYear = 24;
+          regPay = rate / periodsPerYear;
+          otPay = otHrs * (rate / 2080) * parseFloat(company.overtimeMultiplier || "1.5");
+          grossPay = regPay + otPay;
+        } else {
+          regPay = regHrs * rate;
+          otPay = otHrs * rate * parseFloat(company.overtimeMultiplier || "1.5");
+          grossPay = regPay + otPay;
+        }
+
+        let totalDeductions = 0;
+        for (const ded of activeDeductions) {
+          if (ded.calculationType === "percentage") {
+            totalDeductions += grossPay * (parseFloat(ded.rate || "0") / 100);
+          } else {
+            totalDeductions += parseFloat(ded.rate || "0");
+          }
+        }
+
+        const netPay = grossPay - totalDeductions;
+        const ytd = existingYtdByWorker[worker.id] || { gross: 0, deductions: 0, net: 0 };
+
+        totalGross += grossPay;
+        totalNet += netPay;
+        totalHours += regHrs + otHrs;
+        totalOT += otHrs;
+
+        const alreadyExists = existingItems.find(i => i.workerId === worker.id);
+        if (!alreadyExists) {
+          items.push({
+            payrollRunId: run.id,
+            workerId: worker.id,
+            regularHours: regHrs.toFixed(2),
+            overtimeHours: otHrs.toFixed(2),
+            regularPay: regPay.toFixed(2),
+            overtimePay: otPay.toFixed(2),
+            grossPay: grossPay.toFixed(2),
+            deductions: totalDeductions.toFixed(2),
+            netPay: netPay.toFixed(2),
+            payRate: rate.toFixed(2),
+            payType: worker.payType || "hourly",
+            checkNumber: String(checkNum++),
+            ytdGross: (ytd.gross + grossPay).toFixed(2),
+            ytdDeductions: (ytd.deductions + totalDeductions).toFixed(2),
+            ytdNet: (ytd.net + netPay).toFixed(2),
+          });
+        }
+      }
+
+      for (const item of items) {
+        await storage.createPayrollItem(item);
+      }
+
+      await storage.updatePayrollRun(run.id, {
+        status: "processed",
+        totalGross: totalGross.toFixed(2),
+        totalNet: totalNet.toFixed(2),
+        totalHours: totalHours.toFixed(2),
+        totalOvertimeHours: totalOT.toFixed(2),
+        workerCount: activeWorkers.length,
+        processedAt: new Date(),
+      });
+
+      const updatedRun = await storage.getPayrollRun(run.id);
+      const finalItems = await storage.getPayrollItems(run.id);
+      res.json({ run: updatedRun, items: finalItems });
+    } catch (error) {
+      console.error("Payroll processing error:", error);
+      res.status(500).json({ message: "Failed to process payroll" });
+    }
+  });
+
   app.get("/api/time-punches", async (_req, res) => {
     try {
       const punches = await storage.getTimePunches();
