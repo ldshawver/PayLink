@@ -7,6 +7,7 @@ PayLink is a comprehensive full-stack HR, Payroll & Time-clock application for m
 - **Frontend**: React + TypeScript, Tailwind CSS, shadcn/ui components, Wouter routing, TanStack Query
 - **Backend**: Express.js + TypeScript
 - **Database**: PostgreSQL with Drizzle ORM
+- **Authentication**: express-session + connect-pg-simple + bcrypt (session-based)
 - **Build**: Vite for frontend, TSX for backend
 
 ## Project Structure
@@ -15,7 +16,7 @@ client/src/
 ├── pages/           # Section pages (dashboard, attendance, schedule, employee, company, payroll, policy, hr, reports)
 ├── components/      # Reusable components (app-sidebar with collapsible nav, theme-provider, theme-toggle)
 ├── components/ui/   # shadcn/ui base components
-├── hooks/           # Custom hooks
+├── hooks/           # Custom hooks (use-auth, use-toast)
 ├── lib/             # Utilities (queryClient)
 server/
 ├── index.ts         # Express server entry
@@ -95,7 +96,17 @@ Policy tables (15 types):
 - `holiday_policies` - Holiday pay rules
 - `rounding_policies` - Time rounding rules (day total/punch)
 
+## Authentication
+- Session-based auth with express-session + connect-pg-simple (PostgreSQL session store)
+- Passwords hashed with bcrypt
+- All /api/* routes protected behind auth middleware (except /api/auth/*, /api/time-clock/auth)
+- Default admin user: username `admin`, password `admin`
+- Login page at root when unauthenticated, time clock accessible without login at /time-clock
+- Auth context via AuthProvider in use-auth.tsx hook
+- Logout button in sidebar footer
+
 ## API Routes
+Auth: POST /api/auth/login, POST /api/auth/logout, GET /api/auth/me
 Company: GET/POST /api/companies, PATCH /api/companies/:id
 Workers: GET/POST /api/workers, PATCH /api/workers/:id
 Time: GET/POST /api/time-punches, GET/PATCH /api/time-entries
