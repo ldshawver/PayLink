@@ -1,0 +1,737 @@
+There are many elements of information for each employee's profile or employee record. Some elements are dynamic fields that are driven by other features within TimeTrex.
+To add a new employee, do the following:
+	Click Employee, then click Employees in the main menu.
+	Click New in the button bar.
+	An inset page will appear that contains several tabs such as: Employee, Contact Info, Hierarchy, Wage, Tax and Pay Methods. Complete the fields in each tab.
+	Click Save to save your changes, or click Cancel to discard the changes.
+For more information on adding or hiring an employee, see Employee Hiring Process.
+See the Basic Operation section for details on viewing, adding and editing.
+ 
+Employee Tab
+FIELD	DESCRIPTION
+Legal Entity	Select the legal entity the employee is employed with.
+Status	Select a status for the employee from the drop-down box.
+STATUS	DESCRIPTION
+Active	The employee is active, the typical setting for a new employee.
+Inactive - Temporary	The employee is temporarily inactive for administrative purposes, but is still employed.
+Leave - Illness/Injury	The employee is on leave due to illness or injury.
+Leave - Maternity/Paternity	The employee is on maternity or paternity leave.
+Leave - Other	Employee is on leave for another reason.
+Terminated / Quit	The employee is no longer employed by the company, they either quit or were terminated.
+
+
+First Name	Enter the employee's first name.
+Last Name	Enter the employee's last name.
+Employee Number	Enter the employee number.
+Permission Group	Select the permission group for the employee.
+Pay Period Schedule	Select the pay period schedule for the employee.
+Policy Group	Select the policy group for the employee.
+Recurring Schedule	Assign employee to initial recurring schedule starting on their hire date. Only available when adding a new employee.
+Title	Enter the employee's title.
+Currency	Select the currency to pay the employee.
+Default Branch	Select the employee's default branch to be used for filtering reports and new records such as schedules.
+Default Department	Select the employee's default department to be used for filtering reports and new records such as schedules.
+Default Job	Select the employee's default job to be used for filtering reports and new records such as schedules.
+Default Task	Select the employee's task to be used for filtering reports and new records such as schedules.
+Group	Select the employee's group.
+Ethnicity	Select the ethnicity of the employee.
+SIN/SSN	Enter the employee's Social ID Number or Social Security Number.
+Birth Date	Select the employee's birth date from the calendar.
+Hire Date	Select the hire date from the calendar.
+Termination Date	Select the date when the employee leaves the company.
+Tags	Enter any Tag that might help identify this employee and facilitate a future search.
+
+ 
+Contact Info Tab
+FIELD	DESCRIPTION
+Photo	If available, upload an employee's picture.
+First Name	Enter the first name of the employee.
+Middle Name	Enter the middle name of the employee.
+Last Name	Enter the last name of the employee.
+Home Address (Line 1)	Enter the employee's address.
+Home Address (Line 2)	Optional; enter second line of employee's address.
+City	Enter the city.
+Country	Select the country.
+Province/State	Select the province or state.
+Postal/Zip Code	Enter the postal or zip code.
+Gender	Select the gender of the employee from the drop-down box.
+GENDER	DESCRIPTION
+Unspecified	Select if the employee's sex is not available.
+Male	Select if the employee is a man.
+Female	Select if the employee is a woman.
+
+
+Work Phone	Enter the work telephone number.
+Work Phone Ext	Enter the work telephone number extension.
+Home Phone	Enter the home telephone number.
+Mobile Phone	Enter the mobile telephone number.
+Fax	Enter the fax telephone number.
+Work Email	Enter the work email address.
+Home Email	Enter the home email address.
+Note	Use this field to enter any relevant notes about the employee.
+
+ 
+Hierarchy Tab
+Typically this tab indicates the relationship between employees as subordinates to their supervisors. See the Hierarchy section for more information.
+ 
+Sign In Tab
+FIELD	DESCRIPTION
+Sign In Enabled	Enables or disables whether the employee can sign into TimeTrex.
+Multifactor Authentication	Displays if the employee has Disabled or Enabled Multifactor Authentication.
+User Name	Enter a user name (not case sensitive). User names must be at least 3 characters, be unique across all employees in the system, and only be alphanumeric or contain "@", ".", "-", "_" or "+" (without quotes).
+Change Password	Enter a password (case sensitive). This password must be at least 6 digits/characters and must not contain any part of the name, or personal identification information such as first/last name, address, etc.
+Passwords must also meet a minimum "strength" requirement, which essentially requires passwords to contain a sufficient number of unique digits/characters/special characters.
+For example: "1111111111" will not be a valid password, nor would "123456", but "boat-735" would be.
+Confirm Password	Re-enter the password.
+Quick Punch ID(Optional)	This is the employee's Quick Punch ID which is only used by employees to punch In/Out using a web browser or kiosk device quick punch method. The ID must be between four and eight digits and unique across all employees, including employees from other customers in the case of our cloud hosted deployments.
+Quick Punch Password	Enter the employee's numeric Quick Punch password with a minimum of four digits and maximum eight digits.
+Sign In Expire Date	Enter a date when the Sign In will automatically be disabled.
+Terminated Permission Group	The permission group used when employees with a status of anything other than 'Active' sign in.
+
+ 
+Wage Tab
+The wage tab is used to track an employee's wage history. To add a wage for this employee, click the Wage tab and click New in the button bar. Enter the information and click Save. The new wage will appear in the listing on the Wage tab. Refer to the section on Wages for more information.
+ 
+Tax Tab
+To add applicable taxes for this employee, click the Tax tab and click New in the button bar. Choose an item from theTaxes/Deductions drop-down. These items were previously setup in the Taxes / Deductions feature. Click Save and then look for the new tax to appear in the listing on the Tax tab. You can use this tab to quickly edit an employee's tax status, such as when marital status changes from single to married. See the section on Taxes / Deductions for more information.
+TIP:  For US non-resident aliens:
+Edit the US - Federal Income Tax on the Employees, Tax tab. If the employee has filled out the 2019 W4, use the computational bridge to convert it to a 2020 W4. Refer to IRS Publication 15-T (Page 3).
+Ensure that "2020 or later" is selected from the Form W-4 Version drop-down box. Continue editing the US-Federal Tax Income Tax by adding the appropriate annual amount to the Other Income field, based on the IRS Publication 15-T Non-Resident Aliens Table 1 or Table 2 (Page 4).
+This essentially offsets the standard deduction that does not apply to non-resident aliens, to calculate the income tax as expected.
+ 
+Pay Methods Tab
+Pay Methods are necessary only if payroll is being processed in TimeTrex. Refer to Employee Pay Methods for more information.
+ 
+Contacts Tab
+Add Employee contacts such as a relative or someone to contact in case of an emergency.
+ 
+Accruals Tab
+Accruals are displayed here if the employee is associated with a Policy Group that includes an Accrual Policy.
+ 
+Qualifications Tab
+To add Qualifications for this employee, click the Qualifications tab and click New in the button bar. Then complete the fields and click Save. The new qualification will appear in the listing on the Qualifications tab. Refer to the section on Qualifications for more information.
+ 
+Reviews Tab
+To add a Review for this employee, click the Reviews tab and click New in the button bar. Enter the information and click Save. The new review will appear in the listing on the Reviews tab. Refer to the section on Reviews for more information.
+ 
+Attachment Tab
+To add an attachment (such as a contract or tax form) to the employee's record, click the Attachment tab and click New in the button bar. Enter the information about the document in the tab. The fields are the same as those in the Documents tab. See the section on Document Management for more information.
+Employee Titles
+You can add titles such as carpenter, electrician, accountant, etc., to better categorize employees and facilitate searching and reporting. You can link these titles in the Title drop-down of the Employees profile.
+See the Basic Operation section for details on viewing, adding and editing.
+To add an Employee Title:
+	Click Employee, then click Titles in the main menu.
+	Click New from the button bar.
+	Add the name of the Title, on the Employee Title tab.
+	Click Save from the button bar.
+
+Employee Groups
+Groups are another way to classify employees. They are different from Departments and are typically used to classify a cross-functional type of employee. Examples are Executives, Human Resources, or Non-Exempt employees. In TimeTrex, you can place groups within other groups.
+To add a new group, do the following:
+	Click Employee, then click Groups in the main menu.
+	Click New in the button bar.
+	An inset page will appear with one tab, Employee Group. Complete the fields.
+	Click Save or click Cancel to discard the changes.
+See the Basic Operation section for details on viewing, adding and editing.
+ 
+Employee Group Tab
+FIELD	DESCRIPTION
+Parent	If this is your first group entry, you can only choose Root from the Parent drop-down. As you add more groups, you can choose to have one group be the Parent for other groups. You can continue to add and nest these groups beneath one another to reflect your organization. You can also drag-and-drop the groups.
+Name	Enter the Name of the group, such as “Non-Exempt”.
+
+Preferences
+Employees, Supervisors and Administrators can configure a number of settings, such as date and time format, notifications and schedule synchronization with external calendars or mobile devices. Employees can set their own Preferences through the Employee Profile Menu > Preferences.
+NOTE:  Preferences only affect a specific employee and how that employee views data. These settings do not affect any other employee.
+ 
+Preference Tab
+FIELD	DESCRIPTION
+Employee	(read-only)
+Language	preferred language (English, French, German, etc.).
+Date Format	Preferred date format (dd/mm/yy, mm/dd/yy, etc.).
+Time Format	Preferred time format (8:09PM, 20:09GMT, etc.).
+Time Units	Preferred time units (hh:mm, hh:mm:ss, etc.).
+Its important to understand the differences between these formats. The two primary formats are Hours (2.25) (time in decimal hour format) and hh:mm (2:15) (time in hours and minutes separated by a colon, similar to a digital clock). When using Hours (2.25), its easy to add the times together using a calculator, but its difficult to input time to the nearest minute, as 5 minutes would equal 0.083333333 (repeated to infinity). However using the hh:mm (2:15) format its easy to enter time to the nearest minute as 5 minutes would be 00:05, but this format cannot be easily added on a calculator, since its a colon separating the hours and minutes not a decimal. Therefore if you want to manually add 1:59 + 3:01, you cannot enter 1.59 + 3.01 (notice the difference between the colon : and .) into your calculator as that would equal 4.6, but in reality its 1 hour and 59 minutes + 3 hours and 1 minute for a total of 5 hours. The reason for this is of course that there are 60 minutes in an hour and when entered into your calculator it would take 100 minutes to equal an hour.
+Time Units Chart (Minutes ÷ 60 seconds = Decimal)
+Minutes		Decimal	Minutes		Decimal	Minutes		Decimal	Minutes		Decimal
+ 1	 = 	0.02	16	 = 	0.27	 31	 = 	0.52	46	 = 	0.77
+ 2	 = 	0.03	17	 = 	0.28	 32	 = 	0.53	47	 = 	0.78
+ 3	 = 	0.05	18	 = 	0.30	 33	 = 	0.55	48	 = 	0.80
+ 4	 = 	0.07	19	 = 	0.32	 34	 = 	0.57	49	 = 	0.82
+ 5	 = 	0.08	20	 = 	0.33	 35	 = 	0.58	50	 = 	0.83
+ 6	 = 	0.10	21	 = 	0.35	 36	 = 	0.60	51	 = 	0.85
+ 7	 = 	0.12	22	 = 	0.37	 37	 = 	0.62	52	 = 	0.87
+ 8	 = 	0.13	23	 = 	0.38	 38	 = 	0.63	53	 = 	0.88
+ 9	 = 	0.15	24	 = 	0.40	 39	 = 	0.65	54	 = 	0.90
+ 10	 = 	0.17	25	 = 	0.42	 40	 = 	0.67	55	 = 	0.92
+ 11	 = 	0.18	26	 = 	0.43	 41	 = 	0.68	56	 = 	0.93
+ 12	 = 	0.20	27	 = 	0.45	 42	 = 	0.70	57	 = 	0.95
+ 13	 = 	0.22	28	 = 	0.47	 43	 = 	0.72	58	 = 	0.97
+ 14	 = 	0.23	29	 = 	0.48	 44	 = 	0.73	59	 = 	0.98
+ 15	 = 	0.25	30	 = 	0.50	 45	 = 	0.75	60	 = 	1.00
+You can switch back and forth between time unit formats in your preferences at anytime since it only changes how time is displayed or input, it does not affect how the data is stored behind the scenes whatsoever.
+Distance Units	Preferred distance units (kilometers, miles or meters)
+Time Zone	Preferred time zone for displaying time. The Auto-Detect button automatically detects the timezone of the employee who is currently signed in.
+Calendar Starts on	Preferred view for which day of the week the calendar starts on.
+Rows per page	Number of rows to display on a page.
+Default Screen	The first screen that appears after an employee logs in.
+Save Timesheet State	Check the box to return to the employees timesheet that was viewed last.
+
+
+Notifications Tab
+FIELD	DESCRIPTION
+Notification Status	Select to enable notifications.
+STATUS	DESCRIPTION
+Disabled	No notifications will be sent.
+Enabled	The specified notifications will be sent.
+
+
+Display Notifications For	The number of seconds the notification will display in the web browser. Use 0 for infinite.
+Enabled	If the enabled box is checked, the specific notification may be sent and if the box is left blank it will never be sent.
+Type	The types of notifications available for example, punch reminders, exceptions, requests, pay stub, process payroll and remittance agency events will depend on the permissions set for the employee.
+Priority	The way the notification appears and sounds. The different priorities on mobile devices is mainly for Android devices that support notification "channels". So the employee has full control over how each priority is handled on their specific devices.
+PRIORITY	DESCRIPTION
+Critical	Use only when you have to get the employee's attention such as if they forgot to punch. If a critical notification does not get attention it could typically cause a critical exception.
+Web browser: The notification appears on the screen flashing red and plays a sound continuously until it is acknowledged.
+Mobile App: The notification will pop-up and plays a sound and/or vibrates for 30 seconds, or as otherwise configured on the device.
+High	Web browser: The notification appears on the screen flashing red and plays a sound once.
+Mobile App: The notification will pop-up and plays a sound once, or as otherwise configured on the device.
+Normal	Web browser: The notification appears on the screen and plays a sound once.
+Mobile App: The notification will pop-up and plays a sound once, or as otherwise configured on the device.
+Low	Web browser: The notification appears on the screen, no sound will play.
+Mobile App: The notification will pop-up and plays a sound once, or as otherwise configured on the device.
+
+
+Browser	Enables the selected type of notification to pop-up when the employee is signed in to TimeTrex through a browser or through their operating system notification center if they are not signed in.
+Work / Home Email	Enables the selected type of notification to be sent to the employee's work and/or home email addresses.
+Mobile App	Enables the selected type of notification to be sent to the employee's TimeTrex mobile app.
+Settings	Delays when a specific reminder notification is to be sent. Use a negative value to be notified before the expected scheduled time / date.
+Example: If you want an employee to be reminded to punch in 5 minutes before the start of their shift, you would set the Punch Reminder - Start Shift, Settings Delay to -00:05.
+If you want the reminder sent 15 minutes after they start their shift you would set the Punch Reminder - Start Shift, Settings, Delay to 00:15. In this case the reminder will only be sent if the employee has not already started their shift.
+
+TIP:  Notifications can be viewed by clicking on the bell icon or accessing the Employee Profile Menu drop-down on the right side of the header bar. The small number beside the bell icon indicates the number of unread notifications.
+ 
+Schedule Synchronization Tab
+FIELD	DESCRIPTION
+Status	Select the status of the Schedule Synchronization from the drop-down box to allow syncing with the employee's preferred calendar, such as Microsoft Calendar, Google Calendar, or a smart phone.
+STATUS	DESCRIPTION
+Disabled	The Schedule Synchronization is inactive and it should not be allowed to sync with any calendar or device.
+Enabled (Authenticated)	The Schedule Synchronization is active but requires that the calendar application support user name/password authentication.
+Enabled (UnAuthenticated)	This option is used for Schedule Synchronization when the calendar application does not support user name/password authentication and so the Calendar URL can be used instead.
+
+
+Calendar URL	Use this link to subscribe to your schedule in your favorite calendar app (e.g. Google Calendar, Outlook).
+Alarm 1	Enter the time for the first calendar notification (or reminder) before the employee's scheduled start time.
+For example, if this field is set with 1:00 before the scheduled start time, Microsoft Calendar displays a reminder that the shift will start in 1 hour. If the alarm is set for a smart phone, the phone will ring 1 hour before the shift starts. (See Advanced Options Pay Period Schedules for more information.)
+Alarm 2	Enter the time for the second calendar notification (or reminder) before the employee's scheduled start time.
+For example, if this field is set with 00:30 before the scheduled start time, Microsoft Calendar displays a reminder that the shift will start in 30 minutes. If the alarm is set for a smart phone, the phone will ring 30 minutes before the shift starts.
+Alarm 1	Enter a time for the first notification (or reminder) for a scheduled shift absence. Shifts Scheduled Absent are shifts where the employee may be scheduled off on a day they would normally be working, either on vacation or sick time. This alert reminds the employee *not* to come in to work that day.
+For example, if an employee is scheduled for a vacation day and this alarm is set for 04:00, the Microsoft calendar displays a reminder that vacation starts in 4 hours. This allows time to complete the work that cannot wait until the return from vacation.
+Alarm 2	Enter a time for the second notification (or reminder) for a scheduled shift absence. Shifts Scheduled Absent are shifts where the employee may be scheduled off on a day they would normally be working, either on vacation or sick time. This alert reminds the employee *not* to come in to work that day.
+For example, if an employee is scheduled for a vacation day and this alarm is set for 01:00, the Microsoft calendar displays a reminder that vacation starts in 1 hour. The employee could then inform the supervisor of unfinished work that can wait until the return from vacation.
+Alarm 1	Enter the time for the first calendar notification (or reminder) before the start time for the modified shift the employee has been scheduled to work.
+For example, if the supervisor modifies the employee's schedule and this field is set with 1:00, Microsoft Calendar displays a reminder that the modified shift will start in 1 hour. If the alarm is set for a smart phone, the phone will ring 1 hour before the modified shift.
+Alarm 2	Enter the time for the second calendar notification (or reminder) before the start time for the modified shift the employee has been scheduled to work.
+For example, if the supervisor modifies the employee's schedule and this field is set with 00:15, Microsoft Calendar displays a reminder that the modified shift will start in 15 minutes. If the alarm is set for a smart phone, the phone will ring 15 minutes before the modified shift.
+
+ 
+Wages
+The first wage entry for an employee must have an effective date that occurs on or before the employee's hire date. If a wage entry does not cover a period of time, the employee will not be paid for the time they worked within that period.
+See the Basic Operation section for details on viewing, adding, editing and deleting.
+NOTE:  It is critical that you specify an hourly rate for salary employees. Otherwise, TimeTrex can't calculate any adjustments to the employees' salary.
+Wage Tab
+FIELD	DESCRIPTION
+Employee	Select the employee's name from the drop-down box.
+Wage Group	Select the correct wage group for the employee from the drop-down box. In most cases, the default wage group for the employee is sufficient. In rare cases, if the employee works more than one job at different rates of pay, you might need a secondary wage. Learn more in the section about Secondary Wage Groups.
+Type	Select the type of wage from the drop-down box.
+TYPE	DESCRIPTION
+Hourly	The employee is paid by the hour.
+Salary (Weekly)	The employee is paid weekly.
+Salary (Bi-Weekly)	The employee is paid bi-weekly.
+Salary (Monthly)	The employee is paid monthly.
+Salary (Annual)	The employee is paid annually.
+
+
+Wage	Enter a wage amount, either per hour or per salary period.
+Average Time/Week	If you choose one of the salary options as the Type, enter the amount of hours per week for the salaried employee, ie: 40 hours per week.
+Annual Hourly Rate	If you choose one of the salary options as the Type, the Annual Hourly Rate field will display the equivalent hourly rate for that salary amount that you put into the Wage field.
+Labor Burden Percent	Add a percent, such as 25%, to represent the additional costs for this employee.
+For example, if an employee's salary is $20,000 and receives additional benefits worth $5000 for health care and paid vacation, the labor burden is 25%. The rough estimate for extra employee costs is calculated from company accounting records and is applied as a percent to the Labor Burden Percent field. If additional employee costs are not calculated, then this field should be 0%.
+Effective Date	This field contains the date that a wage becomes effective.
+For example, when an employee receives a new wage from a promotion, this field should not be changed or the employee's wage history will be lost. For every change in the employee's wage, you should add a new wage record with the new amount. Then a complete history of each employee's wage changes is maintained within the application.
+Recalculate TimeSheets	When this box is checked timesheets are automatically recalculated for all open pay periods from the Effective Date.
+Note	Add an optional note.
+
+
+Secondary Wage Groups
+With Secondary Wage Groups, you can assign multiple employee wages for each wage group that you define. You can then reference the wage groups directly by policies such as Overtime Policies, Premium Policies, or Absence Policies. Secondary wage groups gives you complete flexibility in paying employees accurately for the time that they work in multiple jobs. This feature is used when you need to pay employees their own specific rate, which cannot be determined by using the policies Rate multiplier on the employee's default wage.
+For example, if an employee gets paid $10 per hour for most of the time they work, but gets $11.27 per hour for work in "Department A" and $12.33 per hour for work in "Department B," you setup two secondary wage groups, one for each department. In addition, you would configure two shift differential premium policies that specify when an employee works in a specific department. Then they get paid the rate that you associated with the secondary wage group(s) instead of their default wage. See Multiple Pay Rates.
+NOTE:  In order for a secondary wage group to trigger it needs to be associated with a Pay Formula Policy and Pay Code.
+This feature may be confused with other group functionality such as Employee Groups, Job Groups or Task Groups. However, Secondary Wage Groups should only be created if you need to pay employees different rates for performing duties in different Branches, Departments, Jobs or Tasks.
+To add a new Secondary Wage Group, do the following:
+	Click Company , then click Secondary Wage Groups in the main menu.
+	Click New in the button bar.
+	Complete the field.
+	Click Save in the button bar to save your changes or click Cancel to discard the changes.
+See the Basic Operation section for details on viewing, adding, editing and deleting.
+ 
+Secondary Wage Group Tab
+FIELD	DESCRIPTION
+Name	Enter a descriptive name for the secondary wage group.
+
+ 
+Multiple Pay Rates
+When managing multiple pay rates, the configuration you choose depends on whether the pay rates are consistent across a group of employees or are different for each individual. Below are example use cases for various scenarios:
+ 
+1. Pay Formula Policies Only
+Use case:
+Apply when all employees receive the same pay rate for a specific rule or policy.
+Key Benefits:
+	Simplifies setup by applying a single formula across multiple employees.
+	Minimized data entry and maintenance.
+Example scenario:
+All employees receive an additional $1/hour for working an evening shift.
+Configuration Steps:
+	Create a single Pay Formula Policy for the Evening Shift Premium.
+	Link the Pay Formula Policy to the associated Premium Policy.
+ 
+2. Secondary Wage Groups with Pay Formula Policies
+Use case:
+Use when individual employees receive different pay rates for the same policy.
+Advantages:
+	Enables precise control over individual pay rates.
+	Supports complex and customized compensation structures.
+Trade-off:
+Requires separate wage entries for each employee, increasing administrative overhead.
+Example scenario:
+Evening shift premiums vary by employee:
+	Employee A receives an additional $1/hour for working an evening shift.
+	Employee B receives an additional $1.50/hour for working an evening shift.
+	Employee C receives an additional $2/hour for working an evening shift.
+Configuration Steps:
+	Setup a Secondary Wage Group for the Evening Premium.
+	Create a Pay Formula Policy for the Evening Premium .
+	Link the Pay Formula Policy to the corresponding Secondary Wage Group.
+	Create wage records for each employee that use the Evening Premium secondary wage group with their specific premium rate.
+ 
+3. Managing Multiple Job Roles using Secondary Wage Groups and Pay Formula Policies
+Use case:
+Applicable when an employee performs multiple roles across branches, departments, job groups, task groups or punch tag groups each with a distinct pay rate.
+Key Benefits:
+While this setup requires initial wage configuration for each role it improves efficiency when on-boarding new employees with similar multi-role configurations.
+Example Scenario:
+An employee alternates between roles in the Restaurant Kitchen and Events & Catering departments, earning $30/hour and $25/hour respectively.
+Configuration Steps:
+	Create separate Secondary Wage Groups to reflect role-specific wage rates.
+	Wage Group - "Restaurant Kitchen Department".
+	Wage Group - "Events & Catering Department".
+	Create Pay Formula Policies for each department such as:
+	"Regular Time - Restaurant Kitchen Department".
+	"Regular Time - Events & Catering Department".
+	Link each Pay Formula Policy to its corresponding Secondary Wage Group.
+	Set Up Regular Time Policies with the appropriate differential criteria to restrict the specific departments, and link them to the corresponding Pay Formula policies created above:
+	"Regular Time - Restaurant Kitchen Department" linked to "Regular Time - Restaurant Kitchen Department" Pay Formula Policy.
+	"Regular Time - Events & Catering Department" linked to "Regular Time - Events & Catering Department" Pay Formula Policy.
+	Assign the Regular Time Policies to a Policy Group that the affected employee(s) are associated with.
+ 
+ 
+
+Employee Pay Methods
+Pay Methods are necessary only if payroll is being processed in TimeTrex and requires employee banking information. At least one pay method must be set up, but employees can have multiple pay methods assigned to define the type and distribution of payments, such as a fixed amount or a percentage of the total.
+For example, if an employee wishes to have 25% of his pay deposited into his savings account and 75% into his checking account create two pay methods, one for the 25% payment and one for the 75% payment.
+To add a New pay method, click Employee, then click Pay Methods in the main menu.
+	Click New in the button bar.
+	An inset page will appear with the tab, Pay Methods. Complete the fields.
+	Click Save or click Cancel to discard the changes.
+ 
+Pay Methods Tab
+FIELD	DESCRIPTION
+Employee	The employee this pay method is for.
+Status	Select a pay method status.
+STATUS	DESCRIPTION
+Enabled	Active.
+Disabled	Not active.
+
+
+Type	The form of payment.
+TYPE	DESCRIPTION
+Check	A paper check which is printed and then mailed or hand delivered to the employee.
+EFT/ACH (Direct Deposit)	EFT - Electronic Funds Transfer for bank account(s) in Canada.
+ACH - Automatic Clearing House transfers for bank account(s) in the United States.
+
+Remittance Source Account	The company's bank account or the source of this payment.
+Priority	The priority of this pay method compared to any other pay methods for this employee. Fixed amounts will always be chosen first over percent amounts, with Priority 1 being first and 10 being last. Percent amounts will then be calculated, again with Priority 1 being first. Once the total payment is distributed, any remaining pay methods will be ignored.
+Amount Type	The method of determining this payment.
+STATUS	DESCRIPTION
+Percent of Net Pay	The payment is calculated by a percentage of the total net pay on the pay stub.
+Percent of Amount Remaining	The remaining amount of net pay after prior payment methods have been applied.
+Fixed Amount	The payment is a set or fixed amount of the total net pay on the pay stub.
+
+Percent / Amount	The portion of the net pay on the pay stub depending on the Amount Type selected. Regardless of the amount or percent entered across all pay methods, the total will never exceed the net pay on the pay stub.
+PERCENT/AMOUNT	DESCRIPTION
+Percent	If amount type is Percent, enter the specific percentage for this payment.
+Amount	If the amount type is Fixed Amount, enter an exact dollar amount for this payment.
+
+Account Type, Routing, and Account (USD)	These fields are required if the Type Is EFT/ACH and Remittance Source Account is a United States dollar (USD) account. Enter the employee's Account Type, Routing and Bank Account numbers for this pay method.
+Institution, Bank Transit and Account (CAD) 	These fields are required if the Type is EFT/ACH and Remittance Source Account is a Canadian dollar (CAD) account. Enter the employee's Institution, Bank Transit and Bank Account numbers for this pay method.
+
+ 
+
+New Hire Defaults
+You can configure one or more New Hire Default settings that will be available during creation of a new employee profile. These default values automatically load into the appropriate tabs, and the data entry process for each new employee becomes more efficient and less time consuming.
+New Hire Defaults feature includes: Employee Identification, Contact Information, Hierarchy, Tax/Deductions, Preferences, and Notifications. Although the values in all the fields are default settings, you can change them when you create a new employee profile or edit an existing employee's profile.
+To view these default settings:
+	Click Employee, then click New Hire Defaults in the main menu.
+ 
+New Hire Defaults Tab
+FIELD	DESCRIPTION
+Display Order	If you have more than one New Hire Default this field determines the order the New Hire Default templates appear in the list. Lesser numbers appear at the top of the list and the first item on the list will be used, unless another is selected.
+Created By	If you have more than one New Hire Default this field is used to determine permissions.
+For example, if a supervisor has permission to create employee profiles for a particular branch, you can add a New Hire Default for that branch, Created By the branch supervisor, then the branch supervisor can only use the New Hire Defaults assigned to them.
+
+ 
+Employee Identification Tab
+The fields and values on this tab correspond to the Employee tab or Sign In tab in the employee's profile. Refer to Employees for more information.
+ 
+Contact Information Tab
+The fields and values on this tab correspond to the Contact Info tab in the employee's profile. Refer to Employees for more information.
+ 
+Hierarchy Tab
+
+The fields and values on this tab correspond to the Hierarchy tab in the employee's profile. Refer to Hierarchy for more information.
+ 
+Taxes & Deductions Tab
+The fields and values on this tab correspond to the Tax tab of the employee's profile. Refer to Employees and Taxes & Deductions for more information.
+ 
+Preferences Tab
+The fields and values on this tab correspond to Preferences. Refer to Preferences for more information.
+NOTE:   Even though a default time zone is set it is only used when TimeTrex cannot automatically determine a time zone based on their province/state or telephone area code.
+WARNING:   If a default telephone number is set, the time zone will always be based on that telephone number and will override the time zone for every new employee added.
+ 
+Notifications Tab
+The fields and values on this tab correspond to the Notifications tab in Preferences. Refer to Preferences, Notifications for more information.
+Employee Hiring Process
+See Hire Applicant if you are hiring through the HR Recruitment module.
+ 
+Rehire a former employee
+There are two options we recommend:
+1.	If the interval between termination and rehire is 12 months or less, edit the existing employee record by changing the status to "Active", clear the "Termination Date" and enter the new "Hire Date". The previous hire and termination dates will be stored as part of the audit records, however for easier reference you could create a Note on the Contact Info tab to include the previous hire and termination dates.
+2.	If the interval between termination and rehire is greater than 12 months, create a new employee record by selecting the employee you wish to re-hire, clicking the Copy as New in the button bar, change the Status to "Active", clear the "Termination Date", make any other necessary changes and click Save in the button bar.
+Hire a new Employee
+Check the New Hire Defaults occasionally to verify the default information is up to date. (Employee -> New Hire Defaults)
+ 
+STEP	MENU	NOTES
+Enter Employee information	Employee -> Employees, Click New, Employee tab
+Verify or fill in the necessary information as it pertains to the new employee. You must enter a First Name, Last Name and User Name as a minimum to be able to save. It is recommended that all employees be associated with a pay period schedule and policy group regardless if they punch in/out or not.
+Enter Employee Contact Information	Contact Info tab
+Verify or fill in the information necessary. Gender, Birth Date and SIN/SSN are included on this tab.
+Assign Hierarchy	Hierarchy tab
+Assign the employee to the hierarchy that they will be a subordinate of.
+Enter Wage	Wage tab
+Add the initial wage which must have an effective date that occurs on or before the employee's hire date.
+The steps below are applicable only if you are processing Payroll in TimeTrex.
+Enter Taxes	Tax tab
+Assign the proper Taxes/Deductions and configure any employee specific settings such as marital statuses, allowances and claim amounts.
+Enter Pay Methods	Pay Methods tab
+Add at least one pay method for each employee you process payroll for.
+ 
+ Employee Termination Process
+	Determine when the employees final pay must be issued according to the federal or state employment labor laws.
+	Click Employee, then click Employees in the main menu.
+	Select an employee and enter a date in theTermination Date field.
+	Change the employee Status field to 'Terminated'.
+	If necessary, zero out all accrued time for the employee to be terminated in Attendance > Accrual Balances.
+	Also, ensure any necessary pay stub amendments (such as bonus, severance or company loan payment) are created before the final pay stub is generated.
+	Generate the final pay stub with the required end/transaction date, review it and then process the transaction.
+Employee Profile
+There are a number of self-service features available through the Employee Profile Menu, which may vary depending on the policies and permissions set.
+To access the Employee Profile Menu:
+	Click on the Employee Profile menu drop-down arrow (or click on your name or photo) at the far right side of the header bar.
+Messages, Requests, Expenses, Authorizations, Preferences, Passwords / Security and Logout (to exit TimeTrex) can all be accessed through this menu.
+Messages
+In the Messages feature, an employee can communicate with other employees and their supervisors by sending and receiving messages. These communications are simple messages— not requests to supervisors. If the Folder: Inbox is selected from the drop-down, any messages the employee receives will appear in the Messages Listing and if the Folder: Sent is selected any messages the employee sent to another employee will appear in the Messages Listing.
+To send a Message, do the following:
+	Click on the drop-down arrow at the far right side of the header bar to open the Employee Profile Menu, then click Messages.
+	Click New in the button bar.
+	Complete the Message.
+	Click Send in the button bar to route the Message to other employees.
+See the Basic Operation section for details on viewing and deleting.
+Message Tab
+FIELD	DESCRIPTION
+Employee(s)	Select the employees to receive the message.
+Subject	Enter a short subject or title for the message.
+Body	Enter the body of the message.
+
+ 	Requests
+Requests are submitted by employees to their supervisor to address exceptions, correct punch times and request time off or changes to their schedule. The relationship between a supervisor and employee is determined by the hierarchy settings.
+To submit a request, do the following:
+	Click on the drop-down arrow at the far right side of the header bar to open the Employee Profile Menu, then click Requests.
+	Click New in the button bar.
+	Complete the Request.
+	Click Send in the button bar to route the Request to the supervisor.
+See the Basic Operation section for details on viewing and deleting.
+NOTE:  Pending Requests can be deleted, however once a Request has been Authorized or Declined it cannot be deleted.
+Request Tab
+FIELD	DESCRIPTION
+Employee	Automatically populated with the employee's name.
+Type	Select the type of request from the drop-down box.
+TYPE	DESCRIPTION
+Missed Punch	Employee did not punch in or out from a shift.
+Punch Adjustment	Employee needs an adjustment to a punch.
+Absence (incl. Vacation)	Employee is requesting time off for vacation or another reason. Once an absence request under a specific absence policy is approved, the accrual balance is updated immediately, even for future-dated requests. This ensures accurate tracking of the available accrual balance, enabling supervisors to effectively manage and authorize any subsequent absence requests. (See the table below for additional fields available for this type).
+Schedule Adjustment	Employee requests a change to the schedule. (See the table below for additional fields available for this type).
+Other	Employee has a different request from the categories listed above.
+
+
+Date	Select the date that the request references.
+For example, when requesting a two week vacation use the first day of the vacation.
+Reason / Message	Enter information or an explanation of the request.
+
+ 
+ 
+Absence (incl. Vacation) & Schedule Adjustment Request Types
+FIELD	DESCRIPTION
+Status	Choose either Absent or Working for this request.
+Start Date	Start date for the requested absence or schedule adjustment.
+End Date	End date for the requested absence or schedule adjustment.
+Effective Days	Click only the days of the week which would normally have been worked during the time specified for this particular request. If more than one week is selected by the Start Date and End Date the effective days must be the same for each week or an additional request must be created.
+In	Start time for the requested absence or schedule adjustment.
+Out	End time for the requested absence or schedule adjustment.
+Overlapping Shift(s)	TimeTrex identifies if an overlapping shift is created by a Request and automatically suggests a mode.
+Click on the information icon to see the Suggested Overlapping Shift(s) Mode and a preview of what the results would look like.
+MODE	DESCRIPTION
+Replace	Any overlapping shift is completely replaced by the requested shift.
+Split	Any overlapping shift is split so the requested shift will not overlap.
+For example: If a current working shift is 8:00 AM to 5:00 PM and an Absent shift from 3:00 PM to 5:00 PM is requested it results in a 2 hour overlap. If you select the Replace Mode, the requested shift will replace the original shift completely, leaving only an absent shift of 3:00 PM to 5:00 PM. If you select the Split mode two shifts will be created, a working shift from 8:00 AM to 3:00 PM and an Absent shift from 3:00 PM to 5:00 PM.
+Create Open Shift (For Absences)	This field is available when a supervisor is Authorizing Requests. An open shift is created for any shifts that need to be filled after an absent shift(s) request is authorized.
+Schedule Policy	Select the schedule policy that applies for this request or schedule adjustment.
+Absence Policy	If the Status is set to Absent, select the applicable absence policy that applies.
+Branch	Select the branch that applies to this request.
+Department	Select the department that applies to this request.
+Job	Select the job that applies to this request.
+Task	Select the task that applies to this request.
+Tags	Select the tags that applies to this request.
+Reason / Message	Provide more details regarding this request.
+
+ 
+ 
+
+Expenses
+Entering an Expense
+A business expense, paid by an employee can be added, for the purpose of record keeping, authorizing and/or reimbursement.
+To add an expense record:
+	Click Payroll, then click Expenses in the main menu.
+	Click New in the button bar.
+	An inset page will appear that contains the Expense tab. Complete the fields.
+	Click Save to save your changes, or click Cancel to discard the changes.
+ 
+Business expenses are usually added directly by the employee as part of the self-service functionality of TimeTrex by the following steps:
+	Click on the drop-down arrow at the far right side of the header bar to open the Employee Profile Menu, then click Expenses.
+	Click New in the button bar.
+See the Basic Operation section for details on viewing, adding, editing and deleting.
+ 
+Expense Tab
+FIELD	DESCRIPTION
+Employee:	Select the employee from the drop-down box.
+(This field is only available to a supervisor in Payroll > Expenses.)
+Effective Date:	Select the date from the calendar that the reimbursement for this expense is effective.
+(This field is only available to a supervisor in Payroll > Expenses.)
+Date Incurred	Select the date from the calendar that the expense was incurred.
+Description	Enter a full description of the expense.
+Payment Method	Select a payment method for the expense from the drop-down box.
+PAYMENT METHOD	DESCRIPTION
+Cash	Expense was paid by cash.
+Debit Card	Expense was paid by debit card.
+Credit card - Personal	Expense was paid by employee's personal credit card.
+Credit Card - Company	Expense was paid by a company credit card.
+Check	Expense was paid by check.
+Cashier Check/Money Order	Expense was paid by cashier check or money order.
+Other	Expense was paid for by any other method than the options available.
+
+
+Type	Select the type of business expense from the drop-down box.
+Amount	Enter the total amount of the expense.
+Reimburse	Click the check box if the employee chooses to submit this expense for reimbursement.
+Currency	Select the currency from the drop-down box.
+Branch	Select the branch from the drop-down box.
+Department	Select the department from the drop-down box.
+Job	Enter in the job code or select it from the drop-down box.
+Task	Enter in the task code or select it from the drop-down box.
+Choose file (attachment)	If submitting an electronic receipt, click on the Choose File box and locate and select the appropriate receipt file to attach it to the expense record.
+
+ 
+Authorizing Expense records
+See Expense Authorizations for details on how to view, and authorize expense records.
+ 
+ 
+
+Authorizations
+
+Supervisors can authorize Requests, Timesheets and Expenses, depending on the criteria defined.
+
+Request Authorizations
+The request authorization process is performed by a supervisor who views pending employee requests, makes the necessary changes requested and authorizes the request, or chooses to pass, or decline the request.
+To perform the request authorization process:
+	Click on the drop-down arrow at the far right side of the header bar to open the Employee Profile Menu, then click Requests Authorizations.
+	Select a request authorization in the list and click View in the button bar.
+	Make any necessary changes to the fields.
+	Choose one of the following options for each request:
+Authorize	After viewing and deciding to authorize the request, the supervisor clicks Authorize in the button bar to accept the request.
+For example, if an employee submits a schedule request to take two weeks off for vacation, the supervisor views the request and clicks the Authorize button. The system will automatically make the change according to the request submitted. To check the schedule before authorizing the request, click the Jump To button, then Schedule to view the employee schedule. Then click the minimized Authorization window at the bottom left to return to the request and click the Authorize button.
+Pass	Click the Pass button to review the request later. If more information or a clarification of the request is required the supervisor may pass on the request until further information is received.
+Decline	Click the Decline button to refuse the request. The supervisor may first choose to click Reply on the button bar, and send a message to the employee stating why the request was declined.
+
+After clicking on any of the three options, the next pending request on the list will be displayed automatically.
+NOTE:  Once a Request is authorized or declined it cannot be deleted in an effort to maintain valid audit logs. In a situation where an employee no longer wants the time off after the absence Request has already been authorized, the employee should submit a new Request to work during that same time. Once this new Request is authorized, the schedule status will change from Absence back to Working again and a valid audit log will be maintained.
+The relationship between a supervisor and employee is determined by the hierarchy settings.
+ 
+TimeSheet Authorizations
+The timesheet authorization process is performed by a superior, within the window of time defined in the Timesheet Verification criteria, by default, after a pay period ends and prior to the employee being paid (pay period transaction date). The purpose of this process is to verify that the record of time worked for a subordinate employee during a particular pay period is correct. TimeSheet Authorizations may not be necessary depending on the Timesheet Verification criteria that is defined.
+To perform the Timesheet Authorization process:
+	Click on the drop-down arrow at the far right side of the header bar to open the Employee Profile Menu, then click TimeSheet Authorizations.
+	Select a pending Timesheet Authorization in the list and click View in the button bar.
+	Choose one of the following options for each timesheet:
+Authorize	Click Authorize in the button bar to accept the timesheet as correct. If necessary, make any changes to the timesheet first by clicking on the Jump To button.
+Pass	Click Pass in the button bar to review the timesheet later, perhaps to wait for corrections to be completed.
+Decline	Click Decline in the button bar to deny the timesheet as is.
+
+After choosing any of the three options, the next pending timesheet authorization on the list will be displayed automatically.
+NOTE:  If changes to a timesheet are made after it has been verified or authorized, the authorization is cleared and the employee must re-verify the new changes to their timesheet.
+NOTE:  Once a Timesheet Authorization is authorized or declined it cannot be deleted, in an effort to maintain valid audit logs.
+The relationship between a supervisor and employee is determined by the hierarchy settings.
+ 
+ 
+
+Expense Authorizations
+The expense authorization process is performed by a supervisor who views employee expenses requiring authorization, makes any necessary changes, then authorizes, passes, or declines the expense.
+To perform the expense authorization process:
+	Click on the drop-down arrow at the far right side of the header bar to open the Employee Profile Menu, then click Expense Authorizations.
+	Select an expense authorization in the list and click Edit in the button bar.
+	Choose one of the following options for each expense:
+Authorize	Click Authorize in the button bar to accept the expense. The date an expense is authorized to be reimbursed becomes the effective date that the authorized amount will automatically be included on the pay stub. However, a supervisor may enter or edit the effective date through Payroll > Expenses.
+Pass	Click Pass in the button bar to review the expense later.
+Decline	Click Decline in the button bar to refuse the expense.
+
+After choosing any of the three options, the next pending request on the list will be displayed automatically.
+NOTE:  Once an expense is reimbursed it cannot be deleted in an effort to maintain valid audit logs.
+ 
+Preferences (Employee)
+Employees can configure a number of settings, such as date and time format, notifications and schedule synchronization with external calendars or mobile devices through the Employee Profile Menu.
+ 
+Preference Tab
+FIELD	DESCRIPTION
+Employee	(read-only)
+Language	preferred language (English, French, German, etc.).
+Date Format	Preferred date format (dd/mm/yy, mm/dd/yy, etc.).
+Time Format	Preferred time format (8:09PM, 20:09GMT, etc.).
+Time Units	Preferred time units (hh:mm, hh:mm:ss, etc.).
+Its important to understand the differences between these formats. The two primary formats are Hours (2.25) (time in decimal hour format) and hh:mm (2:15) (time in hours and minutes separated by a colon, similar to a digital clock). When using Hours (2.25), its easy to add the times together using a calculator, but its difficult to input time to the nearest minute, as 5 minutes would equal 0.083333333 (repeated to infinity). However using the hh:mm (2:15) format its easy to enter time to the nearest minute as 5 minutes would be 00:05, but this format cannot be easily added on a calculator, since its a colon separating the hours and minutes not a decimal. Therefore if you want to manually add 1:59 + 3:01, you cannot enter 1.59 + 3.01 (notice the difference between the colon : and .) into your calculator as that would equal 4.6, but in reality its 1 hour and 59 minutes + 3 hours and 1 minute for a total of 5 hours. The reason for this is of course that there are 60 minutes in an hour and when entered into your calculator it would take 100 minutes to equal an hour.
+Time Units Chart (Minutes ÷ 60 seconds = Decimal)
+Minutes		Decimal	Minutes		Decimal	Minutes		Decimal	Minutes		Decimal
+ 1	 = 	0.02	16	 = 	0.27	 31	 = 	0.52	46	 = 	0.77
+ 2	 = 	0.03	17	 = 	0.28	 32	 = 	0.53	47	 = 	0.78
+ 3	 = 	0.05	18	 = 	0.30	 33	 = 	0.55	48	 = 	0.80
+ 4	 = 	0.07	19	 = 	0.32	 34	 = 	0.57	49	 = 	0.82
+ 5	 = 	0.08	20	 = 	0.33	 35	 = 	0.58	50	 = 	0.83
+ 6	 = 	0.10	21	 = 	0.35	 36	 = 	0.60	51	 = 	0.85
+ 7	 = 	0.12	22	 = 	0.37	 37	 = 	0.62	52	 = 	0.87
+ 8	 = 	0.13	23	 = 	0.38	 38	 = 	0.63	53	 = 	0.88
+ 9	 = 	0.15	24	 = 	0.40	 39	 = 	0.65	54	 = 	0.90
+ 10	 = 	0.17	25	 = 	0.42	 40	 = 	0.67	55	 = 	0.92
+ 11	 = 	0.18	26	 = 	0.43	 41	 = 	0.68	56	 = 	0.93
+ 12	 = 	0.20	27	 = 	0.45	 42	 = 	0.70	57	 = 	0.95
+ 13	 = 	0.22	28	 = 	0.47	 43	 = 	0.72	58	 = 	0.97
+ 14	 = 	0.23	29	 = 	0.48	 44	 = 	0.73	59	 = 	0.98
+ 15	 = 	0.25	30	 = 	0.50	 45	 = 	0.75	60	 = 	1.00
+You can switch back and forth between time unit formats in your preferences at anytime since it only changes how time is displayed or input, it does not affect how the data is stored behind the scenes whatsoever.
+Distance Units	Preferred distance units (kilometers, miles or meters)
+Time Zone	Preferred time zone for displaying time. The Auto-Detect button automatically detects the timezone of the employee who is currently signed in.
+Calendar Starts on	Preferred view for which day of the week the calendar starts on.
+Rows per page	Number of rows to display on a page.
+Default Screen	The first screen that appears after an employee logs in.
+Save Timesheet State	Check the box to return to the employees timesheet that was viewed last.
+
+
+Notifications Tab
+FIELD	DESCRIPTION
+Notification Status	Select to enable notifications.
+STATUS	DESCRIPTION
+Disabled	No notifications will be sent.
+Enabled	The specified notifications will be sent.
+
+
+Display Notifications For	The number of seconds the notification will display in the web browser. Use 0 for infinite.
+Enabled	If the enabled box is checked, the specific notification may be sent and if the box is left blank it will never be sent.
+Type	The types of notifications available for example, punch reminders, exceptions, requests, pay stub, process payroll and remittance agency events will depend on the permissions set for the employee.
+Priority	The way the notification appears and sounds. The different priorities on mobile devices is mainly for Android devices that support notification "channels". So the employee has full control over how each priority is handled on their specific devices.
+PRIORITY	DESCRIPTION
+Critical	Use only when you have to get the employee's attention such as if they forgot to punch. If a critical notification does not get attention it could typically cause a critical exception.
+Web browser: The notification appears on the screen flashing red and plays a sound continuously until it is acknowledged.
+Mobile App: The notification will pop-up and plays a sound and/or vibrates for 30 seconds, or as otherwise configured on the device.
+High	Web browser: The notification appears on the screen flashing red and plays a sound once.
+Mobile App: The notification will pop-up and plays a sound once, or as otherwise configured on the device.
+Normal	Web browser: The notification appears on the screen and plays a sound once.
+Mobile App: The notification will pop-up and plays a sound once, or as otherwise configured on the device.
+Low	Web browser: The notification appears on the screen, no sound will play.
+Mobile App: The notification will pop-up and plays a sound once, or as otherwise configured on the device.
+
+
+Browser	Enables the selected type of notification to pop-up when the employee is signed in to TimeTrex through a browser or through their operating system notification center if they are not signed in.
+Work / Home Email	Enables the selected type of notification to be sent to the employee's work and/or home email addresses.
+Mobile App	Enables the selected type of notification to be sent to the employee's TimeTrex mobile app.
+Settings	Delays when a specific reminder notification is to be sent. Use a negative value to be notified before the expected scheduled time / date.
+Example: If you want an employee to be reminded to punch in 5 minutes before the start of their shift, you would set the Punch Reminder - Start Shift, Settings Delay to -00:05.
+If you want the reminder sent 15 minutes after they start their shift you would set the Punch Reminder - Start Shift, Settings, Delay to 00:15. In this case the reminder will only be sent if the employee has not already started their shift.
+
+TIP:  Notifications can be viewed by clicking on the bell icon or accessing the Employee Profile Menu drop-down on the right side of the header bar. The small number beside the bell icon indicates the number of unread notifications.
+ 
+Schedule Synchronization Tab
+FIELD	DESCRIPTION
+Status	Select the status of the Schedule Synchronization from the drop-down box to allow syncing with the employee's preferred calendar, such as Microsoft Calendar, Google Calendar, or a smart phone.
+STATUS	DESCRIPTION
+Disabled	The Schedule Synchronization is inactive and it should not be allowed to sync with any calendar or device.
+Enabled (Authenticated)	The Schedule Synchronization is active but requires that the calendar application support user name/password authentication.
+Enabled (UnAuthenticated)	This option is used for Schedule Synchronization when the calendar application does not support user name/password authentication and so the Calendar URL can be used instead.
+
+
+Calendar URL	Use this link to subscribe to your schedule in your favorite calendar app (e.g. Google Calendar, Outlook).
+Alarm 1	Enter the time for the first calendar notification (or reminder) before the employee's scheduled start time.
+For example, if this field is set with 1:00 before the scheduled start time, Microsoft Calendar displays a reminder that the shift will start in 1 hour. If the alarm is set for a smart phone, the phone will ring 1 hour before the shift starts. (See Advanced Options Pay Period Schedules for more information.)
+Alarm 2	Enter the time for the second calendar notification (or reminder) before the employee's scheduled start time.
+For example, if this field is set with 00:30 before the scheduled start time, Microsoft Calendar displays a reminder that the shift will start in 30 minutes. If the alarm is set for a smart phone, the phone will ring 30 minutes before the shift starts.
+Alarm 1	Enter a time for the first notification (or reminder) for a scheduled shift absence. Shifts Scheduled Absent are shifts where the employee may be scheduled off on a day they would normally be working, either on vacation or sick time. This alert reminds the employee *not* to come in to work that day.
+For example, if an employee is scheduled for a vacation day and this alarm is set for 04:00, the Microsoft calendar displays a reminder that vacation starts in 4 hours. This allows time to complete the work that cannot wait until the return from vacation.
+Alarm 2	Enter a time for the second notification (or reminder) for a scheduled shift absence. Shifts Scheduled Absent are shifts where the employee may be scheduled off on a day they would normally be working, either on vacation or sick time. This alert reminds the employee *not* to come in to work that day.
+For example, if an employee is scheduled for a vacation day and this alarm is set for 01:00, the Microsoft calendar displays a reminder that vacation starts in 1 hour. The employee could then inform the supervisor of unfinished work that can wait until the return from vacation.
+Alarm 1	Enter the time for the first calendar notification (or reminder) before the start time for the modified shift the employee has been scheduled to work.
+For example, if the supervisor modifies the employee's schedule and this field is set with 1:00, Microsoft Calendar displays a reminder that the modified shift will start in 1 hour. If the alarm is set for a smart phone, the phone will ring 1 hour before the modified shift.
+Alarm 2	Enter the time for the second calendar notification (or reminder) before the start time for the modified shift the employee has been scheduled to work.
+For example, if the supervisor modifies the employee's schedule and this field is set with 00:15, Microsoft Calendar displays a reminder that the modified shift will start in 15 minutes. If the alarm is set for a smart phone, the phone will ring 15 minutes before the modified shift.
+
+ 
+ 
+
+Passwords and Security Changing your Web Password:
+	Click on the Employee Profile menu drop-down arrow on the far right of the header bar and then click Passwords/Security. The Web Password tab will be displayed.
+	In the New Password field, enter a new password.
+	Confirm your New Password by re-entering the same password in the New Password (Confirm) field.
+	Click Save.
+NOTE:  Web Passwords are case sensitive and must be at least 6 digits/characters and must not contain any part of your name or personal identification information such as first/last name, address, etc. Passwords must also meet a minimum "strength" requirement, which essentially requires passwords to contain a sufficient number of unique digits/characters/special characters. For example: "1111111111" will not be a valid password, nor would "123456", but "boat-735" would be.
+ 
+Changing your Quick Punch Password:
+	Click on the Employee Profile menu drop-down arrow on the far right of the header bar and then Change Password
+	Click on the Quick Punch Password tab.
+	In the New Quick Punch Password field enter a new quick punch password.
+	Confirm your New Quick Punch Password by re-entering the same password in the New Quick Punch Password (Confirm) field.
+	Click Save.
+NOTE:  A Quick Punch Password is a numeric password with a minimum of four digits and maximum eight digits. They cannot be all the same number.
+ 
+Security - Multifactor Authentication
+Multifactor Authentication increases security by requiring a user to provide two or more verification factors to gain access to TimeTrex, such as using the Mobile App and the device's fingerprint and facial recognition options where supported. Each employee must individually enable multifactor authentication.
+ 
+Enabling Multifactor Authentication:
+	Click on the Employee Profile menu drop-down arrow on the far right of the header bar and then click on Passwords / Security.
+	Click on the Multifactor Authentication tab.
+	In the Multifactor Type drop-down field select the type of authentication to be used.
+	Follow the on-screen instructions.
+	Click Save.
+ 

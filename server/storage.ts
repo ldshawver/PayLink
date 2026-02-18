@@ -50,7 +50,10 @@ export interface IStorage {
   updateTimeEntry(id: string, data: Partial<TimeEntry>): Promise<TimeEntry | undefined>;
 
   getSchedules(companyId?: string): Promise<Schedule[]>;
+  getSchedulesByDateRange(companyId: string, startDate: string, endDate: string): Promise<Schedule[]>;
   createSchedule(data: InsertSchedule): Promise<Schedule>;
+  updateSchedule(id: string, data: Partial<Schedule>): Promise<Schedule | undefined>;
+  deleteSchedule(id: string): Promise<void>;
 
   getPayrollRuns(companyId?: string): Promise<PayrollRun[]>;
   getPayrollRun(id: string): Promise<PayrollRun | undefined>;
@@ -222,9 +225,21 @@ export class DatabaseStorage implements IStorage {
     }
     return db.select().from(schedules).orderBy(desc(schedules.date));
   }
+  async getSchedulesByDateRange(companyId: string, startDate: string, endDate: string): Promise<Schedule[]> {
+    return db.select().from(schedules).where(
+      and(eq(schedules.companyId, companyId), gte(schedules.date, startDate), lte(schedules.date, endDate))
+    ).orderBy(schedules.date);
+  }
   async createSchedule(data: InsertSchedule): Promise<Schedule> {
     const [schedule] = await db.insert(schedules).values(data).returning();
     return schedule;
+  }
+  async updateSchedule(id: string, data: Partial<Schedule>): Promise<Schedule | undefined> {
+    const [schedule] = await db.update(schedules).set(data).where(eq(schedules.id, id)).returning();
+    return schedule;
+  }
+  async deleteSchedule(id: string): Promise<void> {
+    await db.delete(schedules).where(eq(schedules.id, id));
   }
 
   async getPayrollRuns(companyId?: string): Promise<PayrollRun[]> {
