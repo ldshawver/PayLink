@@ -19,12 +19,12 @@ client/src/
 ├── lib/             # Utilities (queryClient)
 server/
 ├── index.ts         # Express server entry
-├── routes.ts        # API route handlers (70+ endpoints)
-├── storage.ts       # Database storage layer (IStorage interface with 60+ methods)
+├── routes.ts        # API route handlers (90+ endpoints)
+├── storage.ts       # Database storage layer (IStorage interface with 75+ methods)
 ├── db.ts            # Drizzle database connection
 ├── seed.ts          # Database seed data
 shared/
-├── schema.ts        # Drizzle schema + Zod validation + TypeScript types (20+ tables)
+├── schema.ts        # Drizzle schema + Zod validation + TypeScript types (28+ tables)
 ```
 
 ## Navigation Structure
@@ -32,7 +32,7 @@ Sidebar with collapsible sections:
 1. **Dashboard** - Configurable dashlets (News, Exceptions, Messages, Who's In/Out, Schedule Summary, Timesheet Summary, etc.)
 2. **Attendance** - Timesheet, Punches, Accrual Balances, Accruals (tabs)
 3. **Schedule** - Schedules (week view), Scheduled Shifts, Recurring Schedule, Recurring Templates (tabs)
-4. **Employee** - Employee list/CRUD, Contacts, Preferences, Wages, Pay Methods, Titles, Groups (tabs)
+4. **Employee** - Employee list/CRUD (enhanced form with Employment/Identity/Contact/Payroll/Notes sections), Contacts, Preferences, Wages (wage history with effective dates), Pay Methods (with remittance source/priority/amount type), Titles (CRUD), Employee Groups (CRUD with hierarchy), Ethnic Groups, New Hire Defaults (CRUD)
 5. **Company** - Company Info, Legal Entity, Branches, Departments, Hierarchy, Permissions, Import (tabs)
 6. **Payroll** - Process Payroll, Tax Wizard, Pay Stubs, Pay Periods, Taxes & Deductions, Remittance (tabs)
 7. **Policy** - Policy Groups, Pay Codes, Accrual Accounts, Recurring Holidays, 14+ policy type placeholders (tabs)
@@ -63,6 +63,10 @@ Extended tables:
 - `holidays` - Recurring and one-time holidays
 - `qualifications` - Skills, certifications, licenses
 - `reviews` - Performance reviews with ratings
+- `employee_titles` - Company title definitions
+- `employee_groups` - Hierarchical employee groups with parentId
+- `wage_history` - Wage tracking with effective dates, labor burden, average hours
+- `new_hire_defaults` - Company-level default configuration templates
 - `recurring_schedules` - Repeating weekly schedules
 - `users` - System users
 - `remittance_sources` - Bank accounts/payment sources for paying employees
