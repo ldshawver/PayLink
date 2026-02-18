@@ -4,6 +4,7 @@ import {
   companies, workers, timePunches, timeEntries, schedules, payrollRuns, payrollItems, users,
   departments, branches, accrualAccounts, accrualBalances, employeeContacts, payMethods,
   payPeriods, taxesDeductions, policyGroups, payCodes, holidays, qualifications, reviews, recurringSchedules,
+  remittanceSources, remittanceAgencies, remittanceAgencyEvents, payStubAccounts, payStubAmendments, payStubTransactions, payPeriodSchedules,
   type Company, type InsertCompany,
   type Worker, type InsertWorker,
   type TimePunch, type InsertTimePunch,
@@ -26,6 +27,13 @@ import {
   type Qualification, type InsertQualification,
   type Review, type InsertReview,
   type RecurringSchedule, type InsertRecurringSchedule,
+  type RemittanceSource, type InsertRemittanceSource,
+  type RemittanceAgency, type InsertRemittanceAgency,
+  type RemittanceAgencyEvent, type InsertRemittanceAgencyEvent,
+  type PayStubAccount, type InsertPayStubAccount,
+  type PayStubAmendment, type InsertPayStubAmendment,
+  type PayStubTransaction, type InsertPayStubTransaction,
+  type PayPeriodSchedule, type InsertPayPeriodSchedule,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -129,6 +137,40 @@ export interface IStorage {
   createRecurringSchedule(data: InsertRecurringSchedule): Promise<RecurringSchedule>;
   updateRecurringSchedule(id: string, data: Partial<RecurringSchedule>): Promise<RecurringSchedule | undefined>;
   deleteRecurringSchedule(id: string): Promise<void>;
+
+  getRemittanceSources(companyId?: string): Promise<RemittanceSource[]>;
+  createRemittanceSource(data: InsertRemittanceSource): Promise<RemittanceSource>;
+  updateRemittanceSource(id: string, data: Partial<RemittanceSource>): Promise<RemittanceSource | undefined>;
+  deleteRemittanceSource(id: string): Promise<void>;
+
+  getRemittanceAgencies(companyId?: string): Promise<RemittanceAgency[]>;
+  createRemittanceAgency(data: InsertRemittanceAgency): Promise<RemittanceAgency>;
+  updateRemittanceAgency(id: string, data: Partial<RemittanceAgency>): Promise<RemittanceAgency | undefined>;
+  deleteRemittanceAgency(id: string): Promise<void>;
+
+  getRemittanceAgencyEvents(agencyId: string): Promise<RemittanceAgencyEvent[]>;
+  createRemittanceAgencyEvent(data: InsertRemittanceAgencyEvent): Promise<RemittanceAgencyEvent>;
+  updateRemittanceAgencyEvent(id: string, data: Partial<RemittanceAgencyEvent>): Promise<RemittanceAgencyEvent | undefined>;
+  deleteRemittanceAgencyEvent(id: string): Promise<void>;
+
+  getPayStubAccounts(companyId?: string): Promise<PayStubAccount[]>;
+  createPayStubAccount(data: InsertPayStubAccount): Promise<PayStubAccount>;
+  updatePayStubAccount(id: string, data: Partial<PayStubAccount>): Promise<PayStubAccount | undefined>;
+  deletePayStubAccount(id: string): Promise<void>;
+
+  getPayStubAmendments(companyId?: string): Promise<PayStubAmendment[]>;
+  createPayStubAmendment(data: InsertPayStubAmendment): Promise<PayStubAmendment>;
+  updatePayStubAmendment(id: string, data: Partial<PayStubAmendment>): Promise<PayStubAmendment | undefined>;
+  deletePayStubAmendment(id: string): Promise<void>;
+
+  getPayStubTransactions(companyId?: string): Promise<PayStubTransaction[]>;
+  createPayStubTransaction(data: InsertPayStubTransaction): Promise<PayStubTransaction>;
+  updatePayStubTransaction(id: string, data: Partial<PayStubTransaction>): Promise<PayStubTransaction | undefined>;
+
+  getPayPeriodSchedules(companyId?: string): Promise<PayPeriodSchedule[]>;
+  createPayPeriodSchedule(data: InsertPayPeriodSchedule): Promise<PayPeriodSchedule>;
+  updatePayPeriodSchedule(id: string, data: Partial<PayPeriodSchedule>): Promise<PayPeriodSchedule | undefined>;
+  deletePayPeriodSchedule(id: string): Promise<void>;
 
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
@@ -484,6 +526,114 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteRecurringSchedule(id: string): Promise<void> {
     await db.delete(recurringSchedules).where(eq(recurringSchedules.id, id));
+  }
+
+  async getRemittanceSources(companyId?: string): Promise<RemittanceSource[]> {
+    if (companyId) return db.select().from(remittanceSources).where(eq(remittanceSources.companyId, companyId)).orderBy(desc(remittanceSources.createdAt));
+    return db.select().from(remittanceSources).orderBy(desc(remittanceSources.createdAt));
+  }
+  async createRemittanceSource(data: InsertRemittanceSource): Promise<RemittanceSource> {
+    const [r] = await db.insert(remittanceSources).values(data).returning();
+    return r;
+  }
+  async updateRemittanceSource(id: string, data: Partial<RemittanceSource>): Promise<RemittanceSource | undefined> {
+    const [r] = await db.update(remittanceSources).set(data).where(eq(remittanceSources.id, id)).returning();
+    return r;
+  }
+  async deleteRemittanceSource(id: string): Promise<void> {
+    await db.delete(remittanceSources).where(eq(remittanceSources.id, id));
+  }
+
+  async getRemittanceAgencies(companyId?: string): Promise<RemittanceAgency[]> {
+    if (companyId) return db.select().from(remittanceAgencies).where(eq(remittanceAgencies.companyId, companyId)).orderBy(desc(remittanceAgencies.createdAt));
+    return db.select().from(remittanceAgencies).orderBy(desc(remittanceAgencies.createdAt));
+  }
+  async createRemittanceAgency(data: InsertRemittanceAgency): Promise<RemittanceAgency> {
+    const [r] = await db.insert(remittanceAgencies).values(data).returning();
+    return r;
+  }
+  async updateRemittanceAgency(id: string, data: Partial<RemittanceAgency>): Promise<RemittanceAgency | undefined> {
+    const [r] = await db.update(remittanceAgencies).set(data).where(eq(remittanceAgencies.id, id)).returning();
+    return r;
+  }
+  async deleteRemittanceAgency(id: string): Promise<void> {
+    await db.delete(remittanceAgencies).where(eq(remittanceAgencies.id, id));
+  }
+
+  async getRemittanceAgencyEvents(agencyId: string): Promise<RemittanceAgencyEvent[]> {
+    return db.select().from(remittanceAgencyEvents).where(eq(remittanceAgencyEvents.agencyId, agencyId)).orderBy(desc(remittanceAgencyEvents.createdAt));
+  }
+  async createRemittanceAgencyEvent(data: InsertRemittanceAgencyEvent): Promise<RemittanceAgencyEvent> {
+    const [r] = await db.insert(remittanceAgencyEvents).values(data).returning();
+    return r;
+  }
+  async updateRemittanceAgencyEvent(id: string, data: Partial<RemittanceAgencyEvent>): Promise<RemittanceAgencyEvent | undefined> {
+    const [r] = await db.update(remittanceAgencyEvents).set(data).where(eq(remittanceAgencyEvents.id, id)).returning();
+    return r;
+  }
+  async deleteRemittanceAgencyEvent(id: string): Promise<void> {
+    await db.delete(remittanceAgencyEvents).where(eq(remittanceAgencyEvents.id, id));
+  }
+
+  async getPayStubAccounts(companyId?: string): Promise<PayStubAccount[]> {
+    if (companyId) return db.select().from(payStubAccounts).where(eq(payStubAccounts.companyId, companyId)).orderBy(desc(payStubAccounts.createdAt));
+    return db.select().from(payStubAccounts).orderBy(desc(payStubAccounts.createdAt));
+  }
+  async createPayStubAccount(data: InsertPayStubAccount): Promise<PayStubAccount> {
+    const [r] = await db.insert(payStubAccounts).values(data).returning();
+    return r;
+  }
+  async updatePayStubAccount(id: string, data: Partial<PayStubAccount>): Promise<PayStubAccount | undefined> {
+    const [r] = await db.update(payStubAccounts).set(data).where(eq(payStubAccounts.id, id)).returning();
+    return r;
+  }
+  async deletePayStubAccount(id: string): Promise<void> {
+    await db.delete(payStubAccounts).where(eq(payStubAccounts.id, id));
+  }
+
+  async getPayStubAmendments(companyId?: string): Promise<PayStubAmendment[]> {
+    if (companyId) return db.select().from(payStubAmendments).where(eq(payStubAmendments.companyId, companyId)).orderBy(desc(payStubAmendments.createdAt));
+    return db.select().from(payStubAmendments).orderBy(desc(payStubAmendments.createdAt));
+  }
+  async createPayStubAmendment(data: InsertPayStubAmendment): Promise<PayStubAmendment> {
+    const [r] = await db.insert(payStubAmendments).values(data).returning();
+    return r;
+  }
+  async updatePayStubAmendment(id: string, data: Partial<PayStubAmendment>): Promise<PayStubAmendment | undefined> {
+    const [r] = await db.update(payStubAmendments).set(data).where(eq(payStubAmendments.id, id)).returning();
+    return r;
+  }
+  async deletePayStubAmendment(id: string): Promise<void> {
+    await db.delete(payStubAmendments).where(eq(payStubAmendments.id, id));
+  }
+
+  async getPayStubTransactions(companyId?: string): Promise<PayStubTransaction[]> {
+    if (companyId) return db.select().from(payStubTransactions).where(eq(payStubTransactions.companyId, companyId)).orderBy(desc(payStubTransactions.createdAt));
+    return db.select().from(payStubTransactions).orderBy(desc(payStubTransactions.createdAt));
+  }
+  async createPayStubTransaction(data: InsertPayStubTransaction): Promise<PayStubTransaction> {
+    const [r] = await db.insert(payStubTransactions).values(data).returning();
+    return r;
+  }
+  async updatePayStubTransaction(id: string, data: Partial<PayStubTransaction>): Promise<PayStubTransaction | undefined> {
+    const [r] = await db.update(payStubTransactions).set(data).where(eq(payStubTransactions.id, id)).returning();
+    return r;
+  }
+
+  async getPayPeriodSchedules(companyId?: string): Promise<PayPeriodSchedule[]> {
+    if (companyId) return db.select().from(payPeriodSchedules).where(eq(payPeriodSchedules.companyId, companyId)).orderBy(desc(payPeriodSchedules.createdAt));
+    return db.select().from(payPeriodSchedules).orderBy(desc(payPeriodSchedules.createdAt));
+  }
+  async createPayPeriodSchedule(data: InsertPayPeriodSchedule): Promise<PayPeriodSchedule> {
+    const [r] = await db.insert(payPeriodSchedules).values(data).returning();
+    return r;
+  }
+  async updatePayPeriodSchedule(id: string, data: Partial<PayPeriodSchedule>): Promise<PayPeriodSchedule | undefined> {
+    const [r] = await db.update(payPeriodSchedules).set(data).where(eq(payPeriodSchedules.id, id)).returning();
+    return r;
+  }
+  async deletePayPeriodSchedule(id: string): Promise<void> {
+    await db.delete(payPeriodSchedules).where(eq(payPeriodSchedules.id, id));
   }
 
   async getUser(id: string): Promise<User | undefined> {

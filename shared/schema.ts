@@ -312,6 +312,131 @@ export const recurringSchedules = pgTable("recurring_schedules", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const remittanceSources = pgTable("remittance_sources", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  status: text("status").default("enabled"),
+  type: text("type").notNull().default("check"),
+  country: text("country").default("US"),
+  currency: text("currency").default("USD"),
+  lastCheckNumber: integer("last_check_number").default(0),
+  lastBatchNumber: integer("last_batch_number").default(0),
+  routingNumber: text("routing_number"),
+  accountNumber: text("account_number"),
+  institution: text("institution"),
+  bankTransit: text("bank_transit"),
+  bankAccount: text("bank_account"),
+  verticalAlignment: numeric("vertical_alignment").default("0"),
+  horizontalAlignment: numeric("horizontal_alignment").default("0"),
+  signatureUrl: text("signature_url"),
+  businessNumber: text("business_number"),
+  immediateOrigin: text("immediate_origin"),
+  immediateOriginName: text("immediate_origin_name"),
+  immediateDest: text("immediate_dest"),
+  immediateDestName: text("immediate_dest_name"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const remittanceAgencies = pgTable("remittance_agencies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  status: text("status").default("enabled"),
+  type: text("type").notNull().default("federal"),
+  country: text("country").default("US"),
+  provinceState: text("province_state"),
+  district: text("district"),
+  agency: text("agency"),
+  startDate: date("start_date"),
+  endDate: date("end_date"),
+  contactWorkerId: varchar("contact_worker_id"),
+  remittanceSourceId: varchar("remittance_source_id"),
+  businessDayRule: text("business_day_rule").default("no"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const remittanceAgencyEvents = pgTable("remittance_agency_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  agencyId: varchar("agency_id").notNull().references(() => remittanceAgencies.id),
+  status: text("status").default("enabled"),
+  type: text("type").default("payment"),
+  frequency: text("frequency").default("quarterly"),
+  dueDateDelayDays: integer("due_date_delay_days").default(0),
+  effectiveDate: date("effective_date"),
+  reminderDays: integer("reminder_days").default(7),
+  reminderWorkerId: varchar("reminder_worker_id"),
+  primaryMonth: integer("primary_month"),
+  primaryDayOfMonth: integer("primary_day_of_month"),
+  secondaryMonth: integer("secondary_month"),
+  secondaryDayOfMonth: integer("secondary_day_of_month"),
+  dayOfMonth: integer("day_of_month"),
+  monthOfQuarter: integer("month_of_quarter"),
+  lastProcessedDate: date("last_processed_date"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const payStubAccounts = pgTable("pay_stub_accounts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  status: text("status").default("enabled"),
+  type: text("type").notNull().default("earning"),
+  displayOrder: integer("display_order").default(0),
+  accrualAccountId: varchar("accrual_account_id"),
+  debitAccount: text("debit_account"),
+  creditAccount: text("credit_account"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const payStubAmendments = pgTable("pay_stub_amendments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  payStubAccountId: varchar("pay_stub_account_id"),
+  status: text("status").default("active"),
+  amountType: text("amount_type").default("fixed"),
+  rate: numeric("rate").default("0"),
+  units: numeric("units").default("0"),
+  amount: numeric("amount").default("0"),
+  percent: numeric("percent").default("0"),
+  description: text("description"),
+  publicNote: text("public_note"),
+  effectiveDate: date("effective_date"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const payStubTransactions = pgTable("pay_stub_transactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  payrollItemId: varchar("payroll_item_id").references(() => payrollItems.id),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  remittanceSourceId: varchar("remittance_source_id"),
+  status: text("status").default("pending"),
+  paymentMethod: text("payment_method").default("check"),
+  transactionDate: date("transaction_date"),
+  amount: numeric("amount").default("0"),
+  checkNumber: text("check_number"),
+  batchNumber: text("batch_number"),
+  reference: text("reference"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const payPeriodSchedules = pgTable("pay_period_schedules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  type: text("type").notNull().default("biweekly"),
+  anchorDate: date("anchor_date"),
+  transactionDayOffset: integer("transaction_day_offset").default(3),
+  semiMonthlyDay1: integer("semi_monthly_day1").default(1),
+  semiMonthlyDay2: integer("semi_monthly_day2").default(15),
+  annualPayPeriods: integer("annual_pay_periods"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const insertCompanySchema = createInsertSchema(companies).omit({ id: true, createdAt: true });
 export const insertWorkerSchema = createInsertSchema(workers).omit({ id: true, createdAt: true });
 export const insertTimePunchSchema = createInsertSchema(timePunches).omit({ id: true, createdAt: true });
@@ -334,6 +459,13 @@ export const insertHolidaySchema = createInsertSchema(holidays).omit({ id: true,
 export const insertQualificationSchema = createInsertSchema(qualifications).omit({ id: true, createdAt: true });
 export const insertReviewSchema = createInsertSchema(reviews).omit({ id: true, createdAt: true });
 export const insertRecurringScheduleSchema = createInsertSchema(recurringSchedules).omit({ id: true, createdAt: true });
+export const insertRemittanceSourceSchema = createInsertSchema(remittanceSources).omit({ id: true, createdAt: true });
+export const insertRemittanceAgencySchema = createInsertSchema(remittanceAgencies).omit({ id: true, createdAt: true });
+export const insertRemittanceAgencyEventSchema = createInsertSchema(remittanceAgencyEvents).omit({ id: true, createdAt: true });
+export const insertPayStubAccountSchema = createInsertSchema(payStubAccounts).omit({ id: true, createdAt: true });
+export const insertPayStubAmendmentSchema = createInsertSchema(payStubAmendments).omit({ id: true, createdAt: true });
+export const insertPayStubTransactionSchema = createInsertSchema(payStubTransactions).omit({ id: true, createdAt: true });
+export const insertPayPeriodScheduleSchema = createInsertSchema(payPeriodSchedules).omit({ id: true, createdAt: true });
 
 export type Company = typeof companies.$inferSelect;
 export type InsertCompany = z.infer<typeof insertCompanySchema>;
@@ -379,3 +511,17 @@ export type Review = typeof reviews.$inferSelect;
 export type InsertReview = z.infer<typeof insertReviewSchema>;
 export type RecurringSchedule = typeof recurringSchedules.$inferSelect;
 export type InsertRecurringSchedule = z.infer<typeof insertRecurringScheduleSchema>;
+export type RemittanceSource = typeof remittanceSources.$inferSelect;
+export type InsertRemittanceSource = z.infer<typeof insertRemittanceSourceSchema>;
+export type RemittanceAgency = typeof remittanceAgencies.$inferSelect;
+export type InsertRemittanceAgency = z.infer<typeof insertRemittanceAgencySchema>;
+export type RemittanceAgencyEvent = typeof remittanceAgencyEvents.$inferSelect;
+export type InsertRemittanceAgencyEvent = z.infer<typeof insertRemittanceAgencyEventSchema>;
+export type PayStubAccount = typeof payStubAccounts.$inferSelect;
+export type InsertPayStubAccount = z.infer<typeof insertPayStubAccountSchema>;
+export type PayStubAmendment = typeof payStubAmendments.$inferSelect;
+export type InsertPayStubAmendment = z.infer<typeof insertPayStubAmendmentSchema>;
+export type PayStubTransaction = typeof payStubTransactions.$inferSelect;
+export type InsertPayStubTransaction = z.infer<typeof insertPayStubTransactionSchema>;
+export type PayPeriodSchedule = typeof payPeriodSchedules.$inferSelect;
+export type InsertPayPeriodSchedule = z.infer<typeof insertPayPeriodScheduleSchema>;
