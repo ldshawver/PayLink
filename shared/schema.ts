@@ -511,6 +511,247 @@ export const newHireDefaults = pgTable("new_hire_defaults", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const payFormulas = pgTable("pay_formulas", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  payType: text("pay_type").default("pay_multiplied_by_factor"),
+  accrualAccountId: varchar("accrual_account_id"),
+  accrualRate: numeric("accrual_rate").default("1.0"),
+  wageSourceType: text("wage_source_type").default("hourly_rate"),
+  wageSourceContributingShiftId: varchar("wage_source_contributing_shift_id"),
+  wageGroup: text("wage_group"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const contributingPayCodes = pgTable("contributing_pay_codes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  payCodeIds: text("pay_code_ids"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const contributingShifts = pgTable("contributing_shifts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  contributingPayCodeId: varchar("contributing_pay_code_id"),
+  filterType: text("filter_type").default("date"),
+  includeHolidayType: text("include_holiday_type").default("no_effect"),
+  sunFilter: boolean("sun_filter").default(true),
+  monFilter: boolean("mon_filter").default(true),
+  tueFilter: boolean("tue_filter").default(true),
+  wedFilter: boolean("wed_filter").default(true),
+  thuFilter: boolean("thu_filter").default(true),
+  friFilter: boolean("fri_filter").default(true),
+  satFilter: boolean("sat_filter").default(true),
+  startDate: date("start_date"),
+  endDate: date("end_date"),
+  startTime: text("start_time"),
+  endTime: text("end_time"),
+  branchIds: text("branch_ids"),
+  departmentIds: text("department_ids"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const regularTimePolicies = pgTable("regular_time_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  calculationOrder: integer("calculation_order").default(9999),
+  contributingShiftId: varchar("contributing_shift_id"),
+  payCodeId: varchar("pay_code_id"),
+  payFormulaId: varchar("pay_formula_id"),
+  maxTime: numeric("max_time"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const overtimePolicies = pgTable("overtime_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  type: text("type").default("daily"),
+  triggerTime: numeric("trigger_time").default("8"),
+  rate: numeric("rate").default("1.5"),
+  payCodeId: varchar("pay_code_id"),
+  payFormulaId: varchar("pay_formula_id"),
+  contributingShiftId: varchar("contributing_shift_id"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const premiumPolicies = pgTable("premium_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  type: text("type").default("date_time"),
+  payCodeId: varchar("pay_code_id"),
+  payFormulaId: varchar("pay_formula_id"),
+  startDate: date("start_date"),
+  endDate: date("end_date"),
+  startTime: text("start_time"),
+  endTime: text("end_time"),
+  dailyTriggerHours: numeric("daily_trigger_hours"),
+  weeklyTriggerHours: numeric("weekly_trigger_hours"),
+  effectiveDays: text("effective_days"),
+  holidayHandling: text("holiday_handling").default("no_effect"),
+  branchIds: text("branch_ids"),
+  departmentIds: text("department_ids"),
+  minimumTime: numeric("minimum_time"),
+  maximumTime: numeric("maximum_time"),
+  includePartialPunches: boolean("include_partial_punches").default(false),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const mealPolicies = pgTable("meal_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  type: text("type").default("normal"),
+  activeAfter: numeric("active_after").default("5"),
+  mealTime: numeric("meal_time").default("0.5"),
+  payCodeId: varchar("pay_code_id"),
+  payFormulaId: varchar("pay_formula_id"),
+  startWindow: numeric("start_window"),
+  windowLength: numeric("window_length"),
+  autoDetectBy: text("auto_detect_by").default("time_window"),
+  minPunchTime: numeric("min_punch_time"),
+  maxPunchTime: numeric("max_punch_time"),
+  includeMultipleMeals: boolean("include_multiple_meals").default(false),
+  allocationType: text("allocation_type").default("proportional"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const breakPolicies = pgTable("break_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  type: text("type").default("normal"),
+  activeAfter: numeric("active_after").default("4"),
+  breakTime: numeric("break_time").default("0.25"),
+  payCodeId: varchar("pay_code_id"),
+  payFormulaId: varchar("pay_formula_id"),
+  startWindow: numeric("start_window"),
+  windowLength: numeric("window_length"),
+  autoDetectBy: text("auto_detect_by").default("time_window"),
+  minPunchTime: numeric("min_punch_time"),
+  maxPunchTime: numeric("max_punch_time"),
+  includeMultipleBreaks: boolean("include_multiple_breaks").default(false),
+  allocationType: text("allocation_type").default("proportional"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const schedulePolicies = pgTable("schedule_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  mealPolicyId: varchar("meal_policy_id"),
+  breakPolicyIds: text("break_policy_ids"),
+  regularTimePolicyAction: text("regular_time_policy_action").default("include"),
+  regularTimePolicyIds: text("regular_time_policy_ids"),
+  overtimePolicyAction: text("overtime_policy_action").default("include"),
+  overtimePolicyIds: text("overtime_policy_ids"),
+  premiumPolicyAction: text("premium_policy_action").default("include"),
+  premiumPolicyIds: text("premium_policy_ids"),
+  fullShiftAbsencePolicyId: varchar("full_shift_absence_policy_id"),
+  partialShiftAbsencePolicyId: varchar("partial_shift_absence_policy_id"),
+  startStopWindow: numeric("start_stop_window").default("1"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const exceptionPolicies = pgTable("exception_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  exceptionType: text("exception_type").default("missed_punch"),
+  severity: text("severity").default("medium"),
+  grace: numeric("grace").default("0"),
+  watchWindow: numeric("watch_window").default("0"),
+  emailNotification: boolean("email_notification").default(false),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const accrualPolicies = pgTable("accrual_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  type: text("type").default("standard"),
+  accrualAccountId: varchar("accrual_account_id"),
+  contributingShiftId: varchar("contributing_shift_id"),
+  lengthOfServiceUnit: text("length_of_service_unit").default("years"),
+  applyFrequency: text("apply_frequency").default("per_pay_period"),
+  milestoneRolloverHireDate: boolean("milestone_rollover_hire_date").default(false),
+  minimumEmployedDays: integer("minimum_employed_days").default(0),
+  enableOpeningBalance: boolean("enable_opening_balance").default(false),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const accrualPolicyMilestones = pgTable("accrual_policy_milestones", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  accrualPolicyId: varchar("accrual_policy_id").notNull().references(() => accrualPolicies.id),
+  lengthOfService: numeric("length_of_service").default("0"),
+  accrualRate: numeric("accrual_rate").default("0"),
+  maxBalance: numeric("max_balance"),
+  annualMaxBalance: numeric("annual_max_balance"),
+  rolloverTime: numeric("rollover_time"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const absencePolicies = pgTable("absence_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  type: text("type").default("accrual_based"),
+  payCodeId: varchar("pay_code_id"),
+  payFormulaId: varchar("pay_formula_id"),
+  accrualAccountId: varchar("accrual_account_id"),
+  rateType: text("rate_type").default("multiplied_by_factor"),
+  rateFactor: numeric("rate_factor").default("1.0"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const holidayPolicies = pgTable("holiday_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  defaultSchedule: text("default_schedule").default("none"),
+  eligibleAfterDays: integer("eligible_after_days").default(0),
+  minimumWorkedBeforeDays: integer("minimum_worked_before_days").default(0),
+  minimumWorkedAfterDays: integer("minimum_worked_after_days").default(0),
+  workedOnHolidayType: text("worked_on_holiday_type").default("paid"),
+  absencePolicyId: varchar("absence_policy_id"),
+  averageTimeMethod: text("average_time_method").default("daily"),
+  averageTimeDays: integer("average_time_days").default(30),
+  forceOverTimePolicy: boolean("force_over_time_policy").default(false),
+  contributingShiftIds: text("contributing_shift_ids"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const roundingPolicies = pgTable("rounding_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  roundType: text("round_type").default("day_total"),
+  punchType: text("punch_type"),
+  interval: integer("interval_minutes").default(15),
+  grace: integer("grace_minutes").default(3),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const insertCompanySchema = createInsertSchema(companies).omit({ id: true, createdAt: true });
 export const insertWorkerSchema = createInsertSchema(workers).omit({ id: true, createdAt: true });
 export const insertTimePunchSchema = createInsertSchema(timePunches).omit({ id: true, createdAt: true });
@@ -544,6 +785,21 @@ export const insertEmployeeTitleSchema = createInsertSchema(employeeTitles).omit
 export const insertEmployeeGroupSchema = createInsertSchema(employeeGroups).omit({ id: true, createdAt: true });
 export const insertWageHistorySchema = createInsertSchema(wageHistory).omit({ id: true, createdAt: true });
 export const insertNewHireDefaultsSchema = createInsertSchema(newHireDefaults).omit({ id: true, createdAt: true });
+export const insertPayFormulaSchema = createInsertSchema(payFormulas).omit({ id: true, createdAt: true });
+export const insertContributingPayCodeSchema = createInsertSchema(contributingPayCodes).omit({ id: true, createdAt: true });
+export const insertContributingShiftSchema = createInsertSchema(contributingShifts).omit({ id: true, createdAt: true });
+export const insertRegularTimePolicySchema = createInsertSchema(regularTimePolicies).omit({ id: true, createdAt: true });
+export const insertOvertimePolicySchema = createInsertSchema(overtimePolicies).omit({ id: true, createdAt: true });
+export const insertPremiumPolicySchema = createInsertSchema(premiumPolicies).omit({ id: true, createdAt: true });
+export const insertMealPolicySchema = createInsertSchema(mealPolicies).omit({ id: true, createdAt: true });
+export const insertBreakPolicySchema = createInsertSchema(breakPolicies).omit({ id: true, createdAt: true });
+export const insertSchedulePolicySchema = createInsertSchema(schedulePolicies).omit({ id: true, createdAt: true });
+export const insertExceptionPolicySchema = createInsertSchema(exceptionPolicies).omit({ id: true, createdAt: true });
+export const insertAccrualPolicySchema = createInsertSchema(accrualPolicies).omit({ id: true, createdAt: true });
+export const insertAccrualPolicyMilestoneSchema = createInsertSchema(accrualPolicyMilestones).omit({ id: true, createdAt: true });
+export const insertAbsencePolicySchema = createInsertSchema(absencePolicies).omit({ id: true, createdAt: true });
+export const insertHolidayPolicySchema = createInsertSchema(holidayPolicies).omit({ id: true, createdAt: true });
+export const insertRoundingPolicySchema = createInsertSchema(roundingPolicies).omit({ id: true, createdAt: true });
 
 export type Company = typeof companies.$inferSelect;
 export type InsertCompany = z.infer<typeof insertCompanySchema>;
@@ -611,3 +867,33 @@ export type WageHistory = typeof wageHistory.$inferSelect;
 export type InsertWageHistory = z.infer<typeof insertWageHistorySchema>;
 export type NewHireDefault = typeof newHireDefaults.$inferSelect;
 export type InsertNewHireDefault = z.infer<typeof insertNewHireDefaultsSchema>;
+export type PayFormula = typeof payFormulas.$inferSelect;
+export type InsertPayFormula = z.infer<typeof insertPayFormulaSchema>;
+export type ContributingPayCode = typeof contributingPayCodes.$inferSelect;
+export type InsertContributingPayCode = z.infer<typeof insertContributingPayCodeSchema>;
+export type ContributingShift = typeof contributingShifts.$inferSelect;
+export type InsertContributingShift = z.infer<typeof insertContributingShiftSchema>;
+export type RegularTimePolicy = typeof regularTimePolicies.$inferSelect;
+export type InsertRegularTimePolicy = z.infer<typeof insertRegularTimePolicySchema>;
+export type OvertimePolicy = typeof overtimePolicies.$inferSelect;
+export type InsertOvertimePolicy = z.infer<typeof insertOvertimePolicySchema>;
+export type PremiumPolicy = typeof premiumPolicies.$inferSelect;
+export type InsertPremiumPolicy = z.infer<typeof insertPremiumPolicySchema>;
+export type MealPolicy = typeof mealPolicies.$inferSelect;
+export type InsertMealPolicy = z.infer<typeof insertMealPolicySchema>;
+export type BreakPolicy = typeof breakPolicies.$inferSelect;
+export type InsertBreakPolicy = z.infer<typeof insertBreakPolicySchema>;
+export type SchedulePolicy = typeof schedulePolicies.$inferSelect;
+export type InsertSchedulePolicy = z.infer<typeof insertSchedulePolicySchema>;
+export type ExceptionPolicy = typeof exceptionPolicies.$inferSelect;
+export type InsertExceptionPolicy = z.infer<typeof insertExceptionPolicySchema>;
+export type AccrualPolicy = typeof accrualPolicies.$inferSelect;
+export type InsertAccrualPolicy = z.infer<typeof insertAccrualPolicySchema>;
+export type AccrualPolicyMilestone = typeof accrualPolicyMilestones.$inferSelect;
+export type InsertAccrualPolicyMilestone = z.infer<typeof insertAccrualPolicyMilestoneSchema>;
+export type AbsencePolicy = typeof absencePolicies.$inferSelect;
+export type InsertAbsencePolicy = z.infer<typeof insertAbsencePolicySchema>;
+export type HolidayPolicy = typeof holidayPolicies.$inferSelect;
+export type InsertHolidayPolicy = z.infer<typeof insertHolidayPolicySchema>;
+export type RoundingPolicy = typeof roundingPolicies.$inferSelect;
+export type InsertRoundingPolicy = z.infer<typeof insertRoundingPolicySchema>;

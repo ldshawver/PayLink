@@ -19,12 +19,12 @@ client/src/
 ├── lib/             # Utilities (queryClient)
 server/
 ├── index.ts         # Express server entry
-├── routes.ts        # API route handlers (90+ endpoints)
-├── storage.ts       # Database storage layer (IStorage interface with 75+ methods)
+├── routes.ts        # API route handlers (150+ endpoints)
+├── storage.ts       # Database storage layer (IStorage interface with 130+ methods)
 ├── db.ts            # Drizzle database connection
 ├── seed.ts          # Database seed data
 shared/
-├── schema.ts        # Drizzle schema + Zod validation + TypeScript types (28+ tables)
+├── schema.ts        # Drizzle schema + Zod validation + TypeScript types (43+ tables)
 ```
 
 ## Navigation Structure
@@ -35,9 +35,9 @@ Sidebar with collapsible sections:
 4. **Employee** - Employee list/CRUD (enhanced form with Employment/Identity/Contact/Payroll/Notes sections), Contacts, Preferences, Wages (wage history with effective dates), Pay Methods (with remittance source/priority/amount type), Titles (CRUD), Employee Groups (CRUD with hierarchy), Ethnic Groups, New Hire Defaults (CRUD)
 5. **Company** - Company Info, Legal Entity, Branches, Departments, Hierarchy, Permissions, Import (tabs)
 6. **Payroll** - Process Payroll, Tax Wizard, Pay Stubs, Pay Periods, Taxes & Deductions, Remittance (tabs)
-7. **Policy** - Policy Groups, Pay Codes, Accrual Accounts, Recurring Holidays, 14+ policy type placeholders (tabs)
+7. **Policy** - Policy Groups, Pay Codes, Accrual Accounts, Recurring Holidays, Pay Formulas, Contributing Pay Codes, Contributing Shifts, Regular Time, Overtime, Premium, Meal, Break, Schedule, Exception, Accrual, Absence, Holiday, Rounding policies (18 tabs, all with full CRUD)
 8. **HR** - Reviews, Qualifications, KPI Groups, Skills, Education, Memberships, Licenses, Languages (tabs)
-9. **Report** - Saved Reports, Employee/Timesheet/Payroll/Tax/HR report generators (tabs)
+9. **Report** - Saved Reports, Employee Reports (Who's In, Employee Info, Audit Trail), Timesheet Reports (Schedule/Timesheet Summary/Detail, Punch Summary, Accrual Balance, Exception Summary), Payroll Reports (Paystub Summary, Payroll Export, General Ledger), Tax Reports, HR Reports (Qualification/Review Summary) - all with CSV export
 
 ## Database Schema
 Core tables:
@@ -77,6 +77,23 @@ Extended tables:
 - `pay_stub_transactions` - Payment transaction records
 - `pay_period_schedules` - Recurring pay period schedule definitions
 
+Policy tables (15 types):
+- `pay_formulas` - Pay calculation formulas (multiplier, flat rate, hourly, salary)
+- `contributing_pay_codes` - Pay code groups for policy calculations
+- `contributing_shifts` - Shift filters for policy calculations
+- `regular_time_policies` - Regular time calculation rules
+- `overtime_policies` - OT rules (daily/weekly/biweekly/consecutive)
+- `premium_policies` - Premium pay rules (shift differential, holiday, etc.)
+- `meal_policies` - Meal break rules (normal/auto-deduct/auto-add)
+- `break_policies` - Break rules (normal/auto-deduct/auto-add)
+- `schedule_policies` - Schedule adherence rules
+- `exception_policies` - Time exception rules (missed punch, late, etc.)
+- `accrual_policies` - Accrual earning rules (standard/calendar/hour-based)
+- `accrual_policy_milestones` - Accrual policy length-of-service milestones
+- `absence_policies` - Absence/leave rules
+- `holiday_policies` - Holiday pay rules
+- `rounding_policies` - Time rounding rules (day total/punch)
+
 ## API Routes
 Company: GET/POST /api/companies, PATCH /api/companies/:id
 Workers: GET/POST /api/workers, PATCH /api/workers/:id
@@ -102,6 +119,8 @@ Pay Stub Amendments: GET/POST/PATCH/DELETE /api/pay-stub-amendments
 Pay Stub Transactions: GET/POST/PATCH /api/pay-stub-transactions
 Pay Period Schedules: GET/POST/PATCH/DELETE /api/pay-period-schedules
 Dashboard: GET /api/dashboard/stats
+Policy Types: GET/POST/PATCH/DELETE for /api/pay-formulas, /api/contributing-pay-codes, /api/contributing-shifts, /api/regular-time-policies, /api/overtime-policies, /api/premium-policies, /api/meal-policies, /api/break-policies, /api/schedule-policies, /api/exception-policies, /api/accrual-policies, /api/absence-policies, /api/holiday-policies, /api/rounding-policies
+Accrual Milestones: GET/POST/DELETE /api/accrual-policy-milestones
 
 ## Color Theme
 Teal-to-blue gradient matching PayLink logo: primary HSL(180, 55%, 42%), dark sidebar
