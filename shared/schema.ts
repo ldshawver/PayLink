@@ -51,6 +51,9 @@ export const workers = pgTable("workers", {
   state: text("state"),
   zip: text("zip"),
   ssn: text("ssn"),
+  ethnicity: text("ethnicity"),
+  emergencyContactName: text("emergency_contact_name"),
+  emergencyContactPhone: text("emergency_contact_phone"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -129,6 +132,170 @@ export const users = pgTable("users", {
   companyId: varchar("company_id"),
 });
 
+export const departments = pgTable("departments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  code: text("code"),
+  managerId: varchar("manager_id"),
+  parentId: varchar("parent_id"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const branches = pgTable("branches", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  code: text("code"),
+  address: text("address"),
+  city: text("city"),
+  state: text("state"),
+  zip: text("zip"),
+  phone: text("phone"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const accrualAccounts = pgTable("accrual_accounts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  type: text("type").notNull().default("pto"),
+  accrualRate: numeric("accrual_rate").default("0"),
+  accrualFrequency: text("accrual_frequency").default("per_pay_period"),
+  maxBalance: numeric("max_balance"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const accrualBalances = pgTable("accrual_balances", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  accrualAccountId: varchar("accrual_account_id").notNull().references(() => accrualAccounts.id),
+  balance: numeric("balance").default("0"),
+  usedHours: numeric("used_hours").default("0"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const employeeContacts = pgTable("employee_contacts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  contactType: text("contact_type").notNull().default("emergency"),
+  name: text("name").notNull(),
+  relationship: text("relationship"),
+  phone: text("phone"),
+  email: text("email"),
+  address: text("address"),
+  isPrimary: boolean("is_primary").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const payMethods = pgTable("pay_methods", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  methodType: text("method_type").notNull().default("direct_deposit"),
+  bankName: text("bank_name"),
+  accountType: text("account_type"),
+  routingNumber: text("routing_number"),
+  accountNumber: text("account_number"),
+  isPrimary: boolean("is_primary").default(false),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const payPeriods = pgTable("pay_periods", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  startDate: date("start_date").notNull(),
+  endDate: date("end_date").notNull(),
+  payDate: date("pay_date"),
+  status: text("status").default("open"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const taxesDeductions = pgTable("taxes_deductions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  type: text("type").notNull().default("tax"),
+  calculationType: text("calculation_type").default("percentage"),
+  rate: numeric("rate").default("0"),
+  maxAmount: numeric("max_amount"),
+  isEmployerPaid: boolean("is_employer_paid").default(false),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const policyGroups = pgTable("policy_groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  isDefault: boolean("is_default").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const payCodes = pgTable("pay_codes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  code: text("code").notNull(),
+  name: text("name").notNull(),
+  type: text("type").default("regular"),
+  rate: numeric("rate"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const holidays = pgTable("holidays", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  date: date("date").notNull(),
+  isRecurring: boolean("is_recurring").default(false),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const qualifications = pgTable("qualifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  workerId: varchar("worker_id").references(() => workers.id),
+  type: text("type").notNull().default("skill"),
+  name: text("name").notNull(),
+  description: text("description"),
+  level: text("level"),
+  expirationDate: date("expiration_date"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const reviews = pgTable("reviews", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  reviewDate: date("review_date").notNull(),
+  reviewerName: text("reviewer_name"),
+  rating: integer("rating"),
+  notes: text("notes"),
+  status: text("status").default("pending"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const recurringSchedules = pgTable("recurring_schedules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  name: text("name"),
+  dayOfWeek: integer("day_of_week").notNull(),
+  startTime: text("start_time").notNull(),
+  endTime: text("end_time").notNull(),
+  effectiveFrom: date("effective_from"),
+  effectiveTo: date("effective_to"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const insertCompanySchema = createInsertSchema(companies).omit({ id: true, createdAt: true });
 export const insertWorkerSchema = createInsertSchema(workers).omit({ id: true, createdAt: true });
 export const insertTimePunchSchema = createInsertSchema(timePunches).omit({ id: true, createdAt: true });
@@ -137,6 +304,20 @@ export const insertScheduleSchema = createInsertSchema(schedules).omit({ id: tru
 export const insertPayrollRunSchema = createInsertSchema(payrollRuns).omit({ id: true, createdAt: true });
 export const insertPayrollItemSchema = createInsertSchema(payrollItems).omit({ id: true, createdAt: true });
 export const insertUserSchema = createInsertSchema(users).pick({ username: true, password: true });
+export const insertDepartmentSchema = createInsertSchema(departments).omit({ id: true, createdAt: true });
+export const insertBranchSchema = createInsertSchema(branches).omit({ id: true, createdAt: true });
+export const insertAccrualAccountSchema = createInsertSchema(accrualAccounts).omit({ id: true, createdAt: true });
+export const insertAccrualBalanceSchema = createInsertSchema(accrualBalances).omit({ id: true });
+export const insertEmployeeContactSchema = createInsertSchema(employeeContacts).omit({ id: true, createdAt: true });
+export const insertPayMethodSchema = createInsertSchema(payMethods).omit({ id: true, createdAt: true });
+export const insertPayPeriodSchema = createInsertSchema(payPeriods).omit({ id: true, createdAt: true });
+export const insertTaxDeductionSchema = createInsertSchema(taxesDeductions).omit({ id: true, createdAt: true });
+export const insertPolicyGroupSchema = createInsertSchema(policyGroups).omit({ id: true, createdAt: true });
+export const insertPayCodeSchema = createInsertSchema(payCodes).omit({ id: true, createdAt: true });
+export const insertHolidaySchema = createInsertSchema(holidays).omit({ id: true, createdAt: true });
+export const insertQualificationSchema = createInsertSchema(qualifications).omit({ id: true, createdAt: true });
+export const insertReviewSchema = createInsertSchema(reviews).omit({ id: true, createdAt: true });
+export const insertRecurringScheduleSchema = createInsertSchema(recurringSchedules).omit({ id: true, createdAt: true });
 
 export type Company = typeof companies.$inferSelect;
 export type InsertCompany = z.infer<typeof insertCompanySchema>;
@@ -154,3 +335,31 @@ export type PayrollItem = typeof payrollItems.$inferSelect;
 export type InsertPayrollItem = z.infer<typeof insertPayrollItemSchema>;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
+export type Department = typeof departments.$inferSelect;
+export type InsertDepartment = z.infer<typeof insertDepartmentSchema>;
+export type Branch = typeof branches.$inferSelect;
+export type InsertBranch = z.infer<typeof insertBranchSchema>;
+export type AccrualAccount = typeof accrualAccounts.$inferSelect;
+export type InsertAccrualAccount = z.infer<typeof insertAccrualAccountSchema>;
+export type AccrualBalance = typeof accrualBalances.$inferSelect;
+export type InsertAccrualBalance = z.infer<typeof insertAccrualBalanceSchema>;
+export type EmployeeContact = typeof employeeContacts.$inferSelect;
+export type InsertEmployeeContact = z.infer<typeof insertEmployeeContactSchema>;
+export type PayMethod = typeof payMethods.$inferSelect;
+export type InsertPayMethod = z.infer<typeof insertPayMethodSchema>;
+export type PayPeriod = typeof payPeriods.$inferSelect;
+export type InsertPayPeriod = z.infer<typeof insertPayPeriodSchema>;
+export type TaxDeduction = typeof taxesDeductions.$inferSelect;
+export type InsertTaxDeduction = z.infer<typeof insertTaxDeductionSchema>;
+export type PolicyGroup = typeof policyGroups.$inferSelect;
+export type InsertPolicyGroup = z.infer<typeof insertPolicyGroupSchema>;
+export type PayCode = typeof payCodes.$inferSelect;
+export type InsertPayCode = z.infer<typeof insertPayCodeSchema>;
+export type Holiday = typeof holidays.$inferSelect;
+export type InsertHoliday = z.infer<typeof insertHolidaySchema>;
+export type Qualification = typeof qualifications.$inferSelect;
+export type InsertQualification = z.infer<typeof insertQualificationSchema>;
+export type Review = typeof reviews.$inferSelect;
+export type InsertReview = z.infer<typeof insertReviewSchema>;
+export type RecurringSchedule = typeof recurringSchedules.$inferSelect;
+export type InsertRecurringSchedule = z.infer<typeof insertRecurringScheduleSchema>;

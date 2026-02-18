@@ -325,5 +325,554 @@ export async function registerRoutes(
     }
   });
 
+  // Departments
+  app.get("/api/departments", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const departments = await storage.getDepartments(companyId);
+      res.json(departments);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch departments" });
+    }
+  });
+
+  app.post("/api/departments", async (req, res) => {
+    try {
+      const department = await storage.createDepartment(req.body);
+      res.status(201).json(department);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create department" });
+    }
+  });
+
+  app.patch("/api/departments/:id", async (req, res) => {
+    try {
+      const department = await storage.updateDepartment(req.params.id, req.body);
+      if (!department) {
+        return res.status(404).json({ message: "Department not found" });
+      }
+      res.json(department);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update department" });
+    }
+  });
+
+  app.delete("/api/departments/:id", async (req, res) => {
+    try {
+      await storage.deleteDepartment(req.params.id);
+      res.json({ message: "Department deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete department" });
+    }
+  });
+
+  // Branches
+  app.get("/api/branches", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const branches = await storage.getBranches(companyId);
+      res.json(branches);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch branches" });
+    }
+  });
+
+  app.post("/api/branches", async (req, res) => {
+    try {
+      const branch = await storage.createBranch(req.body);
+      res.status(201).json(branch);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create branch" });
+    }
+  });
+
+  app.patch("/api/branches/:id", async (req, res) => {
+    try {
+      const branch = await storage.updateBranch(req.params.id, req.body);
+      if (!branch) {
+        return res.status(404).json({ message: "Branch not found" });
+      }
+      res.json(branch);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update branch" });
+    }
+  });
+
+  app.delete("/api/branches/:id", async (req, res) => {
+    try {
+      await storage.deleteBranch(req.params.id);
+      res.json({ message: "Branch deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete branch" });
+    }
+  });
+
+  // Accrual Accounts
+  app.get("/api/accrual-accounts", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const accounts = await storage.getAccrualAccounts(companyId);
+      res.json(accounts);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch accrual accounts" });
+    }
+  });
+
+  app.post("/api/accrual-accounts", async (req, res) => {
+    try {
+      const account = await storage.createAccrualAccount(req.body);
+      res.status(201).json(account);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create accrual account" });
+    }
+  });
+
+  app.patch("/api/accrual-accounts/:id", async (req, res) => {
+    try {
+      const account = await storage.updateAccrualAccount(req.params.id, req.body);
+      if (!account) {
+        return res.status(404).json({ message: "Accrual account not found" });
+      }
+      res.json(account);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update accrual account" });
+    }
+  });
+
+  // Accrual Balances
+  app.get("/api/accrual-balances", async (req, res) => {
+    try {
+      const workerId = req.query.workerId as string | undefined;
+      const balances = await storage.getAccrualBalances(workerId);
+      res.json(balances);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch accrual balances" });
+    }
+  });
+
+  app.post("/api/accrual-balances", async (req, res) => {
+    try {
+      const balance = await storage.createAccrualBalance(req.body);
+      res.status(201).json(balance);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create accrual balance" });
+    }
+  });
+
+  app.patch("/api/accrual-balances/:id", async (req, res) => {
+    try {
+      const balance = await storage.updateAccrualBalance(req.params.id, req.body);
+      if (!balance) {
+        return res.status(404).json({ message: "Accrual balance not found" });
+      }
+      res.json(balance);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update accrual balance" });
+    }
+  });
+
+  // Employee Contacts
+  app.get("/api/employee-contacts", async (req, res) => {
+    try {
+      const workerId = req.query.workerId as string | undefined;
+      const contacts = await storage.getEmployeeContacts(workerId);
+      res.json(contacts);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch employee contacts" });
+    }
+  });
+
+  app.post("/api/employee-contacts", async (req, res) => {
+    try {
+      const contact = await storage.createEmployeeContact(req.body);
+      res.status(201).json(contact);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create employee contact" });
+    }
+  });
+
+  app.patch("/api/employee-contacts/:id", async (req, res) => {
+    try {
+      const contact = await storage.updateEmployeeContact(req.params.id, req.body);
+      if (!contact) {
+        return res.status(404).json({ message: "Employee contact not found" });
+      }
+      res.json(contact);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update employee contact" });
+    }
+  });
+
+  app.delete("/api/employee-contacts/:id", async (req, res) => {
+    try {
+      await storage.deleteEmployeeContact(req.params.id);
+      res.json({ message: "Employee contact deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete employee contact" });
+    }
+  });
+
+  // Pay Methods
+  app.get("/api/pay-methods", async (req, res) => {
+    try {
+      const workerId = req.query.workerId as string | undefined;
+      const methods = await storage.getPayMethods(workerId);
+      res.json(methods);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch pay methods" });
+    }
+  });
+
+  app.post("/api/pay-methods", async (req, res) => {
+    try {
+      const method = await storage.createPayMethod(req.body);
+      res.status(201).json(method);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create pay method" });
+    }
+  });
+
+  app.patch("/api/pay-methods/:id", async (req, res) => {
+    try {
+      const method = await storage.updatePayMethod(req.params.id, req.body);
+      if (!method) {
+        return res.status(404).json({ message: "Pay method not found" });
+      }
+      res.json(method);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update pay method" });
+    }
+  });
+
+  app.delete("/api/pay-methods/:id", async (req, res) => {
+    try {
+      await storage.deletePayMethod(req.params.id);
+      res.json({ message: "Pay method deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete pay method" });
+    }
+  });
+
+  // Pay Periods
+  app.get("/api/pay-periods", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const periods = await storage.getPayPeriods(companyId);
+      res.json(periods);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch pay periods" });
+    }
+  });
+
+  app.post("/api/pay-periods", async (req, res) => {
+    try {
+      const period = await storage.createPayPeriod(req.body);
+      res.status(201).json(period);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create pay period" });
+    }
+  });
+
+  app.patch("/api/pay-periods/:id", async (req, res) => {
+    try {
+      const period = await storage.updatePayPeriod(req.params.id, req.body);
+      if (!period) {
+        return res.status(404).json({ message: "Pay period not found" });
+      }
+      res.json(period);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update pay period" });
+    }
+  });
+
+  // Taxes & Deductions
+  app.get("/api/taxes-deductions", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const taxesDeductions = await storage.getTaxesDeductions(companyId);
+      res.json(taxesDeductions);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch taxes and deductions" });
+    }
+  });
+
+  app.post("/api/taxes-deductions", async (req, res) => {
+    try {
+      const taxDeduction = await storage.createTaxDeduction(req.body);
+      res.status(201).json(taxDeduction);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create tax/deduction" });
+    }
+  });
+
+  app.patch("/api/taxes-deductions/:id", async (req, res) => {
+    try {
+      const taxDeduction = await storage.updateTaxDeduction(req.params.id, req.body);
+      if (!taxDeduction) {
+        return res.status(404).json({ message: "Tax/deduction not found" });
+      }
+      res.json(taxDeduction);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update tax/deduction" });
+    }
+  });
+
+  app.delete("/api/taxes-deductions/:id", async (req, res) => {
+    try {
+      await storage.deleteTaxDeduction(req.params.id);
+      res.json({ message: "Tax/deduction deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete tax/deduction" });
+    }
+  });
+
+  // Policy Groups
+  app.get("/api/policy-groups", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const groups = await storage.getPolicyGroups(companyId);
+      res.json(groups);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch policy groups" });
+    }
+  });
+
+  app.post("/api/policy-groups", async (req, res) => {
+    try {
+      const group = await storage.createPolicyGroup(req.body);
+      res.status(201).json(group);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create policy group" });
+    }
+  });
+
+  app.patch("/api/policy-groups/:id", async (req, res) => {
+    try {
+      const group = await storage.updatePolicyGroup(req.params.id, req.body);
+      if (!group) {
+        return res.status(404).json({ message: "Policy group not found" });
+      }
+      res.json(group);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update policy group" });
+    }
+  });
+
+  app.delete("/api/policy-groups/:id", async (req, res) => {
+    try {
+      await storage.deletePolicyGroup(req.params.id);
+      res.json({ message: "Policy group deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete policy group" });
+    }
+  });
+
+  // Pay Codes
+  app.get("/api/pay-codes", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const codes = await storage.getPayCodes(companyId);
+      res.json(codes);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch pay codes" });
+    }
+  });
+
+  app.post("/api/pay-codes", async (req, res) => {
+    try {
+      const code = await storage.createPayCode(req.body);
+      res.status(201).json(code);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create pay code" });
+    }
+  });
+
+  app.patch("/api/pay-codes/:id", async (req, res) => {
+    try {
+      const code = await storage.updatePayCode(req.params.id, req.body);
+      if (!code) {
+        return res.status(404).json({ message: "Pay code not found" });
+      }
+      res.json(code);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update pay code" });
+    }
+  });
+
+  app.delete("/api/pay-codes/:id", async (req, res) => {
+    try {
+      await storage.deletePayCode(req.params.id);
+      res.json({ message: "Pay code deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete pay code" });
+    }
+  });
+
+  // Holidays
+  app.get("/api/holidays", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const holidays = await storage.getHolidays(companyId);
+      res.json(holidays);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch holidays" });
+    }
+  });
+
+  app.post("/api/holidays", async (req, res) => {
+    try {
+      const holiday = await storage.createHoliday(req.body);
+      res.status(201).json(holiday);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create holiday" });
+    }
+  });
+
+  app.patch("/api/holidays/:id", async (req, res) => {
+    try {
+      const holiday = await storage.updateHoliday(req.params.id, req.body);
+      if (!holiday) {
+        return res.status(404).json({ message: "Holiday not found" });
+      }
+      res.json(holiday);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update holiday" });
+    }
+  });
+
+  app.delete("/api/holidays/:id", async (req, res) => {
+    try {
+      await storage.deleteHoliday(req.params.id);
+      res.json({ message: "Holiday deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete holiday" });
+    }
+  });
+
+  // Qualifications
+  app.get("/api/qualifications", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const workerId = req.query.workerId as string | undefined;
+      const qualifications = await storage.getQualifications(companyId, workerId);
+      res.json(qualifications);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch qualifications" });
+    }
+  });
+
+  app.post("/api/qualifications", async (req, res) => {
+    try {
+      const qualification = await storage.createQualification(req.body);
+      res.status(201).json(qualification);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create qualification" });
+    }
+  });
+
+  app.patch("/api/qualifications/:id", async (req, res) => {
+    try {
+      const qualification = await storage.updateQualification(req.params.id, req.body);
+      if (!qualification) {
+        return res.status(404).json({ message: "Qualification not found" });
+      }
+      res.json(qualification);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update qualification" });
+    }
+  });
+
+  app.delete("/api/qualifications/:id", async (req, res) => {
+    try {
+      await storage.deleteQualification(req.params.id);
+      res.json({ message: "Qualification deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete qualification" });
+    }
+  });
+
+  // Reviews
+  app.get("/api/reviews", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const workerId = req.query.workerId as string | undefined;
+      const reviews = await storage.getReviews(companyId, workerId);
+      res.json(reviews);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch reviews" });
+    }
+  });
+
+  app.post("/api/reviews", async (req, res) => {
+    try {
+      const review = await storage.createReview(req.body);
+      res.status(201).json(review);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create review" });
+    }
+  });
+
+  app.patch("/api/reviews/:id", async (req, res) => {
+    try {
+      const review = await storage.updateReview(req.params.id, req.body);
+      if (!review) {
+        return res.status(404).json({ message: "Review not found" });
+      }
+      res.json(review);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update review" });
+    }
+  });
+
+  app.delete("/api/reviews/:id", async (req, res) => {
+    try {
+      await storage.deleteReview(req.params.id);
+      res.json({ message: "Review deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete review" });
+    }
+  });
+
+  // Recurring Schedules
+  app.get("/api/recurring-schedules", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const schedules = await storage.getRecurringSchedules(companyId);
+      res.json(schedules);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch recurring schedules" });
+    }
+  });
+
+  app.post("/api/recurring-schedules", async (req, res) => {
+    try {
+      const schedule = await storage.createRecurringSchedule(req.body);
+      res.status(201).json(schedule);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create recurring schedule" });
+    }
+  });
+
+  app.patch("/api/recurring-schedules/:id", async (req, res) => {
+    try {
+      const schedule = await storage.updateRecurringSchedule(req.params.id, req.body);
+      if (!schedule) {
+        return res.status(404).json({ message: "Recurring schedule not found" });
+      }
+      res.json(schedule);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update recurring schedule" });
+    }
+  });
+
+  app.delete("/api/recurring-schedules/:id", async (req, res) => {
+    try {
+      await storage.deleteRecurringSchedule(req.params.id);
+      res.json({ message: "Recurring schedule deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete recurring schedule" });
+    }
+  });
+
   return httpServer;
 }

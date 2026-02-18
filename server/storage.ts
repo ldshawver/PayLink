@@ -2,6 +2,8 @@ import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
 import { db } from "./db";
 import {
   companies, workers, timePunches, timeEntries, schedules, payrollRuns, payrollItems, users,
+  departments, branches, accrualAccounts, accrualBalances, employeeContacts, payMethods,
+  payPeriods, taxesDeductions, policyGroups, payCodes, holidays, qualifications, reviews, recurringSchedules,
   type Company, type InsertCompany,
   type Worker, type InsertWorker,
   type TimePunch, type InsertTimePunch,
@@ -10,6 +12,20 @@ import {
   type PayrollRun, type InsertPayrollRun,
   type PayrollItem, type InsertPayrollItem,
   type User, type InsertUser,
+  type Department, type InsertDepartment,
+  type Branch, type InsertBranch,
+  type AccrualAccount, type InsertAccrualAccount,
+  type AccrualBalance, type InsertAccrualBalance,
+  type EmployeeContact, type InsertEmployeeContact,
+  type PayMethod, type InsertPayMethod,
+  type PayPeriod, type InsertPayPeriod,
+  type TaxDeduction, type InsertTaxDeduction,
+  type PolicyGroup, type InsertPolicyGroup,
+  type PayCode, type InsertPayCode,
+  type Holiday, type InsertHoliday,
+  type Qualification, type InsertQualification,
+  type Review, type InsertReview,
+  type RecurringSchedule, type InsertRecurringSchedule,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -43,6 +59,73 @@ export interface IStorage {
   getPayrollItems(payrollRunId: string): Promise<PayrollItem[]>;
   createPayrollItem(data: InsertPayrollItem): Promise<PayrollItem>;
 
+  getDepartments(companyId?: string): Promise<Department[]>;
+  createDepartment(data: InsertDepartment): Promise<Department>;
+  updateDepartment(id: string, data: Partial<Department>): Promise<Department | undefined>;
+  deleteDepartment(id: string): Promise<void>;
+
+  getBranches(companyId?: string): Promise<Branch[]>;
+  createBranch(data: InsertBranch): Promise<Branch>;
+  updateBranch(id: string, data: Partial<Branch>): Promise<Branch | undefined>;
+  deleteBranch(id: string): Promise<void>;
+
+  getAccrualAccounts(companyId?: string): Promise<AccrualAccount[]>;
+  createAccrualAccount(data: InsertAccrualAccount): Promise<AccrualAccount>;
+  updateAccrualAccount(id: string, data: Partial<AccrualAccount>): Promise<AccrualAccount | undefined>;
+
+  getAccrualBalances(workerId?: string): Promise<AccrualBalance[]>;
+  createAccrualBalance(data: InsertAccrualBalance): Promise<AccrualBalance>;
+  updateAccrualBalance(id: string, data: Partial<AccrualBalance>): Promise<AccrualBalance | undefined>;
+
+  getEmployeeContacts(workerId?: string): Promise<EmployeeContact[]>;
+  createEmployeeContact(data: InsertEmployeeContact): Promise<EmployeeContact>;
+  updateEmployeeContact(id: string, data: Partial<EmployeeContact>): Promise<EmployeeContact | undefined>;
+  deleteEmployeeContact(id: string): Promise<void>;
+
+  getPayMethods(workerId?: string): Promise<PayMethod[]>;
+  createPayMethod(data: InsertPayMethod): Promise<PayMethod>;
+  updatePayMethod(id: string, data: Partial<PayMethod>): Promise<PayMethod | undefined>;
+  deletePayMethod(id: string): Promise<void>;
+
+  getPayPeriods(companyId?: string): Promise<PayPeriod[]>;
+  createPayPeriod(data: InsertPayPeriod): Promise<PayPeriod>;
+  updatePayPeriod(id: string, data: Partial<PayPeriod>): Promise<PayPeriod | undefined>;
+
+  getTaxesDeductions(companyId?: string): Promise<TaxDeduction[]>;
+  createTaxDeduction(data: InsertTaxDeduction): Promise<TaxDeduction>;
+  updateTaxDeduction(id: string, data: Partial<TaxDeduction>): Promise<TaxDeduction | undefined>;
+  deleteTaxDeduction(id: string): Promise<void>;
+
+  getPolicyGroups(companyId?: string): Promise<PolicyGroup[]>;
+  createPolicyGroup(data: InsertPolicyGroup): Promise<PolicyGroup>;
+  updatePolicyGroup(id: string, data: Partial<PolicyGroup>): Promise<PolicyGroup | undefined>;
+  deletePolicyGroup(id: string): Promise<void>;
+
+  getPayCodes(companyId?: string): Promise<PayCode[]>;
+  createPayCode(data: InsertPayCode): Promise<PayCode>;
+  updatePayCode(id: string, data: Partial<PayCode>): Promise<PayCode | undefined>;
+  deletePayCode(id: string): Promise<void>;
+
+  getHolidays(companyId?: string): Promise<Holiday[]>;
+  createHoliday(data: InsertHoliday): Promise<Holiday>;
+  updateHoliday(id: string, data: Partial<Holiday>): Promise<Holiday | undefined>;
+  deleteHoliday(id: string): Promise<void>;
+
+  getQualifications(companyId?: string, workerId?: string): Promise<Qualification[]>;
+  createQualification(data: InsertQualification): Promise<Qualification>;
+  updateQualification(id: string, data: Partial<Qualification>): Promise<Qualification | undefined>;
+  deleteQualification(id: string): Promise<void>;
+
+  getReviews(companyId?: string, workerId?: string): Promise<Review[]>;
+  createReview(data: InsertReview): Promise<Review>;
+  updateReview(id: string, data: Partial<Review>): Promise<Review | undefined>;
+  deleteReview(id: string): Promise<void>;
+
+  getRecurringSchedules(companyId?: string): Promise<RecurringSchedule[]>;
+  createRecurringSchedule(data: InsertRecurringSchedule): Promise<RecurringSchedule>;
+  updateRecurringSchedule(id: string, data: Partial<RecurringSchedule>): Promise<RecurringSchedule | undefined>;
+  deleteRecurringSchedule(id: string): Promise<void>;
+
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
@@ -61,17 +144,14 @@ export class DatabaseStorage implements IStorage {
   async getCompanies(): Promise<Company[]> {
     return db.select().from(companies).orderBy(desc(companies.createdAt));
   }
-
   async getCompany(id: string): Promise<Company | undefined> {
     const [company] = await db.select().from(companies).where(eq(companies.id, id));
     return company;
   }
-
   async createCompany(data: InsertCompany): Promise<Company> {
     const [company] = await db.insert(companies).values(data).returning();
     return company;
   }
-
   async updateCompany(id: string, data: Partial<Company>): Promise<Company | undefined> {
     const [company] = await db.update(companies).set(data).where(eq(companies.id, id)).returning();
     return company;
@@ -83,17 +163,14 @@ export class DatabaseStorage implements IStorage {
     }
     return db.select().from(workers).orderBy(desc(workers.createdAt));
   }
-
   async getWorker(id: string): Promise<Worker | undefined> {
     const [worker] = await db.select().from(workers).where(eq(workers.id, id));
     return worker;
   }
-
   async createWorker(data: InsertWorker): Promise<Worker> {
     const [worker] = await db.insert(workers).values(data).returning();
     return worker;
   }
-
   async updateWorker(id: string, data: Partial<Worker>): Promise<Worker | undefined> {
     const [worker] = await db.update(workers).set(data).where(eq(workers.id, id)).returning();
     return worker;
@@ -105,7 +182,6 @@ export class DatabaseStorage implements IStorage {
     }
     return db.select().from(timePunches).orderBy(desc(timePunches.punchTime));
   }
-
   async createTimePunch(data: InsertTimePunch): Promise<TimePunch> {
     const [punch] = await db.insert(timePunches).values(data).returning();
     return punch;
@@ -117,30 +193,19 @@ export class DatabaseStorage implements IStorage {
     }
     return db.select().from(timeEntries).orderBy(desc(timeEntries.date));
   }
-
   async getTimeEntriesByDateRange(companyId: string, startDate: string, endDate: string): Promise<TimeEntry[]> {
     return db.select().from(timeEntries)
-      .where(
-        and(
-          eq(timeEntries.companyId, companyId),
-          gte(timeEntries.date, startDate),
-          lte(timeEntries.date, endDate),
-          eq(timeEntries.status, "approved")
-        )
-      )
+      .where(and(eq(timeEntries.companyId, companyId), gte(timeEntries.date, startDate), lte(timeEntries.date, endDate), eq(timeEntries.status, "approved")))
       .orderBy(desc(timeEntries.date));
   }
-
   async getTimeEntry(id: string): Promise<TimeEntry | undefined> {
     const [entry] = await db.select().from(timeEntries).where(eq(timeEntries.id, id));
     return entry;
   }
-
   async createTimeEntry(data: InsertTimeEntry): Promise<TimeEntry> {
     const [entry] = await db.insert(timeEntries).values(data).returning();
     return entry;
   }
-
   async updateTimeEntry(id: string, data: Partial<TimeEntry>): Promise<TimeEntry | undefined> {
     const [entry] = await db.update(timeEntries).set(data).where(eq(timeEntries.id, id)).returning();
     return entry;
@@ -152,7 +217,6 @@ export class DatabaseStorage implements IStorage {
     }
     return db.select().from(schedules).orderBy(desc(schedules.date));
   }
-
   async createSchedule(data: InsertSchedule): Promise<Schedule> {
     const [schedule] = await db.insert(schedules).values(data).returning();
     return schedule;
@@ -164,17 +228,14 @@ export class DatabaseStorage implements IStorage {
     }
     return db.select().from(payrollRuns).orderBy(desc(payrollRuns.createdAt));
   }
-
   async getPayrollRun(id: string): Promise<PayrollRun | undefined> {
     const [run] = await db.select().from(payrollRuns).where(eq(payrollRuns.id, id));
     return run;
   }
-
   async createPayrollRun(data: InsertPayrollRun): Promise<PayrollRun> {
     const [run] = await db.insert(payrollRuns).values(data).returning();
     return run;
   }
-
   async updatePayrollRun(id: string, data: Partial<PayrollRun>): Promise<PayrollRun | undefined> {
     const [run] = await db.update(payrollRuns).set(data).where(eq(payrollRuns.id, id)).returning();
     return run;
@@ -183,22 +244,236 @@ export class DatabaseStorage implements IStorage {
   async getPayrollItems(payrollRunId: string): Promise<PayrollItem[]> {
     return db.select().from(payrollItems).where(eq(payrollItems.payrollRunId, payrollRunId));
   }
-
   async createPayrollItem(data: InsertPayrollItem): Promise<PayrollItem> {
     const [item] = await db.insert(payrollItems).values(data).returning();
     return item;
+  }
+
+  async getDepartments(companyId?: string): Promise<Department[]> {
+    if (companyId) return db.select().from(departments).where(eq(departments.companyId, companyId)).orderBy(departments.name);
+    return db.select().from(departments).orderBy(departments.name);
+  }
+  async createDepartment(data: InsertDepartment): Promise<Department> {
+    const [d] = await db.insert(departments).values(data).returning();
+    return d;
+  }
+  async updateDepartment(id: string, data: Partial<Department>): Promise<Department | undefined> {
+    const [d] = await db.update(departments).set(data).where(eq(departments.id, id)).returning();
+    return d;
+  }
+  async deleteDepartment(id: string): Promise<void> {
+    await db.delete(departments).where(eq(departments.id, id));
+  }
+
+  async getBranches(companyId?: string): Promise<Branch[]> {
+    if (companyId) return db.select().from(branches).where(eq(branches.companyId, companyId)).orderBy(branches.name);
+    return db.select().from(branches).orderBy(branches.name);
+  }
+  async createBranch(data: InsertBranch): Promise<Branch> {
+    const [b] = await db.insert(branches).values(data).returning();
+    return b;
+  }
+  async updateBranch(id: string, data: Partial<Branch>): Promise<Branch | undefined> {
+    const [b] = await db.update(branches).set(data).where(eq(branches.id, id)).returning();
+    return b;
+  }
+  async deleteBranch(id: string): Promise<void> {
+    await db.delete(branches).where(eq(branches.id, id));
+  }
+
+  async getAccrualAccounts(companyId?: string): Promise<AccrualAccount[]> {
+    if (companyId) return db.select().from(accrualAccounts).where(eq(accrualAccounts.companyId, companyId)).orderBy(accrualAccounts.name);
+    return db.select().from(accrualAccounts).orderBy(accrualAccounts.name);
+  }
+  async createAccrualAccount(data: InsertAccrualAccount): Promise<AccrualAccount> {
+    const [a] = await db.insert(accrualAccounts).values(data).returning();
+    return a;
+  }
+  async updateAccrualAccount(id: string, data: Partial<AccrualAccount>): Promise<AccrualAccount | undefined> {
+    const [a] = await db.update(accrualAccounts).set(data).where(eq(accrualAccounts.id, id)).returning();
+    return a;
+  }
+
+  async getAccrualBalances(workerId?: string): Promise<AccrualBalance[]> {
+    if (workerId) return db.select().from(accrualBalances).where(eq(accrualBalances.workerId, workerId));
+    return db.select().from(accrualBalances);
+  }
+  async createAccrualBalance(data: InsertAccrualBalance): Promise<AccrualBalance> {
+    const [b] = await db.insert(accrualBalances).values(data).returning();
+    return b;
+  }
+  async updateAccrualBalance(id: string, data: Partial<AccrualBalance>): Promise<AccrualBalance | undefined> {
+    const [b] = await db.update(accrualBalances).set(data).where(eq(accrualBalances.id, id)).returning();
+    return b;
+  }
+
+  async getEmployeeContacts(workerId?: string): Promise<EmployeeContact[]> {
+    if (workerId) return db.select().from(employeeContacts).where(eq(employeeContacts.workerId, workerId));
+    return db.select().from(employeeContacts);
+  }
+  async createEmployeeContact(data: InsertEmployeeContact): Promise<EmployeeContact> {
+    const [c] = await db.insert(employeeContacts).values(data).returning();
+    return c;
+  }
+  async updateEmployeeContact(id: string, data: Partial<EmployeeContact>): Promise<EmployeeContact | undefined> {
+    const [c] = await db.update(employeeContacts).set(data).where(eq(employeeContacts.id, id)).returning();
+    return c;
+  }
+  async deleteEmployeeContact(id: string): Promise<void> {
+    await db.delete(employeeContacts).where(eq(employeeContacts.id, id));
+  }
+
+  async getPayMethods(workerId?: string): Promise<PayMethod[]> {
+    if (workerId) return db.select().from(payMethods).where(eq(payMethods.workerId, workerId));
+    return db.select().from(payMethods);
+  }
+  async createPayMethod(data: InsertPayMethod): Promise<PayMethod> {
+    const [m] = await db.insert(payMethods).values(data).returning();
+    return m;
+  }
+  async updatePayMethod(id: string, data: Partial<PayMethod>): Promise<PayMethod | undefined> {
+    const [m] = await db.update(payMethods).set(data).where(eq(payMethods.id, id)).returning();
+    return m;
+  }
+  async deletePayMethod(id: string): Promise<void> {
+    await db.delete(payMethods).where(eq(payMethods.id, id));
+  }
+
+  async getPayPeriods(companyId?: string): Promise<PayPeriod[]> {
+    if (companyId) return db.select().from(payPeriods).where(eq(payPeriods.companyId, companyId)).orderBy(desc(payPeriods.startDate));
+    return db.select().from(payPeriods).orderBy(desc(payPeriods.startDate));
+  }
+  async createPayPeriod(data: InsertPayPeriod): Promise<PayPeriod> {
+    const [p] = await db.insert(payPeriods).values(data).returning();
+    return p;
+  }
+  async updatePayPeriod(id: string, data: Partial<PayPeriod>): Promise<PayPeriod | undefined> {
+    const [p] = await db.update(payPeriods).set(data).where(eq(payPeriods.id, id)).returning();
+    return p;
+  }
+
+  async getTaxesDeductions(companyId?: string): Promise<TaxDeduction[]> {
+    if (companyId) return db.select().from(taxesDeductions).where(eq(taxesDeductions.companyId, companyId)).orderBy(taxesDeductions.name);
+    return db.select().from(taxesDeductions).orderBy(taxesDeductions.name);
+  }
+  async createTaxDeduction(data: InsertTaxDeduction): Promise<TaxDeduction> {
+    const [t] = await db.insert(taxesDeductions).values(data).returning();
+    return t;
+  }
+  async updateTaxDeduction(id: string, data: Partial<TaxDeduction>): Promise<TaxDeduction | undefined> {
+    const [t] = await db.update(taxesDeductions).set(data).where(eq(taxesDeductions.id, id)).returning();
+    return t;
+  }
+  async deleteTaxDeduction(id: string): Promise<void> {
+    await db.delete(taxesDeductions).where(eq(taxesDeductions.id, id));
+  }
+
+  async getPolicyGroups(companyId?: string): Promise<PolicyGroup[]> {
+    if (companyId) return db.select().from(policyGroups).where(eq(policyGroups.companyId, companyId)).orderBy(policyGroups.name);
+    return db.select().from(policyGroups).orderBy(policyGroups.name);
+  }
+  async createPolicyGroup(data: InsertPolicyGroup): Promise<PolicyGroup> {
+    const [p] = await db.insert(policyGroups).values(data).returning();
+    return p;
+  }
+  async updatePolicyGroup(id: string, data: Partial<PolicyGroup>): Promise<PolicyGroup | undefined> {
+    const [p] = await db.update(policyGroups).set(data).where(eq(policyGroups.id, id)).returning();
+    return p;
+  }
+  async deletePolicyGroup(id: string): Promise<void> {
+    await db.delete(policyGroups).where(eq(policyGroups.id, id));
+  }
+
+  async getPayCodes(companyId?: string): Promise<PayCode[]> {
+    if (companyId) return db.select().from(payCodes).where(eq(payCodes.companyId, companyId)).orderBy(payCodes.name);
+    return db.select().from(payCodes).orderBy(payCodes.name);
+  }
+  async createPayCode(data: InsertPayCode): Promise<PayCode> {
+    const [p] = await db.insert(payCodes).values(data).returning();
+    return p;
+  }
+  async updatePayCode(id: string, data: Partial<PayCode>): Promise<PayCode | undefined> {
+    const [p] = await db.update(payCodes).set(data).where(eq(payCodes.id, id)).returning();
+    return p;
+  }
+  async deletePayCode(id: string): Promise<void> {
+    await db.delete(payCodes).where(eq(payCodes.id, id));
+  }
+
+  async getHolidays(companyId?: string): Promise<Holiday[]> {
+    if (companyId) return db.select().from(holidays).where(eq(holidays.companyId, companyId)).orderBy(holidays.date);
+    return db.select().from(holidays).orderBy(holidays.date);
+  }
+  async createHoliday(data: InsertHoliday): Promise<Holiday> {
+    const [h] = await db.insert(holidays).values(data).returning();
+    return h;
+  }
+  async updateHoliday(id: string, data: Partial<Holiday>): Promise<Holiday | undefined> {
+    const [h] = await db.update(holidays).set(data).where(eq(holidays.id, id)).returning();
+    return h;
+  }
+  async deleteHoliday(id: string): Promise<void> {
+    await db.delete(holidays).where(eq(holidays.id, id));
+  }
+
+  async getQualifications(companyId?: string, workerId?: string): Promise<Qualification[]> {
+    if (workerId) return db.select().from(qualifications).where(eq(qualifications.workerId, workerId)).orderBy(qualifications.name);
+    if (companyId) return db.select().from(qualifications).where(eq(qualifications.companyId, companyId)).orderBy(qualifications.name);
+    return db.select().from(qualifications).orderBy(qualifications.name);
+  }
+  async createQualification(data: InsertQualification): Promise<Qualification> {
+    const [q] = await db.insert(qualifications).values(data).returning();
+    return q;
+  }
+  async updateQualification(id: string, data: Partial<Qualification>): Promise<Qualification | undefined> {
+    const [q] = await db.update(qualifications).set(data).where(eq(qualifications.id, id)).returning();
+    return q;
+  }
+  async deleteQualification(id: string): Promise<void> {
+    await db.delete(qualifications).where(eq(qualifications.id, id));
+  }
+
+  async getReviews(companyId?: string, workerId?: string): Promise<Review[]> {
+    if (workerId) return db.select().from(reviews).where(eq(reviews.workerId, workerId)).orderBy(desc(reviews.reviewDate));
+    if (companyId) return db.select().from(reviews).where(eq(reviews.companyId, companyId)).orderBy(desc(reviews.reviewDate));
+    return db.select().from(reviews).orderBy(desc(reviews.reviewDate));
+  }
+  async createReview(data: InsertReview): Promise<Review> {
+    const [r] = await db.insert(reviews).values(data).returning();
+    return r;
+  }
+  async updateReview(id: string, data: Partial<Review>): Promise<Review | undefined> {
+    const [r] = await db.update(reviews).set(data).where(eq(reviews.id, id)).returning();
+    return r;
+  }
+  async deleteReview(id: string): Promise<void> {
+    await db.delete(reviews).where(eq(reviews.id, id));
+  }
+
+  async getRecurringSchedules(companyId?: string): Promise<RecurringSchedule[]> {
+    if (companyId) return db.select().from(recurringSchedules).where(eq(recurringSchedules.companyId, companyId));
+    return db.select().from(recurringSchedules);
+  }
+  async createRecurringSchedule(data: InsertRecurringSchedule): Promise<RecurringSchedule> {
+    const [r] = await db.insert(recurringSchedules).values(data).returning();
+    return r;
+  }
+  async updateRecurringSchedule(id: string, data: Partial<RecurringSchedule>): Promise<RecurringSchedule | undefined> {
+    const [r] = await db.update(recurringSchedules).set(data).where(eq(recurringSchedules.id, id)).returning();
+    return r;
+  }
+  async deleteRecurringSchedule(id: string): Promise<void> {
+    await db.delete(recurringSchedules).where(eq(recurringSchedules.id, id));
   }
 
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
     return user;
   }
-
   async getUserByUsername(username: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.username, username));
     return user;
   }
-
   async createUser(data: InsertUser): Promise<User> {
     const [user] = await db.insert(users).values(data).returning();
     return user;
