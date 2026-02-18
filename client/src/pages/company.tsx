@@ -9,8 +9,12 @@ import {
   MapPin,
   Phone,
   Hash,
+  Pencil,
+  MoreHorizontal,
+  Clock,
+  DollarSign,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +41,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Company } from "@shared/schema";
@@ -52,6 +62,11 @@ const companyFormSchema = z.object({
   zip: z.string().optional(),
   phone: z.string().optional(),
   payFrequency: z.enum(["weekly", "biweekly", "semimonthly", "monthly"]).default("biweekly"),
+  overtimeThreshold: z.number().min(0).default(40),
+  overtimeMultiplier: z.string().default("1.5"),
+  breakPolicyMinutes: z.number().min(0).default(30),
+  breakAfterHours: z.number().min(0).default(6),
+  timeRoundingMinutes: z.number().min(0).default(15),
 });
 
 type CompanyFormValues = z.infer<typeof companyFormSchema>;
@@ -65,7 +80,335 @@ const entityTypeLabels: Record<string, string> = {
   partnership: "Partnership",
 };
 
-function CompanyCard({ company }: { company: Company }) {
+function CompanyFormFields({ form }: { form: any }) {
+  return (
+    <>
+      <FormField
+        control={form.control}
+        name="name"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Company Name</FormLabel>
+            <FormControl>
+              <Input {...field} data-testid="input-company-name" />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <FormField
+        control={form.control}
+        name="legalName"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Legal Name</FormLabel>
+            <FormControl>
+              <Input {...field} data-testid="input-legal-name" />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <div className="grid grid-cols-2 gap-3">
+        <FormField
+          control={form.control}
+          name="ein"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>EIN</FormLabel>
+              <FormControl>
+                <Input placeholder="XX-XXXXXXX" {...field} data-testid="input-ein" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="entityType"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Entity Type</FormLabel>
+              <Select onValueChange={field.onChange} value={field.value}>
+                <FormControl>
+                  <SelectTrigger data-testid="select-entity-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  {Object.entries(entityTypeLabels).map(([val, label]) => (
+                    <SelectItem key={val} value={val}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </div>
+      <FormField
+        control={form.control}
+        name="address"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Address</FormLabel>
+            <FormControl>
+              <Input {...field} data-testid="input-address" />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <div className="grid grid-cols-3 gap-3">
+        <FormField
+          control={form.control}
+          name="city"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>City</FormLabel>
+              <FormControl>
+                <Input {...field} data-testid="input-city" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="state"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>State</FormLabel>
+              <FormControl>
+                <Input {...field} data-testid="input-state" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="zip"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>ZIP</FormLabel>
+              <FormControl>
+                <Input {...field} data-testid="input-zip" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField
+          control={form.control}
+          name="phone"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Phone</FormLabel>
+              <FormControl>
+                <Input {...field} data-testid="input-company-phone" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="payFrequency"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Pay Frequency</FormLabel>
+              <Select onValueChange={field.onChange} value={field.value}>
+                <FormControl>
+                  <SelectTrigger data-testid="select-pay-frequency">
+                    <SelectValue />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="weekly">Weekly</SelectItem>
+                  <SelectItem value="biweekly">Biweekly</SelectItem>
+                  <SelectItem value="semimonthly">Semimonthly</SelectItem>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                </SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </div>
+
+      <div className="border-t pt-4 mt-2">
+        <p className="text-sm font-medium mb-3">Company Policies</p>
+        <div className="grid grid-cols-2 gap-3">
+          <FormField
+            control={form.control}
+            name="overtimeThreshold"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>OT Threshold (hrs/week)</FormLabel>
+                <FormControl>
+                  <Input
+                    type="number"
+                    {...field}
+                    onChange={e => field.onChange(Number(e.target.value))}
+                    data-testid="input-ot-threshold"
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="overtimeMultiplier"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>OT Multiplier</FormLabel>
+                <FormControl>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    {...field}
+                    data-testid="input-ot-multiplier"
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3 mt-3">
+          <FormField
+            control={form.control}
+            name="breakPolicyMinutes"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Break Duration (min)</FormLabel>
+                <FormControl>
+                  <Input
+                    type="number"
+                    {...field}
+                    onChange={e => field.onChange(Number(e.target.value))}
+                    data-testid="input-break-minutes"
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="breakAfterHours"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Break After (hrs)</FormLabel>
+                <FormControl>
+                  <Input
+                    type="number"
+                    {...field}
+                    onChange={e => field.onChange(Number(e.target.value))}
+                    data-testid="input-break-after-hours"
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+        <div className="mt-3">
+          <FormField
+            control={form.control}
+            name="timeRoundingMinutes"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Time Rounding (min)</FormLabel>
+                <Select onValueChange={(v) => field.onChange(Number(v))} value={String(field.value)}>
+                  <FormControl>
+                    <SelectTrigger data-testid="select-time-rounding">
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="5">5 minutes</SelectItem>
+                    <SelectItem value="6">6 minutes</SelectItem>
+                    <SelectItem value="15">15 minutes (quarter-hour)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+      </div>
+    </>
+  );
+}
+
+function EditCompanyDialog({ company, onClose }: { company: Company; onClose: () => void }) {
+  const { toast } = useToast();
+
+  const form = useForm<CompanyFormValues>({
+    resolver: zodResolver(companyFormSchema),
+    defaultValues: {
+      name: company.name,
+      legalName: company.legalName || "",
+      ein: company.ein || "",
+      entityType: (company.entityType as any) || "llc",
+      address: company.address || "",
+      city: company.city || "",
+      state: company.state || "",
+      zip: company.zip || "",
+      phone: company.phone || "",
+      payFrequency: (company.payFrequency as any) || "biweekly",
+      overtimeThreshold: company.overtimeThreshold ?? 40,
+      overtimeMultiplier: String(company.overtimeMultiplier ?? "1.5"),
+      breakPolicyMinutes: company.breakPolicyMinutes ?? 30,
+      breakAfterHours: company.breakAfterHours ?? 6,
+      timeRoundingMinutes: company.timeRoundingMinutes ?? 15,
+    },
+  });
+
+  const updateCompany = useMutation({
+    mutationFn: async (data: CompanyFormValues) => {
+      await apiRequest("PATCH", `/api/companies/${company.id}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      toast({ title: "Company updated" });
+      onClose();
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogHeader>
+        <DialogTitle>Edit Company</DialogTitle>
+      </DialogHeader>
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit((data) => updateCompany.mutate(data))} className="space-y-4">
+          <CompanyFormFields form={form} />
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={updateCompany.isPending}
+            data-testid="button-submit-edit-company"
+          >
+            {updateCompany.isPending ? "Saving..." : "Save Changes"}
+          </Button>
+        </form>
+      </Form>
+    </DialogContent>
+  );
+}
+
+function CompanyCard({ company, onEdit }: { company: Company; onEdit: (c: Company) => void }) {
   return (
     <Card className="hover-elevate" data-testid={`card-company-${company.id}`}>
       <CardContent className="p-5">
@@ -100,12 +443,32 @@ function CompanyCard({ company }: { company: Company }) {
                 </span>
               )}
             </div>
-            <div className="mt-2">
-              <span className="text-xs text-muted-foreground capitalize">
+            <div className="flex items-center gap-4 mt-2 flex-wrap">
+              <span className="text-xs text-muted-foreground capitalize flex items-center gap-1">
+                <DollarSign className="h-3 w-3" />
                 Pay: {company.payFrequency?.replace("_", "-") || "Biweekly"}
+              </span>
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <Clock className="h-3 w-3" />
+                OT: {company.overtimeThreshold || 40}hrs @ {company.overtimeMultiplier || "1.5"}x
               </span>
             </div>
           </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="icon" variant="ghost" data-testid={`button-company-menu-${company.id}`}>
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={() => onEdit(company)}
+                data-testid={`button-edit-company-${company.id}`}
+              >
+                <Pencil className="h-4 w-4 mr-2" /> Edit
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </CardContent>
     </Card>
@@ -114,6 +477,7 @@ function CompanyCard({ company }: { company: Company }) {
 
 export default function CompanyPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingCompany, setEditingCompany] = useState<Company | null>(null);
   const { toast } = useToast();
 
   const { data: companies, isLoading } = useQuery<Company[]>({
@@ -133,6 +497,11 @@ export default function CompanyPage() {
       zip: "",
       phone: "",
       payFrequency: "biweekly",
+      overtimeThreshold: 40,
+      overtimeMultiplier: "1.5",
+      breakPolicyMinutes: 30,
+      breakAfterHours: 6,
+      timeRoundingMinutes: 15,
     },
   });
 
@@ -159,7 +528,7 @@ export default function CompanyPage() {
             Companies
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Manage your business entities and payroll settings.
+            Manage your business entities, payroll settings, and policies.
           </p>
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -177,163 +546,7 @@ export default function CompanyPage() {
                 onSubmit={form.handleSubmit((data) => createCompany.mutate(data))}
                 className="space-y-4"
               >
-                <FormField
-                  control={form.control}
-                  name="name"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Company Name</FormLabel>
-                      <FormControl>
-                        <Input {...field} data-testid="input-company-name" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="legalName"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Legal Name</FormLabel>
-                      <FormControl>
-                        <Input {...field} data-testid="input-legal-name" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <div className="grid grid-cols-2 gap-3">
-                  <FormField
-                    control={form.control}
-                    name="ein"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>EIN</FormLabel>
-                        <FormControl>
-                          <Input placeholder="XX-XXXXXXX" {...field} data-testid="input-ein" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={form.control}
-                    name="entityType"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Entity Type</FormLabel>
-                        <Select onValueChange={field.onChange} value={field.value}>
-                          <FormControl>
-                            <SelectTrigger data-testid="select-entity-type">
-                              <SelectValue />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            {Object.entries(entityTypeLabels).map(([val, label]) => (
-                              <SelectItem key={val} value={val}>
-                                {label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </div>
-                <FormField
-                  control={form.control}
-                  name="address"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Address</FormLabel>
-                      <FormControl>
-                        <Input {...field} data-testid="input-address" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <div className="grid grid-cols-3 gap-3">
-                  <FormField
-                    control={form.control}
-                    name="city"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>City</FormLabel>
-                        <FormControl>
-                          <Input {...field} data-testid="input-city" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={form.control}
-                    name="state"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>State</FormLabel>
-                        <FormControl>
-                          <Input {...field} data-testid="input-state" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={form.control}
-                    name="zip"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>ZIP</FormLabel>
-                        <FormControl>
-                          <Input {...field} data-testid="input-zip" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <FormField
-                    control={form.control}
-                    name="phone"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Phone</FormLabel>
-                        <FormControl>
-                          <Input {...field} data-testid="input-company-phone" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={form.control}
-                    name="payFrequency"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Pay Frequency</FormLabel>
-                        <Select onValueChange={field.onChange} value={field.value}>
-                          <FormControl>
-                            <SelectTrigger data-testid="select-pay-frequency">
-                              <SelectValue />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            <SelectItem value="weekly">Weekly</SelectItem>
-                            <SelectItem value="biweekly">Biweekly</SelectItem>
-                            <SelectItem value="semimonthly">Semimonthly</SelectItem>
-                            <SelectItem value="monthly">Monthly</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </div>
+                <CompanyFormFields form={form} />
                 <Button
                   type="submit"
                   className="w-full"
@@ -378,10 +591,16 @@ export default function CompanyPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {(companies || []).map((company) => (
-            <CompanyCard key={company.id} company={company} />
+            <CompanyCard key={company.id} company={company} onEdit={setEditingCompany} />
           ))}
         </div>
       )}
+
+      <Dialog open={!!editingCompany} onOpenChange={(open) => !open && setEditingCompany(null)}>
+        {editingCompany && (
+          <EditCompanyDialog company={editingCompany} onClose={() => setEditingCompany(null)} />
+        )}
+      </Dialog>
     </div>
   );
 }

@@ -9,6 +9,7 @@ export const entityTypeEnum = pgEnum("entity_type", ["c_corp", "s_corp", "llc", 
 export const punchTypeEnum = pgEnum("punch_type", ["clock_in", "clock_out", "break_start", "break_end"]);
 export const scheduleStatusEnum = pgEnum("schedule_status", ["draft", "published"]);
 export const timesheetStatusEnum = pgEnum("timesheet_status", ["pending", "approved", "rejected"]);
+export const payrollStatusEnum = pgEnum("payroll_status", ["draft", "processed", "paid"]);
 
 export const companies = pgTable("companies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -24,6 +25,9 @@ export const companies = pgTable("companies", {
   payFrequency: payFrequencyEnum("pay_frequency").default("biweekly"),
   overtimeThreshold: integer("overtime_threshold").default(40),
   overtimeMultiplier: numeric("overtime_multiplier").default("1.5"),
+  breakPolicyMinutes: integer("break_policy_minutes").default(30),
+  breakAfterHours: integer("break_after_hours").default(6),
+  timeRoundingMinutes: integer("time_rounding_minutes").default(15),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -88,6 +92,35 @@ export const schedules = pgTable("schedules", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const payrollRuns = pgTable("payroll_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  periodStart: date("period_start").notNull(),
+  periodEnd: date("period_end").notNull(),
+  status: payrollStatusEnum("status").default("draft"),
+  totalGross: numeric("total_gross").default("0"),
+  totalNet: numeric("total_net").default("0"),
+  totalHours: numeric("total_hours").default("0"),
+  totalOvertimeHours: numeric("total_overtime_hours").default("0"),
+  workerCount: integer("worker_count").default(0),
+  processedAt: timestamp("processed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const payrollItems = pgTable("payroll_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  payrollRunId: varchar("payroll_run_id").notNull().references(() => payrollRuns.id),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  regularHours: numeric("regular_hours").default("0"),
+  overtimeHours: numeric("overtime_hours").default("0"),
+  regularPay: numeric("regular_pay").default("0"),
+  overtimePay: numeric("overtime_pay").default("0"),
+  grossPay: numeric("gross_pay").default("0"),
+  payRate: numeric("pay_rate").default("0"),
+  payType: text("pay_type").default("hourly"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
@@ -101,6 +134,8 @@ export const insertWorkerSchema = createInsertSchema(workers).omit({ id: true, c
 export const insertTimePunchSchema = createInsertSchema(timePunches).omit({ id: true, createdAt: true });
 export const insertTimeEntrySchema = createInsertSchema(timeEntries).omit({ id: true, createdAt: true });
 export const insertScheduleSchema = createInsertSchema(schedules).omit({ id: true, createdAt: true });
+export const insertPayrollRunSchema = createInsertSchema(payrollRuns).omit({ id: true, createdAt: true });
+export const insertPayrollItemSchema = createInsertSchema(payrollItems).omit({ id: true, createdAt: true });
 export const insertUserSchema = createInsertSchema(users).pick({ username: true, password: true });
 
 export type Company = typeof companies.$inferSelect;
@@ -113,5 +148,9 @@ export type TimeEntry = typeof timeEntries.$inferSelect;
 export type InsertTimeEntry = z.infer<typeof insertTimeEntrySchema>;
 export type Schedule = typeof schedules.$inferSelect;
 export type InsertSchedule = z.infer<typeof insertScheduleSchema>;
+export type PayrollRun = typeof payrollRuns.$inferSelect;
+export type InsertPayrollRun = z.infer<typeof insertPayrollRunSchema>;
+export type PayrollItem = typeof payrollItems.$inferSelect;
+export type InsertPayrollItem = z.infer<typeof insertPayrollItemSchema>;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;

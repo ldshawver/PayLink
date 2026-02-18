@@ -7,6 +7,7 @@ import {
   Building2,
   FileText,
   Settings,
+  DollarSign,
 } from "lucide-react";
 import {
   Sidebar,
@@ -28,6 +29,7 @@ const mainItems = [
   { title: "Time Clock", url: "/time-clock", icon: Clock },
   { title: "Timesheets", url: "/timesheets", icon: FileText },
   { title: "Schedule", url: "/schedule", icon: CalendarDays },
+  { title: "Payroll", url: "/payroll", icon: DollarSign },
 ];
 
 const settingsItems = [
