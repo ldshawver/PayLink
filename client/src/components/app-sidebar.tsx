@@ -71,7 +71,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import paylinkLogo from "@assets/PayLink_Logo_(2)_1771399651639.png";
+import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
 
 const navSections = [
   {

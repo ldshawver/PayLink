@@ -509,7 +509,7 @@ export default function Dashboard() {
     <div className="p-4 md:p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-dashboard-title">
-          <LayoutDashboard className="h-6 w-6 text-teal-accent" />
+          <LayoutDashboard className="h-6 w-6 text-blue-accent" />
           Dashboard
         </h1>
         <Dialog>
