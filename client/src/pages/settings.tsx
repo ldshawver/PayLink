@@ -1,39 +1,240 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import {
   Settings as SettingsIcon,
   Shield,
-  Bell,
+  Clock,
+  Building2,
+  Save,
+  AlertTriangle,
   Database,
   Globe,
-  Clock,
+  Bell,
+  ChevronRight,
 } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+  FormDescription,
+} from "@/components/ui/form";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import type { Company } from "@shared/schema";
 
-const settingsSections = [
-  {
-    title: "Overtime & Compliance",
-    description: "Configure FLSA overtime rules, minimum wage thresholds, and worker classification settings.",
-    icon: Clock,
-    status: "Active",
-  },
-  {
-    title: "Break Policies",
-    description: "Set up state-specific meal and rest break rules. Supports California and other state requirements.",
-    icon: Shield,
-    status: "Active",
-  },
-  {
-    title: "Time Rounding",
-    description: "Configure rounding increments (5, 6, or 15 minutes) with the 7-minute quarter-hour rule.",
-    icon: Clock,
-    status: "Active",
-  },
-  {
-    title: "Notifications",
-    description: "Manage alerts for missed punches, overtime warnings, timesheet approvals, and filing deadlines.",
-    icon: Bell,
-    status: "Coming Soon",
-  },
+const policyFormSchema = z.object({
+  overtimeThreshold: z.number().min(0).max(168),
+  overtimeMultiplier: z.string(),
+  breakPolicyMinutes: z.number().min(0).max(120),
+  breakAfterHours: z.number().min(0).max(24),
+  timeRoundingMinutes: z.number(),
+  payFrequency: z.enum(["weekly", "biweekly", "semimonthly", "monthly"]),
+});
+
+type PolicyFormValues = z.infer<typeof policyFormSchema>;
+
+function CompanyPolicyEditor({ company }: { company: Company }) {
+  const { toast } = useToast();
+
+  const form = useForm<PolicyFormValues>({
+    resolver: zodResolver(policyFormSchema),
+    defaultValues: {
+      overtimeThreshold: company.overtimeThreshold ?? 40,
+      overtimeMultiplier: String(company.overtimeMultiplier ?? "1.5"),
+      breakPolicyMinutes: company.breakPolicyMinutes ?? 30,
+      breakAfterHours: company.breakAfterHours ?? 6,
+      timeRoundingMinutes: company.timeRoundingMinutes ?? 15,
+      payFrequency: (company.payFrequency as any) || "biweekly",
+    },
+  });
+
+  const updatePolicies = useMutation({
+    mutationFn: async (data: PolicyFormValues) => {
+      await apiRequest("PATCH", `/api/companies/${company.id}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      toast({ title: `Policies updated for ${company.name}` });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <Card data-testid={`card-policy-${company.id}`}>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Building2 className="h-4 w-4 text-primary" />
+          {company.name}
+          <Badge variant="secondary" className="text-xs ml-auto capitalize">
+            {company.payFrequency || "biweekly"}
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit((data) => updatePolicies.mutate(data))} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <FormField
+                control={form.control}
+                name="payFrequency"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Pay Frequency</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger data-testid={`select-pay-freq-${company.id}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="weekly">Weekly</SelectItem>
+                        <SelectItem value="biweekly">Biweekly</SelectItem>
+                        <SelectItem value="semimonthly">Semimonthly</SelectItem>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="overtimeThreshold"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>OT Threshold (hrs/week)</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        {...field}
+                        onChange={e => field.onChange(Number(e.target.value))}
+                        data-testid={`input-ot-thresh-${company.id}`}
+                      />
+                    </FormControl>
+                    <FormDescription className="text-xs">FLSA standard: 40 hours</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="overtimeMultiplier"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>OT Multiplier</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        {...field}
+                        data-testid={`input-ot-mult-${company.id}`}
+                      />
+                    </FormControl>
+                    <FormDescription className="text-xs">FLSA minimum: 1.5x</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="breakPolicyMinutes"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Break Duration (min)</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        {...field}
+                        onChange={e => field.onChange(Number(e.target.value))}
+                        data-testid={`input-break-min-${company.id}`}
+                      />
+                    </FormControl>
+                    <FormDescription className="text-xs">Meal break length</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="breakAfterHours"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Break After (hrs)</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        {...field}
+                        onChange={e => field.onChange(Number(e.target.value))}
+                        data-testid={`input-break-after-${company.id}`}
+                      />
+                    </FormControl>
+                    <FormDescription className="text-xs">Hours before required break</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="timeRoundingMinutes"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Time Rounding</FormLabel>
+                    <Select onValueChange={(v) => field.onChange(Number(v))} value={String(field.value)}>
+                      <FormControl>
+                        <SelectTrigger data-testid={`select-rounding-${company.id}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="5">5 minutes</SelectItem>
+                        <SelectItem value="6">6 minutes (1/10th hour)</SelectItem>
+                        <SelectItem value="15">15 minutes (quarter-hour)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription className="text-xs">7-minute rule applied</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+            <div className="flex justify-end">
+              <Button
+                type="submit"
+                size="sm"
+                disabled={updatePolicies.isPending}
+                data-testid={`button-save-policy-${company.id}`}
+              >
+                <Save className="h-4 w-4 mr-2" />
+                {updatePolicies.isPending ? "Saving..." : "Save Policies"}
+              </Button>
+            </div>
+          </form>
+        </Form>
+      </CardContent>
+    </Card>
+  );
+}
+
+const complianceInfo = [
   {
     title: "Data Retention",
     description: "Payroll records retained 3 years, time cards 2 years per FLSA requirements.",
@@ -46,44 +247,92 @@ const settingsSections = [
     icon: Globe,
     status: "Coming Soon",
   },
+  {
+    title: "Notifications",
+    description: "Alerts for missed punches, overtime warnings, timesheet approvals, and filing deadlines.",
+    icon: Bell,
+    status: "Coming Soon",
+  },
 ];
 
 export default function SettingsPage() {
+  const { data: companies, isLoading } = useQuery<Company[]>({
+    queryKey: ["/api/companies"],
+  });
+
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div>
         <h1 className="text-2xl font-bold tracking-tight" data-testid="text-settings-title">Settings</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Configure compliance rules, policies, and system preferences.
+          Configure per-company policies, compliance rules, and system preferences.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {settingsSections.map((section) => (
-          <Card key={section.title} className="hover-elevate" data-testid={`card-setting-${section.title.toLowerCase().replace(/\s/g, "-")}`}>
-            <CardContent className="p-5">
-              <div className="flex items-start gap-3">
-                <div className="rounded-md bg-primary/10 p-2.5 shrink-0">
-                  <section.icon className="h-5 w-5 text-primary" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-sm font-semibold">{section.title}</h3>
-                    <Badge
-                      variant={section.status === "Active" ? "default" : "secondary"}
-                      className="text-xs"
-                    >
-                      {section.status}
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                    {section.description}
-                  </p>
-                </div>
+      <div>
+        <div className="flex items-center gap-2 mb-4">
+          <Shield className="h-4 w-4 text-primary" />
+          <h2 className="text-sm font-semibold">Company Policies</h2>
+          <p className="text-xs text-muted-foreground ml-2">Overtime, breaks, and time rounding per company</p>
+        </div>
+
+        {isLoading ? (
+          <Card>
+            <CardContent className="p-6">
+              <div className="h-32 flex items-center justify-center">
+                <p className="text-sm text-muted-foreground">Loading companies...</p>
               </div>
             </CardContent>
           </Card>
-        ))}
+        ) : (companies || []).length === 0 ? (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12">
+              <Building2 className="h-10 w-10 text-muted-foreground/30 mb-2" />
+              <p className="text-sm text-muted-foreground">No companies to configure.</p>
+              <p className="text-xs text-muted-foreground/70 mt-1">Add a company first.</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-4">
+            {(companies || []).map((company) => (
+              <CompanyPolicyEditor key={company.id} company={company} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <div className="flex items-center gap-2 mb-4">
+          <SettingsIcon className="h-4 w-4 text-primary" />
+          <h2 className="text-sm font-semibold">Compliance & System</h2>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {complianceInfo.map((section) => (
+            <Card key={section.title} data-testid={`card-setting-${section.title.toLowerCase().replace(/\s/g, "-")}`}>
+              <CardContent className="p-4">
+                <div className="flex items-start gap-3">
+                  <div className="rounded-md bg-primary/10 p-2 shrink-0">
+                    <section.icon className="h-4 w-4 text-primary" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-xs font-semibold">{section.title}</h3>
+                      <Badge
+                        variant={section.status === "Active" ? "default" : "secondary"}
+                        className="text-xs"
+                      >
+                        {section.status}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                      {section.description}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       </div>
 
       <Card>

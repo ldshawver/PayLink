@@ -1,12 +1,14 @@
-import { eq, and, desc, sql, gte } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
 import { db } from "./db";
 import {
-  companies, workers, timePunches, timeEntries, schedules, users,
+  companies, workers, timePunches, timeEntries, schedules, payrollRuns, payrollItems, users,
   type Company, type InsertCompany,
   type Worker, type InsertWorker,
   type TimePunch, type InsertTimePunch,
   type TimeEntry, type InsertTimeEntry,
   type Schedule, type InsertSchedule,
+  type PayrollRun, type InsertPayrollRun,
+  type PayrollItem, type InsertPayrollItem,
   type User, type InsertUser,
 } from "@shared/schema";
 
@@ -14,6 +16,7 @@ export interface IStorage {
   getCompanies(): Promise<Company[]>;
   getCompany(id: string): Promise<Company | undefined>;
   createCompany(data: InsertCompany): Promise<Company>;
+  updateCompany(id: string, data: Partial<Company>): Promise<Company | undefined>;
 
   getWorkers(companyId?: string): Promise<Worker[]>;
   getWorker(id: string): Promise<Worker | undefined>;
@@ -24,12 +27,21 @@ export interface IStorage {
   createTimePunch(data: InsertTimePunch): Promise<TimePunch>;
 
   getTimeEntries(companyId?: string): Promise<TimeEntry[]>;
+  getTimeEntriesByDateRange(companyId: string, startDate: string, endDate: string): Promise<TimeEntry[]>;
   getTimeEntry(id: string): Promise<TimeEntry | undefined>;
   createTimeEntry(data: InsertTimeEntry): Promise<TimeEntry>;
   updateTimeEntry(id: string, data: Partial<TimeEntry>): Promise<TimeEntry | undefined>;
 
   getSchedules(companyId?: string): Promise<Schedule[]>;
   createSchedule(data: InsertSchedule): Promise<Schedule>;
+
+  getPayrollRuns(companyId?: string): Promise<PayrollRun[]>;
+  getPayrollRun(id: string): Promise<PayrollRun | undefined>;
+  createPayrollRun(data: InsertPayrollRun): Promise<PayrollRun>;
+  updatePayrollRun(id: string, data: Partial<PayrollRun>): Promise<PayrollRun | undefined>;
+
+  getPayrollItems(payrollRunId: string): Promise<PayrollItem[]>;
+  createPayrollItem(data: InsertPayrollItem): Promise<PayrollItem>;
 
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
@@ -57,6 +69,11 @@ export class DatabaseStorage implements IStorage {
 
   async createCompany(data: InsertCompany): Promise<Company> {
     const [company] = await db.insert(companies).values(data).returning();
+    return company;
+  }
+
+  async updateCompany(id: string, data: Partial<Company>): Promise<Company | undefined> {
+    const [company] = await db.update(companies).set(data).where(eq(companies.id, id)).returning();
     return company;
   }
 
@@ -101,6 +118,19 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(timeEntries).orderBy(desc(timeEntries.date));
   }
 
+  async getTimeEntriesByDateRange(companyId: string, startDate: string, endDate: string): Promise<TimeEntry[]> {
+    return db.select().from(timeEntries)
+      .where(
+        and(
+          eq(timeEntries.companyId, companyId),
+          gte(timeEntries.date, startDate),
+          lte(timeEntries.date, endDate),
+          eq(timeEntries.status, "approved")
+        )
+      )
+      .orderBy(desc(timeEntries.date));
+  }
+
   async getTimeEntry(id: string): Promise<TimeEntry | undefined> {
     const [entry] = await db.select().from(timeEntries).where(eq(timeEntries.id, id));
     return entry;
@@ -126,6 +156,37 @@ export class DatabaseStorage implements IStorage {
   async createSchedule(data: InsertSchedule): Promise<Schedule> {
     const [schedule] = await db.insert(schedules).values(data).returning();
     return schedule;
+  }
+
+  async getPayrollRuns(companyId?: string): Promise<PayrollRun[]> {
+    if (companyId) {
+      return db.select().from(payrollRuns).where(eq(payrollRuns.companyId, companyId)).orderBy(desc(payrollRuns.createdAt));
+    }
+    return db.select().from(payrollRuns).orderBy(desc(payrollRuns.createdAt));
+  }
+
+  async getPayrollRun(id: string): Promise<PayrollRun | undefined> {
+    const [run] = await db.select().from(payrollRuns).where(eq(payrollRuns.id, id));
+    return run;
+  }
+
+  async createPayrollRun(data: InsertPayrollRun): Promise<PayrollRun> {
+    const [run] = await db.insert(payrollRuns).values(data).returning();
+    return run;
+  }
+
+  async updatePayrollRun(id: string, data: Partial<PayrollRun>): Promise<PayrollRun | undefined> {
+    const [run] = await db.update(payrollRuns).set(data).where(eq(payrollRuns.id, id)).returning();
+    return run;
+  }
+
+  async getPayrollItems(payrollRunId: string): Promise<PayrollItem[]> {
+    return db.select().from(payrollItems).where(eq(payrollItems.payrollRunId, payrollRunId));
+  }
+
+  async createPayrollItem(data: InsertPayrollItem): Promise<PayrollItem> {
+    const [item] = await db.insert(payrollItems).values(data).returning();
+    return item;
   }
 
   async getUser(id: string): Promise<User | undefined> {

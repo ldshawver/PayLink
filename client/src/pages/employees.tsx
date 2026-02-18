@@ -13,6 +13,7 @@ import {
   MoreHorizontal,
   UserCheck,
   UserX,
+  Pencil,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -63,11 +64,335 @@ const workerFormSchema = z.object({
   payType: z.string().default("hourly"),
   hireDate: z.string().optional(),
   companyId: z.string().min(1, "Company is required"),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  zip: z.string().optional(),
+  ssn: z.string().optional(),
 });
 
 type WorkerFormValues = z.infer<typeof workerFormSchema>;
 
-function WorkerCard({ worker }: { worker: Worker }) {
+function WorkerFormFields({ form, companies }: { form: any; companies: Company[] | undefined }) {
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField
+          control={form.control}
+          name="firstName"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>First Name</FormLabel>
+              <FormControl>
+                <Input {...field} data-testid="input-first-name" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="lastName"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Last Name</FormLabel>
+              <FormControl>
+                <Input {...field} data-testid="input-last-name" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField
+          control={form.control}
+          name="email"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Email</FormLabel>
+              <FormControl>
+                <Input type="email" {...field} data-testid="input-email" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="phone"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Phone</FormLabel>
+              <FormControl>
+                <Input {...field} data-testid="input-phone" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </div>
+      <FormField
+        control={form.control}
+        name="companyId"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Company</FormLabel>
+            <Select onValueChange={field.onChange} value={field.value}>
+              <FormControl>
+                <SelectTrigger data-testid="select-company">
+                  <SelectValue placeholder="Select company" />
+                </SelectTrigger>
+              </FormControl>
+              <SelectContent>
+                {companies?.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <FormField
+        control={form.control}
+        name="workerType"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Worker Type</FormLabel>
+            <Select onValueChange={field.onChange} value={field.value}>
+              <FormControl>
+                <SelectTrigger data-testid="select-worker-type">
+                  <SelectValue />
+                </SelectTrigger>
+              </FormControl>
+              <SelectContent>
+                <SelectItem value="employee">Employee</SelectItem>
+                <SelectItem value="contractor">Contractor</SelectItem>
+              </SelectContent>
+            </Select>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <div className="grid grid-cols-2 gap-3">
+        <FormField
+          control={form.control}
+          name="jobTitle"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Job Title</FormLabel>
+              <FormControl>
+                <Input {...field} data-testid="input-job-title" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="department"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Department</FormLabel>
+              <FormControl>
+                <Input {...field} data-testid="input-department" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField
+          control={form.control}
+          name="payRate"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Pay Rate ($)</FormLabel>
+              <FormControl>
+                <Input type="number" step="0.01" {...field} data-testid="input-pay-rate" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="payType"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Pay Type</FormLabel>
+              <Select onValueChange={field.onChange} value={field.value}>
+                <FormControl>
+                  <SelectTrigger data-testid="select-pay-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="hourly">Hourly</SelectItem>
+                  <SelectItem value="salary">Salary</SelectItem>
+                </SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </div>
+      <FormField
+        control={form.control}
+        name="hireDate"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Hire Date</FormLabel>
+            <FormControl>
+              <Input type="date" {...field} data-testid="input-hire-date" />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <div className="grid grid-cols-2 gap-3">
+        <FormField
+          control={form.control}
+          name="address"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Address</FormLabel>
+              <FormControl>
+                <Input {...field} data-testid="input-worker-address" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="ssn"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>SSN</FormLabel>
+              <FormControl>
+                <Input placeholder="XXX-XX-XXXX" {...field} data-testid="input-ssn" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        <FormField
+          control={form.control}
+          name="city"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>City</FormLabel>
+              <FormControl>
+                <Input {...field} data-testid="input-worker-city" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="state"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>State</FormLabel>
+              <FormControl>
+                <Input {...field} data-testid="input-worker-state" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="zip"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>ZIP</FormLabel>
+              <FormControl>
+                <Input {...field} data-testid="input-worker-zip" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </div>
+    </>
+  );
+}
+
+function EditWorkerDialog({ worker, onClose }: { worker: Worker; onClose: () => void }) {
+  const { toast } = useToast();
+
+  const { data: companies } = useQuery<Company[]>({
+    queryKey: ["/api/companies"],
+  });
+
+  const form = useForm<WorkerFormValues>({
+    resolver: zodResolver(workerFormSchema),
+    defaultValues: {
+      firstName: worker.firstName,
+      lastName: worker.lastName,
+      email: worker.email || "",
+      phone: worker.phone || "",
+      workerType: worker.workerType as "employee" | "contractor",
+      jobTitle: worker.jobTitle || "",
+      department: worker.department || "",
+      payRate: String(worker.payRate),
+      payType: worker.payType || "hourly",
+      hireDate: worker.hireDate || "",
+      companyId: worker.companyId,
+      address: worker.address || "",
+      city: worker.city || "",
+      state: worker.state || "",
+      zip: worker.zip || "",
+      ssn: worker.ssn || "",
+    },
+  });
+
+  const updateWorker = useMutation({
+    mutationFn: async (data: WorkerFormValues) => {
+      await apiRequest("PATCH", `/api/workers/${worker.id}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/workers"] });
+      toast({ title: "Worker updated successfully" });
+      onClose();
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogHeader>
+        <DialogTitle>Edit Worker</DialogTitle>
+      </DialogHeader>
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit((data) => updateWorker.mutate(data))} className="space-y-4">
+          <WorkerFormFields form={form} companies={companies} />
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={updateWorker.isPending}
+            data-testid="button-submit-edit-worker"
+          >
+            {updateWorker.isPending ? "Saving..." : "Save Changes"}
+          </Button>
+        </form>
+      </Form>
+    </DialogContent>
+  );
+}
+
+function WorkerCard({ worker, onEdit }: { worker: Worker; onEdit: (w: Worker) => void }) {
   const { toast } = useToast();
 
   const toggleActive = useMutation({
@@ -136,6 +461,12 @@ function WorkerCard({ worker }: { worker: Worker }) {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem
+                onClick={() => onEdit(worker)}
+                data-testid={`button-edit-worker-${worker.id}`}
+              >
+                <Pencil className="h-4 w-4 mr-2" /> Edit
+              </DropdownMenuItem>
+              <DropdownMenuItem
                 onClick={() => toggleActive.mutate()}
                 data-testid={`button-toggle-active-${worker.id}`}
               >
@@ -179,6 +510,11 @@ function AddWorkerDialog() {
       payType: "hourly",
       hireDate: "",
       companyId: companies?.[0]?.id || "",
+      address: "",
+      city: "",
+      state: "",
+      zip: "",
+      ssn: "",
     },
   });
 
@@ -211,184 +547,7 @@ function AddWorkerDialog() {
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit((data) => createWorker.mutate(data))} className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <FormField
-                control={form.control}
-                name="firstName"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>First Name</FormLabel>
-                    <FormControl>
-                      <Input {...field} data-testid="input-first-name" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="lastName"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Last Name</FormLabel>
-                    <FormControl>
-                      <Input {...field} data-testid="input-last-name" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <FormField
-                control={form.control}
-                name="email"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Email</FormLabel>
-                    <FormControl>
-                      <Input type="email" {...field} data-testid="input-email" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="phone"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Phone</FormLabel>
-                    <FormControl>
-                      <Input {...field} data-testid="input-phone" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-            <FormField
-              control={form.control}
-              name="companyId"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Company</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl>
-                      <SelectTrigger data-testid="select-company">
-                        <SelectValue placeholder="Select company" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {companies?.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="workerType"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Worker Type</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl>
-                      <SelectTrigger data-testid="select-worker-type">
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="employee">Employee</SelectItem>
-                      <SelectItem value="contractor">Contractor</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <div className="grid grid-cols-2 gap-3">
-              <FormField
-                control={form.control}
-                name="jobTitle"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Job Title</FormLabel>
-                    <FormControl>
-                      <Input {...field} data-testid="input-job-title" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="department"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Department</FormLabel>
-                    <FormControl>
-                      <Input {...field} data-testid="input-department" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <FormField
-                control={form.control}
-                name="payRate"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Pay Rate ($)</FormLabel>
-                    <FormControl>
-                      <Input type="number" step="0.01" {...field} data-testid="input-pay-rate" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="payType"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Pay Type</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger data-testid="select-pay-type">
-                          <SelectValue />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="hourly">Hourly</SelectItem>
-                        <SelectItem value="salary">Salary</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-            <FormField
-              control={form.control}
-              name="hireDate"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Hire Date</FormLabel>
-                  <FormControl>
-                    <Input type="date" {...field} data-testid="input-hire-date" />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            <WorkerFormFields form={form} companies={companies} />
             <Button
               type="submit"
               className="w-full"
@@ -407,6 +566,7 @@ function AddWorkerDialog() {
 export default function Employees() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "employee" | "contractor">("all");
+  const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
 
   const { data: workers, isLoading } = useQuery<Worker[]>({
     queryKey: ["/api/workers"],
@@ -493,10 +653,16 @@ export default function Employees() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {filtered.map((worker) => (
-            <WorkerCard key={worker.id} worker={worker} />
+            <WorkerCard key={worker.id} worker={worker} onEdit={setEditingWorker} />
           ))}
         </div>
       )}
+
+      <Dialog open={!!editingWorker} onOpenChange={(open) => !open && setEditingWorker(null)}>
+        {editingWorker && (
+          <EditWorkerDialog worker={editingWorker} onClose={() => setEditingWorker(null)} />
+        )}
+      </Dialog>
     </div>
   );
 }
