@@ -9,25 +9,27 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
-import Employees from "@/pages/employees";
-import TimeClock from "@/pages/time-clock";
-import Timesheets from "@/pages/timesheets";
+import AttendancePage from "@/pages/attendance";
 import SchedulePage from "@/pages/schedule";
+import EmployeePage from "@/pages/employee";
 import CompanyPage from "@/pages/company";
-import SettingsPage from "@/pages/settings";
 import PayrollPage from "@/pages/payroll";
+import PolicyPage from "@/pages/policy";
+import HRPage from "@/pages/hr";
+import ReportsPage from "@/pages/reports";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
-      <Route path="/employees" component={Employees} />
-      <Route path="/time-clock" component={TimeClock} />
-      <Route path="/timesheets" component={Timesheets} />
+      <Route path="/attendance" component={AttendancePage} />
       <Route path="/schedule" component={SchedulePage} />
+      <Route path="/employee" component={EmployeePage} />
       <Route path="/company" component={CompanyPage} />
-      <Route path="/settings" component={SettingsPage} />
       <Route path="/payroll" component={PayrollPage} />
+      <Route path="/policy" component={PolicyPage} />
+      <Route path="/hr" component={HRPage} />
+      <Route path="/reports" component={ReportsPage} />
       <Route component={NotFound} />
     </Switch>
   );
