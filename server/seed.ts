@@ -1,8 +1,31 @@
 import { db } from "./db";
+import { eq } from "drizzle-orm";
 import { companies, workers, timeEntries, schedules, taxesDeductions, users } from "@shared/schema";
 import bcrypt from "bcrypt";
 
+async function ensureAdminUser() {
+  try {
+    const existing = await db.select().from(users).where(eq(users.username, "admin"));
+    const hashedPassword = await bcrypt.hash("admin", 10);
+    if (existing.length === 0) {
+      await db.insert(users).values({
+        username: "admin",
+        password: hashedPassword,
+        role: "admin",
+      });
+      console.log("Admin user created (admin/admin)");
+    } else {
+      await db.update(users).set({ password: hashedPassword }).where(eq(users.username, "admin"));
+      console.log("Admin user password reset to default");
+    }
+  } catch (e) {
+    console.log("Could not ensure admin user (tables may not exist yet)");
+  }
+}
+
 export async function seedDatabase() {
+  await ensureAdminUser();
+
   try {
     const existingCompanies = await db.select().from(companies);
     if (existingCompanies.length > 0) {
@@ -305,17 +328,6 @@ export async function seedDatabase() {
       isEmployerPaid: false,
     },
   ]);
-
-  const existingUsers = await db.select().from(users);
-  if (existingUsers.length === 0) {
-    const hashedPassword = await bcrypt.hash("admin", 10);
-    await db.insert(users).values({
-      username: "admin",
-      password: hashedPassword,
-      role: "admin",
-      companyId: company1.id,
-    });
-  }
 
   console.log("Database seeded successfully");
 }
