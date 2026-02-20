@@ -1,0 +1,359 @@
+
+PayLink - HR, Payroll & Time-clock Software
+Overview
+PayLink is a comprehensive full-stack HR, Payroll & Time-clock application for managing employee and contractor time-tracking, scheduling, payroll, policies, and HR for multiple businesses. Built with React + Express + PostgreSQL.
+
+Tech Stack
+Frontend: React + TypeScript, Tailwind CSS, shadcn/ui components, Wouter routing, TanStack Query
+Backend: Express.js + TypeScript
+Database: PostgreSQL with Drizzle ORM
+Authentication: express-session + connect-pg-simple + bcrypt (session-based)
+Build: Vite for frontend, TSX for backend
+Project Structure
+client/src/
+├── pages/           # Section pages (dashboard, attendance, schedule, employee, company, payroll, policy, hr, reports)
+├── components/      # Reusable components (app-sidebar with collapsible nav, theme-provider, theme-toggle)
+├── components/ui/   # shadcn/ui base components
+├── hooks/           # Custom hooks (use-auth, use-toast)
+├── lib/             # Utilities (queryClient)
+server/
+├── index.ts         # Express server entry
+├── routes.ts        # API route handlers (150+ endpoints)
+├── storage.ts       # Database storage layer (IStorage interface with 130+ methods)
+├── db.ts            # Drizzle database connection
+├── seed.ts          # Database seed data
+shared/
+├── schema.ts        # Drizzle schema + Zod validation + TypeScript types (43+ tables)
+Navigation Structure
+Sidebar with collapsible sections:
+
+Dashboard - Configurable dashlets (News, Exceptions, Messages, Who's In/Out, Schedule Summary, Timesheet Summary, etc.)
+Attendance - Timesheet, Punches, Accrual Balances, Accruals (tabs)
+Schedule - Schedules (week view), Scheduled Shifts, Recurring Schedule, Recurring Templates (tabs)
+Employee - Employee list/CRUD (enhanced form with Employment/Identity/Contact/Payroll/Notes sections), Contacts, Preferences, Wages (wage history with effective dates), Pay Methods (with remittance source/priority/amount type), Titles (CRUD), Employee Groups (CRUD with hierarchy), Ethnic Groups, New Hire Defaults (CRUD)
+Company - Company Info, Legal Entity (full CRUD with status/type/classification/address), Branches, Departments, Hierarchy, Permissions, Import (tabs)
+Payroll - Process Payroll, Tax Wizard (4-step wizard: Select Events → Review/Verify → Submit → Complete), Pay Stubs, Pay Periods, Taxes & Deductions, Remittance (tabs)
+Policy - Policy Groups, Pay Codes, Accrual Accounts, Recurring Holidays, Pay Formulas, Contributing Pay Codes, Contributing Shifts, Regular Time, Overtime, Premium, Meal, Break, Schedule, Exception, Accrual, Absence, Holiday, Rounding policies (18 tabs, all with full CRUD)
+HR - Reviews, Qualifications, KPI Groups, Skills, Education, Memberships, Licenses, Languages (tabs)
+Report - Saved Reports, Employee Reports (Who's In, Employee Info, Audit Trail), Timesheet Reports (Schedule/Timesheet Summary/Detail, Punch Summary, Accrual Balance, Exception Summary), Payroll Reports (Paystub Summary, Payroll Export, General Ledger), Tax Reports, HR Reports (Qualification/Review Summary) - all with CSV export
+Database Schema
+Core tables:
+
+companies - Business entities with policy settings (OT threshold, break policies, rounding)
+workers - Employees and contractors with pay rates, contacts, ethnicity
+time_punches - Clock in/out/break events
+time_entries - Daily time records with hours/overtime
+schedules - Shift schedules per worker
+payroll_runs - Payroll processing runs
+payroll_items - Per-worker payroll line items
+Extended tables:
+
+departments - Company departments
+branches - Company branch locations
+accrual_accounts - PTO/sick/vacation accrual types
+accrual_balances - Per-worker accrual balances
+legal_entities - Legal/tax entities under a company (status, type, classification, addresses)
+employee_contacts - Emergency/personal contacts
+pay_methods - Direct deposit/check payment methods
+pay_periods - Pay period definitions
+taxes_deductions - Tax and deduction configurations
+policy_groups - Named policy groupings
+pay_codes - Pay code definitions
+holidays - Recurring and one-time holidays
+qualifications - Skills, certifications, licenses
+reviews - Performance reviews with ratings
+employee_titles - Company title definitions
+employee_groups - Hierarchical employee groups with parentId
+wage_history - Wage tracking with effective dates, labor burden, average hours
+new_hire_defaults - Company-level default configuration templates
+recurring_schedules - Repeating weekly schedules
+users - System users
+remittance_sources - Bank accounts/payment sources for paying employees
+remittance_agencies - Government entities for tax filings/payments
+remittance_agency_events - Scheduled events (payments/filings) for agencies
+pay_stub_accounts - Pay stub line item categories (earnings/deductions/benefits)
+pay_stub_amendments - One-time pay adjustments per worker
+pay_stub_transactions - Payment transaction records
+pay_period_schedules - Recurring pay period schedule definitions
+Policy tables (15 types):
+
+pay_formulas - Pay calculation formulas (multiplier, flat rate, hourly, salary)
+contributing_pay_codes - Pay code groups for policy calculations
+contributing_shifts - Shift filters for policy calculations
+regular_time_policies - Regular time calculation rules
+overtime_policies - OT rules (daily/weekly/biweekly/consecutive)
+premium_policies - Premium pay rules (shift differential, holiday, etc.)
+meal_policies - Meal break rules (normal/auto-deduct/auto-add)
+break_policies - Break rules (normal/auto-deduct/auto-add)
+schedule_policies - Schedule adherence rules
+exception_policies - Time exception rules (missed punch, late, etc.)
+accrual_policies - Accrual earning rules (standard/calendar/hour-based)
+accrual_policy_milestones - Accrual policy length-of-service milestones
+absence_policies - Absence/leave rules
+holiday_policies - Holiday pay rules
+rounding_policies - Time rounding rules (day total/punch)
+Authentication
+Session-based auth with express-session + connect-pg-simple (PostgreSQL session store)
+Passwords hashed with bcrypt
+All /api/* routes protected behind auth middleware (except /api/auth/*, /api/time-clock/auth)
+Default admin user: username admin, password admin
+Login page at root when unauthenticated, time clock accessible without login at /time-clock
+Auth context via AuthProvider in use-auth.tsx hook
+Logout button in sidebar footer
+API Routes
+Auth: POST /api/auth/login, POST /api/auth/logout, GET /api/auth/me Company: GET/POST /api/companies, PATCH /api/companies/:id Workers: GET/POST /api/workers, PATCH /api/workers/:id Time: GET/POST /api/time-punches, GET/PATCH /api/time-entries Schedules: GET/POST /api/schedules Payroll: GET/POST /api/payroll-runs, GET /api/payroll-runs/:id/items, PATCH /api/payroll-runs/:id Departments: GET/POST/PATCH/DELETE /api/departments Branches: GET/POST/PATCH/DELETE /api/branches Legal Entities: GET/POST/PATCH/DELETE /api/legal-entities Accruals: GET/POST/PATCH /api/accrual-accounts, /api/accrual-balances Contacts: GET/POST/PATCH/DELETE /api/employee-contacts Pay Methods: GET/POST/PATCH/DELETE /api/pay-methods Pay Periods: GET/POST/PATCH /api/pay-periods Taxes: GET/POST/PATCH/DELETE /api/taxes-deductions Policies: GET/POST/PATCH/DELETE /api/policy-groups, /api/pay-codes Holidays: GET/POST/PATCH/DELETE /api/holidays HR: GET/POST/PATCH/DELETE /api/qualifications, /api/reviews Recurring: GET/POST/PATCH/DELETE /api/recurring-schedules Remittance Sources: GET/POST/PATCH/DELETE /api/remittance-sources Remittance Agencies: GET/POST/PATCH/DELETE /api/remittance-agencies Agency Events: GET/POST/PATCH/DELETE /api/remittance-agency-events (filtered by agencyId) Pay Stub Accounts: GET/POST/PATCH/DELETE /api/pay-stub-accounts Pay Stub Amendments: GET/POST/PATCH/DELETE /api/pay-stub-amendments Pay Stub Transactions: GET/POST/PATCH /api/pay-stub-transactions Pay Period Schedules: GET/POST/PATCH/DELETE /api/pay-period-schedules Dashboard: GET /api/dashboard/stats Policy Types: GET/POST/PATCH/DELETE for /api/pay-formulas, /api/contributing-pay-codes, /api/contributing-shifts, /api/regular-time-policies, /api/overtime-policies, /api/premium-policies, /api/meal-policies, /api/break-policies, /api/schedule-policies, /api/exception-policies, /api/accrual-policies, /api/absence-policies, /api/holiday-policies, /api/rounding-policies Accrual Milestones: GET/POST/DELETE /api/accrual-policy-milestones
+
+Color Theme
+Teal-to-blue gradient matching PayLink logo: primary HSL(180, 55%, 42%), dark sidebar
+
+Running
+npm run dev - Start development server (port 5000)
+npm run db:push - Push schema to database
+VPS Deployment
+Push to GitHub
+Clone on VPS, install Node.js 20+ and PostgreSQL
+Set DATABASE_URL, SESSION_SECRET, PORT env vars
+npm install && npm run build
+npm run db:push to create tables
+NODE_ENV=production node dist/index.js
+Use NGINX reverse proxy + PM2
+Remote Updates
+origin/main•upstream
+last fetched 21 min ago
+Commit
+There are no changes to commit.
+Secrets
+PAYLink
+••••••••
+SESSION_SECRET
+••••••••
+MS365_CLIENT_ID
+••••••••
+MS365_CLIENT_SECRET
+••••••••
+MS365_TENANT_ID
+••••••••
+OPENAI_API_KEY
+••••••••
+Configurations
+Configurations are similar to secrets, but should only be used for non-sensitive information. They're useful for having a variable that's different between your published app and when testing on Replit.
+npm run dev
+23m
+ • 
+23 minutes ago
+Update website icon to new company logo
+Choose an operating system
+Choose OS, control panel, or application that you want to install on my VPS.
+cPanel
+
+Plesk
+
+CloudPanel
+
+Coolify
+
+Dokploy
+
+CyberPanel
+
+DirectAdmin
+
+KUSANAGI 9
+
+Webmin
+
+Webuzo
+
+TinyCP
+
+Cloudron
+
+Easypanel
+
+FASTPANEL
+
+HestiaCP cPanel
+
+Plesk
+
+CloudPanel
+
+Coolify
+
+Dokploy
+
+CyberPanel
+
+DirectAdmin
+
+KUSANAGI 9
+
+Webmin
+
+Webuzo
+
+TinyCP
+
+Cloudron
+
+Easypanel
+
+FASTPANEL
+
+HestiaCP
+cPanel
+
+Plesk
+
+CloudPanel
+
+Coolify
+
+Dokploy
+
+CyberPanel
+
+DirectAdmin
+
+KUSANAGI 9
+
+Webmin
+
+Webuzo
+
+TinyCP
+
+Cloudron
+
+Easypanel
+
+FASTPANEL
+
+HestiaCP
+cPanel
+
+Plesk
+
+CloudPanel
+
+Coolify
+
+Dokploy
+
+CyberPanel
+
+DirectAdmin
+
+KUSANAGI 9
+
+Webmin
+
+Webuzo
+
+TinyCP
+
+Cloudron
+
+Easypanel
+
+FASTPANEL
+
+HestiaCP
+cPanel
+
+Plesk
+
+CloudPanel
+
+Coolify
+
+Dokploy
+
+CyberPanel
+
+DirectAdmin
+
+KUSANAGI 9
+
+Webmin
+
+Webuzo
+
+TinyCP
+
+Cloudron
+
+Easypanel
+
+FASTPANEL
+
+HestiaCP
+cPanel
+
+Plesk
+
+CloudPanel
+
+Coolify
+
+Dokploy
+
+CyberPanel
+
+DirectAdmin
+
+KUSANAGI 9
+
+Webmin
+
+Webuzo
+
+TinyCP
+
+Cloudron
+
+Easypanel
+
+FASTPANEL
+
+HestiaCP
+WordPress
+
+Bluesky
+
+Discourse
+
+Ghost
+
+OpenLiteSpeed and Drupal
+
+OpenLiteSpeed and Joomla
+
+OpenLiteSpeed and WordPress
+
+Strapi
+
+TYPO3
+
+It looks like you've pasted a list of VPS control panel and application options. This doesn't relate to changes in the PayLink application we're building here.
+
+If you're looking to deploy PayLink to a VPS, the replit.md already has deployment instructions:
+
+Push your code to GitHub
+Clone it on your VPS with Node.js 20+ and PostgreSQL installed
+Set your environment variables (DATABASE_URL, SESSION_SECRET, PORT)
+Run npm install && npm run build
+Run npm run db:push to create tables
+Start with NODE_ENV=production node dist/index.js
+Use NGINX as a reverse proxy and PM2 for process management
+Any of those control panels (like cPanel, CloudPanel, Coolify, etc.) would work as the server environment, though for a Node.js app like this, simpler options like Coolify, Dokploy, or Easypanel tend to be the easiest since they have built-in support for Node.js deployments.
+
+Alternatively, if you'd like to publish it right here on Replit with a live URL, I can help you do that too. Would you like to proceed with publishing on Replit?
+
+the app needs to be logged in in order to access anything. The tineclock can be accessed from the login screen but the red on the keypad must go. Please create a loginpage for the main access of the app so everything is secured behind the login.
+
+this needs to have a login screen to have access to the app. the login screen can also inclue the clock in/out punch for easy access
+
+change favicon to paylink logo, whats the admin username and password?
+
+The default admin username is
