@@ -1,0 +1,158 @@
+
+No config path provided, using default 'drizzle.config.ts'
+Reading config file '/root/PayLink/drizzle.config.ts'
+Using 'pg' driver for database querying
+[⣷] Pulling schema from database...
+error: password authentication failed for user "paylink"
+    at /root/PayLink/node_modules/pg-pool/index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async Object.query (/root/PayLink/node_modules/drizzle-kit/bin.cjs:80622:26)
+    at async fromDatabase2 (/root/PayLink/node_modules/drizzle-kit/bin.cjs:19276:25) {
+  length: 103,
+  severity: 'FATAL',
+  code: '28P01',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: undefined,
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'auth.c',
+  line: '331',
+  routine: 'auth_failed'
+}
+root@paylink:~/PayLink# nano ~/PayLink/.env
+root@paylink:~/PayLink# npm run db:push
+
+> rest-express@1.0.0 db:push
+> drizzle-kit push
+
+No config path provided, using default 'drizzle.config.ts'
+Reading config file '/root/PayLink/drizzle.config.ts'
+Using 'pg' driver for database querying
+[⣷] Pulling schema from database...
+error: password authentication failed for user "lshawver"
+    at /root/PayLink/node_modules/pg-pool/index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async Object.query (/root/PayLink/node_modules/drizzle-kit/bin.cjs:80622:26)
+    at async fromDatabase2 (/root/PayLink/node_modules/drizzle-kit/bin.cjs:19276:25) {
+  length: 104,
+  severity: 'FATAL',
+  code: '28P01',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: undefined,
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'auth.c',
+  line: '331',
+  routine: 'auth_failed'
+}
+root@paylink:~/PayLink# psql -U lshawver -h 127.0.0.1 -d paylink
+Password for user lshawver: 
+psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "lshawver"
+connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "lshawver"
+root@paylink:~/PayLink# psql -U lshawver -h 127.0.0.1 -d paylink
+Password for user lshawver: 
+psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "lshawver"
+connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "lshawver"
+root@paylink:~/PayLink# sudo -u postgres psql
+psql (16.11 (Ubuntu 16.11-0ubuntu0.24.04.1))
+Type "help" for help.
+
+postgres=# psql -U lshawver -h 127.0.0.1 -d paylink
+postgres-# sudo -u postgres psql
+postgres-# ALTER USER lshawver WITH PASSWORD 'Wow548302';
+\q
+ERROR:  syntax error at or near "psql"
+LINE 1: psql -U lshawver -h 127.0.0.1 -d paylink
+        ^
+root@paylink:~/PayLink# bpsql -U lshawver -h 127.0.0.1 -d paylink
+Command 'bpsql' not found, did you mean:
+  command 'psql' from deb postgresql-client-common (257build1.1)
+Try: apt install <deb name>
+root@paylink:~/PayLink# su - postgres -c "psql"
+
+psql (16.11 (Ubuntu 16.11-0ubuntu0.24.04.1))
+Type "help" for help.
+
+postgres=# 
+postgres=# ALTER USER lshawver WITH PASSWORD 'Wow548302';
+ERROR:  role "lshawver" does not exist
+postgres=# ALTER USER lshawver WITH PASSWORD 'Wow548302';
+ERROR:  role "lshawver" does not exist
+postgres=# ALTER USER lshawver WITH PASSWORD 'Wow548302';
+ERROR:  role "lshawver" does not exist
+postgres=# oot@paylink:~/PayLink# bpsql -U lshawver -h 127.0.0.1 -d paylink
+Command 'bpsql' not found, did you mean:
+  command 'psql' from deb postgresql-client-common (257build1.1)
+Try: apt install <deb name>
+root@paylink:~/PayLink# su - postgres -c "psql"
+
+psql (16.11 (Ubuntu 16.11-0ubuntu0.24.04.1))
+Type "help" for help.
+
+postgres=# 
+postgres=# ALTER USER lshawver WITH PASSWORD 'Wow548302';
+ERROR:  role "lshawver" does not exist
+postgres=# ALTER USER lshawver WITH PASSWORD 'Wow548302';
+ERROR:  role "lshawver" does not exist
+postgres=# ALTER USER lshawver WITH PASSWORD 'Wow548302';
+ERROR:  role "lshawver" does not exist
+postgres=# 
+ERROR:  syntax error at or near "oot"
+LINE 1: oot@paylink:~/PayLink# bpsql -U lshawver -h 127.0.0.1 -d pay...
+        ^
+ERROR:  syntax error at or near "ERROR"
+LINE 1: ERROR:  role "lshawver" does not exist
+        ^
+ERROR:  syntax error at or near "ERROR"
+LINE 1: ERROR:  role "lshawver" does not exist
+        ^
+postgres-# CREATE USER lshawver WITH PASSWORD 'Wow548302';
+GRANT ALL PRIVILEGES ON DATABASE paylink TO lshawver;
+\q
+ERROR:  syntax error at or near "ERROR"
+LINE 1: ERROR:  role "lshawver" does not exist
+        ^
+ERROR:  role "lshawver" does not exist
+root@paylink:~/PayLink# CREATE USER lshawver WITH PASSWORD 'Wow548302';GRANT ALL PRIVILEGES ON DATABASE paylink TO lshawver;
+\q
+CREATE: command not found
+GRANT: command not found
+Command 'q' not found, but can be installed with:
+snap install q                       # version 1.6.3-1, or
+apt  install python3-q-text-as-data  # version 3.1.6-3
+See 'snap info q' for additional versions.
+root@paylink:~/PayLink# CREATE USER lshawver WITH PASSWORD 'Wow548302';
+GRANT ALL PRIVILEGES ON DATABASE paylink TO lshawver;
+\q
+CREATE: command not found
+GRANT: command not found
+Command 'q' not found, but can be installed with:
+snap install q                       # version 1.6.3-1, or
+apt  install python3-q-text-as-data  # version 3.1.6-3
+See 'snap info q' for additional versions.
+root@paylink:~/PayLink# q
+Command 'q' not found, but can be installed with:
+snap install q                       # version 1.6.3-1, or
+apt  install python3-q-text-as-data  # version 3.1.6-3
+See 'snap info q' for additional versions.
+root@paylink:~/PayLink# snap install q  
+error: cannot install "q": invalid instance name: invalid snap name: "q"
+root@paylink:~/PayLink# psql -U lshawver -h 127.0.0.1 -d paylink
+Password for user lshawver: 
+psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "lshawver"
+connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "lshawver"
+root@paylink:~/PayLink# 
