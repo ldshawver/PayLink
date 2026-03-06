@@ -1,0 +1,274 @@
+If you’re building a TimeTrex-style workforce system, the best approach is to implement a true enterprise HR hierarchy model. Large systems like Workday, ADP, SAP SuccessFactors, etc., all follow a similar pattern.
+Since you mentioned you have four companies, the architecture should support multi-company (multi-tenant) hierarchy with shared infrastructure.
+I'll break this into:
+Enterprise HR hierarchy model
+How your 4 companies fit
+Database schema
+Implementation instructions for Replit
+Example structure for your businesses
+1. Enterprise HR Hierarchy Model
+The modern enterprise HR hierarchy has three layers of structure.
+Enterprise
+   ↓
+Company
+   ↓
+Division / Business Unit
+   ↓
+Branch / Location
+   ↓
+Department
+   ↓
+Position
+   ↓
+Employee
+Separate from this is the reporting hierarchy:
+Employee
+   ↓
+Supervisor
+   ↓
+Manager
+   ↓
+Executive
+So the system has two parallel structures:
+Organizational structure (business structure)
+Reporting structure (authority structure)
+2. Example Structure for Your 4 Companies
+Based on what you’ve described previously, your ecosystem might look like:
+Enterprise
+Luke Shawver Holdings
+│
+├── Adiken Inc
+│     └─ Marketing Division
+│
+├── Adiken Properties
+│     └─ Property Management Division
+│
+├── Lucifer Cruz Studios
+│     └─ Media / Content Division
+│
+└── Refined Mind
+      └─ Education Division
+Inside each company:
+Adiken Properties
+│
+├─ Sacramento HQ
+│   ├─ Executive
+│   ├─ Accounting
+│   └─ Property Management
+│
+├─ Midtown Portfolio
+│   ├─ Leasing
+│   └─ Maintenance
+3. Enterprise HR Database Schema
+Below is a standard scalable structure used in enterprise HR platforms.
+enterprises
+id
+name
+created_at
+companies
+id
+enterprise_id
+name
+type
+created_at
+Example:
+Adiken Inc
+Adiken Properties
+Lucifer Cruz Studios
+Refined Mind
+divisions
+id
+company_id
+name
+description
+Example:
+Marketing
+Property Management
+Education Programs
+Media Production
+branches
+id
+company_id
+name
+address
+city
+state
+zip
+Example:
+Sacramento HQ
+Downtown Portfolio
+Midtown Portfolio
+Remote Workforce
+departments
+id
+company_id
+name
+description
+Example:
+Executive
+Marketing
+Leasing
+Maintenance
+Accounting
+IT
+Customer Support
+positions
+Positions define roles that employees occupy.
+id
+company_id
+title
+department_id
+reports_to_position_id
+salary_range
+Example:
+Owner
+Operations Manager
+Maintenance Supervisor
+Leasing Agent
+employees
+id
+company_id
+branch_id
+department_id
+position_id
+manager_id
+first_name
+last_name
+email
+phone
+hire_date
+status
+jobs / projects (optional)
+Useful for property management or project work.
+id
+company_id
+name
+description
+start_date
+end_date
+Example:
+1830 D Street Renovation
+Midtown Property Maintenance
+timesheets
+id
+employee_id
+job_id
+clock_in
+clock_out
+total_hours
+notes
+4. Instructions for Replit to Implement
+Give Replit or Codex something like this.
+Prompt
+Build a multi-company enterprise HR system with hierarchical organizational structure and reporting structure.
+The system must support:
+Enterprise
+Companies
+Divisions
+Branches
+Departments
+Positions
+Employees
+Jobs
+Timesheets
+Requirements:
+• multiple companies in one installation
+• employees assigned to branch + department + position
+• reporting hierarchy through manager relationship
+• time tracking per employee and job
+• permissions based on role
+Backend Requirements
+Framework example:
+Python Flask or FastAPI
+PostgreSQL database
+SQLAlchemy ORM
+API Routes
+Enterprise
+GET /enterprises
+POST /enterprises
+Companies
+GET /companies
+POST /companies
+PUT /companies/{id}
+DELETE /companies/{id}
+Branches
+GET /branches
+POST /branches
+PUT /branches/{id}
+DELETE /branches/{id}
+Departments
+GET /departments
+POST /departments
+Employees
+GET /employees
+POST /employees
+PUT /employees/{id}
+DELETE /employees/{id}
+Timesheets
+POST /clock-in
+POST /clock-out
+GET /timesheets
+Frontend Organization UI
+Sidebar structure:
+Organization
+   Enterprises
+   Companies
+   Divisions
+   Branches
+   Departments
+   Positions
+   Employees
+5. Permissions System
+Roles:
+Owner
+Admin
+Manager
+Supervisor
+Employee
+Permissions control:
+view employees
+edit employees
+approve timesheets
+manage payroll
+6. Example Implementation for Your Businesses
+Enterprise
+Shawver Holdings
+Companies
+Adiken Inc
+Adiken Properties
+Lucifer Cruz Studios
+Refined Mind
+Branches
+Sacramento HQ
+Lucifer Cruz Studio
+Midtown Portfolio
+Remote Workforce
+Departments
+Executive
+Marketing
+Property Management
+Maintenance
+Content Production
+Accounting
+IT Development
+7. Future Features (Enterprise Systems Include)
+If you want your platform to rival enterprise HR software, add:
+Payroll engine
+Scheduling
+Overtime rules
+Benefits management
+Tax jurisdiction logic
+Document storage
+Performance reviews
+Recruiting
+💡 One important architectural improvement most TimeTrex clones miss is cost centers.
+Add:
+cost_centers
+properties
+projects
+For example:
+Employee
+Branch: Midtown
+Department: Maintenance
+Property: 1830 D Street
+This lets you track labor cost per property, which is extremely important for property management.

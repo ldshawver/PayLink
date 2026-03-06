@@ -12,9 +12,20 @@ export const punchTypeEnum = pgEnum("punch_type", ["clock_in", "clock_out", "bre
 export const scheduleStatusEnum = pgEnum("schedule_status", ["draft", "published"]);
 export const timesheetStatusEnum = pgEnum("timesheet_status", ["pending", "approved", "rejected"]);
 export const payrollStatusEnum = pgEnum("payroll_status", ["draft", "processed", "paid"]);
+export const jobStatusEnum = pgEnum("job_status", ["active", "completed", "cancelled", "on_hold"]);
+
+export const enterprises = pgTable("enterprises", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  website: text("website"),
+  logoUrl: text("logo_url"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
 
 export const companies = pgTable("companies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  enterpriseId: varchar("enterprise_id"),
   name: text("name").notNull(),
   legalName: text("legal_name"),
   dba: text("dba"),
@@ -106,6 +117,9 @@ export const workers = pgTable("workers", {
   payPeriodScheduleId: varchar("pay_period_schedule_id"),
   groupId: varchar("group_id"),
   titleId: varchar("title_id"),
+  positionId: varchar("position_id"),
+  costCenterId: varchar("cost_center_id"),
+  managerId: varchar("manager_id"),
   emergencyContactName: text("emergency_contact_name"),
   emergencyContactPhone: text("emergency_contact_phone"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -192,9 +206,19 @@ export const users = pgTable("users", {
   companyId: varchar("company_id"),
 });
 
+export const divisions = pgTable("divisions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const departments = pgTable("departments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id),
+  divisionId: varchar("division_id"),
   name: text("name").notNull(),
   code: text("code"),
   managerId: varchar("manager_id"),
@@ -206,6 +230,7 @@ export const departments = pgTable("departments", {
 export const branches = pgTable("branches", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id),
+  divisionId: varchar("division_id"),
   name: text("name").notNull(),
   code: text("code"),
   address: text("address"),
@@ -214,6 +239,41 @@ export const branches = pgTable("branches", {
   zip: text("zip"),
   phone: text("phone"),
   isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const positions = pgTable("positions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  departmentId: varchar("department_id"),
+  title: text("title").notNull(),
+  description: text("description"),
+  reportsToPositionId: varchar("reports_to_position_id"),
+  salaryRangeMin: numeric("salary_range_min"),
+  salaryRangeMax: numeric("salary_range_max"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const costCenters = pgTable("cost_centers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  code: text("code"),
+  description: text("description"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const jobs = pgTable("jobs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  costCenterId: varchar("cost_center_id"),
+  name: text("name").notNull(),
+  description: text("description"),
+  startDate: date("start_date"),
+  endDate: date("end_date"),
+  status: jobStatusEnum("status").default("active"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -771,7 +831,12 @@ export const roundingPolicies = pgTable("rounding_policies", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const insertEnterpriseSchema = createInsertSchema(enterprises).omit({ id: true, createdAt: true });
 export const insertCompanySchema = createInsertSchema(companies).omit({ id: true, createdAt: true });
+export const insertDivisionSchema = createInsertSchema(divisions).omit({ id: true, createdAt: true });
+export const insertPositionSchema = createInsertSchema(positions).omit({ id: true, createdAt: true });
+export const insertCostCenterSchema = createInsertSchema(costCenters).omit({ id: true, createdAt: true });
+export const insertJobSchema = createInsertSchema(jobs).omit({ id: true, createdAt: true });
 export const insertWorkerSchema = createInsertSchema(workers).omit({ id: true, createdAt: true });
 export const insertTimePunchSchema = createInsertSchema(timePunches).omit({ id: true, createdAt: true });
 export const insertTimeEntrySchema = createInsertSchema(timeEntries).omit({ id: true, createdAt: true });
@@ -821,8 +886,18 @@ export const insertHolidayPolicySchema = createInsertSchema(holidayPolicies).omi
 export const insertRoundingPolicySchema = createInsertSchema(roundingPolicies).omit({ id: true, createdAt: true });
 export const insertLegalEntitySchema = createInsertSchema(legalEntities).omit({ id: true, createdAt: true });
 
+export type Enterprise = typeof enterprises.$inferSelect;
+export type InsertEnterprise = z.infer<typeof insertEnterpriseSchema>;
 export type Company = typeof companies.$inferSelect;
 export type InsertCompany = z.infer<typeof insertCompanySchema>;
+export type Division = typeof divisions.$inferSelect;
+export type InsertDivision = z.infer<typeof insertDivisionSchema>;
+export type Position = typeof positions.$inferSelect;
+export type InsertPosition = z.infer<typeof insertPositionSchema>;
+export type CostCenter = typeof costCenters.$inferSelect;
+export type InsertCostCenter = z.infer<typeof insertCostCenterSchema>;
+export type Job = typeof jobs.$inferSelect;
+export type InsertJob = z.infer<typeof insertJobSchema>;
 export type Worker = typeof workers.$inferSelect;
 export type InsertWorker = z.infer<typeof insertWorkerSchema>;
 export type TimePunch = typeof timePunches.$inferSelect;
