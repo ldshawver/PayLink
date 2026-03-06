@@ -8,6 +8,10 @@ import connectPgSimple from "connect-pg-simple";
 const app = express();
 const httpServer = createServer(app);
 
+if (process.env.NODE_ENV === "production") {
+  app.set("trust proxy", 1);
+}
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
@@ -31,6 +35,7 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+const isProduction = process.env.NODE_ENV === "production";
 const PgStore = connectPgSimple(session);
 app.use(
   session({
@@ -44,7 +49,7 @@ app.use(
     cookie: {
       maxAge: 24 * 60 * 60 * 1000,
       httpOnly: true,
-      secure: false,
+      secure: isProduction,
       sameSite: "lax",
     },
   }),
