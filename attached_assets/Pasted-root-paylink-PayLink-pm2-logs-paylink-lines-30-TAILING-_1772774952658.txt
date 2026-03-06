@@ -1,0 +1,65 @@
+root@paylink:~/PayLink# pm2 logs paylink --lines 30
+[TAILING] Tailing last 30 lines for [paylink] process (change the value with --lines option)
+/root/.pm2/logs/paylink-error.log last 30 lines:
+0|paylink  | Internal Server Error: Error: ENOENT: no such file or directory, open '/root/PayLink/dist/table.sql'
+0|paylink  |     at async open (node:internal/fs/promises:634:25)
+0|paylink  |     at async Object.readFile (node:internal/fs/promises:1236:14)
+0|paylink  |     at async i._rawEnsureSessionStoreTable (/root/PayLink/dist/index.cjs:71:7209)
+0|paylink  |     at async i._asyncQuery (/root/PayLink/dist/index.cjs:71:8294) {
+0|paylink  |   errno: -2,
+0|paylink  |   code: 'ENOENT',
+0|paylink  |   syscall: 'open',
+0|paylink  |   path: '/root/PayLink/dist/table.sql'
+0|paylink  | }
+0|paylink  | Error: ENOENT: no such file or directory, open '/root/PayLink/dist/table.sql'
+0|paylink  |     at async open (node:internal/fs/promises:634:25)
+0|paylink  |     at async Object.readFile (node:internal/fs/promises:1236:14)
+0|paylink  |     at async i._rawEnsureSessionStoreTable (/root/PayLink/dist/index.cjs:71:7209)
+0|paylink  |     at async i._asyncQuery (/root/PayLink/dist/index.cjs:71:8294)
+0|paylink  | Internal Server Error: Error: ENOENT: no such file or directory, open '/root/PayLink/dist/table.sql'
+0|paylink  |     at async open (node:internal/fs/promises:634:25)
+0|paylink  |     at async Object.readFile (node:internal/fs/promises:1236:14)
+0|paylink  |     at async i._rawEnsureSessionStoreTable (/root/PayLink/dist/index.cjs:71:7209)
+0|paylink  |     at async i._asyncQuery (/root/PayLink/dist/index.cjs:71:8294) {
+0|paylink  |   errno: -2,
+0|paylink  |   code: 'ENOENT',
+0|paylink  |   syscall: 'open',
+0|paylink  |   path: '/root/PayLink/dist/table.sql'
+0|paylink  | }
+0|paylink  | Error: ENOENT: no such file or directory, open '/root/PayLink/dist/table.sql'
+0|paylink  |     at async open (node:internal/fs/promises:634:25)
+0|paylink  |     at async Object.readFile (node:internal/fs/promises:1236:14)
+0|paylink  |     at async i._rawEnsureSessionStoreTable (/root/PayLink/dist/index.cjs:71:7209)
+0|paylink  |     at async i._asyncQuery (/root/PayLink/dist/index.cjs:71:8294)
+
+/root/.pm2/logs/paylink-out.log last 30 lines:
+0|paylink  | 5:21:39 AM [express] GET /api/auth/me 401 in 2ms :: {"message":"Not authenticated"}
+0|paylink  | 5:22:19 AM [express] GET /api/auth/me 401 in 1ms :: {"message":"Not authenticated"}
+0|paylink  | 5:22:30 AM [express] GET /api/auth/me 401 in 1ms :: {"message":"Not authenticated"}
+0|paylink  | 5:23:01 AM [express] GET /api/auth/me 401 in 1ms :: {"message":"Not authenticated"}
+0|paylink  | 5:23:06 AM [express] POST /api/auth/login 200 in 87ms :: {"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}
+0|paylink  | 5:23:06 AM [express] GET /api/auth/me 401 in 1ms :: {"message":"Not authenticated"}
+0|paylink  | 5:23:10 AM [express] POST /api/auth/login 200 in 64ms :: {"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}
+0|paylink  | 5:23:10 AM [express] GET /api/auth/me 401 in 1ms :: {"message":"Not authenticated"}
+0|paylink  | 5:23:38 AM [express] POST /api/auth/login 200 in 70ms :: {"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}
+0|paylink  | 5:23:56 AM [express] POST /api/auth/login 200 in 78ms :: {"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}
+0|paylink  | 5:23:57 AM [express] GET /api/auth/me 401 in 1ms :: {"message":"Not authenticated"}
+0|paylink  | 5:23:58 AM [express] POST /api/auth/login 200 in 62ms :: {"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}
+0|paylink  | 5:23:58 AM [express] GET /api/auth/me 401 in 1ms :: {"message":"Not authenticated"}
+0|paylink  | 5:24:15 AM [express] GET /api/auth/me 401 in 1ms :: {"message":"Not authenticated"}
+0|paylink  | 5:24:26 AM [express] POST /api/auth/login 200 in 79ms :: {"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}
+0|paylink  | 5:24:26 AM [express] GET /api/auth/me 401 in 1ms :: {"message":"Not authenticated"}
+0|paylink  | 5:24:28 AM [express] POST /api/auth/login 200 in 70ms :: {"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}
+0|paylink  | 5:24:28 AM [express] GET /api/auth/me 401 in 1ms :: {"message":"Not authenticated"}
+0|paylink  | 5:24:56 AM [express] POST /api/auth/login 200 in 72ms :: {"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}
+0|paylink  | 5:25:16 AM [express] POST /api/auth/login 200 in 77ms :: {"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}
+0|paylink  | 5:25:16 AM [express] GET /api/auth/me 401 in 2ms :: {"message":"Not authenticated"}
+0|paylink  | 5:25:34 AM [express] POST /api/auth/login 200 in 73ms :: {"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}
+0|paylink  | 5:25:34 AM [express] GET /api/auth/me 401 in 1ms :: {"message":"Not authenticated"}
+0|paylink  | 5:25:35 AM [express] POST /api/auth/login 200 in 65ms :: {"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}
+0|paylink  | 5:25:35 AM [express] GET /api/auth/me 401 in 0ms :: {"message":"Not authenticated"}
+0|paylink  | 5:25:39 AM [express] POST /api/auth/login 401 in 72ms :: {"message":"Invalid username or password"}
+0|paylink  | 5:25:46 AM [express] POST /api/auth/login 200 in 62ms :: {"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}
+0|paylink  | 5:25:46 AM [express] GET /api/auth/me 401 in 1ms :: {"message":"Not authenticated"}
+0|paylink  | 5:25:47 AM [express] POST /api/auth/login 200 in 61ms :: {"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}
+0|paylink  | 5:25:47 AM [express] GET /api/auth/me 401 in 0ms :: {"message":"Not authenticated"}
