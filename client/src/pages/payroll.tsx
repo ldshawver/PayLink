@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Company, Worker, PayrollRun, PayrollItem, PayPeriod, TaxDeduction, RemittanceSource, RemittanceAgency, RemittanceAgencyEvent, PayStubAccount, PayStubAmendment, PayStubTransaction, PayPeriodSchedule } from "@shared/schema";
+import type { Company, Worker, PayrollRun, PayrollItem, PayPeriod, TaxDeduction, RemittanceSource, RemittanceAgency, RemittanceAgencyEvent, PayStubAccount, PayStubAmendment, PayStubTransaction, PayPeriodSchedule, LegalEntity } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -1016,8 +1016,14 @@ function TaxWizardTab() {
     agencyId: "", type: "payment", status: "enabled", frequency: "quarterly",
     dueDateDelayDays: 0, effectiveDate: "", reminderDays: 7,
   });
+  const [selectedCompanyFilter, setSelectedCompanyFilter] = useState<string>("all");
+  const [newAgencyName, setNewAgencyName] = useState("");
+  const [newAgencyCompanyId, setNewAgencyCompanyId] = useState("");
+  const [newAgencyType, setNewAgencyType] = useState("federal");
 
   const { data: agencies = [], isLoading: agenciesLoading } = useQuery<RemittanceAgency[]>({ queryKey: ["/api/remittance-agencies"] });
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: legalEntities = [] } = useQuery<LegalEntity[]>({ queryKey: ["/api/legal-entities"] });
 
   const allEventsQueries = agencies.map(a => a.id);
   const { data: allEvents = [], isLoading: eventsLoading } = useQuery<RemittanceAgencyEvent[]>({
@@ -1036,6 +1042,22 @@ function TaxWizardTab() {
     enabled: agencies.length > 0,
   });
 
+  const createAgencyMutation = useMutation({
+    mutationFn: async (data: { name: string; companyId: string; type: string }) => {
+      const res = await apiRequest("POST", "/api/remittance-agencies", data);
+      return res.json();
+    },
+    onSuccess: (newAgency: RemittanceAgency) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/remittance-agencies"] });
+      setFormData(p => ({ ...p, agencyId: newAgency.id }));
+      setNewAgencyName("");
+      setNewAgencyCompanyId("");
+      setNewAgencyType("federal");
+      toast({ title: "Agency created" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
       const res = await apiRequest("POST", "/api/remittance-agency-events", {
@@ -1045,7 +1067,7 @@ function TaxWizardTab() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/remittance-agency-events", "all"] });
-      toast({ title: "Agency event created" });
+      toast({ title: "Tax event created" });
       setAddDialogOpen(false);
       setFormData({ agencyId: "", type: "payment", status: "enabled", frequency: "quarterly", dueDateDelayDays: 0, effectiveDate: "", reminderDays: 7 });
     },
@@ -1084,7 +1106,26 @@ function TaxWizardTab() {
     return dateA - dateB;
   });
 
-  const getAgencyName = (agencyId: string) => agencies.find(a => a.id === agencyId)?.name || "Unknown";
+  const getAgency = (agencyId: string) => agencies.find(a => a.id === agencyId);
+  const getAgencyName = (agencyId: string) => getAgency(agencyId)?.name || "Unknown";
+  const getCompanyForAgency = (agencyId: string) => {
+    const agency = getAgency(agencyId);
+    if (!agency?.companyId) return null;
+    return companies.find(c => c.id === agency.companyId);
+  };
+  const getLegalEntityForCompany = (companyId: string | null | undefined) => {
+    if (!companyId) return null;
+    const company = companies.find(c => c.id === companyId);
+    if (!company?.legalEntityId) return null;
+    return legalEntities.find(le => le.id === company.legalEntityId);
+  };
+
+  const filteredEvents = selectedCompanyFilter === "all"
+    ? sortedEvents
+    : sortedEvents.filter(ev => {
+        const agency = getAgency(ev.agencyId);
+        return agency?.companyId === selectedCompanyFilter;
+      });
 
   const isEventPastDue = (ev: RemittanceAgencyEvent) => {
     if (!ev.effectiveDate) return true;
@@ -1154,24 +1195,61 @@ function TaxWizardTab() {
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
-              <h3 className="text-lg font-semibold">Select Remittance Events</h3>
-              <p className="text-sm text-muted-foreground">Choose the events to process. Future events are disabled until their date arrives.</p>
+              <h3 className="text-lg font-semibold">Select Tax Events</h3>
+              <p className="text-sm text-muted-foreground">Choose tax events to process. Reports are by company, filings submit under the legal entity.</p>
             </div>
             <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
               <DialogTrigger asChild>
                 <Button data-testid="button-add-agency-event"><Plus className="mr-2 h-4 w-4" />Add Event</Button>
               </DialogTrigger>
-              <DialogContent>
-                <DialogHeader><DialogTitle>Add Agency Event</DialogTitle></DialogHeader>
+              <DialogContent className="max-w-lg">
+                <DialogHeader><DialogTitle>Add Tax Event</DialogTitle></DialogHeader>
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <Label>Agency</Label>
-                    <Select value={formData.agencyId} onValueChange={v => setFormData(p => ({ ...p, agencyId: v }))}>
-                      <SelectTrigger data-testid="select-ae-agency"><SelectValue placeholder="Select agency" /></SelectTrigger>
-                      <SelectContent>
-                        {agencies.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    {agencies.length > 0 ? (
+                      <Select value={formData.agencyId} onValueChange={v => setFormData(p => ({ ...p, agencyId: v }))}>
+                        <SelectTrigger data-testid="select-ae-agency"><SelectValue placeholder="Select agency" /></SelectTrigger>
+                        <SelectContent>
+                          {agencies.map(a => {
+                            const comp = companies.find(c => c.id === a.companyId);
+                            return <SelectItem key={a.id} value={a.id}>{a.name}{comp ? ` (${comp.name})` : ""}</SelectItem>;
+                          })}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <div className="border rounded-md p-3 space-y-3 bg-muted/30">
+                        <p className="text-sm text-muted-foreground">No agencies exist yet. Create one to get started:</p>
+                        <div className="space-y-2">
+                          <Input value={newAgencyName} onChange={e => setNewAgencyName(e.target.value)} placeholder="Agency name (e.g., IRS, State Tax Board)" data-testid="input-new-agency-name" />
+                          <div className="grid grid-cols-2 gap-2">
+                            <Select value={newAgencyCompanyId} onValueChange={setNewAgencyCompanyId}>
+                              <SelectTrigger data-testid="select-new-agency-company"><SelectValue placeholder="Company" /></SelectTrigger>
+                              <SelectContent>
+                                {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                              </SelectContent>
+                            </Select>
+                            <Select value={newAgencyType} onValueChange={setNewAgencyType}>
+                              <SelectTrigger data-testid="select-new-agency-type"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="federal">Federal</SelectItem>
+                                <SelectItem value="state">State</SelectItem>
+                                <SelectItem value="local">Local</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            disabled={!newAgencyName || !newAgencyCompanyId || createAgencyMutation.isPending}
+                            onClick={() => createAgencyMutation.mutate({ name: newAgencyName, companyId: newAgencyCompanyId, type: newAgencyType })}
+                            data-testid="button-create-agency"
+                          >
+                            {createAgencyMutation.isPending ? "Creating..." : "Create Agency"}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
@@ -1237,12 +1315,27 @@ function TaxWizardTab() {
             </Dialog>
           </div>
 
+          {companies.length > 1 && (
+            <div className="flex items-center gap-2">
+              <Label className="text-sm">Filter by Company:</Label>
+              <Select value={selectedCompanyFilter} onValueChange={setSelectedCompanyFilter}>
+                <SelectTrigger className="w-[200px]" data-testid="select-company-filter"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Companies</SelectItem>
+                  {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
           {eventsLoading ? (
             <Skeleton className="h-48 w-full" />
-          ) : sortedEvents.length === 0 ? (
+          ) : filteredEvents.length === 0 ? (
             <Card>
               <CardContent className="p-6 text-center text-muted-foreground">
-                No remittance events found. Add events to agencies first.
+                {sortedEvents.length === 0
+                  ? "No tax events found. Click \"Add Event\" to create your first tax event."
+                  : "No events match the selected company filter."}
               </CardContent>
             </Card>
           ) : (
@@ -1254,6 +1347,8 @@ function TaxWizardTab() {
                       <TableRow>
                         <TableHead className="w-12"></TableHead>
                         <TableHead>Agency</TableHead>
+                        <TableHead>Company</TableHead>
+                        <TableHead>Legal Entity</TableHead>
                         <TableHead>Type</TableHead>
                         <TableHead>Frequency</TableHead>
                         <TableHead>Due Date</TableHead>
@@ -1262,9 +1357,11 @@ function TaxWizardTab() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {sortedEvents.map(ev => {
+                      {filteredEvents.map(ev => {
                         const pastDue = isEventPastDue(ev);
                         const isSelected = selectedEventIds.has(ev.id);
+                        const company = getCompanyForAgency(ev.agencyId);
+                        const legalEntity = getLegalEntityForCompany(company?.id);
                         return (
                           <TableRow
                             key={ev.id}
@@ -1280,6 +1377,8 @@ function TaxWizardTab() {
                               />
                             </TableCell>
                             <TableCell className="font-medium">{getAgencyName(ev.agencyId)}</TableCell>
+                            <TableCell className="text-sm">{company?.name || "—"}</TableCell>
+                            <TableCell className="text-sm">{legalEntity?.legalName || "—"}</TableCell>
                             <TableCell>
                               <Badge variant={ev.type === "payment" ? "default" : ev.type === "filing" ? "secondary" : "outline"}>
                                 {ev.type}
@@ -1335,30 +1434,34 @@ function TaxWizardTab() {
             </Card>
           ) : (
             <div className="space-y-3">
-              {selectedEvents.map((ev, idx) => (
-                <Card key={ev.id} className="hover-elevate cursor-pointer" onClick={() => openEditDialog(ev)} data-testid={`card-review-event-${ev.id}`}>
-                  <CardContent className="p-4">
-                    <div className="flex items-center gap-4 flex-wrap">
-                      <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary font-semibold text-sm">
-                        {idx + 1}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium">{getAgencyName(ev.agencyId)}</span>
-                          <Badge variant={ev.type === "payment" ? "default" : ev.type === "filing" ? "secondary" : "outline"} className="text-xs">
-                            {ev.type}
-                          </Badge>
-                          <Badge variant="outline" className="text-xs capitalize">{ev.frequency?.replace("_", " ")}</Badge>
+              {selectedEvents.map((ev, idx) => {
+                const company = getCompanyForAgency(ev.agencyId);
+                const legalEntity = getLegalEntityForCompany(company?.id);
+                return (
+                  <Card key={ev.id} className="hover-elevate cursor-pointer" onClick={() => openEditDialog(ev)} data-testid={`card-review-event-${ev.id}`}>
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-4 flex-wrap">
+                        <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary font-semibold text-sm">
+                          {idx + 1}
                         </div>
-                        <div className="text-sm text-muted-foreground mt-1">
-                          Due: {ev.effectiveDate ? new Date(ev.effectiveDate).toLocaleDateString() : "No date"} · Delay: {ev.dueDateDelayDays ?? 0} days · Reminder: {ev.reminderDays ?? 7} days
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium">{getAgencyName(ev.agencyId)}</span>
+                            <Badge variant={ev.type === "payment" ? "default" : ev.type === "filing" ? "secondary" : "outline"} className="text-xs">
+                              {ev.type}
+                            </Badge>
+                            <Badge variant="outline" className="text-xs capitalize">{ev.frequency?.replace("_", " ")}</Badge>
+                          </div>
+                          <div className="text-sm text-muted-foreground mt-1">
+                            {company?.name || "—"} {legalEntity ? `· Filed under: ${legalEntity.legalName}` : ""} · Due: {ev.effectiveDate ? new Date(ev.effectiveDate).toLocaleDateString() : "No date"}
+                          </div>
                         </div>
+                        <Pencil className="h-4 w-4 text-muted-foreground" />
                       </div>
-                      <Pencil className="h-4 w-4 text-muted-foreground" />
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           )}
         </div>
@@ -1389,20 +1492,28 @@ function TaxWizardTab() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Agency</TableHead>
+                        <TableHead>Company</TableHead>
+                        <TableHead>Legal Entity</TableHead>
                         <TableHead>Type</TableHead>
                         <TableHead>Due Date</TableHead>
                         <TableHead>Status</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {selectedEvents.map(ev => (
-                        <TableRow key={ev.id} data-testid={`row-submit-event-${ev.id}`}>
-                          <TableCell className="font-medium">{getAgencyName(ev.agencyId)}</TableCell>
-                          <TableCell><Badge variant="outline" className="text-xs">{ev.type}</Badge></TableCell>
-                          <TableCell>{ev.effectiveDate ? new Date(ev.effectiveDate).toLocaleDateString() : "—"}</TableCell>
-                          <TableCell><Badge variant="default" className="text-xs">Ready</Badge></TableCell>
-                        </TableRow>
-                      ))}
+                      {selectedEvents.map(ev => {
+                        const company = getCompanyForAgency(ev.agencyId);
+                        const legalEntity = getLegalEntityForCompany(company?.id);
+                        return (
+                          <TableRow key={ev.id} data-testid={`row-submit-event-${ev.id}`}>
+                            <TableCell className="font-medium">{getAgencyName(ev.agencyId)}</TableCell>
+                            <TableCell>{company?.name || "—"}</TableCell>
+                            <TableCell>{legalEntity?.legalName || "—"}</TableCell>
+                            <TableCell><Badge variant="outline" className="text-xs">{ev.type}</Badge></TableCell>
+                            <TableCell>{ev.effectiveDate ? new Date(ev.effectiveDate).toLocaleDateString() : "—"}</TableCell>
+                            <TableCell><Badge variant="default" className="text-xs">Ready</Badge></TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>
@@ -1421,7 +1532,7 @@ function TaxWizardTab() {
               </div>
               <h3 className="text-xl font-semibold mb-2">Processing Complete</h3>
               <p className="text-muted-foreground mb-6">
-                {selectedEvents.length} remittance event(s) have been successfully processed and submitted.
+                {selectedEvents.length} tax event(s) have been successfully processed and submitted.
               </p>
               <Button data-testid="button-wizard-restart" onClick={resetWizard}>
                 Process More Events
