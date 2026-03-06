@@ -13,7 +13,7 @@ import {
   absencePolicies, holidayPolicies, roundingPolicies,
   legalEntities,
   enterprises, divisions, positions, costCenters, jobs,
-  roles, rolePermissions, userRoles,
+  roles, rolePermissions, userRoles, checkTemplates,
   type Company, type InsertCompany,
   type Worker, type InsertWorker,
   type TimePunch, type InsertTimePunch,
@@ -68,6 +68,7 @@ import {
   type Position, type InsertPosition,
   type CostCenter, type InsertCostCenter,
   type Job, type InsertJob,
+  type CheckTemplate, type InsertCheckTemplate,
   type Role, type InsertRole,
   type RolePermission, type InsertRolePermission,
   type UserRole, type InsertUserRole,
@@ -345,6 +346,12 @@ export interface IStorage {
   updateRolePermission(id: string, data: Partial<RolePermission>): Promise<RolePermission | undefined>;
   deleteRolePermission(id: string): Promise<void>;
   deleteRolePermissionsByRole(roleId: string): Promise<void>;
+
+  getCheckTemplates(companyId?: string): Promise<CheckTemplate[]>;
+  getCheckTemplate(id: string): Promise<CheckTemplate | undefined>;
+  createCheckTemplate(data: InsertCheckTemplate): Promise<CheckTemplate>;
+  updateCheckTemplate(id: string, data: Partial<CheckTemplate>): Promise<CheckTemplate | undefined>;
+  deleteCheckTemplate(id: string): Promise<void>;
 
   getUserRoles(userId?: string): Promise<UserRole[]>;
   createUserRole(data: InsertUserRole): Promise<UserRole>;
@@ -1314,6 +1321,26 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteUserRole(id: string): Promise<void> {
     await db.delete(userRoles).where(eq(userRoles.id, id));
+  }
+
+  async getCheckTemplates(companyId?: string): Promise<CheckTemplate[]> {
+    if (companyId) return db.select().from(checkTemplates).where(eq(checkTemplates.companyId, companyId)).orderBy(checkTemplates.name);
+    return db.select().from(checkTemplates).orderBy(checkTemplates.name);
+  }
+  async getCheckTemplate(id: string): Promise<CheckTemplate | undefined> {
+    const [r] = await db.select().from(checkTemplates).where(eq(checkTemplates.id, id));
+    return r;
+  }
+  async createCheckTemplate(data: InsertCheckTemplate): Promise<CheckTemplate> {
+    const [r] = await db.insert(checkTemplates).values(data).returning();
+    return r;
+  }
+  async updateCheckTemplate(id: string, data: Partial<CheckTemplate>): Promise<CheckTemplate | undefined> {
+    const [r] = await db.update(checkTemplates).set(data).where(eq(checkTemplates.id, id)).returning();
+    return r;
+  }
+  async deleteCheckTemplate(id: string): Promise<void> {
+    await db.delete(checkTemplates).where(eq(checkTemplates.id, id));
   }
 }
 

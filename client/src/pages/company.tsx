@@ -21,7 +21,7 @@ import {
   Building2, Plus, MoreVertical, Pencil, Trash2, Phone, MapPin,
   DollarSign, Network, Shield, Monitor, Import, Rocket, CheckCircle2,
   Globe, Briefcase, Target, CircleDot, FolderKanban, ChevronRight, Scale,
-  UserPlus, Users, Lock, Eye, FilePlus, Edit3, Trash, Save
+  UserPlus, Users, Lock, Eye, FilePlus, Edit3, Trash, Save, Upload, Image, X
 } from "lucide-react";
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -59,6 +59,53 @@ const LEGAL_ENTITY_TYPES: Record<string, string> = {
   llc: "LLC",
   nonprofit: "Nonprofit",
 };
+
+function FileUploadField({ label, value, onUpload, onClear, testId }: {
+  label: string;
+  value: string;
+  onUpload: (url: string) => void;
+  onClear: () => void;
+  testId: string;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/upload", { method: "POST", body: formData, credentials: "include" });
+      if (!res.ok) throw new Error("Upload failed");
+      const { url } = await res.json();
+      onUpload(url);
+    } catch {
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  };
+  return (
+    <div className="grid gap-2">
+      <Label>{label}</Label>
+      {value ? (
+        <div className="flex items-center gap-3">
+          <img src={value} alt={label} className="h-12 w-12 rounded border object-contain bg-white" />
+          <span className="text-sm text-muted-foreground truncate flex-1">{value.split("/").pop()}</span>
+          <Button type="button" size="icon" variant="ghost" onClick={onClear} data-testid={`${testId}-clear`}>
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      ) : (
+        <label className="flex items-center gap-2 cursor-pointer border rounded-md px-3 py-2 hover:bg-accent/50 transition-colors">
+          <Upload className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm text-muted-foreground">{uploading ? "Uploading..." : "Choose file"}</span>
+          <input type="file" accept="image/*" className="hidden" onChange={handleFile} disabled={uploading} data-testid={testId} />
+        </label>
+      )}
+    </div>
+  );
+}
 
 function CompanyFormFields({
   form,
@@ -168,6 +215,22 @@ function CompanyFormFields({
           </Select>
         </div>
       </div>
+      <div className="grid grid-cols-2 gap-4">
+        <FileUploadField
+          label="Company Logo"
+          value={form.logoUrl || ""}
+          onUpload={(url) => setForm({ ...form, logoUrl: url })}
+          onClear={() => setForm({ ...form, logoUrl: "" })}
+          testId="upload-company-logo"
+        />
+        <FileUploadField
+          label="Company Icon"
+          value={form.iconUrl || ""}
+          onUpload={(url) => setForm({ ...form, iconUrl: url })}
+          onClear={() => setForm({ ...form, iconUrl: "" })}
+          testId="upload-company-icon"
+        />
+      </div>
     </div>
   );
 }
@@ -175,6 +238,7 @@ function CompanyFormFields({
 const emptyCompanyForm = (): Record<string, string> => ({
   enterpriseId: "", legalEntityId: "", name: "", legalName: "", ein: "", entityType: "llc",
   address: "", city: "", state: "", zip: "", phone: "", payFrequency: "biweekly",
+  logoUrl: "", iconUrl: "",
 });
 
 function CompanyInfoTab() {
@@ -236,6 +300,8 @@ function CompanyInfoTab() {
       zip: company.zip || "",
       phone: company.phone || "",
       payFrequency: company.payFrequency || "biweekly",
+      logoUrl: company.logoUrl || "",
+      iconUrl: company.iconUrl || "",
     });
     setEditOpen(true);
   };
@@ -295,11 +361,22 @@ function CompanyInfoTab() {
         {companies?.map((company) => (
           <Card key={company.id} data-testid={`card-company-${company.id}`}>
             <CardHeader className="flex flex-row items-start justify-between gap-2">
-              <div className="space-y-1">
-                <CardTitle className="text-base">{company.name}</CardTitle>
-                {company.legalName && (
-                  <CardDescription>{company.legalName}</CardDescription>
+              <div className="flex items-center gap-3">
+                {company.logoUrl ? (
+                  <img src={company.logoUrl} alt="" className="h-10 w-10 rounded border object-contain bg-white shrink-0" />
+                ) : company.iconUrl ? (
+                  <img src={company.iconUrl} alt="" className="h-10 w-10 rounded border object-contain bg-white shrink-0" />
+                ) : (
+                  <div className="h-10 w-10 rounded border bg-muted flex items-center justify-center shrink-0">
+                    <Building2 className="h-5 w-5 text-muted-foreground" />
+                  </div>
                 )}
+                <div className="space-y-1">
+                  <CardTitle className="text-base">{company.name}</CardTitle>
+                  {company.legalName && (
+                    <CardDescription>{company.legalName}</CardDescription>
+                  )}
+                </div>
               </div>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

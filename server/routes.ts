@@ -2,7 +2,26 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import bcrypt from "bcrypt";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema } from "@shared/schema";
+import multer from "multer";
+import path from "path";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema } from "@shared/schema";
+
+const uploadStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, path.join(process.cwd(), "uploads")),
+  filename: (_req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  },
+});
+const upload = multer({
+  storage: uploadStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = /\.(jpg|jpeg|png|gif|svg|webp|ico)$/i;
+    if (allowed.test(path.extname(file.originalname))) cb(null, true);
+    else cb(new Error("Only image files are allowed"));
+  },
+});
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.session?.userId) {
@@ -2569,6 +2588,57 @@ export async function registerRoutes(
       res.json(allUsers.map(u => ({ id: u.id, username: u.username, role: u.role, companyId: u.companyId })));
     } catch (error) {
       res.status(500).json({ message: "Failed to get users" });
+    }
+  });
+
+  app.post("/api/upload", requireAuth, upload.single("file"), (req: any, res) => {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    const url = `/uploads/${req.file.filename}`;
+    res.json({ url, filename: req.file.filename });
+  });
+
+  app.get("/api/check-templates", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const templates = await storage.getCheckTemplates(companyId);
+      res.json(templates);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get check templates" });
+    }
+  });
+  app.get("/api/check-templates/:id", requireAuth, async (req, res) => {
+    try {
+      const template = await storage.getCheckTemplate(req.params.id);
+      if (!template) return res.status(404).json({ message: "Template not found" });
+      res.json(template);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get check template" });
+    }
+  });
+  app.post("/api/check-templates", requireAuth, async (req, res) => {
+    try {
+      const parsed = insertCheckTemplateSchema.parse(req.body);
+      const template = await storage.createCheckTemplate(parsed);
+      res.status(201).json(template);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message || "Failed to create template" });
+    }
+  });
+  app.patch("/api/check-templates/:id", requireAuth, async (req, res) => {
+    try {
+      const template = await storage.updateCheckTemplate(req.params.id, req.body);
+      if (!template) return res.status(404).json({ message: "Template not found" });
+      res.json(template);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update template" });
+    }
+  });
+  app.delete("/api/check-templates/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteCheckTemplate(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete template" });
     }
   });
 

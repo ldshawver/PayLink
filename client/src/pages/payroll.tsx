@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Company, Worker, PayrollRun, PayrollItem, PayPeriod, TaxDeduction, RemittanceSource, RemittanceAgency, RemittanceAgencyEvent, PayStubAccount, PayStubAmendment, PayStubTransaction, PayPeriodSchedule, LegalEntity } from "@shared/schema";
+import type { Company, Worker, PayrollRun, PayrollItem, PayPeriod, TaxDeduction, RemittanceSource, RemittanceAgency, RemittanceAgencyEvent, PayStubAccount, PayStubAmendment, PayStubTransaction, PayPeriodSchedule, LegalEntity, CheckTemplate } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,8 +20,10 @@ import { Link } from "wouter";
 import {
   DollarSign, Clock, Calendar, ChevronDown, ChevronUp, Plus, Download, Printer,
   Calculator, FileText, CreditCard, CalendarDays, Settings, Building, Receipt, Zap,
-  ChevronLeft, ChevronRight, Check, AlertCircle, ArrowRight, Pencil, Trash2
+  ChevronLeft, ChevronRight, Check, AlertCircle, ArrowRight, Pencil, Trash2,
+  Layout, Eye, EyeOff, Image, Save, Copy
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 
 function useTabParam(): [string, (tab: string) => void] {
   const search = useSearch();
@@ -2298,6 +2300,441 @@ function PlaceholderTab({ icon: Icon, message }: { icon: typeof Calculator; mess
   );
 }
 
+const DEFAULT_LAYOUT_CONFIG = {
+  showCompanyLogo: true,
+  showCompanyName: true,
+  showCompanyAddress: true,
+  showCheckNumber: true,
+  showMicrLine: true,
+  showEarningsDetail: true,
+  showDeductionsDetail: true,
+  showYtdTotals: true,
+  showPayPeriod: true,
+  showEmployeeAddress: true,
+};
+
+const TEMPLATE_PRESETS: Record<string, { label: string; description: string }> = {
+  standard: { label: "Standard", description: "Check on top, pay stub on bottom" },
+  voucher: { label: "Voucher", description: "Stub on top, check in middle, stub on bottom" },
+  "three-part": { label: "3-Part Stub", description: "Three detachable stubs per page" },
+};
+
+function CheckPreview({ templateType, config, company }: {
+  templateType: string;
+  config: Record<string, boolean>;
+  company?: Company;
+}) {
+  const stub = (key: string) => (
+    <div key={key} className="border border-dashed border-muted-foreground/30 rounded p-3 bg-muted/30 space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {config.showCompanyLogo && (
+            company?.logoUrl ? (
+              <img src={company.logoUrl} alt="" className="h-6 w-6 object-contain" />
+            ) : (
+              <div className="h-6 w-6 bg-muted rounded flex items-center justify-center"><Image className="h-3 w-3 text-muted-foreground" /></div>
+            )
+          )}
+          {config.showCompanyName && <span className="text-xs font-semibold">{company?.name || "Company Name"}</span>}
+        </div>
+        {config.showPayPeriod && <span className="text-[10px] text-muted-foreground">Pay Period: 01/01 - 01/15</span>}
+      </div>
+      {config.showCompanyAddress && <p className="text-[10px] text-muted-foreground">{company?.address || "123 Main St"}, {company?.city || "City"}, {company?.state || "ST"} {company?.zip || "00000"}</p>}
+      <div className="grid grid-cols-2 gap-2">
+        {config.showEarningsDetail && (
+          <div className="space-y-1">
+            <p className="text-[10px] font-semibold">Earnings</p>
+            <div className="text-[9px] text-muted-foreground space-y-0.5">
+              <div className="flex justify-between"><span>Regular</span><span>$2,400.00</span></div>
+              <div className="flex justify-between"><span>Overtime</span><span>$180.00</span></div>
+            </div>
+          </div>
+        )}
+        {config.showDeductionsDetail && (
+          <div className="space-y-1">
+            <p className="text-[10px] font-semibold">Deductions</p>
+            <div className="text-[9px] text-muted-foreground space-y-0.5">
+              <div className="flex justify-between"><span>Federal Tax</span><span>-$312.00</span></div>
+              <div className="flex justify-between"><span>State Tax</span><span>-$96.00</span></div>
+            </div>
+          </div>
+        )}
+      </div>
+      {config.showYtdTotals && (
+        <div className="flex justify-between text-[9px] border-t pt-1">
+          <span className="font-semibold">YTD Gross: $12,000.00</span>
+          <span className="font-semibold">YTD Net: $9,180.00</span>
+        </div>
+      )}
+    </div>
+  );
+
+  const checkPortion = (
+    <div className="border-2 border-primary/40 rounded p-3 bg-background space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {config.showCompanyLogo && (
+            company?.logoUrl ? (
+              <img src={company.logoUrl} alt="" className="h-8 w-8 object-contain" />
+            ) : (
+              <div className="h-8 w-8 bg-muted rounded flex items-center justify-center"><Image className="h-4 w-4 text-muted-foreground" /></div>
+            )
+          )}
+          <div>
+            {config.showCompanyName && <p className="text-xs font-bold">{company?.name || "Company Name"}</p>}
+            {config.showCompanyAddress && <p className="text-[9px] text-muted-foreground">{company?.address || "123 Main St"}</p>}
+          </div>
+        </div>
+        {config.showCheckNumber && <span className="text-xs font-mono text-muted-foreground">Check #1001</span>}
+      </div>
+      <div className="flex justify-between items-end">
+        <div>
+          <p className="text-[10px] text-muted-foreground">Pay to the order of:</p>
+          <p className="text-xs font-semibold">John Doe</p>
+          {config.showEmployeeAddress && <p className="text-[9px] text-muted-foreground">456 Employee St, Town, ST 11111</p>}
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] text-muted-foreground">Date: 01/15/2026</p>
+          <p className="text-sm font-bold">$2,172.00</p>
+        </div>
+      </div>
+      {config.showMicrLine && (
+        <div className="border-t pt-1">
+          <p className="text-[9px] font-mono text-muted-foreground tracking-wider">⑈021000021⑈ ⑆123456789⑆ 1001</p>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="space-y-2 p-4 border rounded-lg bg-background max-w-md">
+      <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Preview</p>
+      {templateType === "standard" && (
+        <div className="space-y-2">
+          {checkPortion}
+          <div className="border-t border-dashed" />
+          {stub("stub-1")}
+        </div>
+      )}
+      {templateType === "voucher" && (
+        <div className="space-y-2">
+          {stub("stub-1")}
+          <div className="border-t border-dashed" />
+          {checkPortion}
+          <div className="border-t border-dashed" />
+          {stub("stub-2")}
+        </div>
+      )}
+      {templateType === "three-part" && (
+        <div className="space-y-2">
+          {stub("stub-1")}
+          <div className="border-t border-dashed" />
+          {stub("stub-2")}
+          <div className="border-t border-dashed" />
+          {stub("stub-3")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CheckLayoutTab() {
+  const { toast } = useToast();
+  const [selectedCompany, setSelectedCompany] = useState<string>("");
+  const [editingTemplate, setEditingTemplate] = useState<CheckTemplate | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newType, setNewType] = useState("standard");
+  const [layoutConfig, setLayoutConfig] = useState<Record<string, boolean>>({ ...DEFAULT_LAYOUT_CONFIG });
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const effectiveCompanyId = selectedCompany && selectedCompany !== "all" ? selectedCompany : undefined;
+  const { data: templates = [], isLoading } = useQuery<CheckTemplate[]>({
+    queryKey: ["/api/check-templates", effectiveCompanyId || "all"],
+    queryFn: async () => {
+      const url = effectiveCompanyId ? `/api/check-templates?companyId=${effectiveCompanyId}` : "/api/check-templates";
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+  });
+
+  const invalidateTemplates = () => {
+    queryClient.invalidateQueries({ predicate: (query) => (query.queryKey[0] as string)?.startsWith?.("/api/check-templates") || query.queryKey[0] === "/api/check-templates" });
+  };
+
+  const createMutation = useMutation({
+    mutationFn: async (data: { name: string; templateType: string; companyId: string; layoutConfig: string; isDefault: boolean }) => {
+      await apiRequest("POST", "/api/check-templates", data);
+    },
+    onSuccess: () => {
+      invalidateTemplates();
+      setAddOpen(false);
+      setNewName("");
+      setNewType("standard");
+      setLayoutConfig({ ...DEFAULT_LAYOUT_CONFIG });
+      toast({ title: "Template created" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Partial<CheckTemplate> }) => {
+      await apiRequest("PATCH", `/api/check-templates/${id}`, data);
+    },
+    onSuccess: () => {
+      invalidateTemplates();
+      setEditingTemplate(null);
+      toast({ title: "Template updated" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/check-templates/${id}`);
+    },
+    onSuccess: () => {
+      invalidateTemplates();
+      toast({ title: "Template deleted" });
+    },
+  });
+
+  const setDefaultMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const others = templates.filter(t => t.companyId === effectiveCompanyId && t.id !== id);
+      for (const t of others) {
+        if (t.isDefault) await apiRequest("PATCH", `/api/check-templates/${t.id}`, { isDefault: false });
+      }
+      await apiRequest("PATCH", `/api/check-templates/${id}`, { isDefault: true });
+    },
+    onSuccess: () => {
+      invalidateTemplates();
+      toast({ title: "Default template set" });
+    },
+  });
+
+  const openEdit = (t: CheckTemplate) => {
+    setEditingTemplate(t);
+    try {
+      setLayoutConfig(JSON.parse(t.layoutConfig || "{}"));
+    } catch {
+      setLayoutConfig({ ...DEFAULT_LAYOUT_CONFIG });
+    }
+  };
+
+  const selectedCompanyObj = companies.find(c => c.id === effectiveCompanyId);
+
+  const toggleField = (field: string) => {
+    setLayoutConfig(prev => ({ ...prev, [field]: !prev[field] }));
+  };
+
+  const layoutFields = [
+    { key: "showCompanyLogo", label: "Company Logo" },
+    { key: "showCompanyName", label: "Company Name" },
+    { key: "showCompanyAddress", label: "Company Address" },
+    { key: "showCheckNumber", label: "Check Number" },
+    { key: "showMicrLine", label: "MICR Line" },
+    { key: "showEarningsDetail", label: "Earnings Detail" },
+    { key: "showDeductionsDetail", label: "Deductions Detail" },
+    { key: "showYtdTotals", label: "YTD Totals" },
+    { key: "showPayPeriod", label: "Pay Period" },
+    { key: "showEmployeeAddress", label: "Employee Address" },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <h2 className="text-lg font-semibold">Check Layout Templates</h2>
+        <div className="flex items-center gap-3">
+          <Select value={selectedCompany} onValueChange={setSelectedCompany}>
+            <SelectTrigger className="w-[200px]" data-testid="select-template-company">
+              <SelectValue placeholder="All companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map(c => (
+                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Dialog open={addOpen} onOpenChange={setAddOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-template" disabled={!effectiveCompanyId}>
+                <Plus className="mr-2 h-4 w-4" />New Template
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader><DialogTitle>Create Check Template</DialogTitle></DialogHeader>
+              <div className="grid gap-4">
+                <div className="grid gap-2">
+                  <Label>Template Name</Label>
+                  <Input data-testid="input-template-name" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Standard Paycheck" />
+                </div>
+                <div className="grid gap-2">
+                  <Label>Template Type</Label>
+                  <div className="grid grid-cols-3 gap-3">
+                    {Object.entries(TEMPLATE_PRESETS).map(([key, preset]) => (
+                      <button
+                        key={key}
+                        data-testid={`button-preset-${key}`}
+                        onClick={() => setNewType(key)}
+                        className={`p-3 border rounded-lg text-left transition-colors ${newType === key ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-accent/50"}`}
+                      >
+                        <p className="text-sm font-medium">{preset.label}</p>
+                        <p className="text-xs text-muted-foreground">{preset.description}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label>Layout Options</Label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {layoutFields.map(f => (
+                      <div key={f.key} className="flex items-center justify-between rounded-md border px-3 py-2">
+                        <span className="text-sm">{f.label}</span>
+                        <Switch
+                          data-testid={`switch-${f.key}`}
+                          checked={layoutConfig[f.key] ?? true}
+                          onCheckedChange={() => toggleField(f.key)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <CheckPreview templateType={newType} config={layoutConfig} company={selectedCompanyObj} />
+                <Button
+                  data-testid="button-create-template"
+                  disabled={!newName || createMutation.isPending}
+                  onClick={() => effectiveCompanyId && createMutation.mutate({
+                    name: newName,
+                    templateType: newType,
+                    companyId: effectiveCompanyId,
+                    layoutConfig: JSON.stringify(layoutConfig),
+                    isDefault: templates.length === 0,
+                  })}
+                >
+                  {createMutation.isPending ? "Creating..." : "Create Template"}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="grid gap-4 md:grid-cols-2">
+          {[1, 2].map(i => <Card key={i}><CardContent className="p-6"><Skeleton className="h-32 w-full" /></CardContent></Card>)}
+        </div>
+      ) : templates.length === 0 ? (
+        <Card>
+          <CardContent className="p-8 text-center">
+            <Layout className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+            <p className="text-muted-foreground">No check templates yet. Select a company and create one.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2">
+          {templates.map(t => {
+            let config: Record<string, boolean>;
+            try { config = JSON.parse(t.layoutConfig || "{}"); } catch { config = { ...DEFAULT_LAYOUT_CONFIG }; }
+            const tCompany = companies.find(c => c.id === t.companyId);
+            return (
+              <Card key={t.id} data-testid={`card-template-${t.id}`} className={t.isDefault ? "ring-2 ring-primary" : ""}>
+                <CardHeader className="flex flex-row items-start justify-between gap-2 pb-2">
+                  <div>
+                    <CardTitle className="text-base flex items-center gap-2">
+                      {t.name}
+                      {t.isDefault && <Badge variant="secondary" className="text-xs">Default</Badge>}
+                    </CardTitle>
+                    <p className="text-sm text-muted-foreground">{TEMPLATE_PRESETS[t.templateType || "standard"]?.label || t.templateType} — {tCompany?.name || "Unknown"}</p>
+                  </div>
+                  <div className="flex gap-1">
+                    {!t.isDefault && (
+                      <Button size="sm" variant="outline" data-testid={`button-set-default-${t.id}`} onClick={() => setDefaultMutation.mutate(t.id)}>
+                        <Check className="h-3 w-3 mr-1" />Set Default
+                      </Button>
+                    )}
+                    <Button size="icon" variant="ghost" data-testid={`button-edit-template-${t.id}`} onClick={() => openEdit(t)}>
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button size="icon" variant="ghost" data-testid={`button-delete-template-${t.id}`} onClick={() => deleteMutation.mutate(t.id)}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <CheckPreview templateType={t.templateType || "standard"} config={config} company={tCompany} />
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      <Dialog open={!!editingTemplate} onOpenChange={(open) => !open && setEditingTemplate(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Edit Template: {editingTemplate?.name}</DialogTitle></DialogHeader>
+          {editingTemplate && (
+            <div className="grid gap-4">
+              <div className="grid gap-2">
+                <Label>Template Name</Label>
+                <Input data-testid="input-edit-template-name" value={editingTemplate.name} onChange={e => setEditingTemplate({ ...editingTemplate, name: e.target.value })} />
+              </div>
+              <div className="grid gap-2">
+                <Label>Template Type</Label>
+                <div className="grid grid-cols-3 gap-3">
+                  {Object.entries(TEMPLATE_PRESETS).map(([key, preset]) => (
+                    <button
+                      key={key}
+                      data-testid={`button-edit-preset-${key}`}
+                      onClick={() => setEditingTemplate({ ...editingTemplate, templateType: key })}
+                      className={`p-3 border rounded-lg text-left transition-colors ${editingTemplate.templateType === key ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-accent/50"}`}
+                    >
+                      <p className="text-sm font-medium">{preset.label}</p>
+                      <p className="text-xs text-muted-foreground">{preset.description}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label>Layout Options</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {layoutFields.map(f => (
+                    <div key={f.key} className="flex items-center justify-between rounded-md border px-3 py-2">
+                      <span className="text-sm">{f.label}</span>
+                      <Switch
+                        data-testid={`switch-edit-${f.key}`}
+                        checked={layoutConfig[f.key] ?? true}
+                        onCheckedChange={() => toggleField(f.key)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <CheckPreview templateType={editingTemplate.templateType || "standard"} config={layoutConfig} company={companies.find(c => c.id === editingTemplate.companyId)} />
+              <Button
+                data-testid="button-save-template"
+                disabled={updateMutation.isPending}
+                onClick={() => updateMutation.mutate({
+                  id: editingTemplate.id,
+                  data: {
+                    name: editingTemplate.name,
+                    templateType: editingTemplate.templateType,
+                    layoutConfig: JSON.stringify(layoutConfig),
+                  },
+                })}
+              >
+                {updateMutation.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 export default function PayrollPage() {
   const [activeTab, setActiveTab] = useTabParam();
 
@@ -2313,6 +2750,7 @@ export default function PayrollPage() {
     { value: "taxes-deductions", label: "Taxes & Deductions" },
     { value: "remittance-agencies", label: "Remittance Agencies" },
     { value: "remittance-sources", label: "Remittance Sources" },
+    { value: "check-layout", label: "Check Layout" },
   ];
 
   return (
@@ -2342,6 +2780,7 @@ export default function PayrollPage() {
         <TabsContent value="taxes-deductions"><TaxesDeductionsTab /></TabsContent>
         <TabsContent value="remittance-agencies"><RemittanceAgenciesTab /></TabsContent>
         <TabsContent value="remittance-sources"><RemittanceSourcesTab /></TabsContent>
+        <TabsContent value="check-layout"><CheckLayoutTab /></TabsContent>
       </Tabs>
     </div>
   );

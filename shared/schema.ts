@@ -42,6 +42,7 @@ export const companies = pgTable("companies", {
   website: text("website"),
   email: text("email"),
   logoUrl: text("logo_url"),
+  iconUrl: text("icon_url"),
   tagline: text("tagline"),
   payFrequency: payFrequencyEnum("pay_frequency").default("biweekly"),
   overtimeThreshold: integer("overtime_threshold").default(40),
@@ -888,6 +889,18 @@ export const insertHolidayPolicySchema = createInsertSchema(holidayPolicies).omi
 export const insertRoundingPolicySchema = createInsertSchema(roundingPolicies).omit({ id: true, createdAt: true });
 export const insertLegalEntitySchema = createInsertSchema(legalEntities).omit({ id: true, createdAt: true });
 
+export const checkTemplates = pgTable("check_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  name: text("name").notNull(),
+  templateType: text("template_type").default("standard"),
+  layoutConfig: text("layout_config").default("{}"),
+  isDefault: boolean("is_default").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertCheckTemplateSchema = createInsertSchema(checkTemplates).omit({ id: true, createdAt: true });
+
 export const roleScopeEnum = pgEnum("role_scope", ["enterprise", "company", "department", "branch"]);
 
 export const roles = pgTable("roles", {
@@ -1038,3 +1051,5 @@ export type RoundingPolicy = typeof roundingPolicies.$inferSelect;
 export type InsertRoundingPolicy = z.infer<typeof insertRoundingPolicySchema>;
 export type LegalEntity = typeof legalEntities.$inferSelect;
 export type InsertLegalEntity = z.infer<typeof insertLegalEntitySchema>;
+export type CheckTemplate = typeof checkTemplates.$inferSelect;
+export type InsertCheckTemplate = z.infer<typeof insertCheckTemplateSchema>;

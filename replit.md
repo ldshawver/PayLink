@@ -35,7 +35,7 @@ Sidebar with collapsible sections:
 3. **Schedule** - Schedules (week view), Scheduled Shifts, Recurring Schedule, Recurring Templates (tabs)
 4. **Employee** - Employee list/CRUD (enhanced form with Employment/Identity/Contact/Payroll/Notes sections), Contacts, Preferences, Wages (wage history with effective dates), Pay Methods (with remittance source/priority/amount type), Titles (CRUD), Employee Groups (CRUD with hierarchy), Ethnic Groups, New Hire Defaults (CRUD)
 5. **Company** - Company Info (with enterprise assignment), Legal Entity (full CRUD), Enterprise (CRUD for top-level holding entities), Divisions (CRUD with company assignment), Branches (with division assignment), Departments (with division assignment), Positions (CRUD with department/reporting hierarchy/salary range), Cost Centers (CRUD for labor cost tracking), Jobs/Projects (CRUD with cost center/dates/status), Hierarchy (visual org tree: Enterprise → Companies → Divisions → Branches → Departments → Positions), Currencies, Quick Start, Permissions (Roles CRUD, Permission Matrix with resource/action toggles, User Role Assignments with scope), Import (tabs)
-6. **Payroll** - Process Payroll, Tax Wizard (4-step wizard: Select Events → Review/Verify → Submit → Complete), Pay Stubs, Pay Periods, Taxes & Deductions, Remittance (tabs)
+6. **Payroll** - Process Payroll, Tax Wizard (4-step wizard: Select Events → Review/Verify → Submit → Complete), Pay Stubs, Pay Periods, Taxes & Deductions, Remittance, Check Layout (template editor with Standard/Voucher/3-Part types, layout toggle switches, live preview) (tabs)
 7. **Policy** - Policy Groups, Pay Codes, Accrual Accounts, Recurring Holidays, Pay Formulas, Contributing Pay Codes, Contributing Shifts, Regular Time, Overtime, Premium, Meal, Break, Schedule, Exception, Accrual, Absence, Holiday, Rounding policies (18 tabs, all with full CRUD)
 8. **HR** - Reviews, Qualifications, KPI Groups, Skills, Education, Memberships, Licenses, Languages (tabs)
 9. **Report** - Saved Reports, Employee Reports (Who's In, Employee Info, Audit Trail), Timesheet Reports (Schedule/Timesheet Summary/Detail, Punch Summary, Accrual Balance, Exception Summary), Payroll Reports (Paystub Summary, Payroll Export, General Ledger), Tax Reports, HR Reports (Qualification/Review Summary) - all with CSV export
@@ -85,6 +85,7 @@ Extended tables:
 - `pay_stub_amendments` - One-time pay adjustments per worker
 - `pay_stub_transactions` - Payment transaction records
 - `pay_period_schedules` - Recurring pay period schedule definitions
+- `check_templates` - Check/paystub layout templates per company (type, layout config JSON, default flag)
 
 Permissions tables:
 - `roles` - Role definitions (Enterprise Admin, Company Admin, Manager, Supervisor, Employee) with level hierarchy and isSystem flag
@@ -148,6 +149,8 @@ Pay Stub Accounts: GET/POST/PATCH/DELETE /api/pay-stub-accounts
 Pay Stub Amendments: GET/POST/PATCH/DELETE /api/pay-stub-amendments
 Pay Stub Transactions: GET/POST/PATCH /api/pay-stub-transactions
 Pay Period Schedules: GET/POST/PATCH/DELETE /api/pay-period-schedules
+Check Templates: GET/POST/PATCH/DELETE /api/check-templates
+File Upload: POST /api/upload (multipart/form-data, returns { url, filename })
 Dashboard: GET /api/dashboard/stats
 Policy Types: GET/POST/PATCH/DELETE for /api/pay-formulas, /api/contributing-pay-codes, /api/contributing-shifts, /api/regular-time-policies, /api/overtime-policies, /api/premium-policies, /api/meal-policies, /api/break-policies, /api/schedule-policies, /api/exception-policies, /api/accrual-policies, /api/absence-policies, /api/holiday-policies, /api/rounding-policies
 Accrual Milestones: GET/POST/DELETE /api/accrual-policy-milestones
