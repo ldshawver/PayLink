@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import bcrypt from "bcrypt";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema } from "@shared/schema";
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.session?.userId) {
@@ -2410,6 +2410,165 @@ export async function registerRoutes(
       res.json({ message: "Deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete legal entity" });
+    }
+  });
+
+  app.get("/api/roles", async (_req, res) => {
+    try {
+      const items = await storage.getRoles();
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get roles" });
+    }
+  });
+
+  app.post("/api/roles", async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      const data = insertRoleSchema.parse(req.body);
+      delete (data as any).isSystem;
+      const item = await storage.createRole(data);
+      res.status(201).json(item);
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Failed to create role" });
+    }
+  });
+
+  app.patch("/api/roles/:id", async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      const { isSystem, ...data } = req.body;
+      const item = await storage.updateRole(req.params.id, data);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update role" });
+    }
+  });
+
+  app.delete("/api/roles/:id", async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      const role = await storage.getRole(req.params.id);
+      if (role?.isSystem) return res.status(400).json({ message: "Cannot delete system roles" });
+      await storage.deleteRole(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete role" });
+    }
+  });
+
+  app.get("/api/role-permissions", async (req, res) => {
+    try {
+      const roleId = req.query.roleId as string | undefined;
+      if (roleId) {
+        const items = await storage.getRolePermissions(roleId);
+        res.json(items);
+      } else {
+        const items = await storage.getAllRolePermissions();
+        res.json(items);
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get role permissions" });
+    }
+  });
+
+  app.post("/api/role-permissions", async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      const data = insertRolePermissionSchema.parse(req.body);
+      const item = await storage.createRolePermission(data);
+      res.status(201).json(item);
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Failed to create role permission" });
+    }
+  });
+
+  app.patch("/api/role-permissions/:id", async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      const item = await storage.updateRolePermission(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update role permission" });
+    }
+  });
+
+  app.delete("/api/role-permissions/:id", async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      await storage.deleteRolePermission(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete role permission" });
+    }
+  });
+
+  app.post("/api/role-permissions/bulk", async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      const { roleId, permissions } = req.body;
+      if (!roleId || !permissions) return res.status(400).json({ message: "roleId and permissions required" });
+      await storage.deleteRolePermissionsByRole(roleId);
+      const results = [];
+      for (const perm of permissions) {
+        const validated = insertRolePermissionSchema.parse({ ...perm, roleId });
+        const item = await storage.createRolePermission(validated);
+        results.push(item);
+      }
+      res.json(results);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to save role permissions" });
+    }
+  });
+
+  app.get("/api/user-roles", async (req, res) => {
+    try {
+      const userId = req.query.userId as string | undefined;
+      const items = await storage.getUserRoles(userId);
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get user roles" });
+    }
+  });
+
+  app.post("/api/user-roles", async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      const data = insertUserRoleSchema.parse(req.body);
+      const item = await storage.createUserRole(data);
+      res.status(201).json(item);
+    } catch (error: any) {
+      res.status(500).json({ message: error?.message || "Failed to assign role" });
+    }
+  });
+
+  app.delete("/api/user-roles/:id", async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      await storage.deleteUserRole(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to remove role assignment" });
+    }
+  });
+
+  app.get("/api/users", async (_req, res) => {
+    try {
+      const allUsers = await storage.getUsers();
+      res.json(allUsers.map(u => ({ id: u.id, username: u.username, role: u.role, companyId: u.companyId })));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get users" });
     }
   });
 

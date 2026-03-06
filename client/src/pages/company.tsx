@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Company, Department, Branch, LegalEntity, Enterprise, Division, Position, CostCenter, Job } from "@shared/schema";
+import type { Company, Department, Branch, LegalEntity, Enterprise, Division, Position, CostCenter, Job, Role, RolePermission, UserRole } from "@shared/schema";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -18,7 +20,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import {
   Building2, Plus, MoreVertical, Pencil, Trash2, Phone, MapPin,
   DollarSign, Network, Shield, Monitor, Import, Rocket, CheckCircle2,
-  Globe, Briefcase, Target, CircleDot, FolderKanban, ChevronRight, Scale
+  Globe, Briefcase, Target, CircleDot, FolderKanban, ChevronRight, Scale,
+  UserPlus, Users, Lock, Eye, FilePlus, Edit3, Trash, Save
 } from "lucide-react";
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -2742,6 +2745,465 @@ function CompanyHierarchyNode({ company, divisions, branches, departments, posit
   );
 }
 
+const PERMISSION_RESOURCES = [
+  { key: "companies", label: "Companies" },
+  { key: "workers", label: "Employees" },
+  { key: "schedules", label: "Schedules" },
+  { key: "payroll", label: "Payroll" },
+  { key: "timesheets", label: "Timesheets" },
+  { key: "departments", label: "Departments" },
+  { key: "branches", label: "Branches" },
+  { key: "divisions", label: "Divisions" },
+  { key: "positions", label: "Positions" },
+  { key: "policies", label: "Policies" },
+  { key: "hr", label: "HR" },
+  { key: "reports", label: "Reports" },
+  { key: "settings", label: "Settings" },
+  { key: "permissions", label: "Permissions" },
+];
+
+function PermissionsTab() {
+  const { toast } = useToast();
+  const [permSection, setPermSection] = useState<"roles" | "matrix" | "assignments">("roles");
+  const [selectedRoleId, setSelectedRoleId] = useState<string>("");
+  const [roleDialogOpen, setRoleDialogOpen] = useState(false);
+  const [editingRole, setEditingRole] = useState<Role | null>(null);
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false);
+
+  const [roleName, setRoleName] = useState("");
+  const [roleDescription, setRoleDescription] = useState("");
+  const [roleLevel, setRoleLevel] = useState("5");
+
+  const [assignUserId, setAssignUserId] = useState("");
+  const [assignRoleId, setAssignRoleId] = useState("");
+  const [assignScopeType, setAssignScopeType] = useState("company");
+  const [assignScopeId, setAssignScopeId] = useState("");
+
+  const rolesQuery = useQuery<Role[]>({ queryKey: ["/api/roles"] });
+  const permissionsQuery = useQuery<RolePermission[]>({
+    queryKey: ["/api/role-permissions", selectedRoleId],
+    enabled: !!selectedRoleId,
+    queryFn: () => apiRequest("GET", `/api/role-permissions?roleId=${selectedRoleId}`).then(r => r.json()),
+  });
+  const userRolesQuery = useQuery<UserRole[]>({ queryKey: ["/api/user-roles"] });
+  const usersQuery = useQuery<{ id: string; username: string; role: string }[]>({ queryKey: ["/api/users"] });
+  const companiesQuery = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const enterprisesQuery = useQuery<Enterprise[]>({ queryKey: ["/api/enterprises"] });
+  const departmentsQuery = useQuery<Department[]>({ queryKey: ["/api/departments"] });
+  const branchesQuery = useQuery<Branch[]>({ queryKey: ["/api/branches"] });
+
+  const [localPerms, setLocalPerms] = useState<Record<string, { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean }>>({});
+  const [permsDirty, setPermsDirty] = useState(false);
+
+  useEffect(() => {
+    if (permissionsQuery.data && selectedRoleId) {
+      const map: Record<string, { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean }> = {};
+      for (const p of permissionsQuery.data) {
+        map[p.resource] = { canView: !!p.canView, canCreate: !!p.canCreate, canEdit: !!p.canEdit, canDelete: !!p.canDelete };
+      }
+      setLocalPerms(map);
+      setPermsDirty(false);
+    }
+  }, [permissionsQuery.data, selectedRoleId]);
+
+  const createRoleMutation = useMutation({
+    mutationFn: async (data: { name: string; description: string; level: number }) => {
+      const res = await apiRequest("POST", "/api/roles", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/roles"] });
+      setRoleDialogOpen(false);
+      setRoleName(""); setRoleDescription(""); setRoleLevel("5");
+      toast({ title: "Role created" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const updateRoleMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Partial<Role> }) => {
+      const res = await apiRequest("PATCH", `/api/roles/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/roles"] });
+      setRoleDialogOpen(false);
+      setEditingRole(null);
+      toast({ title: "Role updated" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteRoleMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/roles/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/roles"] });
+      toast({ title: "Role deleted" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const savePermsMutation = useMutation({
+    mutationFn: async () => {
+      const permissions = Object.entries(localPerms).map(([resource, perms]) => ({
+        resource,
+        ...perms,
+      }));
+      const res = await apiRequest("POST", "/api/role-permissions/bulk", { roleId: selectedRoleId, permissions });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/role-permissions", selectedRoleId] });
+      setPermsDirty(false);
+      toast({ title: "Permissions saved" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const assignRoleMutation = useMutation({
+    mutationFn: async (data: { userId: string; roleId: string; scopeType: string; scopeId: string | null }) => {
+      const res = await apiRequest("POST", "/api/user-roles", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/user-roles"] });
+      setAssignDialogOpen(false);
+      setAssignUserId(""); setAssignRoleId(""); setAssignScopeType("company"); setAssignScopeId("");
+      toast({ title: "Role assigned" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const removeAssignmentMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/user-roles/${id}`); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/user-roles"] });
+      toast({ title: "Assignment removed" });
+    },
+  });
+
+  const roles = rolesQuery.data || [];
+  const userRolesList = userRolesQuery.data || [];
+  const allUsers = usersQuery.data || [];
+  const allCompanies = companiesQuery.data || [];
+  const allEnterprises = enterprisesQuery.data || [];
+  const allDepartments = departmentsQuery.data || [];
+  const allBranches = branchesQuery.data || [];
+
+  const getScopeName = (scopeType: string | null, scopeId: string | null) => {
+    if (!scopeType || !scopeId) return "All";
+    if (scopeType === "enterprise") return allEnterprises.find(e => e.id === scopeId)?.name || scopeId;
+    if (scopeType === "company") return allCompanies.find(c => c.id === scopeId)?.name || scopeId;
+    if (scopeType === "department") return allDepartments.find(d => d.id === scopeId)?.name || scopeId;
+    if (scopeType === "branch") return allBranches.find(b => b.id === scopeId)?.name || scopeId;
+    return scopeId;
+  };
+
+  if (rolesQuery.isLoading) return <Skeleton className="h-64 w-full" />;
+
+  return (
+    <div className="space-y-4" data-testid="permissions-tab">
+      <div className="flex gap-2 mb-4">
+        <Button
+          variant={permSection === "roles" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setPermSection("roles")}
+          data-testid="btn-section-roles"
+        >
+          <Shield className="h-4 w-4 mr-1" /> Roles
+        </Button>
+        <Button
+          variant={permSection === "matrix" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setPermSection("matrix")}
+          data-testid="btn-section-matrix"
+        >
+          <Lock className="h-4 w-4 mr-1" /> Permission Matrix
+        </Button>
+        <Button
+          variant={permSection === "assignments" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setPermSection("assignments")}
+          data-testid="btn-section-assignments"
+        >
+          <Users className="h-4 w-4 mr-1" /> User Assignments
+        </Button>
+      </div>
+
+      {permSection === "roles" && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2"><Shield className="h-5 w-5" />Roles</CardTitle>
+            <Dialog open={roleDialogOpen} onOpenChange={(o) => { setRoleDialogOpen(o); if (!o) setEditingRole(null); }}>
+              <DialogTrigger asChild>
+                <Button size="sm" onClick={() => { setEditingRole(null); setRoleName(""); setRoleDescription(""); setRoleLevel("5"); }} data-testid="btn-add-role">
+                  <Plus className="h-4 w-4 mr-1" /> Add Role
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader><DialogTitle>{editingRole ? "Edit Role" : "Add Role"}</DialogTitle></DialogHeader>
+                <div className="space-y-3">
+                  <div>
+                    <Label>Name</Label>
+                    <Input value={roleName} onChange={e => setRoleName(e.target.value)} placeholder="e.g. Branch Manager" data-testid="input-role-name" />
+                  </div>
+                  <div>
+                    <Label>Description</Label>
+                    <Textarea value={roleDescription} onChange={e => setRoleDescription(e.target.value)} placeholder="What this role can do" data-testid="input-role-description" />
+                  </div>
+                  <div>
+                    <Label>Level (1=highest, 5=lowest)</Label>
+                    <Select value={roleLevel} onValueChange={setRoleLevel}>
+                      <SelectTrigger data-testid="select-role-level"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">1 - Enterprise</SelectItem>
+                        <SelectItem value="2">2 - Company</SelectItem>
+                        <SelectItem value="3">3 - Manager</SelectItem>
+                        <SelectItem value="4">4 - Supervisor</SelectItem>
+                        <SelectItem value="5">5 - Employee</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    onClick={() => {
+                      if (editingRole) {
+                        updateRoleMutation.mutate({ id: editingRole.id, data: { name: roleName, description: roleDescription, level: parseInt(roleLevel) } });
+                      } else {
+                        createRoleMutation.mutate({ name: roleName, description: roleDescription, level: parseInt(roleLevel) });
+                      }
+                    }}
+                    disabled={!roleName || createRoleMutation.isPending || updateRoleMutation.isPending}
+                    data-testid="btn-save-role"
+                  >
+                    {editingRole ? "Update" : "Create"} Role
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead>Level</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {roles.map(role => (
+                  <TableRow key={role.id} data-testid={`row-role-${role.id}`}>
+                    <TableCell className="font-medium">{role.name}</TableCell>
+                    <TableCell className="text-muted-foreground text-sm">{role.description}</TableCell>
+                    <TableCell><Badge variant="outline">{role.level}</Badge></TableCell>
+                    <TableCell>{role.isSystem ? <Badge>System</Badge> : <Badge variant="secondary">Custom</Badge>}</TableCell>
+                    <TableCell>
+                      {!role.isSystem && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreVertical className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                          <DropdownMenuContent>
+                            <DropdownMenuItem onClick={() => {
+                              setEditingRole(role);
+                              setRoleName(role.name);
+                              setRoleDescription(role.description || "");
+                              setRoleLevel(String(role.level));
+                              setRoleDialogOpen(true);
+                            }}>
+                              <Pencil className="h-4 w-4 mr-2" /> Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem className="text-destructive" onClick={() => deleteRoleMutation.mutate(role.id)}>
+                              <Trash2 className="h-4 w-4 mr-2" /> Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {roles.length === 0 && (
+                  <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-8">No roles defined yet</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {permSection === "matrix" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Lock className="h-5 w-5" />Permission Matrix</CardTitle>
+            <CardDescription>Select a role then toggle which resources it can access</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center gap-3">
+              <Label>Role:</Label>
+              <Select value={selectedRoleId} onValueChange={(v) => { setSelectedRoleId(v); setPermsDirty(false); }}>
+                <SelectTrigger className="w-[250px]" data-testid="select-matrix-role"><SelectValue placeholder="Select a role" /></SelectTrigger>
+                <SelectContent>
+                  {roles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {permsDirty && (
+                <Button size="sm" onClick={() => savePermsMutation.mutate()} disabled={savePermsMutation.isPending} data-testid="btn-save-permissions">
+                  <Save className="h-4 w-4 mr-1" /> Save Changes
+                </Button>
+              )}
+            </div>
+
+            {selectedRoleId && permissionsQuery.isLoading && <Skeleton className="h-48 w-full" />}
+
+            {selectedRoleId && !permissionsQuery.isLoading && (
+              <>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Resource</TableHead>
+                      <TableHead className="text-center w-20"><Eye className="h-4 w-4 inline" /> View</TableHead>
+                      <TableHead className="text-center w-20"><FilePlus className="h-4 w-4 inline" /> Create</TableHead>
+                      <TableHead className="text-center w-20"><Edit3 className="h-4 w-4 inline" /> Edit</TableHead>
+                      <TableHead className="text-center w-20"><Trash className="h-4 w-4 inline" /> Delete</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {PERMISSION_RESOURCES.map(res => {
+                      const perm = localPerms[res.key] || { canView: false, canCreate: false, canEdit: false, canDelete: false };
+                      const togglePerm = (field: "canView" | "canCreate" | "canEdit" | "canDelete") => {
+                        setLocalPerms(prev => ({
+                          ...prev,
+                          [res.key]: { ...prev[res.key] || { canView: false, canCreate: false, canEdit: false, canDelete: false }, [field]: !(prev[res.key]?.[field] ?? false) }
+                        }));
+                        setPermsDirty(true);
+                      };
+                      return (
+                        <TableRow key={res.key} data-testid={`row-perm-${res.key}`}>
+                          <TableCell className="font-medium">{res.label}</TableCell>
+                          <TableCell className="text-center"><Checkbox checked={perm.canView} onCheckedChange={() => togglePerm("canView")} data-testid={`check-${res.key}-view`} /></TableCell>
+                          <TableCell className="text-center"><Checkbox checked={perm.canCreate} onCheckedChange={() => togglePerm("canCreate")} data-testid={`check-${res.key}-create`} /></TableCell>
+                          <TableCell className="text-center"><Checkbox checked={perm.canEdit} onCheckedChange={() => togglePerm("canEdit")} data-testid={`check-${res.key}-edit`} /></TableCell>
+                          <TableCell className="text-center"><Checkbox checked={perm.canDelete} onCheckedChange={() => togglePerm("canDelete")} data-testid={`check-${res.key}-delete`} /></TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </>
+            )}
+
+            {!selectedRoleId && (
+              <div className="text-center text-muted-foreground py-8">Select a role above to configure its permissions</div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {permSection === "assignments" && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2"><Users className="h-5 w-5" />User Role Assignments</CardTitle>
+            <Dialog open={assignDialogOpen} onOpenChange={setAssignDialogOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm" data-testid="btn-assign-role"><UserPlus className="h-4 w-4 mr-1" /> Assign Role</Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader><DialogTitle>Assign Role to User</DialogTitle></DialogHeader>
+                <div className="space-y-3">
+                  <div>
+                    <Label>User</Label>
+                    <Select value={assignUserId} onValueChange={setAssignUserId}>
+                      <SelectTrigger data-testid="select-assign-user"><SelectValue placeholder="Select user" /></SelectTrigger>
+                      <SelectContent>
+                        {allUsers.map(u => <SelectItem key={u.id} value={u.id}>{u.username}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Role</Label>
+                    <Select value={assignRoleId} onValueChange={setAssignRoleId}>
+                      <SelectTrigger data-testid="select-assign-role"><SelectValue placeholder="Select role" /></SelectTrigger>
+                      <SelectContent>
+                        {roles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Scope Type</Label>
+                    <Select value={assignScopeType} onValueChange={(v) => { setAssignScopeType(v); setAssignScopeId(""); }}>
+                      <SelectTrigger data-testid="select-assign-scope-type"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="enterprise">Enterprise</SelectItem>
+                        <SelectItem value="company">Company</SelectItem>
+                        <SelectItem value="department">Department</SelectItem>
+                        <SelectItem value="branch">Branch</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Scope ({assignScopeType})</Label>
+                    <Select value={assignScopeId} onValueChange={setAssignScopeId}>
+                      <SelectTrigger data-testid="select-assign-scope-id"><SelectValue placeholder={`Select ${assignScopeType}`} /></SelectTrigger>
+                      <SelectContent>
+                        {assignScopeType === "enterprise" && allEnterprises.map(e => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}
+                        {assignScopeType === "company" && allCompanies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                        {assignScopeType === "department" && allDepartments.map(d => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+                        {assignScopeType === "branch" && allBranches.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    onClick={() => assignRoleMutation.mutate({ userId: assignUserId, roleId: assignRoleId, scopeType: assignScopeType, scopeId: assignScopeId || null })}
+                    disabled={!assignUserId || !assignRoleId || assignRoleMutation.isPending}
+                    data-testid="btn-confirm-assign"
+                  >
+                    Assign Role
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </CardHeader>
+          <CardContent>
+            {userRolesQuery.isLoading ? <Skeleton className="h-32 w-full" /> : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>User</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Scope Type</TableHead>
+                    <TableHead>Scope</TableHead>
+                    <TableHead></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {userRolesList.map(ur => (
+                    <TableRow key={ur.id} data-testid={`row-assignment-${ur.id}`}>
+                      <TableCell className="font-medium">{allUsers.find(u => u.id === ur.userId)?.username || ur.userId}</TableCell>
+                      <TableCell>{roles.find(r => r.id === ur.roleId)?.name || ur.roleId}</TableCell>
+                      <TableCell><Badge variant="outline">{ur.scopeType || "all"}</Badge></TableCell>
+                      <TableCell>{getScopeName(ur.scopeType, ur.scopeId)}</TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="icon" onClick={() => removeAssignmentMutation.mutate(ur.id)} data-testid={`btn-remove-assignment-${ur.id}`}>
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {userRolesList.length === 0 && (
+                    <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-8">No role assignments yet</TableCell></TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function PlaceholderTab({ icon: Icon, message }: { icon: React.ElementType; message: string }) {
   return (
     <Card>
@@ -2850,7 +3312,7 @@ export default function CompanyPage() {
           <PlaceholderTab icon={Monitor} message="Work station management coming soon." />
         </TabsContent>
         <TabsContent value="permissions">
-          <PlaceholderTab icon={Shield} message="Permission group management coming soon." />
+          <PermissionsTab />
         </TabsContent>
         <TabsContent value="currencies"><CurrenciesTab /></TabsContent>
         <TabsContent value="import">
