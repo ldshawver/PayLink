@@ -18,7 +18,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import {
   Building2, Plus, MoreVertical, Pencil, Trash2, Phone, MapPin,
   DollarSign, Network, Shield, Monitor, Import, Rocket, CheckCircle2,
-  Globe, Briefcase, Target, CircleDot, FolderKanban, ChevronRight
+  Globe, Briefcase, Target, CircleDot, FolderKanban, ChevronRight, Scale
 } from "lucide-react";
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -61,10 +61,12 @@ function CompanyFormFields({
   form,
   setForm,
   enterprises,
+  legalEntities,
 }: {
   form: Record<string, string>;
   setForm: (f: Record<string, string>) => void;
   enterprises?: Enterprise[];
+  legalEntities?: LegalEntity[];
 }) {
   const set = (key: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm({ ...form, [key]: e.target.value });
@@ -81,6 +83,20 @@ function CompanyFormFields({
             <SelectItem value="__none__">None</SelectItem>
             {enterprises?.map((ent) => (
               <SelectItem key={ent.id} value={ent.id}>{ent.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="grid gap-2">
+        <Label>Legal Entity</Label>
+        <Select value={form.legalEntityId} onValueChange={(v) => setForm({ ...form, legalEntityId: v === "__none__" ? "" : v })}>
+          <SelectTrigger data-testid="select-company-legal-entity">
+            <SelectValue placeholder="Select legal entity (optional)" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">None</SelectItem>
+            {legalEntities?.map((le) => (
+              <SelectItem key={le.id} value={le.id}>{le.legalName}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -154,7 +170,7 @@ function CompanyFormFields({
 }
 
 const emptyCompanyForm = (): Record<string, string> => ({
-  enterpriseId: "", name: "", legalName: "", ein: "", entityType: "llc",
+  enterpriseId: "", legalEntityId: "", name: "", legalName: "", ein: "", entityType: "llc",
   address: "", city: "", state: "", zip: "", phone: "", payFrequency: "biweekly",
 });
 
@@ -170,6 +186,9 @@ function CompanyInfoTab() {
   });
   const { data: enterprises } = useQuery<Enterprise[]>({
     queryKey: ["/api/enterprises"],
+  });
+  const { data: legalEntities } = useQuery<LegalEntity[]>({
+    queryKey: ["/api/legal-entities"],
   });
 
   const addMutation = useMutation({
@@ -203,6 +222,7 @@ function CompanyInfoTab() {
     setEditId(company.id);
     setForm({
       enterpriseId: company.enterpriseId || "",
+      legalEntityId: company.legalEntityId || "",
       name: company.name || "",
       legalName: company.legalName || "",
       ein: company.ein || "",
@@ -240,7 +260,7 @@ function CompanyInfoTab() {
           </DialogTrigger>
           <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader><DialogTitle>Add Company</DialogTitle></DialogHeader>
-            <CompanyFormFields form={form} setForm={setForm} enterprises={enterprises} />
+            <CompanyFormFields form={form} setForm={setForm} enterprises={enterprises} legalEntities={legalEntities} />
             <Button
               data-testid="button-submit-company"
               className="w-full mt-2"
@@ -256,7 +276,7 @@ function CompanyInfoTab() {
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Company</DialogTitle></DialogHeader>
-          <CompanyFormFields form={form} setForm={setForm} enterprises={enterprises} />
+          <CompanyFormFields form={form} setForm={setForm} enterprises={enterprises} legalEntities={legalEntities} />
           <Button
             data-testid="button-save-company"
             className="w-full mt-2"
@@ -292,6 +312,14 @@ function CompanyInfoTab() {
               </DropdownMenu>
             </CardHeader>
             <CardContent className="space-y-2 text-sm text-muted-foreground">
+              {(() => {
+                const le = legalEntities?.find((l) => l.id === company.legalEntityId);
+                return le ? (
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-xs">Legal Entity: {le.legalName}</Badge>
+                  </div>
+                ) : null;
+              })()}
               {company.ein && <div className="flex items-center gap-2">EIN: {company.ein}</div>}
               {company.entityType && (
                 <div><Badge variant="secondary" className="text-xs">{ENTITY_TYPE_LABELS[company.entityType] || company.entityType}</Badge></div>
@@ -799,13 +827,13 @@ function LegalEntityTab() {
                 <TableHead>Trade Name</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Company</TableHead>
+                <TableHead>Assigned Companies</TableHead>
                 <TableHead className="w-24"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {legalEntities?.map((item) => {
-                const company = companies?.find((c) => c.id === item.companyId);
+                const assignedCompanies = companies?.filter((c) => c.legalEntityId === item.id) || [];
                 return (
                   <TableRow key={item.id} data-testid={`row-legal-entity-${item.id}`}>
                     <TableCell className="font-medium">{item.legalName}</TableCell>
@@ -818,7 +846,12 @@ function LegalEntityTab() {
                         {item.status}
                       </Badge>
                     </TableCell>
-                    <TableCell>{company?.name || "-"}</TableCell>
+                    <TableCell>
+                      {assignedCompanies.length > 0
+                        ? assignedCompanies.map((c) => c.name).join(", ")
+                        : <span className="text-muted-foreground">None</span>
+                      }
+                    </TableCell>
                     <TableCell className="flex gap-1">
                       <Button
                         size="icon"
@@ -2322,18 +2355,19 @@ function JobsTab() {
 function HierarchyTab() {
   const { data: enterprises } = useQuery<Enterprise[]>({ queryKey: ["/api/enterprises"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: legalEntities } = useQuery<LegalEntity[]>({ queryKey: ["/api/legal-entities"] });
   const { data: divisionsList } = useQuery<Division[]>({ queryKey: ["/api/divisions"] });
   const { data: branches } = useQuery<Branch[]>({ queryKey: ["/api/branches"] });
   const { data: departments } = useQuery<Department[]>({ queryKey: ["/api/departments"] });
   const { data: positionsList } = useQuery<Position[]>({ queryKey: ["/api/positions"] });
 
-  const isLoading = !enterprises || !companies || !divisionsList || !branches || !departments || !positionsList;
+  const isLoading = !enterprises || !companies || !legalEntities || !divisionsList || !branches || !departments || !positionsList;
 
   if (isLoading) {
     return <div data-testid="loading-hierarchy"><Skeleton className="h-64 w-full" /></div>;
   }
 
-  const unassignedCompanies = companies.filter((c) => !c.enterpriseId);
+  const unassignedCompanies = companies.filter((c) => !c.enterpriseId && !c.legalEntityId);
 
   return (
     <div className="space-y-4">
@@ -2341,7 +2375,11 @@ function HierarchyTab() {
       <Card>
         <CardContent className="p-4 space-y-2">
           {enterprises.map((ent) => {
-            const entCompanies = companies.filter((c) => c.enterpriseId === ent.id);
+            const entLegalEntities = legalEntities.filter((le) => {
+              const leCompanies = companies.filter((c) => c.legalEntityId === le.id);
+              return leCompanies.some((c) => c.enterpriseId === ent.id);
+            });
+            const entDirectCompanies = companies.filter((c) => c.enterpriseId === ent.id && !c.legalEntityId);
             return (
               <div key={ent.id} data-testid={`hierarchy-enterprise-${ent.id}`}>
                 <div className="flex items-center gap-2 py-1.5 font-semibold text-sm">
@@ -2350,10 +2388,27 @@ function HierarchyTab() {
                   <Badge variant="secondary" className="text-xs">Enterprise</Badge>
                 </div>
                 <div className="ml-6 border-l pl-4 space-y-1">
-                  {entCompanies.map((comp) => (
+                  {entLegalEntities.map((le) => {
+                    const leCompanies = companies.filter((c) => c.legalEntityId === le.id && c.enterpriseId === ent.id);
+                    return (
+                      <div key={le.id} data-testid={`hierarchy-legal-entity-${le.id}`}>
+                        <div className="flex items-center gap-2 py-1.5 font-medium text-sm">
+                          <Scale className="h-4 w-4 text-muted-foreground shrink-0" />
+                          <span>{le.legalName}</span>
+                          <Badge variant="outline" className="text-xs">Legal Entity</Badge>
+                        </div>
+                        <div className="ml-6 border-l pl-4 space-y-1">
+                          {leCompanies.map((comp) => (
+                            <CompanyHierarchyNode key={comp.id} company={comp} divisions={divisionsList} branches={branches} departments={departments} positions={positionsList} />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {entDirectCompanies.map((comp) => (
                     <CompanyHierarchyNode key={comp.id} company={comp} divisions={divisionsList} branches={branches} departments={departments} positions={positionsList} />
                   ))}
-                  {entCompanies.length === 0 && (
+                  {entLegalEntities.length === 0 && entDirectCompanies.length === 0 && (
                     <p className="text-xs text-muted-foreground py-1">No companies assigned</p>
                   )}
                 </div>

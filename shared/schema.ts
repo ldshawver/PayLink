@@ -26,6 +26,7 @@ export const enterprises = pgTable("enterprises", {
 export const companies = pgTable("companies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   enterpriseId: varchar("enterprise_id"),
+  legalEntityId: varchar("legal_entity_id"),
   name: text("name").notNull(),
   legalName: text("legal_name"),
   dba: text("dba"),

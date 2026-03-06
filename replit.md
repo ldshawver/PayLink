@@ -43,7 +43,7 @@ Sidebar with collapsible sections:
 ## Database Schema
 Enterprise hierarchy tables:
 - `enterprises` - Top-level holding/enterprise entities
-- `companies` - Business entities with policy settings, linked to enterprise via enterpriseId
+- `companies` - Business entities with policy settings, linked to enterprise via enterpriseId and to legal entity via legalEntityId
 - `divisions` - Business units/divisions within a company
 - `positions` - Role definitions with department, reporting hierarchy, salary ranges
 - `cost_centers` - Cost tracking categories for labor allocation
