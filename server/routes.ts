@@ -2,6 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import bcrypt from "bcrypt";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema } from "@shared/schema";
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.session?.userId) {
@@ -645,9 +646,13 @@ export async function registerRoutes(
 
   app.post("/api/branches", async (req, res) => {
     try {
-      const branch = await storage.createBranch(req.body);
+      const parsed = insertBranchSchema.parse(req.body);
+      const branch = await storage.createBranch(parsed);
       res.status(201).json(branch);
-    } catch (error) {
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: "Validation failed", errors: error.errors });
+      }
       res.status(500).json({ message: "Failed to create branch" });
     }
   });
@@ -670,6 +675,230 @@ export async function registerRoutes(
       res.json({ message: "Branch deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete branch" });
+    }
+  });
+
+  // Enterprises
+  app.get("/api/enterprises", async (_req, res) => {
+    try {
+      const result = await storage.getEnterprises();
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch enterprises" });
+    }
+  });
+
+  app.post("/api/enterprises", async (req, res) => {
+    try {
+      const parsed = insertEnterpriseSchema.parse(req.body);
+      const enterprise = await storage.createEnterprise(parsed);
+      res.status(201).json(enterprise);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: "Validation failed", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create enterprise" });
+    }
+  });
+
+  app.patch("/api/enterprises/:id", async (req, res) => {
+    try {
+      const enterprise = await storage.updateEnterprise(req.params.id, req.body);
+      if (!enterprise) {
+        return res.status(404).json({ message: "Enterprise not found" });
+      }
+      res.json(enterprise);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update enterprise" });
+    }
+  });
+
+  app.delete("/api/enterprises/:id", async (req, res) => {
+    try {
+      await storage.deleteEnterprise(req.params.id);
+      res.json({ message: "Enterprise deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete enterprise" });
+    }
+  });
+
+  // Divisions
+  app.get("/api/divisions", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const result = await storage.getDivisions(companyId);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch divisions" });
+    }
+  });
+
+  app.post("/api/divisions", async (req, res) => {
+    try {
+      const parsed = insertDivisionSchema.parse(req.body);
+      const division = await storage.createDivision(parsed);
+      res.status(201).json(division);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: "Validation failed", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create division" });
+    }
+  });
+
+  app.patch("/api/divisions/:id", async (req, res) => {
+    try {
+      const division = await storage.updateDivision(req.params.id, req.body);
+      if (!division) {
+        return res.status(404).json({ message: "Division not found" });
+      }
+      res.json(division);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update division" });
+    }
+  });
+
+  app.delete("/api/divisions/:id", async (req, res) => {
+    try {
+      await storage.deleteDivision(req.params.id);
+      res.json({ message: "Division deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete division" });
+    }
+  });
+
+  // Positions
+  app.get("/api/positions", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const result = await storage.getPositions(companyId);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch positions" });
+    }
+  });
+
+  app.post("/api/positions", async (req, res) => {
+    try {
+      const parsed = insertPositionSchema.parse(req.body);
+      const position = await storage.createPosition(parsed);
+      res.status(201).json(position);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: "Validation failed", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create position" });
+    }
+  });
+
+  app.patch("/api/positions/:id", async (req, res) => {
+    try {
+      const position = await storage.updatePosition(req.params.id, req.body);
+      if (!position) {
+        return res.status(404).json({ message: "Position not found" });
+      }
+      res.json(position);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update position" });
+    }
+  });
+
+  app.delete("/api/positions/:id", async (req, res) => {
+    try {
+      await storage.deletePosition(req.params.id);
+      res.json({ message: "Position deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete position" });
+    }
+  });
+
+  // Cost Centers
+  app.get("/api/cost-centers", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const result = await storage.getCostCenters(companyId);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch cost centers" });
+    }
+  });
+
+  app.post("/api/cost-centers", async (req, res) => {
+    try {
+      const parsed = insertCostCenterSchema.parse(req.body);
+      const costCenter = await storage.createCostCenter(parsed);
+      res.status(201).json(costCenter);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: "Validation failed", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create cost center" });
+    }
+  });
+
+  app.patch("/api/cost-centers/:id", async (req, res) => {
+    try {
+      const costCenter = await storage.updateCostCenter(req.params.id, req.body);
+      if (!costCenter) {
+        return res.status(404).json({ message: "Cost center not found" });
+      }
+      res.json(costCenter);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update cost center" });
+    }
+  });
+
+  app.delete("/api/cost-centers/:id", async (req, res) => {
+    try {
+      await storage.deleteCostCenter(req.params.id);
+      res.json({ message: "Cost center deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete cost center" });
+    }
+  });
+
+  // Jobs
+  app.get("/api/jobs", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const result = await storage.getJobs(companyId);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch jobs" });
+    }
+  });
+
+  app.post("/api/jobs", async (req, res) => {
+    try {
+      const parsed = insertJobSchema.parse(req.body);
+      const job = await storage.createJob(parsed);
+      res.status(201).json(job);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: "Validation failed", errors: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create job" });
+    }
+  });
+
+  app.patch("/api/jobs/:id", async (req, res) => {
+    try {
+      const job = await storage.updateJob(req.params.id, req.body);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      res.json(job);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update job" });
+    }
+  });
+
+  app.delete("/api/jobs/:id", async (req, res) => {
+    try {
+      await storage.deleteJob(req.params.id);
+      res.json({ message: "Job deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete job" });
     }
   });
 

@@ -34,16 +34,23 @@ Sidebar with collapsible sections:
 2. **Attendance** - Timesheet, Punches, Accrual Balances, Accruals (tabs)
 3. **Schedule** - Schedules (week view), Scheduled Shifts, Recurring Schedule, Recurring Templates (tabs)
 4. **Employee** - Employee list/CRUD (enhanced form with Employment/Identity/Contact/Payroll/Notes sections), Contacts, Preferences, Wages (wage history with effective dates), Pay Methods (with remittance source/priority/amount type), Titles (CRUD), Employee Groups (CRUD with hierarchy), Ethnic Groups, New Hire Defaults (CRUD)
-5. **Company** - Company Info, Legal Entity (full CRUD with status/type/classification/address), Branches, Departments, Hierarchy, Permissions, Import (tabs)
+5. **Company** - Company Info (with enterprise assignment), Legal Entity (full CRUD), Enterprise (CRUD for top-level holding entities), Divisions (CRUD with company assignment), Branches (with division assignment), Departments (with division assignment), Positions (CRUD with department/reporting hierarchy/salary range), Cost Centers (CRUD for labor cost tracking), Jobs/Projects (CRUD with cost center/dates/status), Hierarchy (visual org tree: Enterprise → Companies → Divisions → Branches → Departments → Positions), Currencies, Quick Start, Permissions, Import (tabs)
 6. **Payroll** - Process Payroll, Tax Wizard (4-step wizard: Select Events → Review/Verify → Submit → Complete), Pay Stubs, Pay Periods, Taxes & Deductions, Remittance (tabs)
 7. **Policy** - Policy Groups, Pay Codes, Accrual Accounts, Recurring Holidays, Pay Formulas, Contributing Pay Codes, Contributing Shifts, Regular Time, Overtime, Premium, Meal, Break, Schedule, Exception, Accrual, Absence, Holiday, Rounding policies (18 tabs, all with full CRUD)
 8. **HR** - Reviews, Qualifications, KPI Groups, Skills, Education, Memberships, Licenses, Languages (tabs)
 9. **Report** - Saved Reports, Employee Reports (Who's In, Employee Info, Audit Trail), Timesheet Reports (Schedule/Timesheet Summary/Detail, Punch Summary, Accrual Balance, Exception Summary), Payroll Reports (Paystub Summary, Payroll Export, General Ledger), Tax Reports, HR Reports (Qualification/Review Summary) - all with CSV export
 
 ## Database Schema
+Enterprise hierarchy tables:
+- `enterprises` - Top-level holding/enterprise entities
+- `companies` - Business entities with policy settings, linked to enterprise via enterpriseId
+- `divisions` - Business units/divisions within a company
+- `positions` - Role definitions with department, reporting hierarchy, salary ranges
+- `cost_centers` - Cost tracking categories for labor allocation
+- `jobs` - Projects/jobs with cost center, dates, status
+
 Core tables:
-- `companies` - Business entities with policy settings (OT threshold, break policies, rounding)
-- `workers` - Employees and contractors with pay rates, contacts, ethnicity
+- `workers` - Employees and contractors with pay rates, contacts, position, cost center, manager
 - `time_punches` - Clock in/out/break events
 - `time_entries` - Daily time records with hours/overtime
 - `schedules` - Shift schedules per worker
@@ -112,6 +119,11 @@ Workers: GET/POST /api/workers, PATCH /api/workers/:id
 Time: GET/POST /api/time-punches, GET/PATCH /api/time-entries
 Schedules: GET/POST /api/schedules
 Payroll: GET/POST /api/payroll-runs, GET /api/payroll-runs/:id/items, PATCH /api/payroll-runs/:id
+Enterprises: GET/POST /api/enterprises, PATCH/DELETE /api/enterprises/:id
+Divisions: GET/POST /api/divisions, PATCH/DELETE /api/divisions/:id
+Positions: GET/POST /api/positions, PATCH/DELETE /api/positions/:id
+Cost Centers: GET/POST /api/cost-centers, PATCH/DELETE /api/cost-centers/:id
+Jobs: GET/POST /api/jobs, PATCH/DELETE /api/jobs/:id
 Departments: GET/POST/PATCH/DELETE /api/departments
 Branches: GET/POST/PATCH/DELETE /api/branches
 Legal Entities: GET/POST/PATCH/DELETE /api/legal-entities

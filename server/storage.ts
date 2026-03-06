@@ -12,6 +12,7 @@ import {
   exceptionPolicies, accrualPolicies, accrualPolicyMilestones,
   absencePolicies, holidayPolicies, roundingPolicies,
   legalEntities,
+  enterprises, divisions, positions, costCenters, jobs,
   type Company, type InsertCompany,
   type Worker, type InsertWorker,
   type TimePunch, type InsertTimePunch,
@@ -61,6 +62,11 @@ import {
   type HolidayPolicy, type InsertHolidayPolicy,
   type RoundingPolicy, type InsertRoundingPolicy,
   type LegalEntity, type InsertLegalEntity,
+  type Enterprise, type InsertEnterprise,
+  type Division, type InsertDivision,
+  type Position, type InsertPosition,
+  type CostCenter, type InsertCostCenter,
+  type Job, type InsertJob,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -292,6 +298,31 @@ export interface IStorage {
   createRoundingPolicy(data: InsertRoundingPolicy): Promise<RoundingPolicy>;
   updateRoundingPolicy(id: string, data: Partial<RoundingPolicy>): Promise<RoundingPolicy | undefined>;
   deleteRoundingPolicy(id: string): Promise<void>;
+
+  getEnterprises(): Promise<Enterprise[]>;
+  createEnterprise(data: InsertEnterprise): Promise<Enterprise>;
+  updateEnterprise(id: string, data: Partial<Enterprise>): Promise<Enterprise | undefined>;
+  deleteEnterprise(id: string): Promise<void>;
+
+  getDivisions(companyId?: string): Promise<Division[]>;
+  createDivision(data: InsertDivision): Promise<Division>;
+  updateDivision(id: string, data: Partial<Division>): Promise<Division | undefined>;
+  deleteDivision(id: string): Promise<void>;
+
+  getPositions(companyId?: string): Promise<Position[]>;
+  createPosition(data: InsertPosition): Promise<Position>;
+  updatePosition(id: string, data: Partial<Position>): Promise<Position | undefined>;
+  deletePosition(id: string): Promise<void>;
+
+  getCostCenters(companyId?: string): Promise<CostCenter[]>;
+  createCostCenter(data: InsertCostCenter): Promise<CostCenter>;
+  updateCostCenter(id: string, data: Partial<CostCenter>): Promise<CostCenter | undefined>;
+  deleteCostCenter(id: string): Promise<void>;
+
+  getJobs(companyId?: string): Promise<Job[]>;
+  createJob(data: InsertJob): Promise<Job>;
+  updateJob(id: string, data: Partial<Job>): Promise<Job | undefined>;
+  deleteJob(id: string): Promise<void>;
 
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
@@ -1127,6 +1158,85 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteLegalEntity(id: string): Promise<void> {
     await db.delete(legalEntities).where(eq(legalEntities.id, id));
+  }
+
+  async getEnterprises(): Promise<Enterprise[]> {
+    return db.select().from(enterprises).orderBy(enterprises.name);
+  }
+  async createEnterprise(data: InsertEnterprise): Promise<Enterprise> {
+    const [r] = await db.insert(enterprises).values(data).returning();
+    return r;
+  }
+  async updateEnterprise(id: string, data: Partial<Enterprise>): Promise<Enterprise | undefined> {
+    const [r] = await db.update(enterprises).set(data).where(eq(enterprises.id, id)).returning();
+    return r;
+  }
+  async deleteEnterprise(id: string): Promise<void> {
+    await db.delete(enterprises).where(eq(enterprises.id, id));
+  }
+
+  async getDivisions(companyId?: string): Promise<Division[]> {
+    if (companyId) return db.select().from(divisions).where(eq(divisions.companyId, companyId)).orderBy(divisions.name);
+    return db.select().from(divisions).orderBy(divisions.name);
+  }
+  async createDivision(data: InsertDivision): Promise<Division> {
+    const [r] = await db.insert(divisions).values(data).returning();
+    return r;
+  }
+  async updateDivision(id: string, data: Partial<Division>): Promise<Division | undefined> {
+    const [r] = await db.update(divisions).set(data).where(eq(divisions.id, id)).returning();
+    return r;
+  }
+  async deleteDivision(id: string): Promise<void> {
+    await db.delete(divisions).where(eq(divisions.id, id));
+  }
+
+  async getPositions(companyId?: string): Promise<Position[]> {
+    if (companyId) return db.select().from(positions).where(eq(positions.companyId, companyId)).orderBy(positions.title);
+    return db.select().from(positions).orderBy(positions.title);
+  }
+  async createPosition(data: InsertPosition): Promise<Position> {
+    const [r] = await db.insert(positions).values(data).returning();
+    return r;
+  }
+  async updatePosition(id: string, data: Partial<Position>): Promise<Position | undefined> {
+    const [r] = await db.update(positions).set(data).where(eq(positions.id, id)).returning();
+    return r;
+  }
+  async deletePosition(id: string): Promise<void> {
+    await db.delete(positions).where(eq(positions.id, id));
+  }
+
+  async getCostCenters(companyId?: string): Promise<CostCenter[]> {
+    if (companyId) return db.select().from(costCenters).where(eq(costCenters.companyId, companyId)).orderBy(costCenters.name);
+    return db.select().from(costCenters).orderBy(costCenters.name);
+  }
+  async createCostCenter(data: InsertCostCenter): Promise<CostCenter> {
+    const [r] = await db.insert(costCenters).values(data).returning();
+    return r;
+  }
+  async updateCostCenter(id: string, data: Partial<CostCenter>): Promise<CostCenter | undefined> {
+    const [r] = await db.update(costCenters).set(data).where(eq(costCenters.id, id)).returning();
+    return r;
+  }
+  async deleteCostCenter(id: string): Promise<void> {
+    await db.delete(costCenters).where(eq(costCenters.id, id));
+  }
+
+  async getJobs(companyId?: string): Promise<Job[]> {
+    if (companyId) return db.select().from(jobs).where(eq(jobs.companyId, companyId)).orderBy(jobs.name);
+    return db.select().from(jobs).orderBy(jobs.name);
+  }
+  async createJob(data: InsertJob): Promise<Job> {
+    const [r] = await db.insert(jobs).values(data).returning();
+    return r;
+  }
+  async updateJob(id: string, data: Partial<Job>): Promise<Job | undefined> {
+    const [r] = await db.update(jobs).set(data).where(eq(jobs.id, id)).returning();
+    return r;
+  }
+  async deleteJob(id: string): Promise<void> {
+    await db.delete(jobs).where(eq(jobs.id, id));
   }
 }
 
