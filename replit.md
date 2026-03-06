@@ -179,13 +179,16 @@ npm install
 # Step 4: Build
 npm run build
 
-# Step 5: Apply schema changes (safe - only adds, never drops)
+# Step 5: Copy session table SQL (required after every build)
+cp ~/PayLink/node_modules/connect-pg-simple/table.sql ~/PayLink/dist/table.sql
+
+# Step 6: Apply schema changes (safe - only adds, never drops)
 npm run db:push
 
-# Step 6: Restart the app
+# Step 7: Restart the app
 pm2 restart paylink
 
-# Step 7: Verify
+# Step 8: Verify
 pm2 logs paylink --lines 10
 ```
 Create the backups directory first: `mkdir -p ~/backups`
