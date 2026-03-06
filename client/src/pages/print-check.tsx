@@ -3,7 +3,7 @@ import { useRoute } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Printer, ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
-import type { PayrollRun, PayrollItem, Worker, Company, TaxDeduction } from "@shared/schema";
+import type { PayrollRun, PayrollItem, Worker, Company, TaxDeduction, CheckTemplate } from "@shared/schema";
 
 function numberToWords(num: number): string {
   const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
@@ -29,18 +29,93 @@ function fmt(val: string | number | null | undefined): string {
   return Number(val || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function CheckStub({
-  item,
-  worker,
-  company,
-  run,
-  deductions,
+const DEFAULT_CONFIG = {
+  showCompanyLogo: true,
+  showCompanyName: true,
+  showCompanyAddress: true,
+  showCheckNumber: true,
+  showMicrLine: true,
+  showEarningsDetail: true,
+  showDeductionsDetail: true,
+  showYtdTotals: true,
+  showPayPeriod: true,
+  showEmployeeAddress: true,
+};
+
+function CompanyHeader({ company, config }: { company: Company; config: Record<string, boolean> }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+      {config.showCompanyLogo && company.logoUrl && (
+        <img src={company.logoUrl} alt="" style={{ height: "40px", width: "40px", objectFit: "contain" }} />
+      )}
+      <div>
+        {config.showCompanyName && <div style={{ fontSize: "14px", fontWeight: "bold" }}>{company.name}</div>}
+        {company.dba && config.showCompanyName && <div style={{ fontSize: "11px" }}>DBA: {company.dba}</div>}
+        {config.showCompanyAddress && company.address && <div style={{ fontSize: "11px" }}>{company.address}</div>}
+        {config.showCompanyAddress && (company.city || company.state || company.zip) && (
+          <div style={{ fontSize: "11px" }}>{[company.city, company.state].filter(Boolean).join(", ")} {company.zip}</div>
+        )}
+        {config.showCompanyAddress && company.phone && <div style={{ fontSize: "11px" }}>{company.phone}</div>}
+      </div>
+    </div>
+  );
+}
+
+function CheckPortion({
+  item, worker, company, run, config,
 }: {
-  item: PayrollItem;
-  worker: Worker;
-  company: Company;
-  run: PayrollRun;
-  deductions: TaxDeduction[];
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; config: Record<string, boolean>;
+}) {
+  const netPay = Number(item.netPay || 0);
+  return (
+    <div style={{ padding: "0.3in 0.5in", display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <CompanyHeader company={company} config={config} />
+        <div style={{ textAlign: "right" }}>
+          {config.showCheckNumber && <div style={{ fontSize: "12px", fontWeight: "bold" }}>CHECK #{item.checkNumber || "—"}</div>}
+          <div style={{ fontSize: "11px" }}>Date: {run.processedAt ? new Date(run.processedAt).toLocaleDateString() : new Date().toLocaleDateString()}</div>
+        </div>
+      </div>
+      <div style={{ margin: "0.15in 0" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+          <div style={{ fontSize: "12px" }}>
+            <span style={{ fontWeight: "bold" }}>PAY TO THE ORDER OF: </span>
+            {worker.firstName} {worker.lastName}
+          </div>
+          <div style={{ border: "1px solid #000", padding: "4px 12px", fontSize: "14px", fontWeight: "bold" }}>
+            ${fmt(netPay)}
+          </div>
+        </div>
+        <div style={{ borderBottom: "1px solid #000", paddingBottom: "4px", fontSize: "11px" }}>
+          {numberToWords(netPay)} Dollars
+        </div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <div style={{ fontSize: "11px" }}>
+          {config.showEmployeeAddress && worker.address && <div>{worker.address}</div>}
+          {config.showEmployeeAddress && (worker.city || worker.state || worker.zip) && (
+            <div>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
+          )}
+        </div>
+        <div style={{ borderBottom: "1px solid #000", width: "3in", height: "0.4in" }}>
+          <div style={{ fontSize: "9px", color: "#999" }}>Authorized Signature</div>
+        </div>
+      </div>
+      {config.showMicrLine && (
+        <div style={{ marginTop: "8px", textAlign: "center" }}>
+          <span style={{ fontSize: "12px", fontFamily: "'MICR', 'Courier New', monospace", letterSpacing: "2px", color: "#333" }}>
+            ⑈021000021⑈ ⑆{company.ein || "000000000"}⑆ {item.checkNumber || "0000"}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StubPortion({
+  item, worker, company, run, deductions, config,
+}: {
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>;
 }) {
   const netPay = Number(item.netPay || 0);
   const grossPay = Number(item.grossPay || 0);
@@ -60,191 +135,183 @@ function CheckStub({
     .filter(d => d.amount > 0);
 
   return (
-    <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Courier New', monospace" }}>
-      <div style={{ height: "3.667in", borderBottom: "1px dashed #999", padding: "0.3in 0.5in", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+    <div style={{ padding: "0.2in 0.4in", fontSize: "10px", height: "100%", display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "8px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          {config.showCompanyLogo && company.logoUrl && (
+            <img src={company.logoUrl} alt="" style={{ height: "28px", width: "28px", objectFit: "contain" }} />
+          )}
           <div>
-            <div style={{ fontSize: "14px", fontWeight: "bold" }}>{company.name}</div>
-            {company.dba && <div style={{ fontSize: "11px" }}>DBA: {company.dba}</div>}
-            {company.address && <div style={{ fontSize: "11px" }}>{company.address}</div>}
-            {(company.city || company.state || company.zip) && (
-              <div style={{ fontSize: "11px" }}>{[company.city, company.state].filter(Boolean).join(", ")} {company.zip}</div>
-            )}
-            {company.phone && <div style={{ fontSize: "11px" }}>{company.phone}</div>}
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: "12px", fontWeight: "bold" }}>CHECK #{item.checkNumber || "—"}</div>
-            <div style={{ fontSize: "11px" }}>Date: {run.processedAt ? new Date(run.processedAt).toLocaleDateString() : new Date().toLocaleDateString()}</div>
+            {config.showCompanyName && <div style={{ fontSize: "12px", fontWeight: "bold" }}>PAY STUB — {company.name}</div>}
+            {!config.showCompanyName && <div style={{ fontSize: "12px", fontWeight: "bold" }}>PAY STUB</div>}
+            {company.ein && <div>EIN: {company.ein}</div>}
           </div>
         </div>
-
-        <div style={{ margin: "0.15in 0" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-            <div style={{ fontSize: "12px" }}>
-              <span style={{ fontWeight: "bold" }}>PAY TO THE ORDER OF: </span>
-              {worker.firstName} {worker.lastName}
-            </div>
-            <div style={{ border: "1px solid #000", padding: "4px 12px", fontSize: "14px", fontWeight: "bold" }}>
-              ${fmt(netPay)}
-            </div>
-          </div>
-          <div style={{ borderBottom: "1px solid #000", paddingBottom: "4px", fontSize: "11px" }}>
-            {numberToWords(netPay)} Dollars
-          </div>
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
-          <div style={{ fontSize: "11px" }}>
-            {worker.address && <div>{worker.address}</div>}
-            {(worker.city || worker.state || worker.zip) && (
-              <div>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
-            )}
-          </div>
-          <div style={{ borderBottom: "1px solid #000", width: "3in", height: "0.4in" }}>
-            <div style={{ fontSize: "9px", color: "#999" }}>Authorized Signature</div>
-          </div>
+        <div style={{ textAlign: "right" }}>
+          <div><strong>Employee:</strong> {worker.firstName} {worker.lastName}</div>
+          <div><strong>Employee #:</strong> {worker.employeeNumber || "—"}</div>
+          <div><strong>SSN:</strong> {worker.ssn ? "XXX-XX-" + worker.ssn.slice(-4) : "XXX-XX-XXXX"}</div>
         </div>
       </div>
 
-      <div style={{ height: "7.333in", padding: "0.3in 0.4in", fontSize: "10px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
-          <div>
-            <div style={{ fontSize: "14px", fontWeight: "bold", marginBottom: "4px" }}>PAY STUB</div>
-            <div style={{ fontSize: "11px", fontWeight: "bold" }}>{company.name}</div>
-            {company.ein && <div>EIN: {company.ein}</div>}
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <div><strong>Employee:</strong> {worker.firstName} {worker.lastName}</div>
-            <div><strong>Employee #:</strong> {worker.employeeNumber || "—"}</div>
-            <div><strong>SSN:</strong> {worker.ssn ? "XXX-XX-" + worker.ssn.slice(-4) : "XXX-XX-XXXX"}</div>
-            <div><strong>Department:</strong> {worker.department || "—"}</div>
-          </div>
+      {config.showPayPeriod && (
+        <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "2px solid #000", paddingBottom: "4px", marginBottom: "8px" }}>
+          <div><strong>Pay Period:</strong> {run.periodStart} to {run.periodEnd}</div>
+          {config.showCheckNumber && <div><strong>Check #:</strong> {item.checkNumber || "—"}</div>}
+          <div><strong>Pay Date:</strong> {run.processedAt ? new Date(run.processedAt).toLocaleDateString() : "—"}</div>
         </div>
+      )}
 
-        <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "2px solid #000", paddingBottom: "6px", marginBottom: "10px" }}>
-          <div>
-            <strong>Pay Period:</strong> {run.periodStart} to {run.periodEnd}
-          </div>
-          <div>
-            <strong>Check #:</strong> {item.checkNumber || "—"}
-          </div>
-          <div>
-            <strong>Pay Date:</strong> {run.processedAt ? new Date(run.processedAt).toLocaleDateString() : "—"}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", gap: "20px" }}>
+      <div style={{ display: "flex", gap: "16px", flex: 1 }}>
+        {config.showEarningsDetail && (
           <div style={{ flex: 1 }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #000" }}>
-                  <th style={{ textAlign: "left", padding: "4px 2px", fontWeight: "bold" }}>EARNINGS</th>
-                  <th style={{ textAlign: "right", padding: "4px 2px", fontWeight: "bold" }}>HOURS</th>
-                  <th style={{ textAlign: "right", padding: "4px 2px", fontWeight: "bold" }}>RATE</th>
-                  <th style={{ textAlign: "right", padding: "4px 2px", fontWeight: "bold" }}>CURRENT</th>
-                  <th style={{ textAlign: "right", padding: "4px 2px", fontWeight: "bold" }}>YTD</th>
+                  <th style={{ textAlign: "left", padding: "3px 2px", fontWeight: "bold" }}>EARNINGS</th>
+                  <th style={{ textAlign: "right", padding: "3px 2px", fontWeight: "bold" }}>HOURS</th>
+                  <th style={{ textAlign: "right", padding: "3px 2px", fontWeight: "bold" }}>RATE</th>
+                  <th style={{ textAlign: "right", padding: "3px 2px", fontWeight: "bold" }}>CURRENT</th>
+                  {config.showYtdTotals && <th style={{ textAlign: "right", padding: "3px 2px", fontWeight: "bold" }}>YTD</th>}
                 </tr>
               </thead>
               <tbody>
                 <tr>
-                  <td style={{ padding: "3px 2px" }}>Regular</td>
-                  <td style={{ textAlign: "right", padding: "3px 2px" }}>{fmt(item.regularHours)}</td>
-                  <td style={{ textAlign: "right", padding: "3px 2px" }}>${fmt(item.payRate)}</td>
-                  <td style={{ textAlign: "right", padding: "3px 2px" }}>${fmt(item.regularPay)}</td>
-                  <td style={{ textAlign: "right", padding: "3px 2px" }}>${fmt(item.ytdGross)}</td>
+                  <td style={{ padding: "2px" }}>Regular</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.regularHours)}</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.payRate)}</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.regularPay)}</td>
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdGross)}</td>}
                 </tr>
                 {Number(item.overtimeHours || 0) > 0 && (
                   <tr>
-                    <td style={{ padding: "3px 2px" }}>Overtime</td>
-                    <td style={{ textAlign: "right", padding: "3px 2px" }}>{fmt(item.overtimeHours)}</td>
-                    <td style={{ textAlign: "right", padding: "3px 2px" }}>${fmt(Number(item.payRate || 0) * 1.5)}</td>
-                    <td style={{ textAlign: "right", padding: "3px 2px" }}>${fmt(item.overtimePay)}</td>
-                    <td style={{ textAlign: "right", padding: "3px 2px" }}>—</td>
+                    <td style={{ padding: "2px" }}>Overtime</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.overtimeHours)}</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(Number(item.payRate || 0) * 1.5)}</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.overtimePay)}</td>
+                    {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
                   </tr>
                 )}
                 <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
-                  <td style={{ padding: "3px 2px" }}>GROSS PAY</td>
-                  <td style={{ textAlign: "right", padding: "3px 2px" }}>
-                    {fmt(Number(item.regularHours || 0) + Number(item.overtimeHours || 0))}
-                  </td>
-                  <td style={{ padding: "3px 2px" }}></td>
-                  <td style={{ textAlign: "right", padding: "3px 2px" }}>${fmt(item.grossPay)}</td>
-                  <td style={{ textAlign: "right", padding: "3px 2px" }}>${fmt(item.ytdGross)}</td>
+                  <td style={{ padding: "2px" }}>GROSS PAY</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(Number(item.regularHours || 0) + Number(item.overtimeHours || 0))}</td>
+                  <td style={{ padding: "2px" }}></td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.grossPay)}</td>
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdGross)}</td>}
                 </tr>
               </tbody>
             </table>
           </div>
+        )}
 
+        {config.showDeductionsDetail && (
           <div style={{ flex: 1 }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #000" }}>
-                  <th style={{ textAlign: "left", padding: "4px 2px", fontWeight: "bold" }}>DEDUCTIONS</th>
-                  <th style={{ textAlign: "right", padding: "4px 2px", fontWeight: "bold" }}>CURRENT</th>
-                  <th style={{ textAlign: "right", padding: "4px 2px", fontWeight: "bold" }}>YTD</th>
+                  <th style={{ textAlign: "left", padding: "3px 2px", fontWeight: "bold" }}>DEDUCTIONS</th>
+                  <th style={{ textAlign: "right", padding: "3px 2px", fontWeight: "bold" }}>CURRENT</th>
+                  {config.showYtdTotals && <th style={{ textAlign: "right", padding: "3px 2px", fontWeight: "bold" }}>YTD</th>}
                 </tr>
               </thead>
               <tbody>
                 {deductionBreakdown.map((d, i) => (
                   <tr key={i}>
-                    <td style={{ padding: "3px 2px" }}>{d.name}</td>
-                    <td style={{ textAlign: "right", padding: "3px 2px" }}>${fmt(d.amount)}</td>
-                    <td style={{ textAlign: "right", padding: "3px 2px" }}>—</td>
+                    <td style={{ padding: "2px" }}>{d.name}</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(d.amount)}</td>
+                    {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
                   </tr>
                 ))}
                 {deductionBreakdown.length === 0 && (
-                  <tr>
-                    <td style={{ padding: "3px 2px", color: "#999" }} colSpan={3}>No deductions</td>
-                  </tr>
+                  <tr><td style={{ padding: "2px", color: "#999" }} colSpan={config.showYtdTotals ? 3 : 2}>No deductions</td></tr>
                 )}
                 <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
-                  <td style={{ padding: "3px 2px" }}>TOTAL DEDUCTIONS</td>
-                  <td style={{ textAlign: "right", padding: "3px 2px" }}>${fmt(totalDeductions)}</td>
-                  <td style={{ textAlign: "right", padding: "3px 2px" }}>${fmt(item.ytdDeductions)}</td>
+                  <td style={{ padding: "2px" }}>TOTAL DEDUCTIONS</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(totalDeductions)}</td>
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdDeductions)}</td>}
                 </tr>
               </tbody>
             </table>
           </div>
-        </div>
+        )}
+      </div>
 
-        <div style={{ marginTop: "20px", borderTop: "2px solid #000", paddingTop: "10px" }}>
+      {config.showYtdTotals && (
+        <div style={{ marginTop: "8px", borderTop: "2px solid #000", paddingTop: "6px" }}>
           <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <div style={{ display: "flex", gap: "40px" }}>
-              <div>
-                <div style={{ fontSize: "9px", color: "#666" }}>GROSS PAY</div>
-                <div style={{ fontSize: "14px", fontWeight: "bold" }}>${fmt(grossPay)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: "9px", color: "#666" }}>DEDUCTIONS</div>
-                <div style={{ fontSize: "14px", fontWeight: "bold" }}>${fmt(totalDeductions)}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: "9px", color: "#666" }}>NET PAY</div>
-                <div style={{ fontSize: "14px", fontWeight: "bold" }}>${fmt(netPay)}</div>
-              </div>
+            <div style={{ display: "flex", gap: "30px" }}>
+              <div><div style={{ fontSize: "8px", color: "#666" }}>GROSS PAY</div><div style={{ fontSize: "12px", fontWeight: "bold" }}>${fmt(grossPay)}</div></div>
+              <div><div style={{ fontSize: "8px", color: "#666" }}>DEDUCTIONS</div><div style={{ fontSize: "12px", fontWeight: "bold" }}>${fmt(totalDeductions)}</div></div>
+              <div><div style={{ fontSize: "8px", color: "#666" }}>NET PAY</div><div style={{ fontSize: "12px", fontWeight: "bold" }}>${fmt(netPay)}</div></div>
             </div>
-            <div>
-              <div style={{ display: "flex", gap: "30px" }}>
-                <div>
-                  <div style={{ fontSize: "9px", color: "#666" }}>YTD GROSS</div>
-                  <div style={{ fontWeight: "bold" }}>${fmt(item.ytdGross)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: "9px", color: "#666" }}>YTD DEDUCTIONS</div>
-                  <div style={{ fontWeight: "bold" }}>${fmt(item.ytdDeductions)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: "9px", color: "#666" }}>YTD NET</div>
-                  <div style={{ fontWeight: "bold" }}>${fmt(item.ytdNet)}</div>
-                </div>
-              </div>
+            <div style={{ display: "flex", gap: "20px" }}>
+              <div><div style={{ fontSize: "8px", color: "#666" }}>YTD GROSS</div><div style={{ fontWeight: "bold" }}>${fmt(item.ytdGross)}</div></div>
+              <div><div style={{ fontSize: "8px", color: "#666" }}>YTD DEDUCTIONS</div><div style={{ fontWeight: "bold" }}>${fmt(item.ytdDeductions)}</div></div>
+              <div><div style={{ fontSize: "8px", color: "#666" }}>YTD NET</div><div style={{ fontWeight: "bold" }}>${fmt(item.ytdNet)}</div></div>
             </div>
           </div>
         </div>
+      )}
 
-        <div style={{ position: "relative", bottom: 0, marginTop: "20px", textAlign: "center", fontSize: "9px", color: "#999", borderTop: "1px solid #ccc", paddingTop: "6px" }}>
-          This is a computer-generated document. {company.name} {company.ein ? `- EIN: ${company.ein}` : ""}
-        </div>
+      <div style={{ marginTop: "6px", textAlign: "center", fontSize: "8px", color: "#999", borderTop: "1px solid #ccc", paddingTop: "4px" }}>
+        This is a computer-generated document. {company.name} {company.ein ? `- EIN: ${company.ein}` : ""}
+      </div>
+    </div>
+  );
+}
+
+function StandardCheck({
+  item, worker, company, run, deductions, config,
+}: {
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>;
+}) {
+  return (
+    <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Courier New', monospace" }}>
+      <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
+        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} />
+      </div>
+      <div style={{ height: "7.333in" }}>
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
+      </div>
+    </div>
+  );
+}
+
+function VoucherCheck({
+  item, worker, company, run, deductions, config,
+}: {
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>;
+}) {
+  return (
+    <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Courier New', monospace" }}>
+      <div style={{ height: "3.333in", borderBottom: "1px dashed #999" }}>
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
+      </div>
+      <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
+        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} />
+      </div>
+      <div style={{ height: "4in" }}>
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
+      </div>
+    </div>
+  );
+}
+
+function ThreePartCheck({
+  item, worker, company, run, deductions, config,
+}: {
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>;
+}) {
+  return (
+    <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Courier New', monospace" }}>
+      <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
+      </div>
+      <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
+      </div>
+      <div style={{ height: "3.666in" }}>
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
       </div>
     </div>
   );
@@ -278,6 +345,30 @@ export default function PrintCheckPage() {
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: taxesDeductions = [] } = useQuery<TaxDeduction[]>({ queryKey: ["/api/taxes-deductions"] });
 
+  const company = run ? companies.find(c => c.id === run.companyId) : undefined;
+
+  const { data: templates = [] } = useQuery<CheckTemplate[]>({
+    queryKey: ["/api/check-templates", company?.id],
+    queryFn: async () => {
+      const res = await fetch(`/api/check-templates?companyId=${company!.id}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch templates");
+      return res.json();
+    },
+    enabled: !!company?.id,
+  });
+
+  const activeTemplate = templates.find(t => t.isDefault) || templates[0];
+  let templateType = activeTemplate?.templateType || "standard";
+  let config: Record<string, boolean>;
+  try {
+    config = activeTemplate?.layoutConfig ? JSON.parse(activeTemplate.layoutConfig) : { ...DEFAULT_CONFIG };
+  } catch {
+    config = { ...DEFAULT_CONFIG };
+  }
+  Object.keys(DEFAULT_CONFIG).forEach(k => {
+    if (config[k] === undefined) config[k] = (DEFAULT_CONFIG as any)[k];
+  });
+
   if (!run || !runId) {
     return (
       <div className="p-6 text-center text-muted-foreground" data-testid="text-loading-checks">
@@ -301,10 +392,11 @@ export default function PrintCheckPage() {
     );
   }
 
-  const company = companies.find(c => c.id === run.companyId);
   const companyDeductions = taxesDeductions.filter(d => d.companyId === run.companyId);
-
   const getWorker = (id: string) => workers.find(w => w.id === id);
+
+  const CheckComponent = templateType === "voucher" ? VoucherCheck :
+    templateType === "three-part" ? ThreePartCheck : StandardCheck;
 
   return (
     <div>
@@ -317,8 +409,8 @@ export default function PrintCheckPage() {
         <Button onClick={() => window.print()} data-testid="button-print-checks">
           <Printer className="mr-2 h-4 w-4" />Print Checks
         </Button>
-        <span className="text-sm text-muted-foreground">
-          {items.length} check(s) for {company?.name || ""}
+        <span className="text-sm text-muted-foreground" data-testid="text-check-info">
+          {items.length} check(s) for {company?.name || ""} — Template: {activeTemplate?.name || "Default"}
         </span>
       </div>
 
@@ -327,13 +419,14 @@ export default function PrintCheckPage() {
           const worker = getWorker(item.workerId);
           if (!worker || !company) return null;
           return (
-            <CheckStub
+            <CheckComponent
               key={item.id}
               item={item}
               worker={worker}
               company={company}
               run={run}
               deductions={companyDeductions}
+              config={config}
             />
           );
         })}

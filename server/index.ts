@@ -35,6 +35,12 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+import path from "path";
+import fs from "fs";
+const uploadsDir = path.join(process.cwd(), "uploads");
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+app.use("/uploads", express.static(uploadsDir));
+
 const isProduction = process.env.NODE_ENV === "production";
 const PgStore = connectPgSimple(session);
 app.use(
