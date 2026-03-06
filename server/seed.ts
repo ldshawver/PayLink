@@ -1,7 +1,13 @@
 import { db } from "./db";
 import { eq } from "drizzle-orm";
-import { companies, workers, timeEntries, schedules, taxesDeductions, users } from "@shared/schema";
+import { companies, workers, timeEntries, schedules, taxesDeductions, users, roles, rolePermissions, userRoles } from "@shared/schema";
 import bcrypt from "bcrypt";
+
+const PERMISSION_RESOURCES = [
+  "companies", "workers", "schedules", "payroll", "timesheets",
+  "departments", "branches", "divisions", "positions",
+  "policies", "hr", "reports", "settings", "permissions"
+];
 
 async function ensureAdminUser() {
   try {
@@ -23,8 +29,81 @@ async function ensureAdminUser() {
   }
 }
 
+async function seedRolesAndPermissions() {
+  try {
+    const existingRoles = await db.select().from(roles);
+    if (existingRoles.length > 0) {
+      console.log("Roles already seeded, skipping");
+      return;
+    }
+
+    const roleDefinitions = [
+      { name: "Enterprise Admin", description: "Full access across all companies in the enterprise", level: 1, isSystem: true },
+      { name: "Company Admin", description: "Full access within assigned company", level: 2, isSystem: true },
+      { name: "Manager", description: "Manage employees, schedules, timesheets within scope", level: 3, isSystem: true },
+      { name: "Supervisor", description: "View and approve timesheets, manage schedules within scope", level: 4, isSystem: true },
+      { name: "Employee", description: "View own data, punch in/out, view schedule", level: 5, isSystem: true },
+    ];
+
+    const createdRoles: Record<string, string> = {};
+    for (const roleDef of roleDefinitions) {
+      const [r] = await db.insert(roles).values(roleDef).returning();
+      createdRoles[roleDef.name] = r.id;
+    }
+
+    const permissionMatrix: Record<string, { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean }> = {
+      "Enterprise Admin": { canView: true, canCreate: true, canEdit: true, canDelete: true },
+      "Company Admin": { canView: true, canCreate: true, canEdit: true, canDelete: true },
+      "Manager": { canView: true, canCreate: true, canEdit: true, canDelete: false },
+      "Supervisor": { canView: true, canCreate: false, canEdit: true, canDelete: false },
+      "Employee": { canView: true, canCreate: false, canEdit: false, canDelete: false },
+    };
+
+    const managerResources = ["workers", "schedules", "timesheets", "reports"];
+    const supervisorResources = ["schedules", "timesheets"];
+    const employeeResources = ["timesheets", "schedules"];
+
+    for (const roleName of Object.keys(createdRoles)) {
+      const roleId = createdRoles[roleName];
+      const perms = permissionMatrix[roleName];
+      let resources = PERMISSION_RESOURCES;
+
+      if (roleName === "Manager") resources = managerResources;
+      else if (roleName === "Supervisor") resources = supervisorResources;
+      else if (roleName === "Employee") resources = employeeResources;
+
+      for (const resource of resources) {
+        let actualPerms = { ...perms };
+        if (roleName === "Employee") {
+          actualPerms = { canView: true, canCreate: false, canEdit: false, canDelete: false };
+        }
+        await db.insert(rolePermissions).values({
+          roleId,
+          resource,
+          ...actualPerms,
+        });
+      }
+    }
+
+    const adminUser = await db.select().from(users).where(eq(users.username, "admin"));
+    if (adminUser.length > 0 && createdRoles["Enterprise Admin"]) {
+      await db.insert(userRoles).values({
+        userId: adminUser[0].id,
+        roleId: createdRoles["Enterprise Admin"],
+        scopeType: "enterprise",
+        scopeId: null,
+      });
+    }
+
+    console.log("Default roles, permissions, and admin assignment seeded");
+  } catch (e: any) {
+    console.log("Could not seed roles:", e?.message || e);
+  }
+}
+
 export async function seedDatabase() {
   await ensureAdminUser();
+  await seedRolesAndPermissions();
 
   try {
     const existingCompanies = await db.select().from(companies);

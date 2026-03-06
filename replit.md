@@ -34,7 +34,7 @@ Sidebar with collapsible sections:
 2. **Attendance** - Timesheet, Punches, Accrual Balances, Accruals (tabs)
 3. **Schedule** - Schedules (week view), Scheduled Shifts, Recurring Schedule, Recurring Templates (tabs)
 4. **Employee** - Employee list/CRUD (enhanced form with Employment/Identity/Contact/Payroll/Notes sections), Contacts, Preferences, Wages (wage history with effective dates), Pay Methods (with remittance source/priority/amount type), Titles (CRUD), Employee Groups (CRUD with hierarchy), Ethnic Groups, New Hire Defaults (CRUD)
-5. **Company** - Company Info (with enterprise assignment), Legal Entity (full CRUD), Enterprise (CRUD for top-level holding entities), Divisions (CRUD with company assignment), Branches (with division assignment), Departments (with division assignment), Positions (CRUD with department/reporting hierarchy/salary range), Cost Centers (CRUD for labor cost tracking), Jobs/Projects (CRUD with cost center/dates/status), Hierarchy (visual org tree: Enterprise → Companies → Divisions → Branches → Departments → Positions), Currencies, Quick Start, Permissions, Import (tabs)
+5. **Company** - Company Info (with enterprise assignment), Legal Entity (full CRUD), Enterprise (CRUD for top-level holding entities), Divisions (CRUD with company assignment), Branches (with division assignment), Departments (with division assignment), Positions (CRUD with department/reporting hierarchy/salary range), Cost Centers (CRUD for labor cost tracking), Jobs/Projects (CRUD with cost center/dates/status), Hierarchy (visual org tree: Enterprise → Companies → Divisions → Branches → Departments → Positions), Currencies, Quick Start, Permissions (Roles CRUD, Permission Matrix with resource/action toggles, User Role Assignments with scope), Import (tabs)
 6. **Payroll** - Process Payroll, Tax Wizard (4-step wizard: Select Events → Review/Verify → Submit → Complete), Pay Stubs, Pay Periods, Taxes & Deductions, Remittance (tabs)
 7. **Policy** - Policy Groups, Pay Codes, Accrual Accounts, Recurring Holidays, Pay Formulas, Contributing Pay Codes, Contributing Shifts, Regular Time, Overtime, Premium, Meal, Break, Schedule, Exception, Accrual, Absence, Holiday, Rounding policies (18 tabs, all with full CRUD)
 8. **HR** - Reviews, Qualifications, KPI Groups, Skills, Education, Memberships, Licenses, Languages (tabs)
@@ -85,6 +85,11 @@ Extended tables:
 - `pay_stub_amendments` - One-time pay adjustments per worker
 - `pay_stub_transactions` - Payment transaction records
 - `pay_period_schedules` - Recurring pay period schedule definitions
+
+Permissions tables:
+- `roles` - Role definitions (Enterprise Admin, Company Admin, Manager, Supervisor, Employee) with level hierarchy and isSystem flag
+- `role_permissions` - Permission matrix per role (resource × action: canView/canCreate/canEdit/canDelete)
+- `user_roles` - User-to-role assignments with scope (enterprise/company/department/branch + scopeId)
 
 Policy tables (15 types):
 - `pay_formulas` - Pay calculation formulas (multiplier, flat rate, hourly, salary)
@@ -146,6 +151,10 @@ Pay Period Schedules: GET/POST/PATCH/DELETE /api/pay-period-schedules
 Dashboard: GET /api/dashboard/stats
 Policy Types: GET/POST/PATCH/DELETE for /api/pay-formulas, /api/contributing-pay-codes, /api/contributing-shifts, /api/regular-time-policies, /api/overtime-policies, /api/premium-policies, /api/meal-policies, /api/break-policies, /api/schedule-policies, /api/exception-policies, /api/accrual-policies, /api/absence-policies, /api/holiday-policies, /api/rounding-policies
 Accrual Milestones: GET/POST/DELETE /api/accrual-policy-milestones
+Roles: GET/POST/PATCH/DELETE /api/roles (admin-only for mutations)
+Role Permissions: GET/POST/PATCH/DELETE /api/role-permissions, POST /api/role-permissions/bulk (admin-only)
+User Roles: GET/POST/DELETE /api/user-roles (admin-only for mutations)
+Users: GET /api/users (returns id, username, role, companyId)
 
 ## Color Theme
 Teal-to-blue gradient matching PayLink logo: primary HSL(180, 55%, 42%), dark sidebar
