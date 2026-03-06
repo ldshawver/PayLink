@@ -1,0 +1,275 @@
+root@paylink:~/PayLink# psql -U lshawver -h 127.0.0.1 -d paylink -c "
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS enterprise_id VARCHAR;
+ALTER TABLE departments ADD COLUMN IF NOT EXISTS division_id VARCHAR;
+ALTER TABLE branches ADD COLUMN IF NOT EXISTS division_id VARCHAR;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS position_id VARCHAR;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS cost_center_id VARCHAR;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS manager_id VARCHAR;
+CREATE TABLE IF NOT EXISTS enterprises (id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL, description TEXT, website TEXT, logo_url TEXT, created_at TIMESTAMP DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS divisions (id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(), company_id VARCHAR NOT NULL REFERENCES companies(id), name TEXT NOT NULL, description TEXT, is_active BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS positions (id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(), company_id VARCHAR NOT NULL REFERENCES companies(id), department_id VARCHAR, title TEXT NOT NULL, description TEXT, reports_to_position_id VARCHAR, salary_range_min NUMERIC, salary_range_max NUMERIC, is_active BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS cost_centers (id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(), company_id VARCHAR NOT NULL REFERENCES companies(id), name TEXT NOT NULL, code TEXT, description TEXT, is_active BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW());
+DO \$\$ BEGIN CREATE TYPE job_status AS ENUM ('active', 'completed', 'cancelled', 'on_hold'); EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;
+CREATE TABLE IF NOT EXISTS jobs (id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(), company_id VARCHAR NOT NULL REFERENCES companies(id), cost_center_id VARCHAR, name TEXT NOT NULL, description TEXT, start_date DATE, end_date DATE, status job_status DEFAULT 'active', created_at TIMESTAMP DEFAULT NOW());
+"
+Password for user lshawver: 
+ERROR:  must be owner of table companies
+root@paylink:~/PayLink# sudo -u postgres psql -d paylink -c "ALTER TABLE companies OWNER TO lshawver; ALTER TABLE departments OWNER TO lshawver; ALTER TABLE branches OWNER TO lshawver; ALTER TABLE workers OWNER TO lshawver;"
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+root@paylink:~/PayLink# psql -U lshawver -h 127.0.0.1 -d paylink -c "
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS enterprise_id VARCHAR;
+ALTER TABLE departments ADD COLUMN IF NOT EXISTS division_id VARCHAR;
+ALTER TABLE branches ADD COLUMN IF NOT EXISTS division_id VARCHAR;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS position_id VARCHAR;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS cost_center_id VARCHAR;
+ALTER TABLE workers ADD COLUMN IF NOT EXISTS manager_id VARCHAR;
+CREATE TABLE IF NOT EXISTS enterprises (id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL, description TEXT, website TEXT, logo_url TEXT, created_at TIMESTAMP DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS divisions (id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(), company_id VARCHAR NOT NULL REFERENCES companies(id), name TEXT NOT NULL, description TEXT, is_active BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS positions (id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(), company_id VARCHAR NOT NULL REFERENCES companies(id), department_id VARCHAR, title TEXT NOT NULL, description TEXT, reports_to_position_id VARCHAR, salary_range_min NUMERIC, salary_range_max NUMERIC, is_active BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS cost_centers (id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(), company_id VARCHAR NOT NULL REFERENCES companies(id), name TEXT NOT NULL, code TEXT, description TEXT, is_active BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT NOW());
+DO \$\$ BEGIN CREATE TYPE job_status AS ENUM ('active', 'completed', 'cancelled', 'on_hold'); EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;
+CREATE TABLE IF NOT EXISTS jobs (id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(), company_id VARCHAR NOT NULL REFERENCES companies(id), cost_center_id VARCHAR, name TEXT NOT NULL, description TEXT, start_date DATE, end_date DATE, status job_status DEFAULT 'active', created_at TIMESTAMP DEFAULT NOW());
+"
+Password for user lshawver: 
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+DO
+CREATE TABLE
+root@paylink:~/PayLink# pg_dump -U lshawver -h 127.0.0.1 paylink > ~/backups/paylink_backup_$(date +%Y%m%d_%H%M%S).sql
+Password: 
+root@paylink:~/PayLink# cd ~/PayLink
+git pull origin main
+npm install
+npm run build
+From github.com:ldshawver/PayLink
+ * branch            main       -> FETCH_HEAD
+Already up to date.
+
+up to date, audited 451 packages in 2s
+
+67 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+
+> rest-express@1.0.0 build
+> tsx script/build.ts
+
+building client...
+vite v7.3.1 building client environment for production...
+
+A PostCSS plugin did not pass the `from` option to `postcss.parse`. This may cause imported assets to be incorrectly transformed. If you've recently added a PostCSS plugin that raised this warning, please contact the package author to fix the issue.
+✓ 1756 modules transformed.
+../dist/public/index.html                                                    2.26 kB │ gzip:   0.88 kB
+../dist/public/assets/PayLink_Logo_transparent_1771416877301-C_7uCr63.png  193.11 kB
+../dist/public/assets/index-BTwkpFtd.css                                    74.56 kB │ gzip:  12.39 kB
+../dist/public/assets/index-D5mH67tn.js                                    798.18 kB │ gzip: 183.21 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 11.60s
+building server...
+
+  dist/index.cjs  1.1mb ⚠️
+
+⚡ Done in 961ms
+root@paylink:~/PayLink# pm2 restart paylink
+pm2 logs paylink --lines 10
+Use --update-env to update environment variables
+[PM2] Applying action restartProcessId on app [paylink](ids: [ 0 ])
+[PM2] [paylink](0) ✓
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ 1.0.0   │ fork    │ 359032   │ 0s     │ 6    │ online    │ 0%       │ 17.8mb   │ root     │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[TAILING] Tailing last 10 lines for [paylink] process (change the value with --lines option)
+/root/.pm2/logs/paylink-error.log last 10 lines:
+0|paylink  |   errno: -2,
+0|paylink  |   code: 'ENOENT',
+0|paylink  |   syscall: 'open',
+0|paylink  |   path: '/root/PayLink/dist/table.sql'
+0|paylink  | }
+0|paylink  | Error: ENOENT: no such file or directory, open '/root/PayLink/dist/table.sql'
+0|paylink  |     at async open (node:internal/fs/promises:634:25)
+0|paylink  |     at async Object.readFile (node:internal/fs/promises:1236:14)
+0|paylink  |     at async i._rawEnsureSessionStoreTable (/root/PayLink/dist/index.cjs:71:7209)
+0|paylink  |     at async i._asyncQuery (/root/PayLink/dist/index.cjs:71:8294)
+
+/root/.pm2/logs/paylink-out.log last 10 lines:
+0|paylink  | ":"(916) 307-4621","isActive":true,"createdAt":"2026-03-06T06:14:01.982Z"},{"id":"a8ca5eb9-f97c-44fb-83d5-3ea88f2a83a3","companyId":"7ab13b28-4994-4197-8cf2-16d8c9ac6f86","name":"Remote","code":"R","address":"400 19th Street #3","city":"Sacramento","state":"CA","zip":"95811","phone":"(916) 307-4621","isActive":true,"createdAt":"2026-03-06T06:14:33.122Z"},{"id":"48a67454-da76-418d-8d13-6330767eb207","companyId":"a17e275b-c26e-4b86-8fe3-b7261ff30666","name":"Remote","code":"R","address":"400 19th Street #3","city":"Sacramento","state":"CA","zip":"95811","phone":"(845) 470-0120","isActive":true,"createdAt":"2026-03-06T06:15:14.240Z"}]
+0|paylink  | 7:14:41 AM [express] GET /api/departments 304 in 4ms :: [{"id":"4ff778cf-967e-4f18-b6be-f1199c4cbda5","companyId":"7ab13b28-4994-4197-8cf2-16d8c9ac6f86","name":"Maintenance","code":"M","managerId":null,"parentId":null,"isActive":true,"createdAt":"2026-03-06T06:17:30.800Z"},{"id":"6090d6ac-d235-4d64-90bd-5c6fcacbc376","companyId":"a17e275b-c26e-4b86-8fe3-b7261ff30666","name":"Marketing","code":"MKT","managerId":null,"parentId":null,"isActive":true,"createdAt":"2026-03-06T06:18:35.911Z"},{"id":"30cb3cfc-420b-448b-8624-c7107e18fa07","companyId":"a17e275b-c26e-4b86-8fe3-b7261ff30666","name":"Operations","code":"OP","managerId":null,"parentId":null,"isActive":true,"createdAt":"2026-03-06T06:12:18.556Z"},{"id":"89e0afb1-5b33-4c4f-8c1b-2faeb3790b11","companyId":"15a20637-31ac-452c-aa28-529e84c49cde","name":"Operations","code":"OP","managerId":null,"parentId":null,"isActive":true,"createdAt":"2026-03-06T06:12:35.474Z"},{"id":"e56bf54a-b754-44c4-b489-d20cb5b2547a","companyId":"7218f3c4-5803-4e7d-946a-2876e4832be1","name":"Operations","code":"OP","managerId":null,"parentId":null,"isActive":true,"createdAt":"2026-03-06T06:12:50.804Z"},{"id":"106c4c29-4bb4-456d-bedd-45af98d2cff6","companyId":"7ab13b28-4994-4197-8cf2-16d8c9ac6f86","name":"Operations","code":"OP","managerId":null,"parentId":null,"isActive":true,"createdAt":"2026-03-06T06:13:02.164Z"}]
+
+0|paylink  | 7:16:27 AM [express] serving on port 8080
+
+^Z
+[1]+  Stopped                 pm2 logs paylink --lines 10
+root@paylink:~/PayLink# cp ~/PayLink/node_modules/connect-pg-simple/table.sql ~/PayLink/dist/table.sql
+pm2 restart paylink
+pm2 logs paylink --err --lines 5
+Use --update-env to update environment variables
+[PM2] Applying action restartProcessId on app [paylink](ids: [ 0 ])
+[PM2] [paylink](0) ✓
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ 1.0.0   │ fork    │ 359070   │ 0s     │ 7    │ online    │ 0%       │ 17.6mb   │ root     │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[TAILING] Tailing last 5 lines for [paylink] process (change the value with --lines option)
+/root/.pm2/logs/paylink-error.log last 5 lines:
+0|paylink  | Error: ENOENT: no such file or directory, open '/root/PayLink/dist/table.sql'
+0|paylink  |     at async open (node:internal/fs/promises:634:25)
+0|paylink  |     at async Object.readFile (node:internal/fs/promises:1236:14)
+0|paylink  |     at async i._rawEnsureSessionStoreTable (/root/PayLink/dist/index.cjs:71:7209)
+0|paylink  |     at async i._asyncQuery (/root/PayLink/dist/index.cjs:71:8294)
+
+cp ~/PayLink/node_modules/connect-pg-simple/table.sql ~/PayLink/dist/table.sql
+pm2 restart paylink
+pm2 logs paylink --err --lines 5
+^Z
+[2]+  Stopped                 pm2 logs paylink --err --lines 5
+root@paylink:~/PayLink# cp ~/PayLink/node_modules/connect-pg-simple/table.sql ~/PayLink/dist/table.sql
+pm2 restart paylink
+pm2 logs paylink --err --lines 5
+Use --update-env to update environment variables
+[PM2] Applying action restartProcessId on app [paylink](ids: [ 0 ])
+[PM2] [paylink](0) ✓
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ 1.0.0   │ fork    │ 359103   │ 0s     │ 8    │ online    │ 0%       │ 18.1mb   │ root     │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[TAILING] Tailing last 5 lines for [paylink] process (change the value with --lines option)
+/root/.pm2/logs/paylink-error.log last 5 lines:
+0|paylink  | Error: ENOENT: no such file or directory, open '/root/PayLink/dist/table.sql'
+0|paylink  |     at async open (node:internal/fs/promises:634:25)
+0|paylink  |     at async Object.readFile (node:internal/fs/promises:1236:14)
+0|paylink  |     at async i._rawEnsureSessionStoreTable (/root/PayLink/dist/index.cjs:71:7209)
+0|paylink  |     at async i._asyncQuery (/root/PayLink/dist/index.cjs:71:8294)
+
+^Z
+[3]+  Stopped                 pm2 logs paylink --err --lines 5
+root@paylink:~/PayLink# cat > ~/PayLink/dist/table.sql << 'EOF'
+CREATE TABLE IF NOT EXISTS "session" (
+  "sid" varchar NOT NULL COLLATE "default",
+  "sess" json NOT NULL,
+  "expire" timestamp(6) NOT NULL,
+  CONSTRAINT "session_pkey" PRIMARY KEY ("sid")
+) WITH (OIDS=FALSE);
+CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
+EOF
+pm2 restart paylink
+pm2 logs paylink --err --lines 5
+Use --update-env to update environment variables
+[PM2] Applying action restartProcessId on app [paylink](ids: [ 0 ])
+[PM2] [paylink](0) ✓
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ 1.0.0   │ fork    │ 359137   │ 0s     │ 9    │ online    │ 0%       │ 17.8mb   │ root     │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[TAILING] Tailing last 5 lines for [paylink] process (change the value with --lines option)
+/root/.pm2/logs/paylink-error.log last 5 lines:
+0|paylink  | Error: ENOENT: no such file or directory, open '/root/PayLink/dist/table.sql'
+0|paylink  |     at async open (node:internal/fs/promises:634:25)
+0|paylink  |     at async Object.readFile (node:internal/fs/promises:1236:14)
+0|paylink  |     at async i._rawEnsureSessionStoreTable (/root/PayLink/dist/index.cjs:71:7209)
+0|paylink  |     at async i._asyncQuery (/root/PayLink/dist/index.cjs:71:8294)
+
+cat > ~/PayLink/dist/table.sql << 'EOF'
+CREATE TABLE IF NOT EXISTS "session" (
+  "sid" varchar NOT NULL COLLATE "default",
+  "sess" json NOT NULL,
+  "expire" timestamp(6) NOT NULL,
+  CONSTRAINT "session_pkey" PRIMARY KEY ("sid")
+) WITH (OIDS=FALSE);
+CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
+EOF
+pm2 restart paylink
+pm2 logs paylink --err --lines ^Z
+[4]+  Stopped                 pm2 logs paylink --err --lines 5
+root@paylink:~/PayLink# ls -la ~/PayLink/dist/table.sql
+-rw-rw-r-- 1 root root 283 Mar  6 07:18 /root/PayLink/dist/table.sql
+root@paylink:~/PayLink# echo 'CREATE TABLE IF NOT EXISTS "session" ("sid" varchar NOT NULL, "sess" json NOT NULL, "expire" timestamp(6) NOT NULL, CONSTRAINT "session_pkey" PRIMARY KEY ("sid")); CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");' > ~/PayLink/dist/table.sql
+root@paylink:~/PayLink# pm2 restart paylink
+pm2 logs paylink --err --lines 5
+Use --update-env to update environment variables
+[PM2] Applying action restartProcessId on app [paylink](ids: [ 0 ])
+[PM2] [paylink](0) ✓
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ 1.0.0   │ fork    │ 359172   │ 0s     │ 10   │ online    │ 0%       │ 16.6mb   │ root     │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[TAILING] Tailing last 5 lines for [paylink] process (change the value with --lines option)
+/root/.pm2/logs/paylink-error.log last 5 lines:
+0|paylink  | Error: ENOENT: no such file or directory, open '/root/PayLink/dist/table.sql'
+0|paylink  |     at async open (node:internal/fs/promises:634:25)
+0|paylink  |     at async Object.readFile (node:internal/fs/promises:1236:14)
+0|paylink  |     at async i._rawEnsureSessionStoreTable (/root/PayLink/dist/index.cjs:71:7209)
+0|paylink  |     at async i._asyncQuery (/root/PayLink/dist/index.cjs:71:8294)
+
+^Z
+[5]+  Stopped                 pm2 logs paylink --err --lines 5
+root@paylink:~/PayLink# pg_dump -U lshawver -h 127.0.0.1 paylink > ~/backups/paylink_backup_$(date +%Y%m%d_%H%M%S).sql
+Password: 
+root@paylink:~/PayLink# cd ~/PayLink
+git pull origin main
+npm run build
+pm2 restart paylink
+pm2 logs paylink --err --lines 5
+From github.com:ldshawver/PayLink
+ * branch            main       -> FETCH_HEAD
+Already up to date.
+
+> rest-express@1.0.0 build
+> tsx script/build.ts
+
+building client...
+vite v7.3.1 building client environment for production...
+transforming (4) src/App.tsx
+A PostCSS plugin did not pass the `from` option to `postcss.parse`. This may cause imported assets to be incorrectly transformed. If you've recently added a PostCSS plugin that raised this warning, please contact the package author to fix the issue.
+✓ 1756 modules transformed.
+../dist/public/index.html                                                    2.26 kB │ gzip:   0.88 kB
+../dist/public/assets/PayLink_Logo_transparent_1771416877301-C_7uCr63.png  193.11 kB
+../dist/public/assets/index-BTwkpFtd.css                                    74.56 kB │ gzip:  12.39 kB
+../dist/public/assets/index-D5mH67tn.js                                    798.18 kB │ gzip: 183.21 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 11.15s
+building server...
+
+  dist/index.cjs  1.1mb ⚠️
+
+⚡ Done in 1893ms
+Use --update-env to update environment variables
+[PM2] Applying action restartProcessId on app [paylink](ids: [ 0 ])
+[PM2] [paylink](0) ✓
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ 1.0.0   │ fork    │ 359267   │ 0s     │ 11   │ online    │ 0%       │ 19.4mb   │ root     │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[TAILING] Tailing last 5 lines for [paylink] process (change the value with --lines option)
+/root/.pm2/logs/paylink-error.log last 5 lines:
+0|paylink  | Error: ENOENT: no such file or directory, open '/root/PayLink/dist/table.sql'
+0|paylink  |     at async open (node:internal/fs/promises:634:25)
+0|paylink  |     at async Object.readFile (node:internal/fs/promises:1236:14)
+0|paylink  |     at async i._rawEnsureSessionStoreTable (/root/PayLink/dist/index.cjs:71:7209)
+0|paylink  |     at async i._asyncQuery (/root/PayLink/dist/index.cjs:71:8294)
