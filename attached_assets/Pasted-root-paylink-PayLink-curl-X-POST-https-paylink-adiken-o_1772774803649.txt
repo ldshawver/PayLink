@@ -1,0 +1,42 @@
+root@paylink:~/PayLink# curl -X POST https://paylink.adiken.org/api/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"admin"}' -v 2>&1 | tail -20
+< HTTP/2 200 
+< server: nginx
+< date: Fri, 06 Mar 2026 05:23:38 GMT
+< content-type: application/json; charset=utf-8
+< content-length: 79
+< vary: Accept-Encoding
+< x-powered-by: Express
+< etag: W/"4f-KhAylhtTGelhQ3Aw5Z+xTCFunPA"
+< set-cookie: connect.sid=s%3AravVxsvoFfV3Z_ii-HHNH-pCt-7VsoG6.Snh6WV2lch1d93K4NXBoUfPr%2Bt7E%2FE2yBZMDUBPouAg; Path=/; Expires=Sat, 07 Mar 2026 05:23:38 GMT; HttpOnly; SameSite=Lax
+< x-frame-options: SAMEORIGIN
+< x-content-type-options: nosniff
+< x-xss-protection: 1; mode=block
+< x-permitted-cross-domain-policies: master-only
+< referrer-policy: same-origin
+< alt-svc: h3=":443"; ma=86400
+< 
+{ [79 bytes data]
+100   118  100    79  100    39    683    337 --:--:-- --:--:-- --:--:--  1026
+* Connection #0 to host paylink.adiken.org left intact
+{"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}root@paylink:~/PayLink# curl -X POST https://paylink.adiken.org/api/auth/login -H "Content-Type: application/json" -d '{"username":"admin","passwocurl -X POST https://paylink.adiken.org/api/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"admin"}' -v 2>&1 | tail -20
+< HTTP/2 200 
+< server: nginx
+< date: Fri, 06 Mar 2026 05:24:56 GMT
+< content-type: application/json; charset=utf-8
+< content-length: 79
+< vary: Accept-Encoding
+< x-powered-by: Express
+< etag: W/"4f-KhAylhtTGelhQ3Aw5Z+xTCFunPA"
+< set-cookie: connect.sid=s%3AjDVEpjL6X_Pp4YCLcTrS1gtf6rulf3Kx.1Zyc%2BYNMOf1701YWTXtlVqX7WMV%2B3j9Z38fihOUxhpY; Path=/; Expires=Sat, 07 Mar 2026 05:24:56 GMT; HttpOnly; SameSite=Lax
+< x-frame-options: SAMEORIGIN
+< x-content-type-options: nosniff
+< x-xss-protection: 1; mode=block
+< x-permitted-cross-domain-policies: master-only
+< referrer-policy: same-origin
+< alt-svc: h3=":443"; ma=86400
+< 
+{ [79 bytes data]
+100   118  100    79  100    39    656    324 --:--:-- --:--:-- --:--:--   983
+* Connection #0 to host paylink.adiken.org left intact
+{"id":"177ea659-c851-49aa-b5fb-e47b6999f348","username":"admin","role":"admin"}root@paylink:~/PayLink# 
+root@paylink:~/PayLink# 
