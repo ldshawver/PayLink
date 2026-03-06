@@ -54,12 +54,13 @@ export const companies = pgTable("companies", {
 
 export const legalEntities = pgTable("legal_entities", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id"),
   status: text("status").default("active"),
   type: text("type").default("corporation"),
   classificationCode: text("classification_code"),
   legalName: text("legal_name").notNull(),
   tradeName: text("trade_name"),
+  ein: text("ein"),
   startDate: date("start_date"),
   endDate: date("end_date"),
   address: text("address"),

@@ -96,7 +96,10 @@ export async function registerRoutes(
 
   app.post("/api/companies", async (req, res) => {
     try {
-      const company = await storage.createCompany(req.body);
+      const data = { ...req.body };
+      if (data.enterpriseId === "") data.enterpriseId = null;
+      if (data.legalEntityId === "") data.legalEntityId = null;
+      const company = await storage.createCompany(data);
       res.status(201).json(company);
     } catch (error) {
       res.status(500).json({ message: "Failed to create company" });
@@ -105,7 +108,10 @@ export async function registerRoutes(
 
   app.patch("/api/companies/:id", async (req, res) => {
     try {
-      const company = await storage.updateCompany(req.params.id, req.body);
+      const data = { ...req.body };
+      if (data.enterpriseId === "") data.enterpriseId = null;
+      if (data.legalEntityId === "") data.legalEntityId = null;
+      const company = await storage.updateCompany(req.params.id, data);
       if (!company) {
         return res.status(404).json({ message: "Company not found" });
       }
@@ -2372,6 +2378,8 @@ export async function registerRoutes(
       if (data.startDate === "") data.startDate = null;
       if (data.endDate === "") data.endDate = null;
       if (data.classificationCode === "") data.classificationCode = null;
+      if (data.companyId === "") data.companyId = null;
+      if (data.ein === "") data.ein = null;
       const item = await storage.createLegalEntity(data);
       res.status(201).json(item);
     } catch (error: any) {
@@ -2386,6 +2394,8 @@ export async function registerRoutes(
       if (data.startDate === "") data.startDate = null;
       if (data.endDate === "") data.endDate = null;
       if (data.classificationCode === "") data.classificationCode = null;
+      if (data.companyId === "") data.companyId = null;
+      if (data.ein === "") data.ein = null;
       const item = await storage.updateLegalEntity(req.params.id, data);
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);

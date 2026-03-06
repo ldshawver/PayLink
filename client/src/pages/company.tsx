@@ -360,13 +360,14 @@ function LegalEntityTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<LegalEntity | null>(null);
-  const [form, setForm] = useState({
+  const emptyLegalEntityForm = () => ({
     companyId: "",
     status: "active",
     type: "corporation",
     classificationCode: "",
     legalName: "",
     tradeName: "",
+    ein: "",
     startDate: "",
     endDate: "",
     address: "",
@@ -376,6 +377,7 @@ function LegalEntityTab() {
     country: "US",
     phone: "",
   });
+  const [form, setForm] = useState(emptyLegalEntityForm());
 
   const { data: legalEntities, isLoading } = useQuery<LegalEntity[]>({
     queryKey: ["/api/legal-entities"],
@@ -391,22 +393,7 @@ function LegalEntityTab() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/legal-entities"] });
       setAddOpen(false);
-      setForm({
-        companyId: "",
-        status: "active",
-        type: "corporation",
-        classificationCode: "",
-        legalName: "",
-        tradeName: "",
-        startDate: "",
-        endDate: "",
-        address: "",
-        city: "",
-        state: "",
-        zip: "",
-        country: "US",
-        phone: "",
-      });
+      setForm(emptyLegalEntityForm());
       toast({ title: "Legal entity added successfully" });
     },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
@@ -420,22 +407,7 @@ function LegalEntityTab() {
       queryClient.invalidateQueries({ queryKey: ["/api/legal-entities"] });
       setEditOpen(false);
       setEditItem(null);
-      setForm({
-        companyId: "",
-        status: "active",
-        type: "corporation",
-        classificationCode: "",
-        legalName: "",
-        tradeName: "",
-        startDate: "",
-        endDate: "",
-        address: "",
-        city: "",
-        state: "",
-        zip: "",
-        country: "US",
-        phone: "",
-      });
+      setForm(emptyLegalEntityForm());
       toast({ title: "Legal entity updated successfully" });
     },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
@@ -464,6 +436,7 @@ function LegalEntityTab() {
       classificationCode: item.classificationCode || "",
       legalName: item.legalName || "",
       tradeName: item.tradeName || "",
+      ein: (item as any).ein || "",
       startDate: item.startDate || "",
       endDate: item.endDate || "",
       address: item.address || "",
@@ -495,19 +468,6 @@ function LegalEntityTab() {
           <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader><DialogTitle>Add Legal Entity</DialogTitle></DialogHeader>
             <div className="grid gap-4">
-              <div className="grid gap-2">
-                <Label>Company *</Label>
-                <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
-                  <SelectTrigger data-testid="select-legal-entity-company">
-                    <SelectValue placeholder="Select company" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {companies?.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Status</Label>
@@ -553,14 +513,26 @@ function LegalEntityTab() {
                   onChange={set("tradeName")}
                 />
               </div>
-              <div className="grid gap-2">
-                <Label htmlFor="legal-entity-classificationCode">NAICS Code</Label>
-                <Input
-                  id="legal-entity-classificationCode"
-                  data-testid="input-legal-entity-classificationCode"
-                  value={form.classificationCode}
-                  onChange={set("classificationCode")}
-                />
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="legal-entity-ein">EIN</Label>
+                  <Input
+                    id="legal-entity-ein"
+                    data-testid="input-legal-entity-ein"
+                    value={form.ein}
+                    onChange={set("ein")}
+                    placeholder="XX-XXXXXXX"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="legal-entity-classificationCode">NAICS Code</Label>
+                  <Input
+                    id="legal-entity-classificationCode"
+                    data-testid="input-legal-entity-classificationCode"
+                    value={form.classificationCode}
+                    onChange={set("classificationCode")}
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="grid gap-2">
@@ -646,7 +618,7 @@ function LegalEntityTab() {
             <Button
               data-testid="button-submit-legal-entity"
               className="w-full mt-2"
-              disabled={!form.legalName || !form.companyId || addMutation.isPending}
+              disabled={!form.legalName || addMutation.isPending}
               onClick={() => addMutation.mutate(form)}
             >
               {addMutation.isPending ? "Adding..." : "Add Legal Entity"}
@@ -659,19 +631,6 @@ function LegalEntityTab() {
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Legal Entity</DialogTitle></DialogHeader>
           <div className="grid gap-4">
-            <div className="grid gap-2">
-              <Label>Company *</Label>
-              <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
-                <SelectTrigger data-testid="select-legal-entity-company-edit">
-                  <SelectValue placeholder="Select company" />
-                </SelectTrigger>
-                <SelectContent>
-                  {companies?.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
                 <Label>Status</Label>
@@ -717,14 +676,26 @@ function LegalEntityTab() {
                 onChange={set("tradeName")}
               />
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="legal-entity-classificationCode-edit">NAICS Code</Label>
-              <Input
-                id="legal-entity-classificationCode-edit"
-                data-testid="input-legal-entity-classificationCode-edit"
-                value={form.classificationCode}
-                onChange={set("classificationCode")}
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="legal-entity-ein-edit">EIN</Label>
+                <Input
+                  id="legal-entity-ein-edit"
+                  data-testid="input-legal-entity-ein-edit"
+                  value={form.ein}
+                  onChange={set("ein")}
+                  placeholder="XX-XXXXXXX"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="legal-entity-classificationCode-edit">NAICS Code</Label>
+                <Input
+                  id="legal-entity-classificationCode-edit"
+                  data-testid="input-legal-entity-classificationCode-edit"
+                  value={form.classificationCode}
+                  onChange={set("classificationCode")}
+                />
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
@@ -810,7 +781,7 @@ function LegalEntityTab() {
           <Button
             data-testid="button-save-legal-entity"
             className="w-full mt-2"
-            disabled={!form.legalName || !form.companyId || editMutation.isPending}
+            disabled={!form.legalName || editMutation.isPending}
             onClick={() => editItem && editMutation.mutate({ id: editItem.id, data: form })}
           >
             {editMutation.isPending ? "Saving..." : "Save Changes"}
@@ -825,6 +796,7 @@ function LegalEntityTab() {
               <TableRow>
                 <TableHead>Legal Name</TableHead>
                 <TableHead>Trade Name</TableHead>
+                <TableHead>EIN</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Assigned Companies</TableHead>
@@ -838,6 +810,7 @@ function LegalEntityTab() {
                   <TableRow key={item.id} data-testid={`row-legal-entity-${item.id}`}>
                     <TableCell className="font-medium">{item.legalName}</TableCell>
                     <TableCell>{item.tradeName || "-"}</TableCell>
+                    <TableCell>{(item as any).ein || "-"}</TableCell>
                     <TableCell>
                       <Badge variant="secondary">{LEGAL_ENTITY_TYPES[item.type] || item.type}</Badge>
                     </TableCell>
@@ -876,7 +849,7 @@ function LegalEntityTab() {
               })}
               {legalEntities?.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                     No legal entities found.
                   </TableCell>
                 </TableRow>
@@ -2353,6 +2326,7 @@ function JobsTab() {
 }
 
 function HierarchyTab() {
+  const { toast } = useToast();
   const { data: enterprises } = useQuery<Enterprise[]>({ queryKey: ["/api/enterprises"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: legalEntities } = useQuery<LegalEntity[]>({ queryKey: ["/api/legal-entities"] });
@@ -2360,6 +2334,46 @@ function HierarchyTab() {
   const { data: branches } = useQuery<Branch[]>({ queryKey: ["/api/branches"] });
   const { data: departments } = useQuery<Department[]>({ queryKey: ["/api/departments"] });
   const { data: positionsList } = useQuery<Position[]>({ queryKey: ["/api/positions"] });
+
+  const [editingCompany, setEditingCompany] = useState<Company | null>(null);
+  const [editingBranch, setEditingBranch] = useState<Branch | null>(null);
+  const [editingDept, setEditingDept] = useState<Department | null>(null);
+
+  const companyMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, string> }) => {
+      await apiRequest("PATCH", `/api/companies/${id}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      setEditingCompany(null);
+      toast({ title: "Company assignment updated" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const branchMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, string> }) => {
+      await apiRequest("PATCH", `/api/branches/${id}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/branches"] });
+      setEditingBranch(null);
+      toast({ title: "Branch assignment updated" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deptMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, string> }) => {
+      await apiRequest("PATCH", `/api/departments/${id}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/departments"] });
+      setEditingDept(null);
+      toast({ title: "Department assignment updated" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
 
   const isLoading = !enterprises || !companies || !legalEntities || !divisionsList || !branches || !departments || !positionsList;
 
@@ -2372,6 +2386,7 @@ function HierarchyTab() {
   return (
     <div className="space-y-4">
       <h2 className="text-lg font-semibold">Organization Hierarchy</h2>
+      <p className="text-sm text-muted-foreground">Click the edit icon next to any item to reassign it within the hierarchy.</p>
       <Card>
         <CardContent className="p-4 space-y-2">
           {enterprises.map((ent) => {
@@ -2399,14 +2414,34 @@ function HierarchyTab() {
                         </div>
                         <div className="ml-6 border-l pl-4 space-y-1">
                           {leCompanies.map((comp) => (
-                            <CompanyHierarchyNode key={comp.id} company={comp} divisions={divisionsList} branches={branches} departments={departments} positions={positionsList} />
+                            <CompanyHierarchyNode
+                              key={comp.id}
+                              company={comp}
+                              divisions={divisionsList}
+                              branches={branches}
+                              departments={departments}
+                              positions={positionsList}
+                              onEditCompany={setEditingCompany}
+                              onEditBranch={setEditingBranch}
+                              onEditDept={setEditingDept}
+                            />
                           ))}
                         </div>
                       </div>
                     );
                   })}
                   {entDirectCompanies.map((comp) => (
-                    <CompanyHierarchyNode key={comp.id} company={comp} divisions={divisionsList} branches={branches} departments={departments} positions={positionsList} />
+                    <CompanyHierarchyNode
+                      key={comp.id}
+                      company={comp}
+                      divisions={divisionsList}
+                      branches={branches}
+                      departments={departments}
+                      positions={positionsList}
+                      onEditCompany={setEditingCompany}
+                      onEditBranch={setEditingBranch}
+                      onEditDept={setEditingDept}
+                    />
                   ))}
                   {entLegalEntities.length === 0 && entDirectCompanies.length === 0 && (
                     <p className="text-xs text-muted-foreground py-1">No companies assigned</p>
@@ -2415,9 +2450,28 @@ function HierarchyTab() {
               </div>
             );
           })}
-          {unassignedCompanies.map((comp) => (
-            <CompanyHierarchyNode key={comp.id} company={comp} divisions={divisionsList} branches={branches} departments={departments} positions={positionsList} />
-          ))}
+          {unassignedCompanies.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 py-1.5 font-semibold text-sm text-muted-foreground">
+                <span>Unassigned Companies</span>
+              </div>
+              <div className="ml-6 border-l pl-4 space-y-1">
+                {unassignedCompanies.map((comp) => (
+                  <CompanyHierarchyNode
+                    key={comp.id}
+                    company={comp}
+                    divisions={divisionsList}
+                    branches={branches}
+                    departments={departments}
+                    positions={positionsList}
+                    onEditCompany={setEditingCompany}
+                    onEditBranch={setEditingBranch}
+                    onEditDept={setEditingDept}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
           {enterprises.length === 0 && unassignedCompanies.length === 0 && (
             <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
               <Network className="h-10 w-10 mb-3" />
@@ -2426,16 +2480,181 @@ function HierarchyTab() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={!!editingCompany} onOpenChange={(open) => !open && setEditingCompany(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Reassign Company: {editingCompany?.name}</DialogTitle></DialogHeader>
+          {editingCompany && (
+            <HierarchyCompanyEditor
+              company={editingCompany}
+              enterprises={enterprises}
+              legalEntities={legalEntities}
+              isPending={companyMutation.isPending}
+              onSave={(data) => companyMutation.mutate({ id: editingCompany.id, data })}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editingBranch} onOpenChange={(open) => !open && setEditingBranch(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Reassign Branch: {editingBranch?.name}</DialogTitle></DialogHeader>
+          {editingBranch && (
+            <HierarchyBranchEditor
+              branch={editingBranch}
+              companies={companies}
+              isPending={branchMutation.isPending}
+              onSave={(data) => branchMutation.mutate({ id: editingBranch.id, data })}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editingDept} onOpenChange={(open) => !open && setEditingDept(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Reassign Department: {editingDept?.name}</DialogTitle></DialogHeader>
+          {editingDept && (
+            <HierarchyDeptEditor
+              department={editingDept}
+              companies={companies}
+              isPending={deptMutation.isPending}
+              onSave={(data) => deptMutation.mutate({ id: editingDept.id, data })}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function CompanyHierarchyNode({ company, divisions, branches, departments, positions }: {
+function HierarchyCompanyEditor({ company, enterprises, legalEntities, isPending, onSave }: {
+  company: Company;
+  enterprises: Enterprise[];
+  legalEntities: LegalEntity[];
+  isPending: boolean;
+  onSave: (data: Record<string, string>) => void;
+}) {
+  const [enterpriseId, setEnterpriseId] = useState(company.enterpriseId || "");
+  const [legalEntityId, setLegalEntityId] = useState(company.legalEntityId || "");
+
+  return (
+    <div className="grid gap-4">
+      <div className="grid gap-2">
+        <Label>Enterprise</Label>
+        <Select value={enterpriseId || "__none__"} onValueChange={(v) => setEnterpriseId(v === "__none__" ? "" : v)}>
+          <SelectTrigger data-testid="select-hierarchy-company-enterprise">
+            <SelectValue placeholder="Select enterprise" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">None</SelectItem>
+            {enterprises.map((e) => (
+              <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="grid gap-2">
+        <Label>Legal Entity</Label>
+        <Select value={legalEntityId || "__none__"} onValueChange={(v) => setLegalEntityId(v === "__none__" ? "" : v)}>
+          <SelectTrigger data-testid="select-hierarchy-company-legal-entity">
+            <SelectValue placeholder="Select legal entity" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">None</SelectItem>
+            {legalEntities.map((le) => (
+              <SelectItem key={le.id} value={le.id}>{le.legalName}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <Button
+        data-testid="button-save-hierarchy-company"
+        disabled={isPending}
+        onClick={() => onSave({ enterpriseId, legalEntityId })}
+      >
+        {isPending ? "Saving..." : "Save"}
+      </Button>
+    </div>
+  );
+}
+
+function HierarchyBranchEditor({ branch, companies, isPending, onSave }: {
+  branch: Branch;
+  companies: Company[];
+  isPending: boolean;
+  onSave: (data: Record<string, string>) => void;
+}) {
+  const [companyId, setCompanyId] = useState(branch.companyId || "");
+
+  return (
+    <div className="grid gap-4">
+      <div className="grid gap-2">
+        <Label>Company</Label>
+        <Select value={companyId} onValueChange={setCompanyId}>
+          <SelectTrigger data-testid="select-hierarchy-branch-company">
+            <SelectValue placeholder="Select company" />
+          </SelectTrigger>
+          <SelectContent>
+            {companies.map((c) => (
+              <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <Button
+        data-testid="button-save-hierarchy-branch"
+        disabled={isPending || !companyId}
+        onClick={() => onSave({ companyId })}
+      >
+        {isPending ? "Saving..." : "Save"}
+      </Button>
+    </div>
+  );
+}
+
+function HierarchyDeptEditor({ department, companies, isPending, onSave }: {
+  department: Department;
+  companies: Company[];
+  isPending: boolean;
+  onSave: (data: Record<string, string>) => void;
+}) {
+  const [companyId, setCompanyId] = useState(department.companyId || "");
+
+  return (
+    <div className="grid gap-4">
+      <div className="grid gap-2">
+        <Label>Company</Label>
+        <Select value={companyId} onValueChange={setCompanyId}>
+          <SelectTrigger data-testid="select-hierarchy-dept-company">
+            <SelectValue placeholder="Select company" />
+          </SelectTrigger>
+          <SelectContent>
+            {companies.map((c) => (
+              <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <Button
+        data-testid="button-save-hierarchy-dept"
+        disabled={isPending || !companyId}
+        onClick={() => onSave({ companyId })}
+      >
+        {isPending ? "Saving..." : "Save"}
+      </Button>
+    </div>
+  );
+}
+
+function CompanyHierarchyNode({ company, divisions, branches, departments, positions, onEditCompany, onEditBranch, onEditDept }: {
   company: Company;
   divisions: Division[];
   branches: Branch[];
   departments: Department[];
   positions: Position[];
+  onEditCompany: (c: Company) => void;
+  onEditBranch: (b: Branch) => void;
+  onEditDept: (d: Department) => void;
 }) {
   const compDivisions = divisions.filter((d) => d.companyId === company.id);
   const compBranches = branches.filter((b) => b.companyId === company.id);
@@ -2444,11 +2663,20 @@ function CompanyHierarchyNode({ company, divisions, branches, departments, posit
 
   return (
     <div data-testid={`hierarchy-company-${company.id}`}>
-      <div className="flex items-center gap-2 py-1.5 text-sm">
+      <div className="flex items-center gap-2 py-1.5 text-sm group">
         <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
         <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
         <span className="font-medium">{company.name}</span>
         <Badge variant="secondary" className="text-xs">Company</Badge>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+          data-testid={`button-edit-hierarchy-company-${company.id}`}
+          onClick={() => onEditCompany(company)}
+        >
+          <Pencil className="h-3 w-3" />
+        </Button>
       </div>
       <div className="ml-6 border-l pl-4 space-y-0.5">
         {compDivisions.map((div) => (
@@ -2459,20 +2687,38 @@ function CompanyHierarchyNode({ company, divisions, branches, departments, posit
           </div>
         ))}
         {compBranches.map((br) => (
-          <div key={br.id} className="flex items-center gap-2 py-0.5 text-sm text-muted-foreground">
+          <div key={br.id} className="flex items-center gap-2 py-0.5 text-sm text-muted-foreground group">
             <ChevronRight className="h-3 w-3 shrink-0" />
             <span>{br.name}</span>
             <Badge variant="secondary" className="text-xs">Branch</Badge>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity"
+              data-testid={`button-edit-hierarchy-branch-${br.id}`}
+              onClick={() => onEditBranch(br)}
+            >
+              <Pencil className="h-3 w-3" />
+            </Button>
           </div>
         ))}
         {compDepts.map((dept) => {
           const deptPositions = compPositions.filter((p) => p.departmentId === dept.id);
           return (
             <div key={dept.id}>
-              <div className="flex items-center gap-2 py-0.5 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2 py-0.5 text-sm text-muted-foreground group">
                 <ChevronRight className="h-3 w-3 shrink-0" />
                 <span>{dept.name}</span>
                 <Badge variant="secondary" className="text-xs">Department</Badge>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity"
+                  data-testid={`button-edit-hierarchy-dept-${dept.id}`}
+                  onClick={() => onEditDept(dept)}
+                >
+                  <Pencil className="h-3 w-3" />
+                </Button>
               </div>
               {deptPositions.length > 0 && (
                 <div className="ml-5 border-l pl-3 space-y-0.5">
