@@ -154,7 +154,7 @@ Teal-to-blue gradient matching PayLink logo: primary HSL(180, 55%, 42%), dark si
 - `npm run dev` - Start development server (port 5000)
 - `npm run db:push` - Push schema to database
 
-## VPS Deployment
+## VPS Deployment (Initial Setup)
 1. Push to GitHub
 2. Clone on VPS, install Node.js 20+ and PostgreSQL
 3. Set DATABASE_URL, SESSION_SECRET, PORT env vars
@@ -162,3 +162,41 @@ Teal-to-blue gradient matching PayLink logo: primary HSL(180, 55%, 42%), dark si
 5. `npm run db:push` to create tables
 6. `NODE_ENV=production node dist/index.js`
 7. Use NGINX reverse proxy + PM2
+
+## VPS Update Procedure (MANDATORY - NEVER SKIP)
+When deploying updates to the VPS, ALWAYS follow this exact sequence:
+```bash
+# Step 1: BACKUP the database FIRST
+pg_dump -U lshawver -h 127.0.0.1 paylink > ~/backups/paylink_backup_$(date +%Y%m%d_%H%M%S).sql
+
+# Step 2: Pull new code
+cd ~/PayLink
+git pull origin main
+
+# Step 3: Install any new dependencies
+npm install
+
+# Step 4: Build
+npm run build
+
+# Step 5: Apply schema changes (safe - only adds, never drops)
+npm run db:push
+
+# Step 6: Restart the app
+pm2 restart paylink
+
+# Step 7: Verify
+pm2 logs paylink --lines 10
+```
+Create the backups directory first: `mkdir -p ~/backups`
+If anything goes wrong, restore: `psql -U lshawver -h 127.0.0.1 paylink < ~/backups/paylink_backup_YYYYMMDD_HHMMSS.sql`
+
+## Schema Change Rules (CRITICAL - NEVER VIOLATE)
+1. NEVER drop existing tables - only add new tables
+2. NEVER remove columns from existing tables - only add new columns with ALTER TABLE ADD COLUMN IF NOT EXISTS
+3. NEVER rename tables or columns - this breaks existing data and foreign keys
+4. NEVER change column types on existing columns
+5. When adding features, ADD columns/tables alongside existing ones - never replace
+6. All new columns MUST have defaults or be nullable so existing rows are not affected
+7. Test all schema changes on Replit dev database BEFORE deploying to VPS
+8. The VPS database contains REAL production data - treat it as sacred
