@@ -41,7 +41,7 @@ app.use(
   session({
     store: new PgStore({
       conString: process.env.DATABASE_URL,
-      createTableIfMissing: true,
+      createTableIfMissing: false,
     }),
     secret: process.env.SESSION_SECRET || "paylink-dev-secret",
     resave: false,
