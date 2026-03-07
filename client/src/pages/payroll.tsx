@@ -1611,10 +1611,11 @@ const PSA_TYPE_LABELS: Record<string, string> = {
   tax: "Taxes",
   deduction: "Deductions",
   employer_contribution: "Employer Contributions",
+  employee_contribution: "Employee Contributions",
   benefit: "Benefits",
   other: "Other",
 };
-const PSA_TYPE_ORDER = ["earning", "tax", "deduction", "employer_contribution", "benefit", "other"];
+const PSA_TYPE_ORDER = ["earning", "tax", "deduction", "employer_contribution", "employee_contribution", "benefit", "other"];
 
 function PayStubAccountsTab() {
   const { toast } = useToast();
@@ -1769,6 +1770,7 @@ function PayStubAccountsTab() {
                         <SelectItem value="tax">Tax</SelectItem>
                         <SelectItem value="deduction">Deduction</SelectItem>
                         <SelectItem value="employer_contribution">Employer Contribution</SelectItem>
+                        <SelectItem value="employee_contribution">Employee Contribution</SelectItem>
                         <SelectItem value="benefit">Benefit</SelectItem>
                         <SelectItem value="other">Other</SelectItem>
                       </SelectContent>

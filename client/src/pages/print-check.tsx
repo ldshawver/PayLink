@@ -3,7 +3,7 @@ import { useRoute } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Printer, ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
-import type { PayrollRun, PayrollItem, Worker, Company, TaxDeduction, CheckTemplate } from "@shared/schema";
+import type { PayrollRun, PayrollItem, Worker, Company, TaxDeduction, CheckTemplate, PayStubAccount } from "@shared/schema";
 
 function numberToWords(num: number): string {
   const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
@@ -113,9 +113,9 @@ function CheckPortion({
 }
 
 function StubPortion({
-  item, worker, company, run, deductions, config,
+  item, worker, company, run, deductions, config, payStubAccounts = [],
 }: {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>;
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts?: PayStubAccount[];
 }) {
   const netPay = Number(item.netPay || 0);
   const grossPay = Number(item.grossPay || 0);
@@ -143,7 +143,11 @@ function StubPortion({
     })
     .filter(d => d.amount > 0);
 
-  const seRefItems = isContractor ? deductions
+  const employeeContribAccounts = isContractor ? payStubAccounts
+    .filter(a => a.type === "employee_contribution" && a.status === "enabled")
+    .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0)) : [];
+
+  const seRefFromDeductions = isContractor ? deductions
     .filter(d => d.isActive && d.isReferenceOnly)
     .filter(d => {
       const appliesTo = d.appliesTo || "all";
@@ -161,7 +165,18 @@ function StubPortion({
     })
     .filter(d => d.amount > 0) : [];
 
-  const totalSeTax = seRefItems.reduce((sum, d) => sum + d.amount, 0);
+  const employeeContribItems = employeeContribAccounts.length > 0
+    ? employeeContribAccounts.map(a => {
+        const rateMatch = a.name.match(/(\d+\.?\d*)%/);
+        const rate = rateMatch ? parseFloat(rateMatch[1]) : 0;
+        const isSS = a.name.toLowerCase().includes("social security");
+        const base = isSS ? Math.min(grossPay, 168600) : grossPay;
+        const amount = base * (rate / 100);
+        return { name: a.name, amount };
+      }).filter(d => d.amount > 0)
+    : seRefFromDeductions;
+
+  const totalSeTax = employeeContribItems.reduce((sum, d) => sum + d.amount, 0);
 
   return (
     <div style={{ padding: "0.2in 0.4in", fontSize: "10px", height: "100%", display: "flex", flexDirection: "column" }}>
@@ -282,27 +297,27 @@ function StubPortion({
         </div>
       )}
 
-      {isContractor && seRefItems.length > 0 && (
+      {isContractor && employeeContribItems.length > 0 && (
         <div style={{ marginTop: "8px", border: "1px solid #4a90d9", padding: "6px 8px", background: "#f0f5ff" }}>
           <div style={{ fontWeight: "bold", fontSize: "9px", color: "#2b5ea7", marginBottom: "4px" }}>
-            SELF-EMPLOYMENT TAX (Reference Only — Not Deducted)
+            EMPLOYEE CONTRIBUTIONS (Reference Only — Not Deducted)
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <tbody>
-              {seRefItems.map((d, i) => (
+              {employeeContribItems.map((d, i) => (
                 <tr key={i}>
                   <td style={{ padding: "1px 2px", color: "#2b5ea7" }}>{d.name}</td>
                   <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>${fmt(d.amount)}</td>
                 </tr>
               ))}
               <tr style={{ borderTop: "1px solid #4a90d9", fontWeight: "bold" }}>
-                <td style={{ padding: "2px", color: "#2b5ea7" }}>TOTAL SE TAX</td>
+                <td style={{ padding: "2px", color: "#2b5ea7" }}>TOTAL (15.3%)</td>
                 <td style={{ textAlign: "right", padding: "2px", color: "#2b5ea7" }}>${fmt(totalSeTax)}</td>
               </tr>
             </tbody>
           </table>
           <div style={{ fontSize: "7px", color: "#666", marginTop: "2px" }}>
-            As an independent contractor, you are responsible for paying self-employment tax (Social Security 12.4% + Medicare 2.9%) directly to the IRS.
+            As an independent contractor, you are responsible for paying self-employment tax (Social Security 12.4% + Medicare 2.9% = 15.3%) directly to the IRS.
           </div>
         </div>
       )}
@@ -315,9 +330,9 @@ function StubPortion({
 }
 
 function StandardCheck({
-  item, worker, company, run, deductions, config,
+  item, worker, company, run, deductions, config, payStubAccounts,
 }: {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>;
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts: PayStubAccount[];
 }) {
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Courier New', monospace" }}>
@@ -325,47 +340,47 @@ function StandardCheck({
         <CheckPortion item={item} worker={worker} company={company} run={run} config={config} />
       </div>
       <div style={{ height: "7.333in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} />
       </div>
     </div>
   );
 }
 
 function VoucherCheck({
-  item, worker, company, run, deductions, config,
+  item, worker, company, run, deductions, config, payStubAccounts,
 }: {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>;
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts: PayStubAccount[];
 }) {
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Courier New', monospace" }}>
       <div style={{ height: "3.333in", borderBottom: "1px dashed #999" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} />
       </div>
       <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
         <CheckPortion item={item} worker={worker} company={company} run={run} config={config} />
       </div>
       <div style={{ height: "4in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} />
       </div>
     </div>
   );
 }
 
 function ThreePartCheck({
-  item, worker, company, run, deductions, config,
+  item, worker, company, run, deductions, config, payStubAccounts,
 }: {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>;
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts: PayStubAccount[];
 }) {
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Courier New', monospace" }}>
       <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} />
       </div>
       <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} />
       </div>
       <div style={{ height: "3.666in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} />
       </div>
     </div>
   );
@@ -398,6 +413,7 @@ export default function PrintCheckPage() {
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: taxesDeductions = [] } = useQuery<TaxDeduction[]>({ queryKey: ["/api/taxes-deductions"] });
+  const { data: payStubAccounts = [] } = useQuery<PayStubAccount[]>({ queryKey: ["/api/pay-stub-accounts"] });
 
   const company = run ? companies.find(c => c.id === run.companyId) : undefined;
 
@@ -447,6 +463,7 @@ export default function PrintCheckPage() {
   }
 
   const companyDeductions = taxesDeductions.filter(d => d.companyId === run.companyId);
+  const companyPSAccounts = payStubAccounts.filter(a => a.companyId === run.companyId);
   const getWorker = (id: string) => workers.find(w => w.id === id);
 
   const CheckComponent = templateType === "voucher" ? VoucherCheck :
@@ -481,6 +498,7 @@ export default function PrintCheckPage() {
               run={run}
               deductions={companyDeductions}
               config={config}
+              payStubAccounts={companyPSAccounts}
             />
           );
         })}
