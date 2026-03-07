@@ -161,9 +161,13 @@ export async function registerRoutes(
 
   app.post("/api/workers", async (req, res) => {
     try {
+      if (!req.body.companyId) return res.status(400).json({ message: "Company is required" });
+      if (!req.body.firstName) return res.status(400).json({ message: "First name is required" });
+      if (!req.body.lastName) return res.status(400).json({ message: "Last name is required" });
       const worker = await storage.createWorker(req.body);
       res.status(201).json(worker);
     } catch (error) {
+      console.error("Failed to create worker:", error);
       res.status(500).json({ message: "Failed to create worker" });
     }
   });
