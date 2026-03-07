@@ -1088,3 +1088,21 @@ export type CheckTemplate = typeof checkTemplates.$inferSelect;
 export type InsertCheckTemplate = z.infer<typeof insertCheckTemplateSchema>;
 export type WorkerDocument = typeof workerDocuments.$inferSelect;
 export type InsertWorkerDocument = z.infer<typeof insertWorkerDocumentSchema>;
+
+export const savedReports = pgTable("saved_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id"),
+  name: varchar("name").notNull(),
+  reportType: varchar("report_type").notNull(),
+  category: varchar("category").notNull(),
+  filters: text("filters"),
+  data: text("data"),
+  headers: text("headers"),
+  rowCount: integer("row_count").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  createdBy: varchar("created_by"),
+});
+
+export const insertSavedReportSchema = createInsertSchema(savedReports).omit({ id: true, createdAt: true });
+export type SavedReport = typeof savedReports.$inferSelect;
+export type InsertSavedReport = z.infer<typeof insertSavedReportSchema>;

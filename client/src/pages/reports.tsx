@@ -1,14 +1,16 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import type {
   Worker, TimeEntry, PayrollRun, PayrollItem, Schedule, TimePunch,
   AccrualBalance, AccrualAccount, Qualification, Review,
-  TaxDeduction, PayStubTransaction, Company
+  TaxDeduction, PayStubTransaction, Company, SavedReport
 } from "@shared/schema";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +21,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   FolderOpen, Users, ClipboardList, DollarSign, FileText, UserCheck,
   Clock, CalendarDays, AlertTriangle, Download, Printer, BarChart3,
-  Shield, Star, Award, Receipt, Building, Calculator, ExternalLink
+  Shield, Star, Award, Receipt, Building, Calculator, ExternalLink,
+  Save, Trash2, Eye, Search
 } from "lucide-react";
 
 const OFFICIAL_FORM_URLS: Record<string, { url: string; source: string }> = {
@@ -92,6 +95,204 @@ function downloadCSV(headers: string[], rows: string[][], filename: string) {
   URL.revokeObjectURL(url);
 }
 
+function SaveReportButton({ reportType, category, defaultName, headers, rows }: {
+  reportType: string; category: string; defaultName: string; headers: string[]; rows: string[][];
+}) {
+  const { toast } = useToast();
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await apiRequest("POST", "/api/saved-reports", {
+        name: `${defaultName} - ${new Date().toLocaleDateString()}`,
+        reportType,
+        category,
+        headers: JSON.stringify(headers),
+        data: JSON.stringify(rows),
+        rowCount: rows.length,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/saved-reports"] });
+      toast({ title: "Report saved successfully" });
+    } catch (err: any) {
+      toast({ title: "Error saving report", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Button variant="outline" size="sm" onClick={handleSave} disabled={saving || rows.length === 0} data-testid={`button-save-${reportType}`}>
+      <Save className="mr-2 h-4 w-4" />{saving ? "Saving..." : "Save Report"}
+    </Button>
+  );
+}
+
+function SavedReportViewDialog({ open, onOpenChange, reportId }: { open: boolean; onOpenChange: (v: boolean) => void; reportId: string | null }) {
+  const { data: report, isLoading } = useQuery<SavedReport>({
+    queryKey: ["/api/saved-reports", reportId],
+    enabled: open && !!reportId,
+  });
+
+  const headers: string[] = report?.headers ? JSON.parse(report.headers) : [];
+  const rows: string[][] = report?.data ? JSON.parse(report.data) : [];
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-5xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle data-testid="text-saved-report-title">{report?.name || "Saved Report"}</DialogTitle>
+        </DialogHeader>
+        {isLoading ? (
+          <div className="space-y-2">{[1, 2, 3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant="secondary">{report?.category}</Badge>
+              <Badge variant="outline">{report?.reportType}</Badge>
+              <span className="text-xs text-muted-foreground">{report?.rowCount} rows</span>
+              <span className="text-xs text-muted-foreground">Saved {report?.createdAt ? new Date(report.createdAt).toLocaleString() : ""}</span>
+              <div className="ml-auto flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-saved"><Printer className="mr-2 h-4 w-4" />Print</Button>
+                <Button variant="outline" size="sm" onClick={() => downloadCSV(headers, rows, `${report?.name || "report"}.csv`)} data-testid="button-export-saved"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+              </div>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>{headers.map((h, i) => <TableHead key={i}>{h}</TableHead>)}</TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.length > 0 ? rows.map((row, ri) => (
+                  <TableRow key={ri}>{row.map((cell, ci) => <TableCell key={ci}>{cell}</TableCell>)}</TableRow>
+                )) : (
+                  <TableRow><TableCell colSpan={headers.length || 1} className="text-center text-muted-foreground py-8">No data</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SavedReportsTab() {
+  const { toast } = useToast();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [viewReportId, setViewReportId] = useState<string | null>(null);
+  const [viewOpen, setViewOpen] = useState(false);
+
+  const { data: reports = [], isLoading } = useQuery<SavedReport[]>({ queryKey: ["/api/saved-reports"] });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/saved-reports/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/saved-reports"] });
+      toast({ title: "Report deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const filtered = reports.filter(r => {
+    if (categoryFilter !== "all" && r.category !== categoryFilter) return false;
+    if (searchQuery && !r.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    return true;
+  });
+
+  const categoryLabel = (cat: string) => {
+    const labels: Record<string, string> = { employee: "Employee", timesheet: "Timesheet", payroll: "Payroll", tax: "Tax", hr: "HR" };
+    return labels[cat] || cat;
+  };
+
+  if (isLoading) {
+    return <div className="space-y-2">{[1, 2, 3].map(i => <Skeleton key={i} className="h-10 w-full" />)}</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search saved reports..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9"
+            data-testid="input-search-saved-reports"
+          />
+        </div>
+        <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+          <SelectTrigger className="w-[160px]" data-testid="select-category-filter">
+            <SelectValue placeholder="All Categories" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Categories</SelectItem>
+            <SelectItem value="employee">Employee</SelectItem>
+            <SelectItem value="timesheet">Timesheet</SelectItem>
+            <SelectItem value="payroll">Payroll</SelectItem>
+            <SelectItem value="tax">Tax</SelectItem>
+            <SelectItem value="hr">HR</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <FolderOpen className="h-12 w-12 text-muted-foreground mb-4" />
+          <p className="text-muted-foreground max-w-md" data-testid="text-no-saved-reports">
+            {reports.length === 0
+              ? "No saved reports yet. Generate a report from any category and save it for quick access."
+              : "No reports match your search criteria."}
+          </p>
+        </div>
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Rows</TableHead>
+                  <TableHead>Saved</TableHead>
+                  <TableHead>By</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.map(r => (
+                  <TableRow key={r.id} data-testid={`row-saved-report-${r.id}`}>
+                    <TableCell className="font-medium max-w-[200px] truncate">{r.name}</TableCell>
+                    <TableCell className="text-sm">{r.reportType}</TableCell>
+                    <TableCell><Badge variant="secondary">{categoryLabel(r.category)}</Badge></TableCell>
+                    <TableCell>{r.rowCount}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : ""}</TableCell>
+                    <TableCell className="text-sm">{r.createdBy || "—"}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        <Button size="icon" variant="ghost" data-testid={`button-view-report-${r.id}`} onClick={() => { setViewReportId(r.id); setViewOpen(true); }}><Eye className="h-4 w-4" /></Button>
+                        <Button size="icon" variant="ghost" data-testid={`button-delete-report-${r.id}`} onClick={() => deleteMutation.mutate(r.id)}><Trash2 className="h-4 w-4" /></Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      <SavedReportViewDialog open={viewOpen} onOpenChange={setViewOpen} reportId={viewReportId} />
+    </div>
+  );
+}
+
 function WhosInDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const { data: timeEntries = [], isLoading: loadingEntries } = useQuery<TimeEntry[]>({
     queryKey: ["/api/time-entries"],
@@ -143,9 +344,12 @@ function WhosInDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
             </TableBody>
           </Table>
         )}
-        <p className="text-sm text-muted-foreground" data-testid="text-clocked-in-count">
-          {clockedIn.length} employee{clockedIn.length !== 1 ? "s" : ""} currently clocked in
-        </p>
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground" data-testid="text-clocked-in-count">
+            {clockedIn.length} employee{clockedIn.length !== 1 ? "s" : ""} currently clocked in
+          </p>
+          <SaveReportButton reportType="whos-in" category="employee" defaultName="Who's In Summary" headers={["Employee", "Clock In Time", "Date"]} rows={clockedIn.map(e => [getWorkerName(e.workerId), e.clockIn ? new Date(e.clockIn).toLocaleTimeString() : "—", e.date])} />
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -191,6 +395,7 @@ function EmployeeInfoDialog({ open, onOpenChange }: { open: boolean; onOpenChang
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
+          <SaveReportButton reportType="employee-info" category="employee" defaultName="Employee Information" headers={["Name", "Email", "Phone", "Type", "Job Title", "Department", "Pay Rate", "Status"]} rows={workers.map(w => [`${w.firstName} ${w.lastName}`, w.email || "", w.phone || "", w.workerType, w.jobTitle || "", w.department || "", w.payRate, w.isActive ? "Active" : "Inactive"])} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -277,22 +482,27 @@ function TimesheetSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenC
         ) : rows.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-timesheet-data">No timesheet data available.</p>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Employee</TableHead>
-                <TableHead className="text-right">Total Hours</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map(([workerId, hours]) => (
-                <TableRow key={workerId} data-testid={`row-timesheet-${workerId}`}>
-                  <TableCell>{getWorkerName(workerId)}</TableCell>
-                  <TableCell className="text-right">{hours.toFixed(2)}</TableCell>
+          <div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Employee</TableHead>
+                  <TableHead className="text-right">Total Hours</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {rows.map(([workerId, hours]) => (
+                  <TableRow key={workerId} data-testid={`row-timesheet-${workerId}`}>
+                    <TableCell>{getWorkerName(workerId)}</TableCell>
+                    <TableCell className="text-right">{hours.toFixed(2)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            <div className="flex justify-end mt-3">
+              <SaveReportButton reportType="timesheet-summary" category="timesheet" defaultName="Timesheet Summary" headers={["Employee", "Total Hours"]} rows={rows.map(([wId, hrs]) => [getWorkerName(wId), hrs.toFixed(2)])} />
+            </div>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -333,6 +543,7 @@ function PayrollExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
             <Download className="mr-2 h-4 w-4" />
             Download CSV
           </Button>
+          <SaveReportButton reportType="payroll-export" category="payroll" defaultName="Payroll Export" headers={["ID", "Period Start", "Period End", "Status", "Total Gross", "Total Net", "Total Hours", "OT Hours", "Worker Count", "Processed At"]} rows={payrollRuns.map(r => [r.id, r.periodStart, r.periodEnd, r.status || "", r.totalGross || "0", r.totalNet || "0", r.totalHours || "0", r.totalOvertimeHours || "0", String(r.workerCount || 0), r.processedAt ? new Date(r.processedAt).toLocaleString() : ""])} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -437,6 +648,7 @@ function AuditTrailDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
+          <SaveReportButton reportType="audit-trail" category="employee" defaultName="Audit Trail" headers={["Employee", "Action", "Date", "Time"]} rows={sorted.map(e => [getWorkerName(e.workerId), getAction(e), e.date, getTime(e)])} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -533,6 +745,7 @@ function ScheduleSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenCh
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
+          <SaveReportButton reportType="schedule-summary" category="timesheet" defaultName="Schedule Summary" headers={["Department", "Employee", "Date", "Start Time", "End Time"]} rows={sorted.map(s => [s.department || "", getWorkerName(s.workerId), s.date, s.startTime || "", s.endTime || ""])} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -622,6 +835,7 @@ function TimesheetDetailDialog({ open, onOpenChange }: { open: boolean; onOpenCh
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
+          <SaveReportButton reportType="timesheet-detail" category="timesheet" defaultName="Timesheet Detail" headers={["Employee", "Date", "Clock In", "Clock Out", "Break Mins", "Total Hours", "OT Hours", "Status"]} rows={sorted.map(e => [getWorkerName(e.workerId), e.date, e.clockIn ? new Date(e.clockIn).toLocaleTimeString() : "", e.clockOut ? new Date(e.clockOut).toLocaleTimeString() : "", String(e.breakMinutes || 0), String(Number(e.totalHours || 0).toFixed(2)), String(Number(e.overtimeHours || 0).toFixed(2)), e.status || ""])} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -717,6 +931,7 @@ function PunchSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenChang
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
+          <SaveReportButton reportType="punch-summary" category="timesheet" defaultName="Punch Summary" headers={["Employee", "Punch Type", "Punch Time", "Note"]} rows={sorted.map(p => [getWorkerName(p.workerId), p.punchType, p.punchTime ? new Date(p.punchTime).toLocaleString() : "", p.note || ""])} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -816,6 +1031,7 @@ function AccrualBalanceSummaryDialog({ open, onOpenChange }: { open: boolean; on
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
+          <SaveReportButton reportType="accrual-balance" category="timesheet" defaultName="Accrual Balance Summary" headers={["Employee", "Type", "Account", "Balance", "Used", "Available"]} rows={balances.map(b => { const acct = accounts.find(a => a.id === b.accrualAccountId); return [getWorkerName(b.workerId), acct?.type || "", acct?.name || "", String(Number(b.balance || 0).toFixed(2)), String(Number(b.usedHours || 0).toFixed(2)), String((Number(b.balance || 0) - Number(b.usedHours || 0)).toFixed(2))]; })} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -925,6 +1141,7 @@ function ExceptionSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenC
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
+          <SaveReportButton reportType="exception-summary" category="timesheet" defaultName="Exception Summary" headers={["Employee", "Date", "Issue Type", "Total Hours", "OT Hours", "Status"]} rows={sorted.map(e => [getWorkerName(e.workerId), e.date, Number(e.totalHours || 0) > 8 ? "Overtime" : Number(e.totalHours || 0) < 4 ? "Short Shift" : "Other", String(Number(e.totalHours || 0).toFixed(2)), String(Number(e.overtimeHours || 0).toFixed(2)), e.status || ""])} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -1021,6 +1238,7 @@ function PaystubSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenCha
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
+          <SaveReportButton reportType="paystub-summary" category="payroll" defaultName="Paystub Summary" headers={["Employee", "Date", "Amount", "Payment Method", "Status", "Check Number", "Reference"]} rows={sorted.map(t => [getWorkerName(t.workerId), t.transactionDate || "", String(Number(t.amount || 0).toFixed(2)), t.paymentMethod || "", t.status || "", t.checkNumber || "", t.reference || ""])} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -1107,6 +1325,7 @@ function GeneralLedgerSummaryDialog({ open, onOpenChange }: { open: boolean; onO
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
+          <SaveReportButton reportType="general-ledger" category="payroll" defaultName="General Ledger Summary" headers={["Period Start", "Period End", "Status", "Total Gross", "Total Net", "Total Deductions", "Worker Count"]} rows={sorted.map(r => [r.periodStart, r.periodEnd, r.status || "", "$" + Number(r.totalGross || 0).toFixed(2), "$" + Number(r.totalNet || 0).toFixed(2), "$" + (Number(r.totalGross || 0) - Number(r.totalNet || 0)).toFixed(2), String(r.workerCount || 0)])} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -1203,6 +1422,7 @@ function TaxSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
+          <SaveReportButton reportType="tax-summary" category="tax" defaultName="Tax Summary" headers={["Name", "Type", "Rate", "Employer Paid"]} rows={deductions.map(d => [d.name, d.type || "", d.rate || "", d.isEmployerPaid ? "Yes" : "No"])} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -1317,6 +1537,7 @@ function QualificationSummaryDialog({ open, onOpenChange }: { open: boolean; onO
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
+          <SaveReportButton reportType="qualification-summary" category="hr" defaultName="Qualification Summary" headers={["Employee", "Qualification", "Type", "Expiration"]} rows={qualifications.map(q => [getWorkerName(q.workerId), q.name, q.type || "", q.expirationDate || ""])} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -1413,6 +1634,7 @@ function ReviewSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
+          <SaveReportButton reportType="review-summary" category="hr" defaultName="Review Summary" headers={["Employee", "Review Date", "Rating", "Status"]} rows={reviews.map(r => [getWorkerName(r.workerId), r.reviewDate || "", String(r.rating || ""), r.status || ""])} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -1572,6 +1794,7 @@ function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={handlePrint} data-testid="button-print-w2"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-w2"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+          <SaveReportButton reportType="w2-annual" category="tax" defaultName="W-2 Annual Report" headers={["Employee", "SSN", "Gross Pay", "Federal Tax", "SS Tax", "Medicare Tax", "State Tax"]} rows={employees.map((w: Worker) => [w.firstName + " " + w.lastName, w.ssn || "", "$" + (Number(w.payRate || 0) * 2080).toFixed(2), "$" + ((Number(w.payRate || 0) * 2080) * 0.22).toFixed(2), "$" + ((Number(w.payRate || 0) * 2080) * 0.062).toFixed(2), "$" + ((Number(w.payRate || 0) * 2080) * 0.0145).toFixed(2), "$" + ((Number(w.payRate || 0) * 2080) * 0.04).toFixed(2)])} />
         </div>
         {companyEmployees.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-w2">No W-2 eligible employees found for {year}.</p>
@@ -1667,6 +1890,7 @@ function Form1099NECDialog({ open, onOpenChange }: { open: boolean; onOpenChange
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-1099"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-1099"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+          <SaveReportButton reportType="1099-nec" category="tax" defaultName="Form 1099-NEC" headers={["Contractor", "TIN", "Compensation"]} rows={contractors.map(c => [c.firstName + " " + c.lastName, c.ssn || "", "$" + (Number(c.payRate || 0) * 2080).toFixed(2)])} />
         </div>
         {filtered.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-1099">No contractors found for the selected period.</p>
@@ -1751,6 +1975,7 @@ function Form941Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-941"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-941"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+          <SaveReportButton reportType="form-941" category="tax" defaultName="Form 941" headers={["Line", "Description", "Amount"]} rows={[["1", "Employees", String(filtered.length)], ["2", "Wages", "$" + totalWages.toFixed(2)], ["3", "Federal Income Tax", "$" + fedWithholding.toFixed(2)], ["5a", "Social Security", "$" + ssEmployee.toFixed(2)], ["5c", "Medicare", "$" + medicareEmployee.toFixed(2)]]} />
         </div>
         <div className="border rounded-lg p-4 space-y-3 mt-2">
           <h3 className="font-semibold text-sm">Form 941 — {quarter} {year}</h3>
@@ -1810,6 +2035,7 @@ function Form940Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-940"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-940"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+          <SaveReportButton reportType="form-940" category="tax" defaultName="Form 940" headers={["Line", "Description", "Amount"]} rows={[["3", "Total FUTA Wages", "$" + totalWages.toFixed(2)], ["8", "FUTA Tax Before Adj", "$" + futaTax.toFixed(2)]]} />
         </div>
         <div className="border rounded-lg p-4 space-y-3 mt-2">
           <h3 className="font-semibold text-sm">Form 940 — {year}</h3>
@@ -1873,6 +2099,7 @@ function DE9Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: bo
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-de9"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-de9"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+          <SaveReportButton reportType="de9" category="tax" defaultName="DE 9" headers={["Line", "Description", "Amount"]} rows={[["A", "Total Subject Wages", "$" + totalWages.toFixed(2)], ["D", "SDI Withholding", "$" + sdiWithheld.toFixed(2)], ["E", "PIT Withholding", "$" + pitWithheld.toFixed(2)]]} />
         </div>
         <div className="border rounded-lg p-4 space-y-3 mt-2">
           <h3 className="font-semibold text-sm">California DE 9 — {quarter} {year}</h3>
@@ -1931,6 +2158,7 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-de9c"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-de9c"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+          <SaveReportButton reportType="de9c" category="tax" defaultName="DE 9C" headers={["Employee", "SSN", "PIT Wages", "PIT Withheld", "SDI Wages", "SDI Withheld"]} rows={employees.map(e => [e.firstName + " " + e.lastName, e.ssn || "", "$" + (Number(e.payRate || 0) * 520).toFixed(2), "$" + ((Number(e.payRate || 0) * 520) * 0.04).toFixed(2), "$" + (Number(e.payRate || 0) * 520).toFixed(2), "$" + ((Number(e.payRate || 0) * 520) * 0.009).toFixed(2)])} />
         </div>
         {filtered.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-de9c">No employees found for the selected period.</p>
@@ -2009,6 +2237,7 @@ function Form1096Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-1096"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-1096"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+          <SaveReportButton reportType="form-1096" category="tax" defaultName="Form 1096" headers={["Line", "Description", "Amount"]} rows={[["1", "Filer Name/Address", ""], ["3", "Number of 1099s", String(eligible.length)], ["5", "Total Amount", "$" + totalComp.toFixed(2)]]} />
         </div>
         <div className="border rounded-lg p-4 space-y-3 mt-2">
           <h3 className="font-semibold text-sm">Form 1096 — Annual Summary and Transmittal of U.S. Information Returns — {year}</h3>
@@ -2072,12 +2301,7 @@ export default function ReportsPage() {
         </TabsList>
 
         <TabsContent value="saved" className="mt-6">
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <FolderOpen className="h-12 w-12 text-muted-foreground mb-4" />
-            <p className="text-muted-foreground max-w-md" data-testid="text-no-saved-reports">
-              No saved reports yet. Generate a report from any category and save it for quick access.
-            </p>
-          </div>
+          <SavedReportsTab />
         </TabsContent>
 
         <TabsContent value="employee" className="mt-6">
