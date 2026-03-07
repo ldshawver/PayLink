@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import bcrypt from "bcrypt";
 import multer from "multer";
 import path from "path";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema } from "@shared/schema";
 
 const uploadStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, path.join(process.cwd(), "uploads")),
@@ -1006,10 +1006,16 @@ export async function registerRoutes(
 
   app.post("/api/positions", async (req, res) => {
     try {
-      const parsed = insertPositionSchema.parse(req.body);
-      const position = await storage.createPosition(parsed);
+      const data = { ...req.body };
+      if (data.departmentId === "") data.departmentId = null;
+      if (data.reportsToPositionId === "") data.reportsToPositionId = null;
+      if (data.salaryRangeMin === "") data.salaryRangeMin = null;
+      if (data.salaryRangeMax === "") data.salaryRangeMax = null;
+      if (data.description === "") data.description = null;
+      const position = await storage.createPosition(data);
       res.status(201).json(position);
     } catch (error: any) {
+      console.error(error);
       if (error.name === "ZodError") {
         return res.status(400).json({ message: "Validation failed", errors: error.errors });
       }
@@ -1019,7 +1025,13 @@ export async function registerRoutes(
 
   app.patch("/api/positions/:id", async (req, res) => {
     try {
-      const position = await storage.updatePosition(req.params.id, req.body);
+      const data = { ...req.body };
+      if (data.departmentId === "") data.departmentId = null;
+      if (data.reportsToPositionId === "") data.reportsToPositionId = null;
+      if (data.salaryRangeMin === "") data.salaryRangeMin = null;
+      if (data.salaryRangeMax === "") data.salaryRangeMax = null;
+      if (data.description === "") data.description = null;
+      const position = await storage.updatePosition(req.params.id as string, data);
       if (!position) {
         return res.status(404).json({ message: "Position not found" });
       }
@@ -1102,7 +1114,13 @@ export async function registerRoutes(
 
   app.post("/api/jobs", async (req, res) => {
     try {
-      const parsed = insertJobSchema.parse(req.body);
+      const data = { ...req.body };
+      if (data.costCenterId === "") data.costCenterId = null;
+      if (data.departmentId === "") data.departmentId = null;
+      if (data.defaultWage === "") data.defaultWage = null;
+      if (data.startDate === "") data.startDate = null;
+      if (data.endDate === "") data.endDate = null;
+      const parsed = insertJobSchema.parse(data);
       const job = await storage.createJob(parsed);
       res.status(201).json(job);
     } catch (error: any) {
@@ -1115,7 +1133,13 @@ export async function registerRoutes(
 
   app.patch("/api/jobs/:id", async (req, res) => {
     try {
-      const job = await storage.updateJob(req.params.id, req.body);
+      const data = { ...req.body };
+      if (data.costCenterId === "") data.costCenterId = null;
+      if (data.departmentId === "") data.departmentId = null;
+      if (data.defaultWage === "") data.defaultWage = null;
+      if (data.startDate === "") data.startDate = null;
+      if (data.endDate === "") data.endDate = null;
+      const job = await storage.updateJob(req.params.id, data);
       if (!job) {
         return res.status(404).json({ message: "Job not found" });
       }
@@ -1949,6 +1973,183 @@ export async function registerRoutes(
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to delete membership" });
+    }
+  });
+
+  app.get("/api/stations", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const items = await storage.getStations(companyId);
+      res.json(items);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch stations" });
+    }
+  });
+  app.post("/api/stations", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const data = { ...req.body };
+      if (data.location === "") data.location = null;
+      if (data.ipRestriction === "") data.ipRestriction = null;
+      if (data.description === "") data.description = null;
+      const parsed = insertStationSchema.parse(data);
+      const item = await storage.createStation(parsed);
+      res.status(201).json(item);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: "Validation failed", errors: error.errors });
+      console.error(error);
+      res.status(500).json({ message: "Failed to create station" });
+    }
+  });
+  app.patch("/api/stations/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const data = { ...req.body };
+      if (data.location === "") data.location = null;
+      if (data.ipRestriction === "") data.ipRestriction = null;
+      if (data.description === "") data.description = null;
+      const item = await storage.updateStation(req.params.id as string, data);
+      if (!item) return res.status(404).json({ message: "Station not found" });
+      res.json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update station" });
+    }
+  });
+  app.delete("/api/stations/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      await storage.deleteStation(req.params.id as string);
+      res.json({ message: "Station deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete station" });
+    }
+  });
+
+  app.get("/api/secondary-wage-groups", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const items = await storage.getSecondaryWageGroups(companyId);
+      res.json(items);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch secondary wage groups" });
+    }
+  });
+  app.post("/api/secondary-wage-groups", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const data = { ...req.body };
+      if (data.description === "") data.description = null;
+      if (data.hourlyRate === "") data.hourlyRate = "0";
+      if (data.overtimeRate === "") data.overtimeRate = "0";
+      const parsed = insertSecondaryWageGroupSchema.parse(data);
+      const item = await storage.createSecondaryWageGroup(parsed);
+      res.status(201).json(item);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: "Validation failed", errors: error.errors });
+      console.error(error);
+      res.status(500).json({ message: "Failed to create secondary wage group" });
+    }
+  });
+  app.patch("/api/secondary-wage-groups/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const data = { ...req.body };
+      if (data.description === "") data.description = null;
+      if (data.hourlyRate === "") data.hourlyRate = "0";
+      if (data.overtimeRate === "") data.overtimeRate = "0";
+      const item = await storage.updateSecondaryWageGroup(req.params.id as string, data);
+      if (!item) return res.status(404).json({ message: "Secondary wage group not found" });
+      res.json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update secondary wage group" });
+    }
+  });
+  app.delete("/api/secondary-wage-groups/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      await storage.deleteSecondaryWageGroup(req.params.id as string);
+      res.json({ message: "Secondary wage group deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete secondary wage group" });
+    }
+  });
+
+  app.get("/api/currencies", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const items = await storage.getCurrencies(companyId);
+      res.json(items);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch currencies" });
+    }
+  });
+  app.post("/api/currencies", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const data = { ...req.body };
+      if (data.exchangeRate === "") data.exchangeRate = "1";
+      if (data.companyId === "") data.companyId = null;
+      const parsed = insertCurrencySchema.parse(data);
+      const item = await storage.createCurrency(parsed);
+      res.status(201).json(item);
+    } catch (error: any) {
+      if (error.name === "ZodError") return res.status(400).json({ message: "Validation failed", errors: error.errors });
+      console.error(error);
+      res.status(500).json({ message: "Failed to create currency" });
+    }
+  });
+  app.patch("/api/currencies/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const data = { ...req.body };
+      if (data.exchangeRate === "") data.exchangeRate = "1";
+      if (data.companyId === "") data.companyId = null;
+      const item = await storage.updateCurrency(req.params.id as string, data);
+      if (!item) return res.status(404).json({ message: "Currency not found" });
+      res.json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update currency" });
+    }
+  });
+  app.delete("/api/currencies/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      await storage.deleteCurrency(req.params.id as string);
+      res.json({ message: "Currency deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete currency" });
+    }
+  });
+
+  app.post("/api/import/:type", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { type } = req.params;
+      const { records } = req.body;
+      if (!Array.isArray(records) || records.length === 0) {
+        return res.status(400).json({ message: "No records provided" });
+      }
+      let imported = 0;
+      const errors: string[] = [];
+      for (let i = 0; i < records.length; i++) {
+        try {
+          if (type === "workers") {
+            await storage.createWorker(records[i]);
+          } else if (type === "departments") {
+            await storage.createDepartment(records[i]);
+          } else if (type === "jobs") {
+            await storage.createJob(records[i]);
+          } else {
+            return res.status(400).json({ message: `Unsupported import type: ${type}` });
+          }
+          imported++;
+        } catch (err: any) {
+          errors.push(`Row ${i + 1}: ${err.message}`);
+        }
+      }
+      res.json({ imported, errors, total: records.length });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Import failed" });
     }
   });
 

@@ -1,0 +1,249 @@
+Replit Prompt — Implement Missing Core System Modules in PayLink
+You are acting as a senior software architect and HR/payroll systems engineer.
+Your task is to implement the missing core system modules in the PayLink payroll platform so the software can be configured and used properly.
+These modules must include:
+Jobs
+Hierarchy
+Secondary Wage Groups
+Stations
+Permission Groups
+Currencies
+Import
+Quick Start
+Each module must include:
+• database tables
+• backend models
+• API endpoints
+• admin UI pages
+• validation rules
+• reporting compatibility
+The goal is to make the software fully configurable and usable by administrators.
+1. Jobs Module
+Purpose:
+Defines employee roles and job titles used in payroll, scheduling, and reporting.
+Examples:
+Manager
+Cashier
+Warehouse Worker
+Customer Support Agent
+Software Engineer
+Implement:
+Database table:
+jobs
+id
+job_title
+department
+description
+pay_type
+default_wage
+status
+created_at
+Features:
+• assign job to employee
+• use job in scheduling
+• use job in payroll reports
+2. Hierarchy Module
+Purpose:
+Defines company structure and reporting relationships.
+Example hierarchy:
+Company
+   ├ Executive
+   │    ├ HR
+   │    ├ Finance
+   ├ Operations
+   │    ├ Warehouse
+   │    ├ Support
+Database table:
+hierarchy
+id
+parent_id
+name
+type
+description
+Features:
+• nested departments
+• manager assignments
+• reporting filters
+• permission inheritance
+3. Secondary Wage Groups
+Purpose:
+Allows employees to receive different wage rates based on role or task.
+Example:
+Primary Wage: $20/hour
+Secondary Wage: $25/hour (Supervisor duties)
+Database table:
+secondary_wage_groups
+id
+name
+hourly_rate
+overtime_rate
+description
+Features:
+• assign to pay codes
+• apply during payroll calculation
+• override employee default wage
+4. Stations
+Purpose:
+Defines physical or logical work locations used by the timeclock system.
+Examples:
+Front Desk
+Warehouse Dock
+Office Floor
+Remote Work
+Manufacturing Line
+Database table:
+stations
+id
+station_name
+location
+ip_restriction
+description
+status
+Features:
+• restrict clock-ins by station
+• track work location
+• station-based reporting
+5. Permission Groups
+Purpose:
+Defines system access roles.
+Examples:
+Administrator
+HR Manager
+Payroll Manager
+Department Manager
+Employee
+Database table:
+permission_groups
+id
+name
+description
+permissions_json
+Permissions should control access to:
+employees
+payroll
+reports
+timeclock
+HR records
+system settings
+Implement role-based access control (RBAC).
+6. Currencies Module
+Purpose:
+Supports payroll calculations and reporting in multiple currencies.
+Database table:
+currencies
+id
+currency_code
+currency_name
+symbol
+exchange_rate
+status
+Example currencies:
+USD
+CAD
+EUR
+GBP
+Features:
+• currency conversion
+• payroll reporting by currency
+• base currency configuration
+7. Import Module
+Purpose:
+Allows bulk data imports.
+Supported imports:
+Employees
+Timesheets
+Payroll records
+Job titles
+Departments
+Supported formats:
+CSV
+Excel
+JSON
+Features:
+• file upload
+• column mapping interface
+• preview validation
+• rollback on errors
+8. Quick Start Wizard
+Purpose:
+Helps administrators configure the system on first launch.
+Steps should include:
+Company information
+Tax configuration
+Currency selection
+Job setup
+Department hierarchy
+Permission groups
+Employee import
+Timeclock configuration
+Payroll policies
+Features:
+• guided setup interface
+• progress tracking
+• validation before completion
+UI Requirements
+Each module must include:
+Admin page
+/admin/jobs
+/admin/hierarchy
+/admin/stations
+/admin/currencies
+/admin/permissions
+/admin/import
+/admin/setup
+Features:
+• create
+• edit
+• delete
+• search
+• pagination
+API Endpoints
+Create REST endpoints:
+GET /api/jobs
+POST /api/jobs
+PUT /api/jobs/{id}
+DELETE /api/jobs/{id}
+
+GET /api/stations
+POST /api/stations
+
+GET /api/permissions
+POST /api/permissions
+Follow REST standards.
+Integration Requirements
+Ensure modules integrate with:
+employees
+payroll engine
+timeclock
+reporting system
+HR module
+Examples:
+Employees → assigned job
+Employees → assigned hierarchy department
+Timeclock → station
+Users → permission group
+Payroll → secondary wage group
+Validation Requirements
+Ensure:
+• no orphan relationships
+• foreign keys enforced
+• required fields validated
+• unique constraints applied where necessary
+Deliverables
+After implementation, provide:
+Database migration scripts
+Backend models
+API endpoints
+Admin UI pages
+Updated documentation
+Also generate sample seed data so the system is usable immediately.
+Final Goal
+The PayLink platform should support:
+organizational structure
+role-based access
+location-based time tracking
+multi-wage payroll
+multi-currency payroll
+bulk data import
+guided system setup
+The system must be fully configurable and ready for payroll operations.

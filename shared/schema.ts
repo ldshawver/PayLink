@@ -275,8 +275,11 @@ export const jobs = pgTable("jobs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id),
   costCenterId: varchar("cost_center_id"),
+  departmentId: varchar("department_id"),
   name: text("name").notNull(),
   description: text("description"),
+  payType: text("pay_type").default("hourly"),
+  defaultWage: numeric("default_wage"),
   startDate: date("start_date"),
   endDate: date("end_date"),
   status: jobStatusEnum("status").default("active"),
@@ -1145,6 +1148,51 @@ export type WorkerLanguage = typeof workerLanguages.$inferSelect;
 export type InsertWorkerLanguage = z.infer<typeof insertWorkerLanguageSchema>;
 export type WorkerMembership = typeof workerMemberships.$inferSelect;
 export type InsertWorkerMembership = z.infer<typeof insertWorkerMembershipSchema>;
+
+export const stations = pgTable("stations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  stationName: text("station_name").notNull(),
+  location: text("location"),
+  ipRestriction: text("ip_restriction"),
+  description: text("description"),
+  status: text("status").default("active"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const secondaryWageGroups = pgTable("secondary_wage_groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  hourlyRate: numeric("hourly_rate").default("0"),
+  overtimeRate: numeric("overtime_rate").default("0"),
+  description: text("description"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const currencies = pgTable("currencies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id"),
+  currencyCode: text("currency_code").notNull(),
+  currencyName: text("currency_name").notNull(),
+  symbol: text("symbol").default("$"),
+  exchangeRate: numeric("exchange_rate").default("1"),
+  isBaseCurrency: boolean("is_base_currency").default(false),
+  status: text("status").default("active"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertStationSchema = createInsertSchema(stations).omit({ id: true, createdAt: true });
+export const insertSecondaryWageGroupSchema = createInsertSchema(secondaryWageGroups).omit({ id: true, createdAt: true });
+export const insertCurrencySchema = createInsertSchema(currencies).omit({ id: true, createdAt: true });
+
+export type Station = typeof stations.$inferSelect;
+export type InsertStation = z.infer<typeof insertStationSchema>;
+export type SecondaryWageGroup = typeof secondaryWageGroups.$inferSelect;
+export type InsertSecondaryWageGroup = z.infer<typeof insertSecondaryWageGroupSchema>;
+export type Currency = typeof currencies.$inferSelect;
+export type InsertCurrency = z.infer<typeof insertCurrencySchema>;
 
 export const savedReports = pgTable("saved_reports", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

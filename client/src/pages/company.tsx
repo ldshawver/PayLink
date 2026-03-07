@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Company, Department, Branch, LegalEntity, Enterprise, Division, Position, CostCenter, Job, Role, RolePermission, UserRole } from "@shared/schema";
+import type { Company, Department, Branch, LegalEntity, Enterprise, Division, Position, CostCenter, Job, Role, RolePermission, UserRole, Station, SecondaryWageGroup, Currency } from "@shared/schema";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -21,7 +21,8 @@ import {
   Building2, Plus, MoreVertical, Pencil, Trash2, Phone, MapPin,
   DollarSign, Network, Shield, Monitor, Import, Rocket, CheckCircle2,
   Globe, Briefcase, Target, CircleDot, FolderKanban, ChevronRight, Scale,
-  UserPlus, Users, Lock, Eye, FilePlus, Edit3, Trash, Save, Upload, Image, X
+  UserPlus, Users, Lock, Eye, FilePlus, Edit3, Trash, Save, Upload, Image, X,
+  FileUp, AlertCircle, ArrowRight, Check
 } from "lucide-react";
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -2187,12 +2188,13 @@ function JobsTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<Job | null>(null);
-  const emptyForm = { companyId: "", costCenterId: "", name: "", description: "", startDate: "", endDate: "", status: "active" };
+  const emptyForm = { companyId: "", costCenterId: "", departmentId: "", name: "", description: "", payType: "hourly", defaultWage: "", startDate: "", endDate: "", status: "active" };
   const [form, setForm] = useState(emptyForm);
 
   const { data: jobsList, isLoading } = useQuery<Job[]>({ queryKey: ["/api/jobs"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: costCentersList } = useQuery<CostCenter[]>({ queryKey: ["/api/cost-centers"] });
+  const { data: departmentsList } = useQuery<Department[]>({ queryKey: ["/api/departments"] });
 
   const addMutation = useMutation({
     mutationFn: async (data: typeof form) => {
@@ -2237,8 +2239,11 @@ function JobsTab() {
     setForm({
       companyId: item.companyId || "",
       costCenterId: item.costCenterId || "",
+      departmentId: (item as any).departmentId || "",
       name: item.name || "",
       description: item.description || "",
+      payType: (item as any).payType || "hourly",
+      defaultWage: (item as any).defaultWage || "",
       startDate: item.startDate || "",
       endDate: item.endDate || "",
       status: item.status || "active",
@@ -2251,12 +2256,13 @@ function JobsTab() {
   }
 
   const filteredCostCenters = form.companyId ? costCentersList?.filter((cc) => cc.companyId === form.companyId) : costCentersList;
+  const filteredDepartments = form.companyId ? departmentsList?.filter((d) => d.companyId === form.companyId) : departmentsList;
 
   const jobFormFields = (suffix: string) => (
     <div className="grid gap-4">
       <div className="grid gap-2">
         <Label>Company *</Label>
-        <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v, costCenterId: "" })}>
+        <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v, costCenterId: "", departmentId: "" })}>
           <SelectTrigger data-testid={`select-job-company${suffix}`}>
             <SelectValue placeholder="Select company" />
           </SelectTrigger>
@@ -2267,18 +2273,33 @@ function JobsTab() {
           </SelectContent>
         </Select>
       </div>
-      <div className="grid gap-2">
-        <Label>Cost Center</Label>
-        <Select value={form.costCenterId} onValueChange={(v) => setForm({ ...form, costCenterId: v })}>
-          <SelectTrigger data-testid={`select-job-cost-center${suffix}`}>
-            <SelectValue placeholder="Select cost center" />
-          </SelectTrigger>
-          <SelectContent>
-            {filteredCostCenters?.map((cc) => (
-              <SelectItem key={cc.id} value={cc.id}>{cc.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-2">
+          <Label>Department</Label>
+          <Select value={form.departmentId} onValueChange={(v) => setForm({ ...form, departmentId: v })}>
+            <SelectTrigger data-testid={`select-job-department${suffix}`}>
+              <SelectValue placeholder="Select department" />
+            </SelectTrigger>
+            <SelectContent>
+              {filteredDepartments?.map((d) => (
+                <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-2">
+          <Label>Cost Center</Label>
+          <Select value={form.costCenterId} onValueChange={(v) => setForm({ ...form, costCenterId: v })}>
+            <SelectTrigger data-testid={`select-job-cost-center${suffix}`}>
+              <SelectValue placeholder="Select cost center" />
+            </SelectTrigger>
+            <SelectContent>
+              {filteredCostCenters?.map((cc) => (
+                <SelectItem key={cc.id} value={cc.id}>{cc.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       <div className="grid gap-2">
         <Label>Name *</Label>
@@ -2287,6 +2308,26 @@ function JobsTab() {
       <div className="grid gap-2">
         <Label>Description</Label>
         <Input data-testid={`input-job-description${suffix}`} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-2">
+          <Label>Pay Type</Label>
+          <Select value={form.payType} onValueChange={(v) => setForm({ ...form, payType: v })}>
+            <SelectTrigger data-testid={`select-job-pay-type${suffix}`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="hourly">Hourly</SelectItem>
+              <SelectItem value="salary">Salary</SelectItem>
+              <SelectItem value="commission">Commission</SelectItem>
+              <SelectItem value="piece_rate">Piece Rate</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-2">
+          <Label>Default Wage ($)</Label>
+          <Input data-testid={`input-job-wage${suffix}`} type="number" step="0.01" value={form.defaultWage} onChange={(e) => setForm({ ...form, defaultWage: e.target.value })} placeholder="0.00" />
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="grid gap-2">
@@ -3281,62 +3322,658 @@ function PermissionsTab() {
   );
 }
 
-function PlaceholderTab({ icon: Icon, message }: { icon: React.ElementType; message: string }) {
+function StationsTab() {
+  const { toast } = useToast();
+  const [addOpen, setAddOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editItem, setEditItem] = useState<Station | null>(null);
+  const emptyForm = { companyId: "", stationName: "", location: "", ipRestriction: "", description: "", status: "active" };
+  const [form, setForm] = useState(emptyForm);
+
+  const { data: stationsList, isLoading } = useQuery<Station[]>({ queryKey: ["/api/stations"] });
+  const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const addMutation = useMutation({
+    mutationFn: async (data: typeof form) => { await apiRequest("POST", "/api/stations", data); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/stations"] }); setAddOpen(false); setForm(emptyForm); toast({ title: "Station added" }); },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+  const editMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: typeof form }) => { await apiRequest("PATCH", `/api/stations/${id}`, data); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/stations"] }); setEditOpen(false); setEditItem(null); setForm(emptyForm); toast({ title: "Station updated" }); },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/stations/${id}`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/stations"] }); toast({ title: "Station deleted" }); },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const handleEdit = (item: Station) => {
+    setEditItem(item);
+    setForm({ companyId: item.companyId || "", stationName: item.stationName || "", location: item.location || "", ipRestriction: item.ipRestriction || "", description: item.description || "", status: item.status || "active" });
+    setEditOpen(true);
+  };
+
+  if (isLoading) return <div data-testid="loading-stations"><Skeleton className="h-64 w-full" /></div>;
+
+  const stationFormFields = (suffix: string) => (
+    <div className="grid gap-4">
+      <div className="grid gap-2">
+        <Label>Company *</Label>
+        <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
+          <SelectTrigger data-testid={`select-station-company${suffix}`}><SelectValue placeholder="Select company" /></SelectTrigger>
+          <SelectContent>{companies?.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}</SelectContent>
+        </Select>
+      </div>
+      <div className="grid gap-2">
+        <Label>Station Name *</Label>
+        <Input data-testid={`input-station-name${suffix}`} value={form.stationName} onChange={(e) => setForm({ ...form, stationName: e.target.value })} />
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-2">
+          <Label>Location</Label>
+          <Input data-testid={`input-station-location${suffix}`} value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="e.g. Building A, Floor 2" />
+        </div>
+        <div className="grid gap-2">
+          <Label>IP Restriction</Label>
+          <Input data-testid={`input-station-ip${suffix}`} value={form.ipRestriction} onChange={(e) => setForm({ ...form, ipRestriction: e.target.value })} placeholder="e.g. 192.168.1.0/24" />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-2">
+          <Label>Description</Label>
+          <Input data-testid={`input-station-description${suffix}`} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+        </div>
+        <div className="grid gap-2">
+          <Label>Status</Label>
+          <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
+            <SelectTrigger data-testid={`select-station-status${suffix}`}><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="inactive">Inactive</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
-    <Card>
-      <CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-        <Icon className="h-10 w-10 mb-4" />
-        <p>{message}</p>
-      </CardContent>
-    </Card>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <h2 className="text-lg font-semibold">Stations</h2>
+        <Dialog open={addOpen} onOpenChange={setAddOpen}>
+          <DialogTrigger asChild><Button data-testid="button-add-station"><Plus className="mr-2 h-4 w-4" />Add Station</Button></DialogTrigger>
+          <DialogContent><DialogHeader><DialogTitle>Add Station</DialogTitle></DialogHeader>
+            {stationFormFields("")}
+            <Button data-testid="button-submit-station" className="w-full mt-2" disabled={!form.stationName || !form.companyId || addMutation.isPending} onClick={() => addMutation.mutate(form)}>
+              {addMutation.isPending ? "Adding..." : "Add Station"}
+            </Button>
+          </DialogContent>
+        </Dialog>
+      </div>
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent><DialogHeader><DialogTitle>Edit Station</DialogTitle></DialogHeader>
+          {stationFormFields("-edit")}
+          <Button data-testid="button-update-station" className="w-full mt-2" disabled={!form.stationName || editMutation.isPending} onClick={() => editItem && editMutation.mutate({ id: editItem.id, data: form })}>
+            {editMutation.isPending ? "Saving..." : "Save Changes"}
+          </Button>
+        </DialogContent>
+      </Dialog>
+      <Card>
+        <Table>
+          <TableHeader><TableRow>
+            <TableHead>Station Name</TableHead><TableHead>Location</TableHead><TableHead>IP Restriction</TableHead><TableHead>Status</TableHead><TableHead className="w-12"></TableHead>
+          </TableRow></TableHeader>
+          <TableBody>
+            {(!stationsList || stationsList.length === 0) ? (
+              <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-8">No stations configured</TableCell></TableRow>
+            ) : stationsList.map((s) => (
+              <TableRow key={s.id} data-testid={`row-station-${s.id}`}>
+                <TableCell className="font-medium">{s.stationName}</TableCell>
+                <TableCell>{s.location || "—"}</TableCell>
+                <TableCell className="font-mono text-sm">{s.ipRestriction || "—"}</TableCell>
+                <TableCell><Badge variant={s.status === "active" ? "default" : "secondary"}>{s.status}</Badge></TableCell>
+                <TableCell>
+                  <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" data-testid={`menu-station-${s.id}`}><MoreVertical className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => handleEdit(s)} data-testid={`edit-station-${s.id}`}><Pencil className="mr-2 h-4 w-4" />Edit</DropdownMenuItem>
+                      <DropdownMenuItem className="text-red-600" onClick={() => deleteMutation.mutate(s.id)} data-testid={`delete-station-${s.id}`}><Trash2 className="mr-2 h-4 w-4" />Delete</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Card>
+    </div>
+  );
+}
+
+function SecondaryWageGroupsTab() {
+  const { toast } = useToast();
+  const [addOpen, setAddOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editItem, setEditItem] = useState<SecondaryWageGroup | null>(null);
+  const emptyForm = { companyId: "", name: "", hourlyRate: "", overtimeRate: "", description: "", isActive: true };
+  const [form, setForm] = useState(emptyForm);
+
+  const { data: wageGroupsList, isLoading } = useQuery<SecondaryWageGroup[]>({ queryKey: ["/api/secondary-wage-groups"] });
+  const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const addMutation = useMutation({
+    mutationFn: async (data: typeof form) => { await apiRequest("POST", "/api/secondary-wage-groups", data); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/secondary-wage-groups"] }); setAddOpen(false); setForm(emptyForm); toast({ title: "Wage group added" }); },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+  const editMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: typeof form }) => { await apiRequest("PATCH", `/api/secondary-wage-groups/${id}`, data); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/secondary-wage-groups"] }); setEditOpen(false); setEditItem(null); setForm(emptyForm); toast({ title: "Wage group updated" }); },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/secondary-wage-groups/${id}`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/secondary-wage-groups"] }); toast({ title: "Wage group deleted" }); },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const handleEdit = (item: SecondaryWageGroup) => {
+    setEditItem(item);
+    setForm({ companyId: item.companyId || "", name: item.name || "", hourlyRate: item.hourlyRate || "0", overtimeRate: item.overtimeRate || "0", description: item.description || "", isActive: item.isActive !== false });
+    setEditOpen(true);
+  };
+
+  if (isLoading) return <div data-testid="loading-wage-groups"><Skeleton className="h-64 w-full" /></div>;
+
+  const wageFormFields = (suffix: string) => (
+    <div className="grid gap-4">
+      <div className="grid gap-2">
+        <Label>Company *</Label>
+        <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
+          <SelectTrigger data-testid={`select-wg-company${suffix}`}><SelectValue placeholder="Select company" /></SelectTrigger>
+          <SelectContent>{companies?.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}</SelectContent>
+        </Select>
+      </div>
+      <div className="grid gap-2">
+        <Label>Group Name *</Label>
+        <Input data-testid={`input-wg-name${suffix}`} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-2">
+          <Label>Hourly Rate ($)</Label>
+          <Input data-testid={`input-wg-hourly${suffix}`} type="number" step="0.01" value={form.hourlyRate} onChange={(e) => setForm({ ...form, hourlyRate: e.target.value })} />
+        </div>
+        <div className="grid gap-2">
+          <Label>Overtime Rate ($)</Label>
+          <Input data-testid={`input-wg-overtime${suffix}`} type="number" step="0.01" value={form.overtimeRate} onChange={(e) => setForm({ ...form, overtimeRate: e.target.value })} />
+        </div>
+      </div>
+      <div className="grid gap-2">
+        <Label>Description</Label>
+        <Input data-testid={`input-wg-description${suffix}`} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <h2 className="text-lg font-semibold">Secondary Wage Groups</h2>
+        <Dialog open={addOpen} onOpenChange={setAddOpen}>
+          <DialogTrigger asChild><Button data-testid="button-add-wage-group"><Plus className="mr-2 h-4 w-4" />Add Wage Group</Button></DialogTrigger>
+          <DialogContent><DialogHeader><DialogTitle>Add Secondary Wage Group</DialogTitle></DialogHeader>
+            {wageFormFields("")}
+            <Button data-testid="button-submit-wage-group" className="w-full mt-2" disabled={!form.name || !form.companyId || addMutation.isPending} onClick={() => addMutation.mutate(form)}>
+              {addMutation.isPending ? "Adding..." : "Add Wage Group"}
+            </Button>
+          </DialogContent>
+        </Dialog>
+      </div>
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent><DialogHeader><DialogTitle>Edit Secondary Wage Group</DialogTitle></DialogHeader>
+          {wageFormFields("-edit")}
+          <Button data-testid="button-update-wage-group" className="w-full mt-2" disabled={!form.name || editMutation.isPending} onClick={() => editItem && editMutation.mutate({ id: editItem.id, data: form })}>
+            {editMutation.isPending ? "Saving..." : "Save Changes"}
+          </Button>
+        </DialogContent>
+      </Dialog>
+      <Card>
+        <Table>
+          <TableHeader><TableRow>
+            <TableHead>Name</TableHead><TableHead>Hourly Rate</TableHead><TableHead>OT Rate</TableHead><TableHead>Description</TableHead><TableHead>Status</TableHead><TableHead className="w-12"></TableHead>
+          </TableRow></TableHeader>
+          <TableBody>
+            {(!wageGroupsList || wageGroupsList.length === 0) ? (
+              <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No secondary wage groups configured</TableCell></TableRow>
+            ) : wageGroupsList.map((w) => (
+              <TableRow key={w.id} data-testid={`row-wage-group-${w.id}`}>
+                <TableCell className="font-medium">{w.name}</TableCell>
+                <TableCell>${Number(w.hourlyRate || 0).toFixed(2)}</TableCell>
+                <TableCell>${Number(w.overtimeRate || 0).toFixed(2)}</TableCell>
+                <TableCell>{w.description || "—"}</TableCell>
+                <TableCell><Badge variant={w.isActive ? "default" : "secondary"}>{w.isActive ? "Active" : "Inactive"}</Badge></TableCell>
+                <TableCell>
+                  <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" data-testid={`menu-wg-${w.id}`}><MoreVertical className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => handleEdit(w)} data-testid={`edit-wg-${w.id}`}><Pencil className="mr-2 h-4 w-4" />Edit</DropdownMenuItem>
+                      <DropdownMenuItem className="text-red-600" onClick={() => deleteMutation.mutate(w.id)} data-testid={`delete-wg-${w.id}`}><Trash2 className="mr-2 h-4 w-4" />Delete</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Card>
+    </div>
   );
 }
 
 function CurrenciesTab() {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Globe className="h-5 w-5" />Currencies</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex items-center gap-3">
-          <Badge variant="default">USD</Badge>
-          <div>
-            <p className="font-medium">United States Dollar</p>
-            <p className="text-sm text-muted-foreground">Default currency</p>
-          </div>
+  const { toast } = useToast();
+  const [addOpen, setAddOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editItem, setEditItem] = useState<Currency | null>(null);
+  const emptyForm = { companyId: "", currencyCode: "", currencyName: "", symbol: "$", exchangeRate: "1", isBaseCurrency: false, status: "active" };
+  const [form, setForm] = useState(emptyForm);
+
+  const { data: currenciesList, isLoading } = useQuery<Currency[]>({ queryKey: ["/api/currencies"] });
+  const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const addMutation = useMutation({
+    mutationFn: async (data: typeof form) => { await apiRequest("POST", "/api/currencies", data); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/currencies"] }); setAddOpen(false); setForm(emptyForm); toast({ title: "Currency added" }); },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+  const editMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: typeof form }) => { await apiRequest("PATCH", `/api/currencies/${id}`, data); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/currencies"] }); setEditOpen(false); setEditItem(null); setForm(emptyForm); toast({ title: "Currency updated" }); },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/currencies/${id}`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/currencies"] }); toast({ title: "Currency deleted" }); },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const handleEdit = (item: Currency) => {
+    setEditItem(item);
+    setForm({ companyId: item.companyId || "", currencyCode: item.currencyCode || "", currencyName: item.currencyName || "", symbol: item.symbol || "$", exchangeRate: item.exchangeRate || "1", isBaseCurrency: item.isBaseCurrency || false, status: item.status || "active" });
+    setEditOpen(true);
+  };
+
+  if (isLoading) return <div data-testid="loading-currencies"><Skeleton className="h-64 w-full" /></div>;
+
+  const currencyFormFields = (suffix: string) => (
+    <div className="grid gap-4">
+      <div className="grid gap-2">
+        <Label>Company</Label>
+        <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
+          <SelectTrigger data-testid={`select-currency-company${suffix}`}><SelectValue placeholder="Global (all companies)" /></SelectTrigger>
+          <SelectContent>{companies?.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}</SelectContent>
+        </Select>
+      </div>
+      <div className="grid grid-cols-3 gap-4">
+        <div className="grid gap-2">
+          <Label>Currency Code *</Label>
+          <Input data-testid={`input-currency-code${suffix}`} value={form.currencyCode} onChange={(e) => setForm({ ...form, currencyCode: e.target.value.toUpperCase() })} placeholder="USD" maxLength={3} />
         </div>
-      </CardContent>
-    </Card>
+        <div className="grid gap-2">
+          <Label>Currency Name *</Label>
+          <Input data-testid={`input-currency-name${suffix}`} value={form.currencyName} onChange={(e) => setForm({ ...form, currencyName: e.target.value })} placeholder="US Dollar" />
+        </div>
+        <div className="grid gap-2">
+          <Label>Symbol</Label>
+          <Input data-testid={`input-currency-symbol${suffix}`} value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })} placeholder="$" maxLength={5} />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-2">
+          <Label>Exchange Rate</Label>
+          <Input data-testid={`input-currency-rate${suffix}`} type="number" step="0.0001" value={form.exchangeRate} onChange={(e) => setForm({ ...form, exchangeRate: e.target.value })} />
+        </div>
+        <div className="grid gap-2">
+          <Label>Status</Label>
+          <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
+            <SelectTrigger data-testid={`select-currency-status${suffix}`}><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="inactive">Inactive</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <Checkbox data-testid={`check-currency-base${suffix}`} checked={form.isBaseCurrency} onCheckedChange={(v) => setForm({ ...form, isBaseCurrency: !!v })} />
+        <Label>Base Currency</Label>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <h2 className="text-lg font-semibold">Currencies</h2>
+        <Dialog open={addOpen} onOpenChange={setAddOpen}>
+          <DialogTrigger asChild><Button data-testid="button-add-currency"><Plus className="mr-2 h-4 w-4" />Add Currency</Button></DialogTrigger>
+          <DialogContent><DialogHeader><DialogTitle>Add Currency</DialogTitle></DialogHeader>
+            {currencyFormFields("")}
+            <Button data-testid="button-submit-currency" className="w-full mt-2" disabled={!form.currencyCode || !form.currencyName || addMutation.isPending} onClick={() => addMutation.mutate(form)}>
+              {addMutation.isPending ? "Adding..." : "Add Currency"}
+            </Button>
+          </DialogContent>
+        </Dialog>
+      </div>
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent><DialogHeader><DialogTitle>Edit Currency</DialogTitle></DialogHeader>
+          {currencyFormFields("-edit")}
+          <Button data-testid="button-update-currency" className="w-full mt-2" disabled={!form.currencyCode || editMutation.isPending} onClick={() => editItem && editMutation.mutate({ id: editItem.id, data: form })}>
+            {editMutation.isPending ? "Saving..." : "Save Changes"}
+          </Button>
+        </DialogContent>
+      </Dialog>
+      <Card>
+        <Table>
+          <TableHeader><TableRow>
+            <TableHead>Code</TableHead><TableHead>Name</TableHead><TableHead>Symbol</TableHead><TableHead>Exchange Rate</TableHead><TableHead>Base</TableHead><TableHead>Status</TableHead><TableHead className="w-12"></TableHead>
+          </TableRow></TableHeader>
+          <TableBody>
+            {(!currenciesList || currenciesList.length === 0) ? (
+              <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No currencies configured</TableCell></TableRow>
+            ) : currenciesList.map((c) => (
+              <TableRow key={c.id} data-testid={`row-currency-${c.id}`}>
+                <TableCell className="font-medium">{c.currencyCode}</TableCell>
+                <TableCell>{c.currencyName}</TableCell>
+                <TableCell>{c.symbol}</TableCell>
+                <TableCell>{Number(c.exchangeRate || 1).toFixed(4)}</TableCell>
+                <TableCell>{c.isBaseCurrency ? <Badge variant="default">Base</Badge> : "—"}</TableCell>
+                <TableCell><Badge variant={c.status === "active" ? "default" : "secondary"}>{c.status}</Badge></TableCell>
+                <TableCell>
+                  <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" data-testid={`menu-currency-${c.id}`}><MoreVertical className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => handleEdit(c)} data-testid={`edit-currency-${c.id}`}><Pencil className="mr-2 h-4 w-4" />Edit</DropdownMenuItem>
+                      <DropdownMenuItem className="text-red-600" onClick={() => deleteMutation.mutate(c.id)} data-testid={`delete-currency-${c.id}`}><Trash2 className="mr-2 h-4 w-4" />Delete</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Card>
+    </div>
+  );
+}
+
+function ImportTab() {
+  const { toast } = useToast();
+  const [step, setStep] = useState<"upload" | "map" | "preview" | "result">("upload");
+  const [importType, setImportType] = useState("workers");
+  const [csvData, setCsvData] = useState<string[][]>([]);
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [columnMap, setColumnMap] = useState<Record<string, string>>({});
+  const [result, setResult] = useState<{ imported: number; errors: string[]; total: number } | null>(null);
+  const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const [selectedCompanyId, setSelectedCompanyId] = useState("");
+
+  const targetFields: Record<string, { label: string; required: boolean }[]> = {
+    workers: [
+      { label: "firstName", required: true }, { label: "lastName", required: true },
+      { label: "email", required: false }, { label: "phone", required: false },
+      { label: "workerType", required: false }, { label: "status", required: false },
+      { label: "hireDate", required: false }, { label: "hourlyRate", required: false },
+      { label: "ssn", required: false }, { label: "address", required: false },
+      { label: "city", required: false }, { label: "state", required: false }, { label: "zip", required: false },
+    ],
+    departments: [
+      { label: "name", required: true }, { label: "code", required: false },
+      { label: "description", required: false },
+    ],
+    jobs: [
+      { label: "name", required: true }, { label: "description", required: false },
+      { label: "status", required: false },
+    ],
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) { toast({ title: "CSV must have headers and at least one data row", variant: "destructive" }); return; }
+      const parsed = lines.map(line => {
+        const result: string[] = [];
+        let current = "";
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          if (line[i] === '"') { inQuotes = !inQuotes; }
+          else if (line[i] === ',' && !inQuotes) { result.push(current.trim()); current = ""; }
+          else { current += line[i]; }
+        }
+        result.push(current.trim());
+        return result;
+      });
+      const h = parsed[0];
+      setHeaders(h);
+      setCsvData(parsed.slice(1));
+      const autoMap: Record<string, string> = {};
+      const fields = targetFields[importType] || [];
+      fields.forEach(f => {
+        const match = h.findIndex(col => col.toLowerCase().replace(/[_\s]/g, "") === f.label.toLowerCase().replace(/[_\s]/g, ""));
+        if (match >= 0) autoMap[f.label] = h[match];
+      });
+      setColumnMap(autoMap);
+      setStep("map");
+    };
+    reader.readAsText(file);
+  };
+
+  const importMutation = useMutation({
+    mutationFn: async () => {
+      const fields = targetFields[importType] || [];
+      const records = csvData.map(row => {
+        const record: Record<string, string> = {};
+        if (selectedCompanyId) record.companyId = selectedCompanyId;
+        fields.forEach(f => {
+          const csvCol = columnMap[f.label];
+          if (csvCol) {
+            const idx = headers.indexOf(csvCol);
+            if (idx >= 0 && row[idx]) record[f.label] = row[idx];
+          }
+        });
+        return record;
+      }).filter(r => Object.keys(r).length > 1 || (Object.keys(r).length === 1 && !r.companyId));
+      const res = await apiRequest("POST", `/api/import/${importType}`, { records });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setResult(data);
+      setStep("result");
+      queryClient.invalidateQueries({ queryKey: ["/api/workers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/departments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/jobs"] });
+    },
+    onError: (err: Error) => toast({ title: "Import failed", description: err.message, variant: "destructive" }),
+  });
+
+  const previewData = csvData.slice(0, 5).map(row => {
+    const mapped: Record<string, string> = {};
+    Object.entries(columnMap).forEach(([field, csvCol]) => {
+      const idx = headers.indexOf(csvCol);
+      if (idx >= 0) mapped[field] = row[idx] || "";
+    });
+    return mapped;
+  });
+
+  const reset = () => { setStep("upload"); setCsvData([]); setHeaders([]); setColumnMap({}); setResult(null); };
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-lg font-semibold flex items-center gap-2"><FileUp className="h-5 w-5" />CSV Import Wizard</h2>
+
+      <Card>
+        <CardContent className="pt-6">
+          {step === "upload" && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label>Import Type</Label>
+                  <Select value={importType} onValueChange={setImportType}>
+                    <SelectTrigger data-testid="select-import-type"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="workers">Employees</SelectItem>
+                      <SelectItem value="departments">Departments</SelectItem>
+                      <SelectItem value="jobs">Jobs</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  <Label>Company *</Label>
+                  <Select value={selectedCompanyId} onValueChange={setSelectedCompanyId}>
+                    <SelectTrigger data-testid="select-import-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                    <SelectContent>{companies?.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}</SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="border-2 border-dashed rounded-lg p-8 text-center">
+                <FileUp className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground mb-3">Upload a CSV file to import {importType}</p>
+                <Input type="file" accept=".csv" onChange={handleFileUpload} data-testid="input-csv-file" className="max-w-xs mx-auto" disabled={!selectedCompanyId} />
+                {!selectedCompanyId && <p className="text-xs text-amber-600 mt-2">Select a company first</p>}
+              </div>
+              <div className="text-sm text-muted-foreground">
+                <p className="font-medium mb-1">Expected columns for {importType}:</p>
+                <p>{(targetFields[importType] || []).map(f => f.required ? `${f.label} *` : f.label).join(", ")}</p>
+              </div>
+            </div>
+          )}
+
+          {step === "map" && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">Map CSV columns to {importType} fields. {csvData.length} rows found.</p>
+                <Button variant="outline" size="sm" onClick={reset} data-testid="button-import-reset">Start Over</Button>
+              </div>
+              <div className="grid gap-3 max-h-96 overflow-y-auto">
+                {(targetFields[importType] || []).map(f => (
+                  <div key={f.label} className="grid grid-cols-2 gap-3 items-center">
+                    <Label className="text-sm">{f.label} {f.required && <span className="text-red-500">*</span>}</Label>
+                    <Select value={columnMap[f.label] || "__skip__"} onValueChange={(v) => setColumnMap({ ...columnMap, [f.label]: v === "__skip__" ? "" : v })}>
+                      <SelectTrigger data-testid={`select-map-${f.label}`}><SelectValue placeholder="Skip" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__skip__">— Skip —</SelectItem>
+                        {headers.map((h) => (<SelectItem key={h} value={h}>{h}</SelectItem>))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ))}
+              </div>
+              <Button className="w-full" onClick={() => setStep("preview")} data-testid="button-import-preview">
+                Preview <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </div>
+          )}
+
+          {step === "preview" && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">Preview (first 5 rows of {csvData.length})</p>
+                <Button variant="outline" size="sm" onClick={() => setStep("map")} data-testid="button-import-back">Back to Mapping</Button>
+              </div>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader><TableRow>
+                    {Object.keys(columnMap).filter(k => columnMap[k]).map(k => (<TableHead key={k}>{k}</TableHead>))}
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {previewData.map((row, i) => (
+                      <TableRow key={i}>
+                        {Object.keys(columnMap).filter(k => columnMap[k]).map(k => (<TableCell key={k}>{row[k] || "—"}</TableCell>))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <Button className="w-full" onClick={() => importMutation.mutate()} disabled={importMutation.isPending} data-testid="button-import-execute">
+                {importMutation.isPending ? "Importing..." : `Import ${csvData.length} Records`}
+              </Button>
+            </div>
+          )}
+
+          {step === "result" && result && (
+            <div className="space-y-4">
+              <div className="flex flex-col items-center py-6">
+                <CheckCircle2 className="h-12 w-12 text-green-600 mb-3" />
+                <h3 className="text-lg font-semibold">Import Complete</h3>
+                <p className="text-muted-foreground">{result.imported} of {result.total} records imported successfully</p>
+              </div>
+              {result.errors.length > 0 && (
+                <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-4">
+                  <p className="font-medium text-red-800 dark:text-red-300 flex items-center gap-2 mb-2"><AlertCircle className="h-4 w-4" />{result.errors.length} errors:</p>
+                  <ul className="text-sm text-red-700 dark:text-red-400 space-y-1 max-h-40 overflow-y-auto">
+                    {result.errors.map((e, i) => (<li key={i}>{e}</li>))}
+                  </ul>
+                </div>
+              )}
+              <Button className="w-full" onClick={reset} data-testid="button-import-new">Import Another File</Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
 function QuickStartTab() {
-  const items = [
-    "Add Company info",
-    "Add Departments",
-    "Add Employees",
-    "Set Pay Policies",
-    "Configure Payroll",
+  const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: departments } = useQuery<Department[]>({ queryKey: ["/api/departments"] });
+  const { data: workers } = useQuery<any[]>({ queryKey: ["/api/workers"] });
+  const { data: jobs } = useQuery<Job[]>({ queryKey: ["/api/jobs"] });
+  const { data: policyGroups } = useQuery<any[]>({ queryKey: ["/api/policy-groups"] });
+  const { data: payPeriods } = useQuery<any[]>({ queryKey: ["/api/pay-periods"] });
+  const [, setLocation] = useLocation();
+
+  const steps = [
+    { label: "Add Company Information", done: (companies?.length || 0) > 0, link: "/company?tab=info", icon: Building2 },
+    { label: "Set Up Departments", done: (departments?.length || 0) > 0, link: "/company?tab=departments", icon: FolderKanban },
+    { label: "Configure Jobs", done: (jobs?.length || 0) > 0, link: "/company?tab=jobs", icon: Briefcase },
+    { label: "Add Employees", done: (workers?.length || 0) > 0, link: "/employees", icon: Users },
+    { label: "Set Pay Policies", done: (policyGroups?.length || 0) > 0, link: "/policies", icon: Shield },
+    { label: "Configure Pay Periods", done: (payPeriods?.length || 0) > 0, link: "/payroll", icon: DollarSign },
   ];
 
+  const completed = steps.filter(s => s.done).length;
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Rocket className="h-5 w-5" />Quick Start Checklist</CardTitle>
-        <CardDescription>Follow these steps to set up your payroll system.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <ul className="space-y-3">
-          {items.map((item, i) => (
-            <li key={i} className="flex items-center gap-3" data-testid={`checklist-item-${i}`}>
-              <CheckCircle2 className="h-5 w-5 text-muted-foreground shrink-0" />
-              <span>{item}</span>
-            </li>
-          ))}
-        </ul>
-      </CardContent>
-    </Card>
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Rocket className="h-5 w-5" />Quick Start Checklist</CardTitle>
+          <CardDescription>{completed} of {steps.length} steps completed</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="w-full bg-muted rounded-full h-2 mb-6">
+            <div className="bg-primary rounded-full h-2 transition-all" style={{ width: `${(completed / steps.length) * 100}%` }} />
+          </div>
+          <ul className="space-y-3">
+            {steps.map((step, i) => (
+              <li key={i} className="flex items-center justify-between gap-3 p-3 rounded-lg border cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => setLocation(step.link)} data-testid={`quickstart-step-${i}`}>
+                <div className="flex items-center gap-3">
+                  {step.done ? <Check className="h-5 w-5 text-green-600 shrink-0" /> : <CircleDot className="h-5 w-5 text-muted-foreground shrink-0" />}
+                  <step.icon className="h-4 w-4 text-muted-foreground" />
+                  <span className={step.done ? "line-through text-muted-foreground" : ""}>{step.label}</span>
+                </div>
+                <ArrowRight className="h-4 w-4 text-muted-foreground" />
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -3382,19 +4019,11 @@ export default function CompanyPage() {
         <TabsContent value="cost-centers"><CostCentersTab /></TabsContent>
         <TabsContent value="jobs"><JobsTab /></TabsContent>
         <TabsContent value="hierarchy"><HierarchyTab /></TabsContent>
-        <TabsContent value="wage-groups">
-          <PlaceholderTab icon={DollarSign} message="Secondary wage group configuration coming soon." />
-        </TabsContent>
-        <TabsContent value="stations">
-          <PlaceholderTab icon={Monitor} message="Work station management coming soon." />
-        </TabsContent>
-        <TabsContent value="permissions">
-          <PermissionsTab />
-        </TabsContent>
+        <TabsContent value="wage-groups"><SecondaryWageGroupsTab /></TabsContent>
+        <TabsContent value="stations"><StationsTab /></TabsContent>
+        <TabsContent value="permissions"><PermissionsTab /></TabsContent>
         <TabsContent value="currencies"><CurrenciesTab /></TabsContent>
-        <TabsContent value="import">
-          <PlaceholderTab icon={Import} message="Data import wizard coming soon." />
-        </TabsContent>
+        <TabsContent value="import"><ImportTab /></TabsContent>
         <TabsContent value="quickstart"><QuickStartTab /></TabsContent>
       </Tabs>
     </div>
