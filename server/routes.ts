@@ -1425,6 +1425,38 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/holidays/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getHolidays(companyId);
+      const existingNames = new Set(existing.map(e => e.name));
+      const currentYear = new Date().getFullYear();
+      const defaultHolidays = [
+        { companyId, name: "New Year's Day", date: `${currentYear}-01-01`, isRecurring: true },
+        { companyId, name: "Martin Luther King Jr Day", date: `${currentYear}-01-20`, isRecurring: true },
+        { companyId, name: "Presidents Day", date: `${currentYear}-02-17`, isRecurring: true },
+        { companyId, name: "Memorial Day", date: `${currentYear}-05-26`, isRecurring: true },
+        { companyId, name: "Independence Day", date: `${currentYear}-07-04`, isRecurring: true },
+        { companyId, name: "Labor Day", date: `${currentYear}-09-01`, isRecurring: true },
+        { companyId, name: "Columbus Day", date: `${currentYear}-10-13`, isRecurring: true },
+        { companyId, name: "Veterans Day", date: `${currentYear}-11-11`, isRecurring: true },
+        { companyId, name: "Thanksgiving", date: `${currentYear}-11-27`, isRecurring: true },
+        { companyId, name: "Christmas Day", date: `${currentYear}-12-25`, isRecurring: true },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const holiday of defaultHolidays) {
+        if (existingNames.has(holiday.name)) { skipped.push(holiday.name); continue; }
+        const result = await storage.createHoliday(holiday as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} holidays${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up holidays" });
+    }
+  });
+
   // Qualifications
   app.get("/api/qualifications", async (req, res) => {
     try {
@@ -2327,6 +2359,29 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/regular-time-policies/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getRegularTimePolicies(companyId);
+      const existingNames = new Set(existing.map(e => e.name));
+      const defaults = [
+        { companyId, name: "Regular 8hr", maxTime: "8", calculationOrder: 100 },
+        { companyId, name: "Salary", maxTime: null, calculationOrder: 200 },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const item of defaults) {
+        if (existingNames.has(item.name)) { skipped.push(item.name); continue; }
+        const record = await storage.createRegularTimePolicy(item);
+        created.push(record);
+      }
+      res.json({ message: `Created ${created.length} regular time policies${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to set up regular time policies" });
+    }
+  });
+
   // Overtime Policies
   app.get("/api/overtime-policies", async (_req, res) => {
     try {
@@ -2362,6 +2417,30 @@ export async function registerRoutes(
       res.json({ message: "Deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete overtime policy" });
+    }
+  });
+
+  app.post("/api/overtime-policies/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getOvertimePolicies(companyId);
+      const existingNames = new Set(existing.map(e => e.name));
+      const defaults = [
+        { companyId, name: "CA Daily OT 8hr 1.5x", type: "daily", triggerTime: "8", rate: "1.5" },
+        { companyId, name: "CA Daily DT 12hr 2x", type: "daily", triggerTime: "12", rate: "2.0" },
+        { companyId, name: "Weekly OT 40hr 1.5x", type: "weekly", triggerTime: "40", rate: "1.5" },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const item of defaults) {
+        if (existingNames.has(item.name)) { skipped.push(item.name); continue; }
+        const record = await storage.createOvertimePolicy(item);
+        created.push(record);
+      }
+      res.json({ message: `Created ${created.length} overtime policies${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to set up overtime policies" });
     }
   });
 
@@ -2441,6 +2520,29 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/meal-policies/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getMealPolicies(companyId);
+      const existingNames = new Set(existing.map(e => e.name));
+      const defaults = [
+        { companyId, name: "CA 30min Meal after 5hr", type: "normal", activeAfter: "5", mealTime: "0.5" },
+        { companyId, name: "Second Meal after 10hr", type: "normal", activeAfter: "10", mealTime: "0.5", includeMultipleMeals: true },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const item of defaults) {
+        if (existingNames.has(item.name)) { skipped.push(item.name); continue; }
+        const record = await storage.createMealPolicy(item);
+        created.push(record);
+      }
+      res.json({ message: `Created ${created.length} meal policies${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to set up meal policies" });
+    }
+  });
+
   // Break Policies
   app.get("/api/break-policies", async (_req, res) => {
     try {
@@ -2476,6 +2578,29 @@ export async function registerRoutes(
       res.json({ message: "Deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete break policy" });
+    }
+  });
+
+  app.post("/api/break-policies/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getBreakPolicies(companyId);
+      const existingNames = new Set(existing.map(e => e.name));
+      const defaults = [
+        { companyId, name: "CA 10min Break after 4hr", type: "normal", activeAfter: "4", breakTime: "0.167" },
+        { companyId, name: "CA Second Break after 6hr", type: "normal", activeAfter: "6", breakTime: "0.167", includeMultipleBreaks: true },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const item of defaults) {
+        if (existingNames.has(item.name)) { skipped.push(item.name); continue; }
+        const record = await storage.createBreakPolicy(item);
+        created.push(record);
+      }
+      res.json({ message: `Created ${created.length} break policies${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to set up break policies" });
     }
   });
 
@@ -2734,6 +2859,178 @@ export async function registerRoutes(
       res.json({ message: "Deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete rounding policy" });
+    }
+  });
+
+  app.post("/api/premium-policies/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getPremiumPolicies();
+      const companyItems = existing.filter(p => p.companyId === companyId);
+      const existingNames = new Set(companyItems.map(e => e.name));
+      const defaults = [
+        { companyId, name: "Night Shift Premium (+10%)", type: "date_time", startTime: "18:00", endTime: "06:00", effectiveDays: "0,1,2,3,4,5,6" },
+        { companyId, name: "Weekend Premium (+15%)", type: "date_time", effectiveDays: "0,6" },
+        { companyId, name: "Holiday Premium (+50%)", type: "date_time", holidayHandling: "apply_on_holiday" },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const item of defaults) {
+        if (existingNames.has(item.name)) { skipped.push(item.name); continue; }
+        const result = await storage.createPremiumPolicy(item as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} premium policies${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up premium policies" });
+    }
+  });
+
+  app.post("/api/exception-policies/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getExceptionPolicies();
+      const companyItems = existing.filter(p => p.companyId === companyId);
+      const existingNames = new Set(companyItems.map(e => e.name));
+      const defaults = [
+        { companyId, name: "Late Start", exceptionType: "late_start", severity: "medium", grace: "5", watchWindow: "15" },
+        { companyId, name: "Early End", exceptionType: "early_end", severity: "medium", grace: "5", watchWindow: "15" },
+        { companyId, name: "Missed Punch", exceptionType: "missed_punch", severity: "high", grace: "0", watchWindow: "0", emailNotification: true },
+        { companyId, name: "Unscheduled Absence", exceptionType: "unscheduled_absence", severity: "high", grace: "0", watchWindow: "0", emailNotification: true },
+        { companyId, name: "Long Break", exceptionType: "long_break", severity: "low", grace: "5", watchWindow: "10" },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const item of defaults) {
+        if (existingNames.has(item.name)) { skipped.push(item.name); continue; }
+        const result = await storage.createExceptionPolicy(item as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} exception policies${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up exception policies" });
+    }
+  });
+
+  app.post("/api/schedule-policies/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getSchedulePolicies();
+      const companyItems = existing.filter(p => p.companyId === companyId);
+      const existingNames = new Set(companyItems.map(e => e.name));
+      const defaults = [
+        { companyId, name: "Standard Schedule", startStopWindow: "1", regularTimePolicyAction: "include", overtimePolicyAction: "include", premiumPolicyAction: "include" },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const item of defaults) {
+        if (existingNames.has(item.name)) { skipped.push(item.name); continue; }
+        const result = await storage.createSchedulePolicy(item as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} schedule policies${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up schedule policies" });
+    }
+  });
+
+  app.post("/api/holiday-policies/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getHolidayPolicies();
+      const companyItems = existing.filter(p => p.companyId === companyId);
+      const existingNames = new Set(companyItems.map(e => e.name));
+      const defaults = [
+        { companyId, name: "Standard Holiday - Paid", defaultSchedule: "none", workedOnHolidayType: "paid", eligibleAfterDays: 0, minimumWorkedBeforeDays: 0, minimumWorkedAfterDays: 0 },
+        { companyId, name: "Holiday Worked - OT Rate", defaultSchedule: "none", workedOnHolidayType: "overtime", eligibleAfterDays: 0, forceOverTimePolicy: true },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const item of defaults) {
+        if (existingNames.has(item.name)) { skipped.push(item.name); continue; }
+        const result = await storage.createHolidayPolicy(item as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} holiday policies${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up holiday policies" });
+    }
+  });
+
+  app.post("/api/accrual-policies/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getAccrualPolicies();
+      const companyItems = existing.filter(p => p.companyId === companyId);
+      const existingNames = new Set(companyItems.map(e => e.name));
+      const defaults = [
+        { companyId, name: "Vacation Accrual", type: "standard", lengthOfServiceUnit: "years", applyFrequency: "per_pay_period", minimumEmployedDays: 90 },
+        { companyId, name: "Sick Leave Accrual", type: "standard", lengthOfServiceUnit: "years", applyFrequency: "per_pay_period", minimumEmployedDays: 0 },
+        { companyId, name: "PTO Accrual", type: "standard", lengthOfServiceUnit: "years", applyFrequency: "per_pay_period", minimumEmployedDays: 0 },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const item of defaults) {
+        if (existingNames.has(item.name)) { skipped.push(item.name); continue; }
+        const result = await storage.createAccrualPolicy(item as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} accrual policies${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up accrual policies" });
+    }
+  });
+
+  app.post("/api/absence-policies/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getAbsencePolicies();
+      const companyItems = existing.filter(p => p.companyId === companyId);
+      const existingNames = new Set(companyItems.map(e => e.name));
+      const defaults = [
+        { companyId, name: "Vacation Use", type: "accrual_based", rateType: "multiplied_by_factor", rateFactor: "1.0" },
+        { companyId, name: "Sick Leave Use", type: "accrual_based", rateType: "multiplied_by_factor", rateFactor: "1.0" },
+        { companyId, name: "Personal Leave", type: "accrual_based", rateType: "multiplied_by_factor", rateFactor: "1.0" },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const item of defaults) {
+        if (existingNames.has(item.name)) { skipped.push(item.name); continue; }
+        const result = await storage.createAbsencePolicy(item as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} absence policies${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up absence policies" });
+    }
+  });
+
+  app.post("/api/rounding-policies/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getRoundingPolicies(companyId);
+      const existingNames = new Set(existing.map(e => e.name));
+      const defaults = [
+        { companyId, name: "15min Rounding", roundType: "day_total", interval: 15, grace: 7 },
+        { companyId, name: "6min Rounding", roundType: "day_total", interval: 6, grace: 3 },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const item of defaults) {
+        if (existingNames.has(item.name)) { skipped.push(item.name); continue; }
+        const record = await storage.createRoundingPolicy(item);
+        created.push(record);
+      }
+      res.json({ message: `Created ${created.length} rounding policies${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to set up rounding policies" });
     }
   });
 

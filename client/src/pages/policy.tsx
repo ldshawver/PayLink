@@ -38,16 +38,50 @@ function useTabParam(defaultTab: string): [string, (tab: string) => void] {
   return [tab, setTab];
 }
 
+function PolicyLinkSelect({ label, value, onChange, items, testId }: { label: string; value: string; onChange: (v: string) => void; items: { id: string; name: string }[]; testId: string }) {
+  return (
+    <div className="grid gap-1">
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Select value={value || "_none_"} onValueChange={(v) => onChange(v === "_none_" ? "" : v)}>
+        <SelectTrigger data-testid={testId} className="h-8 text-xs">
+          <SelectValue placeholder="None" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="_none_">None</SelectItem>
+          {items.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 function PolicyGroupsTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<PolicyGroup | null>(null);
-  const defaultForm = { companyId: "", name: "", description: "", isDefault: false };
+  const defaultForm = {
+    companyId: "", name: "", description: "", isDefault: false,
+    regularTimePolicyId: "", overtimePolicyId: "", premiumPolicyId: "",
+    mealPolicyId: "", breakPolicyId: "", schedulePolicyId: "",
+    exceptionPolicyId: "", accrualPolicyId: "", absencePolicyId: "",
+    holidayPolicyId: "", roundingPolicyId: "",
+  };
   const [form, setForm] = useState(defaultForm);
   const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: groups, isLoading } = useQuery<PolicyGroup[]>({ queryKey: ["/api/policy-groups"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: regularTimePolicies } = useQuery<RegularTimePolicy[]>({ queryKey: ["/api/regular-time-policies"] });
+  const { data: overtimePolicies } = useQuery<OvertimePolicy[]>({ queryKey: ["/api/overtime-policies"] });
+  const { data: premiumPolicies } = useQuery<PremiumPolicy[]>({ queryKey: ["/api/premium-policies"] });
+  const { data: mealPolicies } = useQuery<MealPolicy[]>({ queryKey: ["/api/meal-policies"] });
+  const { data: breakPolicies } = useQuery<BreakPolicy[]>({ queryKey: ["/api/break-policies"] });
+  const { data: schedulePolicies } = useQuery<SchedulePolicy[]>({ queryKey: ["/api/schedule-policies"] });
+  const { data: exceptionPolicies } = useQuery<ExceptionPolicy[]>({ queryKey: ["/api/exception-policies"] });
+  const { data: accrualPolicies } = useQuery<AccrualPolicy[]>({ queryKey: ["/api/accrual-policies"] });
+  const { data: absencePolicies } = useQuery<AbsencePolicy[]>({ queryKey: ["/api/absence-policies"] });
+  const { data: holidayPolicies } = useQuery<HolidayPolicy[]>({ queryKey: ["/api/holiday-policies"] });
+  const { data: roundingPolicies } = useQuery<RoundingPolicy[]>({ queryKey: ["/api/rounding-policies"] });
 
   const quickSetupMutation = useMutation({
     mutationFn: async (companyId: string) => {
@@ -98,7 +132,15 @@ function PolicyGroupsTab() {
 
   const handleEdit = (item: PolicyGroup) => {
     setEditItem(item);
-    setForm({ companyId: item.companyId, name: item.name, description: item.description || "", isDefault: item.isDefault ?? false });
+    setForm({
+      companyId: item.companyId, name: item.name, description: item.description || "", isDefault: item.isDefault ?? false,
+      regularTimePolicyId: item.regularTimePolicyId || "", overtimePolicyId: item.overtimePolicyId || "",
+      premiumPolicyId: item.premiumPolicyId || "", mealPolicyId: item.mealPolicyId || "",
+      breakPolicyId: item.breakPolicyId || "", schedulePolicyId: item.schedulePolicyId || "",
+      exceptionPolicyId: item.exceptionPolicyId || "", accrualPolicyId: item.accrualPolicyId || "",
+      absencePolicyId: item.absencePolicyId || "", holidayPolicyId: item.holidayPolicyId || "",
+      roundingPolicyId: item.roundingPolicyId || "",
+    });
     setOpen(true);
   };
 
@@ -108,6 +150,22 @@ function PolicyGroupsTab() {
       setEditItem(null);
       setForm(defaultForm);
     }
+  };
+
+  const countLinkedPolicies = (g: PolicyGroup) => {
+    let count = 0;
+    if (g.regularTimePolicyId) count++;
+    if (g.overtimePolicyId) count++;
+    if (g.premiumPolicyId) count++;
+    if (g.mealPolicyId) count++;
+    if (g.breakPolicyId) count++;
+    if (g.schedulePolicyId) count++;
+    if (g.exceptionPolicyId) count++;
+    if (g.accrualPolicyId) count++;
+    if (g.absencePolicyId) count++;
+    if (g.holidayPolicyId) count++;
+    if (g.roundingPolicyId) count++;
+    return count;
   };
 
   if (isLoading) {
@@ -143,27 +201,29 @@ function PolicyGroupsTab() {
             <DialogTrigger asChild>
               <Button data-testid="button-add-policy-group"><Plus className="w-4 h-4 mr-1" /> Add Policy Group</Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{editItem ? "Edit Policy Group" : "Add Policy Group"}</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4">
-                <div className="grid gap-2">
-                  <Label>Company</Label>
-                  <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
-                    <SelectTrigger data-testid="select-policy-group-company">
-                      <SelectValue placeholder="Select company" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {companies?.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid gap-2">
-                  <Label>Name</Label>
-                  <Input data-testid="input-policy-group-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label>Company</Label>
+                    <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
+                      <SelectTrigger data-testid="select-policy-group-company">
+                        <SelectValue placeholder="Select company" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {companies?.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Name</Label>
+                    <Input data-testid="input-policy-group-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                  </div>
                 </div>
                 <div className="grid gap-2">
                   <Label>Description</Label>
@@ -177,6 +237,22 @@ function PolicyGroupsTab() {
                     onCheckedChange={(v) => setForm({ ...form, isDefault: !!v })}
                   />
                   <Label htmlFor="policy-group-default">Default</Label>
+                </div>
+                <div className="border-t pt-3">
+                  <Label className="text-sm font-medium mb-2 block">Linked Policies</Label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <PolicyLinkSelect label="Regular Time" value={form.regularTimePolicyId} onChange={(v) => setForm({ ...form, regularTimePolicyId: v })} items={regularTimePolicies || []} testId="select-pg-regular-time" />
+                    <PolicyLinkSelect label="Overtime" value={form.overtimePolicyId} onChange={(v) => setForm({ ...form, overtimePolicyId: v })} items={overtimePolicies || []} testId="select-pg-overtime" />
+                    <PolicyLinkSelect label="Premium" value={form.premiumPolicyId} onChange={(v) => setForm({ ...form, premiumPolicyId: v })} items={premiumPolicies || []} testId="select-pg-premium" />
+                    <PolicyLinkSelect label="Meal" value={form.mealPolicyId} onChange={(v) => setForm({ ...form, mealPolicyId: v })} items={mealPolicies || []} testId="select-pg-meal" />
+                    <PolicyLinkSelect label="Break" value={form.breakPolicyId} onChange={(v) => setForm({ ...form, breakPolicyId: v })} items={breakPolicies || []} testId="select-pg-break" />
+                    <PolicyLinkSelect label="Schedule" value={form.schedulePolicyId} onChange={(v) => setForm({ ...form, schedulePolicyId: v })} items={schedulePolicies || []} testId="select-pg-schedule" />
+                    <PolicyLinkSelect label="Exception" value={form.exceptionPolicyId} onChange={(v) => setForm({ ...form, exceptionPolicyId: v })} items={exceptionPolicies || []} testId="select-pg-exception" />
+                    <PolicyLinkSelect label="Accrual" value={form.accrualPolicyId} onChange={(v) => setForm({ ...form, accrualPolicyId: v })} items={accrualPolicies || []} testId="select-pg-accrual" />
+                    <PolicyLinkSelect label="Absence" value={form.absencePolicyId} onChange={(v) => setForm({ ...form, absencePolicyId: v })} items={absencePolicies || []} testId="select-pg-absence" />
+                    <PolicyLinkSelect label="Holiday" value={form.holidayPolicyId} onChange={(v) => setForm({ ...form, holidayPolicyId: v })} items={holidayPolicies || []} testId="select-pg-holiday" />
+                    <PolicyLinkSelect label="Rounding" value={form.roundingPolicyId} onChange={(v) => setForm({ ...form, roundingPolicyId: v })} items={roundingPolicies || []} testId="select-pg-rounding" />
+                  </div>
                 </div>
                 <Button data-testid="button-submit-policy-group" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
                   {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
@@ -193,6 +269,7 @@ function PolicyGroupsTab() {
               <TableRow>
                 <TableHead>Name</TableHead>
                 <TableHead>Description</TableHead>
+                <TableHead>Linked Policies</TableHead>
                 <TableHead>Default</TableHead>
                 <TableHead>Company</TableHead>
                 <TableHead>Actions</TableHead>
@@ -202,7 +279,10 @@ function PolicyGroupsTab() {
               {groups && groups.length > 0 ? groups.map((g) => (
                 <TableRow key={g.id} data-testid={`row-policy-group-${g.id}`}>
                   <TableCell className="font-medium">{g.name}</TableCell>
-                  <TableCell>{g.description || "—"}</TableCell>
+                  <TableCell className="max-w-[200px] truncate">{g.description || "—"}</TableCell>
+                  <TableCell>
+                    <Badge variant="secondary" data-testid={`badge-linked-policies-${g.id}`}>{countLinkedPolicies(g)}/11</Badge>
+                  </TableCell>
                   <TableCell>{g.isDefault ? <Badge variant="secondary">Default</Badge> : null}</TableCell>
                   <TableCell>{companies?.find((c) => c.id === g.companyId)?.name || g.companyId}</TableCell>
                   <TableCell>
@@ -214,7 +294,7 @@ function PolicyGroupsTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">No policy groups yet</TableCell>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No policy groups yet</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -668,11 +748,26 @@ function HolidaysTab() {
   const [editItem, setEditItem] = useState<Holiday | null>(null);
   const defaultForm = { companyId: "", name: "", date: "", isRecurring: false };
   const [form, setForm] = useState(defaultForm);
+    const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: holidaysList, isLoading } = useQuery<Holiday[]>({ queryKey: ["/api/holidays"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
-  const mutation = useMutation({
+  const quickSetupMutation = useMutation({
+      mutationFn: async (companyId: string) => {
+        const res = await apiRequest("POST", "/api/holidays/quick-setup", { companyId });
+        return res.json();
+      },
+      onSuccess: (data: any) => {
+        queryClient.invalidateQueries({ queryKey: ["/api/holidays"] });
+        toast({ title: data.message || "Holidays created" });
+      },
+      onError: (err: Error) => {
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      },
+    });
+
+    const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
       if (editItem) {
         await apiRequest("PATCH", `/api/holidays/${editItem.id}`, data);
@@ -731,10 +826,27 @@ function HolidaysTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Recurring Holidays</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-holiday"><Plus className="w-4 h-4 mr-1" /> Add Holiday</Button>
-          </DialogTrigger>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+              <SelectTrigger data-testid="select-holidays-quick-company" className="w-[180px]">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              data-testid="button-quick-setup-holidays"
+              disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+            >
+              <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+            <Dialog open={open} onOpenChange={handleDialogChange}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-add-holiday"><Plus className="w-4 h-4 mr-1" /> Add Holiday</Button>
+              </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{editItem ? "Edit Holiday" : "Add Holiday"}</DialogTitle>
@@ -775,7 +887,8 @@ function HolidaysTab() {
               </Button>
             </div>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -1500,11 +1613,26 @@ function RegularTimePoliciesTab() {
   const [editItem, setEditItem] = useState<RegularTimePolicy | null>(null);
   const defaultForm = { companyId: "", name: "", calculationOrder: "", payCodeId: "", payFormulaId: "", maxTime: "" };
   const [form, setForm] = useState(defaultForm);
+    const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<RegularTimePolicy[]>({ queryKey: ["/api/regular-time-policies"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
-  const mutation = useMutation({
+  const quickSetupMutation = useMutation({
+      mutationFn: async (companyId: string) => {
+        const res = await apiRequest("POST", "/api/regular-time-policies/quick-setup", { companyId });
+        return res.json();
+      },
+      onSuccess: (data: any) => {
+        queryClient.invalidateQueries({ queryKey: ["/api/regular-time-policies"] });
+        toast({ title: data.message || "Regular time policies created" });
+      },
+      onError: (err: Error) => {
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      },
+    });
+
+    const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
       const payload = { ...data, calculationOrder: data.calculationOrder ? parseInt(data.calculationOrder) : undefined, maxTime: data.maxTime || undefined };
       if (editItem) {
@@ -1564,10 +1692,27 @@ function RegularTimePoliciesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Regular Time Policies</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-regular-time-policy"><Plus className="w-4 h-4 mr-1" /> Add Regular Time Policy</Button>
-          </DialogTrigger>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+              <SelectTrigger data-testid="select-regular-time-quick-company" className="w-[180px]">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              data-testid="button-quick-setup-regular-time-policies"
+              disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+            >
+              <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+            <Dialog open={open} onOpenChange={handleDialogChange}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-add-regular-time-policy"><Plus className="w-4 h-4 mr-1" /> Add Regular Time Policy</Button>
+              </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{editItem ? "Edit Regular Time Policy" : "Add Regular Time Policy"}</DialogTitle>
@@ -1615,7 +1760,8 @@ function RegularTimePoliciesTab() {
               </Button>
             </div>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -1662,11 +1808,26 @@ function OvertimePoliciesTab() {
   const [editItem, setEditItem] = useState<OvertimePolicy | null>(null);
   const defaultForm = { companyId: "", name: "", type: "daily", triggerTime: "8", rate: "1.5", payCodeId: "" };
   const [form, setForm] = useState(defaultForm);
+    const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<OvertimePolicy[]>({ queryKey: ["/api/overtime-policies"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
-  const mutation = useMutation({
+  const quickSetupMutation = useMutation({
+      mutationFn: async (companyId: string) => {
+        const res = await apiRequest("POST", "/api/overtime-policies/quick-setup", { companyId });
+        return res.json();
+      },
+      onSuccess: (data: any) => {
+        queryClient.invalidateQueries({ queryKey: ["/api/overtime-policies"] });
+        toast({ title: data.message || "Overtime policies created" });
+      },
+      onError: (err: Error) => {
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      },
+    });
+
+    const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
       const payload = { ...data, triggerTime: data.triggerTime || undefined, rate: data.rate || undefined };
       if (editItem) {
@@ -1728,10 +1889,27 @@ function OvertimePoliciesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Overtime Policies</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-overtime-policy"><Plus className="w-4 h-4 mr-1" /> Add Overtime Policy</Button>
-          </DialogTrigger>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+              <SelectTrigger data-testid="select-overtime-quick-company" className="w-[180px]">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              data-testid="button-quick-setup-overtime-policies"
+              disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+            >
+              <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+            <Dialog open={open} onOpenChange={handleDialogChange}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-add-overtime-policy"><Plus className="w-4 h-4 mr-1" /> Add Overtime Policy</Button>
+              </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{editItem ? "Edit Overtime Policy" : "Add Overtime Policy"}</DialogTitle>
@@ -1789,7 +1967,8 @@ function OvertimePoliciesTab() {
               </Button>
             </div>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -1838,11 +2017,26 @@ function PremiumPoliciesTab() {
   const [editItem, setEditItem] = useState<PremiumPolicy | null>(null);
   const defaultForm = { companyId: "", name: "", type: "date_time", holidayHandling: "no_effect", dailyTriggerHours: "", weeklyTriggerHours: "", includePartialPunches: false };
   const [form, setForm] = useState(defaultForm);
+    const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<PremiumPolicy[]>({ queryKey: ["/api/premium-policies"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
-  const mutation = useMutation({
+  const quickSetupMutation = useMutation({
+      mutationFn: async (companyId: string) => {
+        const res = await apiRequest("POST", "/api/premium-policies/quick-setup", { companyId });
+        return res.json();
+      },
+      onSuccess: (data: any) => {
+        queryClient.invalidateQueries({ queryKey: ["/api/premium-policies"] });
+        toast({ title: data.message || "Premium policies created" });
+      },
+      onError: (err: Error) => {
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      },
+    });
+
+    const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
       const payload = { ...data, dailyTriggerHours: data.dailyTriggerHours || undefined, weeklyTriggerHours: data.weeklyTriggerHours || undefined };
       if (editItem) {
@@ -1908,10 +2102,27 @@ function PremiumPoliciesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Premium Policies</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-premium-policy"><Plus className="w-4 h-4 mr-1" /> Add Premium Policy</Button>
-          </DialogTrigger>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+              <SelectTrigger data-testid="select-premium-quick-company" className="w-[180px]">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              data-testid="button-quick-setup-premium-policies"
+              disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+            >
+              <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+            <Dialog open={open} onOpenChange={handleDialogChange}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-add-premium-policy"><Plus className="w-4 h-4 mr-1" /> Add Premium Policy</Button>
+              </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{editItem ? "Edit Premium Policy" : "Add Premium Policy"}</DialogTitle>
@@ -1990,7 +2201,8 @@ function PremiumPoliciesTab() {
               </Button>
             </div>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -2037,11 +2249,26 @@ function MealPoliciesTab() {
   const [editItem, setEditItem] = useState<MealPolicy | null>(null);
   const defaultForm = { companyId: "", name: "", type: "normal", activeAfter: "5", mealTime: "0.5", autoDetectBy: "time_window" };
   const [form, setForm] = useState(defaultForm);
+    const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<MealPolicy[]>({ queryKey: ["/api/meal-policies"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
-  const mutation = useMutation({
+  const quickSetupMutation = useMutation({
+      mutationFn: async (companyId: string) => {
+        const res = await apiRequest("POST", "/api/meal-policies/quick-setup", { companyId });
+        return res.json();
+      },
+      onSuccess: (data: any) => {
+        queryClient.invalidateQueries({ queryKey: ["/api/meal-policies"] });
+        toast({ title: data.message || "Meal policies created" });
+      },
+      onError: (err: Error) => {
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      },
+    });
+
+    const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
       const payload = { ...data, activeAfter: data.activeAfter || undefined, mealTime: data.mealTime || undefined };
       if (editItem) {
@@ -2104,10 +2331,27 @@ function MealPoliciesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Meal Policies</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-meal-policy"><Plus className="w-4 h-4 mr-1" /> Add Meal Policy</Button>
-          </DialogTrigger>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+              <SelectTrigger data-testid="select-meal-quick-company" className="w-[180px]">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              data-testid="button-quick-setup-meal-policies"
+              disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+            >
+              <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+            <Dialog open={open} onOpenChange={handleDialogChange}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-add-meal-policy"><Plus className="w-4 h-4 mr-1" /> Add Meal Policy</Button>
+              </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{editItem ? "Edit Meal Policy" : "Add Meal Policy"}</DialogTitle>
@@ -2173,7 +2417,8 @@ function MealPoliciesTab() {
               </Button>
             </div>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -2222,11 +2467,26 @@ function BreakPoliciesTab() {
   const [editItem, setEditItem] = useState<BreakPolicy | null>(null);
   const defaultForm = { companyId: "", name: "", type: "normal", activeAfter: "4", breakTime: "0.25", autoDetectBy: "time_window" };
   const [form, setForm] = useState(defaultForm);
+    const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<BreakPolicy[]>({ queryKey: ["/api/break-policies"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
-  const mutation = useMutation({
+  const quickSetupMutation = useMutation({
+      mutationFn: async (companyId: string) => {
+        const res = await apiRequest("POST", "/api/break-policies/quick-setup", { companyId });
+        return res.json();
+      },
+      onSuccess: (data: any) => {
+        queryClient.invalidateQueries({ queryKey: ["/api/break-policies"] });
+        toast({ title: data.message || "Break policies created" });
+      },
+      onError: (err: Error) => {
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      },
+    });
+
+    const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
       const payload = { ...data, activeAfter: data.activeAfter || undefined, breakTime: data.breakTime || undefined };
       if (editItem) {
@@ -2289,10 +2549,27 @@ function BreakPoliciesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Break Policies</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-break-policy"><Plus className="w-4 h-4 mr-1" /> Add Break Policy</Button>
-          </DialogTrigger>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+              <SelectTrigger data-testid="select-break-quick-company" className="w-[180px]">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              data-testid="button-quick-setup-break-policies"
+              disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+            >
+              <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+            <Dialog open={open} onOpenChange={handleDialogChange}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-add-break-policy"><Plus className="w-4 h-4 mr-1" /> Add Break Policy</Button>
+              </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{editItem ? "Edit Break Policy" : "Add Break Policy"}</DialogTitle>
@@ -2358,7 +2635,8 @@ function BreakPoliciesTab() {
               </Button>
             </div>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -2407,11 +2685,26 @@ function SchedulePoliciesTab() {
   const [editItem, setEditItem] = useState<SchedulePolicy | null>(null);
   const defaultForm = { companyId: "", name: "", regularTimePolicyAction: "include", overtimePolicyAction: "include", premiumPolicyAction: "include", startStopWindow: "1" };
   const [form, setForm] = useState(defaultForm);
+    const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<SchedulePolicy[]>({ queryKey: ["/api/schedule-policies"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
-  const mutation = useMutation({
+  const quickSetupMutation = useMutation({
+      mutationFn: async (companyId: string) => {
+        const res = await apiRequest("POST", "/api/schedule-policies/quick-setup", { companyId });
+        return res.json();
+      },
+      onSuccess: (data: any) => {
+        queryClient.invalidateQueries({ queryKey: ["/api/schedule-policies"] });
+        toast({ title: data.message || "Schedule policies created" });
+      },
+      onError: (err: Error) => {
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      },
+    });
+
+    const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
       const payload = { ...data, startStopWindow: data.startStopWindow || undefined };
       if (editItem) {
@@ -2473,10 +2766,27 @@ function SchedulePoliciesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Schedule Policies</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-schedule-policy"><Plus className="w-4 h-4 mr-1" /> Add Schedule Policy</Button>
-          </DialogTrigger>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+              <SelectTrigger data-testid="select-schedule-policy-quick-company" className="w-[180px]">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              data-testid="button-quick-setup-schedule-policies"
+              disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+            >
+              <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+            <Dialog open={open} onOpenChange={handleDialogChange}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-add-schedule-policy"><Plus className="w-4 h-4 mr-1" /> Add Schedule Policy</Button>
+              </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{editItem ? "Edit Schedule Policy" : "Add Schedule Policy"}</DialogTitle>
@@ -2548,7 +2858,8 @@ function SchedulePoliciesTab() {
               </Button>
             </div>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -2599,11 +2910,26 @@ function ExceptionPoliciesTab() {
   const [editItem, setEditItem] = useState<ExceptionPolicy | null>(null);
   const defaultForm = { companyId: "", name: "", exceptionType: "missed_punch", severity: "medium", grace: "", watchWindow: "", emailNotification: false };
   const [form, setForm] = useState(defaultForm);
+    const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<ExceptionPolicy[]>({ queryKey: ["/api/exception-policies"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
-  const mutation = useMutation({
+  const quickSetupMutation = useMutation({
+      mutationFn: async (companyId: string) => {
+        const res = await apiRequest("POST", "/api/exception-policies/quick-setup", { companyId });
+        return res.json();
+      },
+      onSuccess: (data: any) => {
+        queryClient.invalidateQueries({ queryKey: ["/api/exception-policies"] });
+        toast({ title: data.message || "Exception policies created" });
+      },
+      onError: (err: Error) => {
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      },
+    });
+
+    const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
       const payload = { ...data, grace: data.grace || undefined, watchWindow: data.watchWindow || undefined };
       if (editItem) {
@@ -2673,10 +2999,27 @@ function ExceptionPoliciesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Exception Policies</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-exception-policy"><Plus className="w-4 h-4 mr-1" /> Add Exception Policy</Button>
-          </DialogTrigger>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+              <SelectTrigger data-testid="select-exception-quick-company" className="w-[180px]">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              data-testid="button-quick-setup-exception-policies"
+              disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+            >
+              <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+            <Dialog open={open} onOpenChange={handleDialogChange}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-add-exception-policy"><Plus className="w-4 h-4 mr-1" /> Add Exception Policy</Button>
+              </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{editItem ? "Edit Exception Policy" : "Add Exception Policy"}</DialogTitle>
@@ -2759,7 +3102,8 @@ function ExceptionPoliciesTab() {
               </Button>
             </div>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -2808,11 +3152,26 @@ function AccrualPoliciesTab() {
   const [editItem, setEditItem] = useState<AccrualPolicy | null>(null);
   const defaultForm = { companyId: "", name: "", type: "standard", lengthOfServiceUnit: "years", applyFrequency: "per_pay_period", minimumEmployedDays: "" };
   const [form, setForm] = useState(defaultForm);
+    const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<AccrualPolicy[]>({ queryKey: ["/api/accrual-policies"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
-  const mutation = useMutation({
+  const quickSetupMutation = useMutation({
+      mutationFn: async (companyId: string) => {
+        const res = await apiRequest("POST", "/api/accrual-policies/quick-setup", { companyId });
+        return res.json();
+      },
+      onSuccess: (data: any) => {
+        queryClient.invalidateQueries({ queryKey: ["/api/accrual-policies"] });
+        toast({ title: data.message || "Accrual policies created" });
+      },
+      onError: (err: Error) => {
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      },
+    });
+
+    const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
       const payload = { ...data, minimumEmployedDays: data.minimumEmployedDays ? parseInt(data.minimumEmployedDays) : undefined };
       if (editItem) {
@@ -2876,10 +3235,27 @@ function AccrualPoliciesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Accrual Policies</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-accrual-policy"><Plus className="w-4 h-4 mr-1" /> Add Accrual Policy</Button>
-          </DialogTrigger>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+              <SelectTrigger data-testid="select-accrual-policy-quick-company" className="w-[180px]">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              data-testid="button-quick-setup-accrual-policies"
+              disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+            >
+              <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+            <Dialog open={open} onOpenChange={handleDialogChange}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-add-accrual-policy"><Plus className="w-4 h-4 mr-1" /> Add Accrual Policy</Button>
+              </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{editItem ? "Edit Accrual Policy" : "Add Accrual Policy"}</DialogTitle>
@@ -2955,7 +3331,8 @@ function AccrualPoliciesTab() {
               </Button>
             </div>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -3004,11 +3381,26 @@ function AbsencePoliciesTab() {
   const [editItem, setEditItem] = useState<AbsencePolicy | null>(null);
   const defaultForm = { companyId: "", name: "", type: "accrual_based", rateType: "multiplied_by_factor", rateFactor: "1.0", payCodeId: "" };
   const [form, setForm] = useState(defaultForm);
+    const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<AbsencePolicy[]>({ queryKey: ["/api/absence-policies"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
-  const mutation = useMutation({
+  const quickSetupMutation = useMutation({
+      mutationFn: async (companyId: string) => {
+        const res = await apiRequest("POST", "/api/absence-policies/quick-setup", { companyId });
+        return res.json();
+      },
+      onSuccess: (data: any) => {
+        queryClient.invalidateQueries({ queryKey: ["/api/absence-policies"] });
+        toast({ title: data.message || "Absence policies created" });
+      },
+      onError: (err: Error) => {
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      },
+    });
+
+    const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
       const payload = { ...data, rateFactor: data.rateFactor || undefined };
       if (editItem) {
@@ -3071,10 +3463,27 @@ function AbsencePoliciesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Absence Policies</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-absence-policy"><Plus className="w-4 h-4 mr-1" /> Add Absence Policy</Button>
-          </DialogTrigger>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+              <SelectTrigger data-testid="select-absence-quick-company" className="w-[180px]">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              data-testid="button-quick-setup-absence-policies"
+              disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+            >
+              <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+            <Dialog open={open} onOpenChange={handleDialogChange}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-add-absence-policy"><Plus className="w-4 h-4 mr-1" /> Add Absence Policy</Button>
+              </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{editItem ? "Edit Absence Policy" : "Add Absence Policy"}</DialogTitle>
@@ -3138,7 +3547,8 @@ function AbsencePoliciesTab() {
               </Button>
             </div>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -3187,9 +3597,24 @@ function HolidayPoliciesTab() {
   const [editItem, setEditItem] = useState<HolidayPolicy | null>(null);
   const defaultForm = { companyId: "", name: "", defaultSchedule: "none", eligibleAfterDays: "", workedOnHolidayType: "paid", averageTimeMethod: "daily", forceOverTimePolicy: false };
   const [form, setForm] = useState(defaultForm);
+  const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<HolidayPolicy[]>({ queryKey: ["/api/holiday-policies"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async (companyId: string) => {
+      const res = await apiRequest("POST", "/api/holiday-policies/quick-setup", { companyId });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/holiday-policies"] });
+      toast({ title: data.message || "Holiday policies created" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
@@ -3255,14 +3680,31 @@ function HolidayPoliciesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Holiday Policies</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-holiday-policy"><Plus className="w-4 h-4 mr-1" /> Add Holiday Policy</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{editItem ? "Edit Holiday Policy" : "Add Holiday Policy"}</DialogTitle>
-            </DialogHeader>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+            <SelectTrigger data-testid="select-holiday-policy-quick-company" className="w-[180px]">
+              <SelectValue placeholder="Select company" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            data-testid="button-quick-setup-holiday-policies"
+            disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+            onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+          >
+            <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+          </Button>
+          <Dialog open={open} onOpenChange={handleDialogChange}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-holiday-policy"><Plus className="w-4 h-4 mr-1" /> Add Holiday Policy</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{editItem ? "Edit Holiday Policy" : "Add Holiday Policy"}</DialogTitle>
+              </DialogHeader>
             <div className="grid gap-4">
               <div className="grid gap-2">
                 <Label>Company</Label>
@@ -3341,8 +3783,9 @@ function HolidayPoliciesTab() {
                 {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
               </Button>
             </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -3391,9 +3834,24 @@ function RoundingPoliciesTab() {
   const [editItem, setEditItem] = useState<RoundingPolicy | null>(null);
   const defaultForm = { companyId: "", name: "", roundType: "day_total", punchType: "", interval: "15", grace: "3" };
   const [form, setForm] = useState(defaultForm);
+  const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<RoundingPolicy[]>({ queryKey: ["/api/rounding-policies"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async (companyId: string) => {
+      const res = await apiRequest("POST", "/api/rounding-policies/quick-setup", { companyId });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/rounding-policies"] });
+      toast({ title: data.message || "Rounding policies created" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
@@ -3463,10 +3921,27 @@ function RoundingPoliciesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Rounding Policies</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-rounding-policy"><Plus className="w-4 h-4 mr-1" /> Add Rounding Policy</Button>
-          </DialogTrigger>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+            <SelectTrigger data-testid="select-rounding-quick-company" className="w-[180px]">
+              <SelectValue placeholder="Select company" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            data-testid="button-quick-setup-rounding-policies"
+            disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+            onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+          >
+            <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+          </Button>
+          <Dialog open={open} onOpenChange={handleDialogChange}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-rounding-policy"><Plus className="w-4 h-4 mr-1" /> Add Rounding Policy</Button>
+            </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{editItem ? "Edit Rounding Policy" : "Add Rounding Policy"}</DialogTitle>
@@ -3534,7 +4009,8 @@ function RoundingPoliciesTab() {
               </Button>
             </div>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
