@@ -1779,6 +1779,58 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/saved-reports", requireAuth, async (req, res) => {
+    try {
+      const reports = await storage.getSavedReports();
+      res.json(reports);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch saved reports" });
+    }
+  });
+
+  app.get("/api/saved-reports/:id", requireAuth, async (req, res) => {
+    try {
+      const report = await storage.getSavedReport(req.params.id);
+      if (!report) return res.status(404).json({ message: "Report not found" });
+      res.json(report);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch saved report" });
+    }
+  });
+
+  app.post("/api/saved-reports", requireAuth, async (req, res) => {
+    try {
+      const { name, reportType, category, companyId, filters, data, headers, rowCount } = req.body;
+      if (!name || !reportType || !category) {
+        return res.status(400).json({ message: "Name, reportType, and category are required" });
+      }
+      const user = req.user as any;
+      const report = await storage.createSavedReport({
+        name,
+        reportType,
+        category,
+        companyId: companyId || null,
+        filters: filters || null,
+        data: typeof data === "string" ? data : JSON.stringify(data),
+        headers: typeof headers === "string" ? headers : JSON.stringify(headers),
+        rowCount: rowCount || 0,
+        createdBy: user?.username || "unknown",
+      });
+      res.json(report);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to save report" });
+    }
+  });
+
+  app.delete("/api/saved-reports/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteSavedReport(req.params.id);
+      res.json({ message: "Report deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete report" });
+    }
+  });
+
   app.get("/api/pay-stub-accounts", async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
