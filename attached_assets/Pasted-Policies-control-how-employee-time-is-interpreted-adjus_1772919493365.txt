@@ -1,0 +1,205 @@
+Policies control how employee time is interpreted, adjusted, and converted into payroll and leave balances.
+Each employee should be assigned a Policy Group, which links to all relevant policies.
+Core Architecture
+Recommended calculation flow:
+Employee Time Entry
+      ↓
+Schedule Policy
+      ↓
+Rounding Policy
+      ↓
+Meal & Break Policies
+      ↓
+Regular Time Policy
+      ↓
+Overtime Policy
+      ↓
+Premium Policy
+      ↓
+Exception Policy
+      ↓
+Holiday Policy
+      ↓
+Accrual Policy
+      ↓
+Payroll Calculation
+Policy Categories
+1. Recurring Holidays
+Defines company holidays that repeat each year.
+Examples:
+New Year's Day
+Independence Day
+Thanksgiving
+Christmas
+System requirements:
+store holiday date
+support recurring yearly holidays
+apply holiday pay rules
+integrate with Holiday Policies
+Example logic:
+if date == holiday:
+   apply holiday policy
+2. Schedule Policies
+Defines expected work schedules.
+Purpose:
+determine expected work hours
+detect lateness
+detect missed shifts
+Example configuration:
+Shift Start: 9:00 AM
+Shift End: 5:00 PM
+Expected Hours: 8
+Grace Period: 5 minutes
+System functions:
+compare clock-in times vs scheduled shift
+generate attendance exceptions
+3. Rounding Policies
+Controls how punch times are rounded.
+Example rule:
+round to nearest 15 minutes
+Example behavior:
+8:03 → 8:00
+8:08 → 8:15
+System requirements:
+configurable rounding increments
+apply during time processing
+4. Meal Policies
+Defines required unpaid meal breaks.
+Example (California compliant):
+Meal break after 5 hours
+Duration: 30 minutes
+System functions:
+enforce meal break requirements
+automatically deduct meals if configured
+generate violations if missed
+5. Break Policies
+Defines paid rest breaks.
+Example:
+10-minute break every 4 hours worked
+System requirements:
+track break punches
+enforce minimum break rules
+6. Regular Time Policies
+Defines what counts as regular work hours.
+Example:
+Regular hours = first 8 hours per day
+System functions:
+classify worked hours as regular time
+feed into overtime calculations
+7. Overtime Policies
+Defines overtime rules.
+Example (California):
+Overtime after 8 hours/day
+Double time after 12 hours/day
+Overtime after 40 hours/week
+System functions:
+calculate overtime thresholds
+convert regular hours to overtime hours
+8. Premium Policies
+Defines additional pay conditions.
+Examples:
+night shift premium
+weekend premium
+holiday premium
+Example rule:
+Night shift premium = +10% pay
+System requirements:
+detect premium conditions
+apply additional pay multipliers
+9. Exception Policies
+Handles rule violations.
+Examples:
+late clock-in
+early clock-out
+missed break
+missed meal
+System functions:
+flag exceptions
+notify supervisors
+generate reports
+10. Accrual Policies
+Defines how leave is earned.
+Examples:
+Vacation accrual:
+1 hour per 30 hours worked
+Alternative:
+4 hours PTO per pay period
+System requirements:
+calculate accrual balances
+enforce accrual caps
+apply policy based on employee type
+11. Absence Policies
+Defines allowed absence rules.
+Examples:
+unpaid leave
+sick leave
+personal leave
+System functions:
+deduct hours from accrual accounts
+track absence reason codes
+12. Holiday Policies
+Defines how holidays affect pay.
+Possible rules:
+Paid holiday
+Holiday worked = overtime rate
+Holiday worked = double time
+System functions:
+detect holiday dates
+apply premium or leave rules
+13. Accrual Accounts
+Tracks balances of earned time off.
+Typical accounts:
+vacation
+sick leave
+PTO
+comp time
+Example account structure:
+employee_id
+accrual_type
+balance_hours
+accrual_rate
+max_balance
+System functions:
+update balances automatically
+deduct when leave is used
+Policy Group System
+Employees should be assigned to Policy Groups.
+Example groups:
+Full Time
+Part Time
+Managers
+Contractors
+Each group links to:
+schedule policy
+overtime policy
+accrual policy
+break policy
+meal policy
+This allows consistent rule application.
+Core Payroll Engine Requirements
+PayLink must support:
+• rule-based time classification
+• automated overtime calculations
+• accrual balance tracking
+• holiday detection
+• attendance exception tracking
+• policy inheritance via policy groups
+Simplified Policy Engine Model
+Example object structure:
+PolicyGroup
+  ├ SchedulePolicy
+  ├ RoundingPolicy
+  ├ MealPolicy
+  ├ BreakPolicy
+  ├ RegularTimePolicy
+  ├ OvertimePolicy
+  ├ PremiumPolicy
+  ├ ExceptionPolicy
+  ├ HolidayPolicy
+  ├ AccrualPolicy
+Key Goal for Replit Implementation
+Ensure the system:
+Applies policies in the correct order
+Allows policies to be assigned per employee group
+Keeps policy logic separate from payroll calculations
+Supports future rule expansion
