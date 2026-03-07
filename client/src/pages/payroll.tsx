@@ -522,12 +522,25 @@ function PayPeriodsTab() {
   );
 }
 
+const CATEGORY_LABELS: Record<string, string> = {
+  mandatory_tax: "Mandatory Taxes",
+  garnishment: "Garnishments & Court Orders",
+  benefit_deduction: "Benefit Deductions",
+  voluntary_deduction: "Voluntary Deductions",
+};
+
+const CATEGORY_ORDER = ["mandatory_tax", "garnishment", "benefit_deduction", "voluntary_deduction"];
+
+const APPLIES_TO_LABELS: Record<string, string> = { all: "All Workers", employee: "Employees", contractor: "Contractors" };
+
 function TaxesDeductionsTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedCompany, setSelectedCompany] = useState<string>("all");
   const [formData, setFormData] = useState({
-    companyId: "", name: "", type: "tax", calculationType: "percentage",
-    rate: "", maxAmount: "", isEmployerPaid: false,
+    companyId: "", name: "", type: "tax", category: "mandatory_tax", subcategory: "",
+    calculationType: "percentage", rate: "", maxAmount: "", isEmployerPaid: false,
+    isReferenceOnly: false, appliesTo: "all",
   });
 
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
@@ -546,133 +559,258 @@ function TaxesDeductionsTab() {
       queryClient.invalidateQueries({ queryKey: ["/api/taxes-deductions"] });
       toast({ title: "Tax/Deduction created" });
       setDialogOpen(false);
-      setFormData({ companyId: "", name: "", type: "tax", calculationType: "percentage", rate: "", maxAmount: "", isEmployerPaid: false });
+      setFormData({ companyId: "", name: "", type: "tax", category: "mandatory_tax", subcategory: "", calculationType: "percentage", rate: "", maxAmount: "", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "all" });
     },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async (companyId: string) => {
+      const res = await apiRequest("POST", "/api/taxes-deductions/quick-setup", { companyId });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/taxes-deductions"] });
+      toast({ title: "Quick Setup Complete", description: `Created ${data.count} standard items` });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const toggleActiveMutation = useMutation({
+    mutationFn: async ({ id, isActive }: { id: string; isActive: boolean }) => {
+      await apiRequest("PATCH", `/api/taxes-deductions/${id}`, { isActive });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/taxes-deductions"] });
     },
   });
 
-  if (isLoading) {
-    return <div data-testid="loading-taxes-deductions"><Skeleton className="h-64 w-full" /></div>;
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/taxes-deductions/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/taxes-deductions"] });
+      toast({ title: "Item deleted" });
+    },
+  });
+
+  if (isLoading) return <div data-testid="loading-taxes-deductions"><Skeleton className="h-64 w-full" /></div>;
+
+  const filteredItems = selectedCompany === "all"
+    ? taxesDeductions
+    : taxesDeductions.filter(td => td.companyId === selectedCompany);
+
+  const groupedItems: Record<string, TaxDeduction[]> = {};
+  for (const cat of CATEGORY_ORDER) groupedItems[cat] = [];
+  for (const td of filteredItems) {
+    const cat = td.category || "mandatory_tax";
+    if (!groupedItems[cat]) groupedItems[cat] = [];
+    groupedItems[cat].push(td);
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-tax-deduction"><Plus className="mr-2 h-4 w-4" />Add Tax/Deduction</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader><DialogTitle>Add Tax/Deduction</DialogTitle></DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label>Company</Label>
-                <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v }))}>
-                  <SelectTrigger data-testid="select-td-company"><SelectValue placeholder="Select company" /></SelectTrigger>
-                  <SelectContent>
-                    {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <Select value={selectedCompany} onValueChange={setSelectedCompany}>
+            <SelectTrigger className="w-[200px]" data-testid="select-td-filter-company">
+              <SelectValue placeholder="All companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center gap-2">
+          {selectedCompany !== "all" && (
+            <Button
+              variant="outline"
+              data-testid="button-quick-setup"
+              disabled={quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate(selectedCompany)}
+            >
+              <Zap className="mr-2 h-4 w-4" />
+              {quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+          )}
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-tax-deduction"><Plus className="mr-2 h-4 w-4" />Add Item</Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-lg">
+              <DialogHeader><DialogTitle>Add Tax / Deduction / Benefit</DialogTitle></DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Company</Label>
+                  <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v }))}>
+                    <SelectTrigger data-testid="select-td-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                    <SelectContent>
+                      {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Name</Label>
+                  <Input data-testid="input-td-name" value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Type</Label>
+                    <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
+                      <SelectTrigger data-testid="select-td-type"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="tax">Tax</SelectItem>
+                        <SelectItem value="deduction">Deduction</SelectItem>
+                        <SelectItem value="benefit">Benefit</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Category</Label>
+                    <Select value={formData.category} onValueChange={v => setFormData(p => ({ ...p, category: v }))}>
+                      <SelectTrigger data-testid="select-td-category"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {CATEGORY_ORDER.map(c => <SelectItem key={c} value={c}>{CATEGORY_LABELS[c]}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Calculation</Label>
+                    <Select value={formData.calculationType} onValueChange={v => setFormData(p => ({ ...p, calculationType: v }))}>
+                      <SelectTrigger data-testid="select-td-calc-type"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="percentage">Percentage</SelectItem>
+                        <SelectItem value="fixed">Fixed Amount</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Applies To</Label>
+                    <Select value={formData.appliesTo} onValueChange={v => setFormData(p => ({ ...p, appliesTo: v }))}>
+                      <SelectTrigger data-testid="select-td-applies"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Workers</SelectItem>
+                        <SelectItem value="employee">Employees Only</SelectItem>
+                        <SelectItem value="contractor">Contractors Only</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Rate</Label>
+                    <Input type="number" step="0.01" data-testid="input-td-rate" value={formData.rate} onChange={e => setFormData(p => ({ ...p, rate: e.target.value }))} placeholder={formData.calculationType === "percentage" ? "e.g. 6.2" : "e.g. 150.00"} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Max Annual Amount</Label>
+                    <Input type="number" step="0.01" data-testid="input-td-max-amount" value={formData.maxAmount} onChange={e => setFormData(p => ({ ...p, maxAmount: e.target.value }))} placeholder="Optional" />
+                  </div>
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <Checkbox id="isEmployerPaid" data-testid="checkbox-td-employer-paid" checked={formData.isEmployerPaid} onCheckedChange={(c) => setFormData(p => ({ ...p, isEmployerPaid: c === true }))} />
+                    <Label htmlFor="isEmployerPaid">Employer Paid</Label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Checkbox id="isReferenceOnly" data-testid="checkbox-td-reference" checked={formData.isReferenceOnly} onCheckedChange={(c) => setFormData(p => ({ ...p, isReferenceOnly: c === true }))} />
+                    <Label htmlFor="isReferenceOnly">Reference Only (not deducted)</Label>
+                  </div>
+                </div>
+                <Button className="w-full" data-testid="button-submit-tax-deduction" disabled={createMutation.isPending || !formData.companyId || !formData.name} onClick={() => createMutation.mutate(formData)}>
+                  {createMutation.isPending ? "Creating..." : "Create Item"}
+                </Button>
               </div>
-              <div className="space-y-2">
-                <Label>Name</Label>
-                <Input data-testid="input-td-name" value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Type</Label>
-                <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
-                  <SelectTrigger data-testid="select-td-type"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="tax">Tax</SelectItem>
-                    <SelectItem value="deduction">Deduction</SelectItem>
-                    <SelectItem value="benefit">Benefit</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Calculation Type</Label>
-                <Select value={formData.calculationType} onValueChange={v => setFormData(p => ({ ...p, calculationType: v }))}>
-                  <SelectTrigger data-testid="select-td-calc-type"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="percentage">Percentage</SelectItem>
-                    <SelectItem value="fixed">Fixed</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Rate</Label>
-                <Input type="number" step="0.01" data-testid="input-td-rate" value={formData.rate} onChange={e => setFormData(p => ({ ...p, rate: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Max Amount</Label>
-                <Input type="number" step="0.01" data-testid="input-td-max-amount" value={formData.maxAmount} onChange={e => setFormData(p => ({ ...p, maxAmount: e.target.value }))} />
-              </div>
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="isEmployerPaid"
-                  data-testid="checkbox-td-employer-paid"
-                  checked={formData.isEmployerPaid}
-                  onCheckedChange={(checked) => setFormData(p => ({ ...p, isEmployerPaid: checked === true }))}
-                />
-                <Label htmlFor="isEmployerPaid">Employer Paid</Label>
-              </div>
-              <Button
-                className="w-full"
-                data-testid="button-submit-tax-deduction"
-                disabled={createMutation.isPending}
-                onClick={() => createMutation.mutate(formData)}
-              >
-                {createMutation.isPending ? "Creating..." : "Create Tax/Deduction"}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
-      <Card>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Calculation</TableHead>
-                  <TableHead>Rate</TableHead>
-                  <TableHead>Max Amount</TableHead>
-                  <TableHead>Employer Paid</TableHead>
-                  <TableHead>Active</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {taxesDeductions.map(td => (
-                  <TableRow key={td.id} data-testid={`row-tax-deduction-${td.id}`}>
-                    <TableCell className="font-medium">{td.name}</TableCell>
-                    <TableCell>
-                      <Badge variant={td.type === "tax" ? "default" : td.type === "benefit" ? "secondary" : "outline"} data-testid={`badge-td-type-${td.id}`}>
-                        {td.type}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{td.calculationType}</TableCell>
-                    <TableCell>{td.calculationType === "percentage" ? `${Number(td.rate || 0)}%` : `$${Number(td.rate || 0).toFixed(2)}`}</TableCell>
-                    <TableCell>{td.maxAmount ? `$${Number(td.maxAmount).toLocaleString()}` : "—"}</TableCell>
-                    <TableCell>{td.isEmployerPaid ? "Yes" : "No"}</TableCell>
-                    <TableCell>
-                      <Badge variant={td.isActive ? "default" : "outline"} data-testid={`badge-td-active-${td.id}`}>
-                        {td.isActive ? "Active" : "Inactive"}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {taxesDeductions.length === 0 && (
-                  <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">No taxes or deductions configured</TableCell></TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
+
+      {filteredItems.length === 0 ? (
+        <Card>
+          <CardContent className="p-8 text-center">
+            <DollarSign className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+            <p className="text-muted-foreground mb-2">No taxes or deductions configured.</p>
+            {selectedCompany !== "all" && (
+              <p className="text-sm text-muted-foreground">Use Quick Setup to add standard US tax items for this company.</p>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        CATEGORY_ORDER.map(cat => {
+          const items = groupedItems[cat];
+          if (!items || items.length === 0) return null;
+          return (
+            <Card key={cat}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                  {CATEGORY_LABELS[cat]}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Applies To</TableHead>
+                        <TableHead>Calc</TableHead>
+                        <TableHead>Rate</TableHead>
+                        <TableHead>Max</TableHead>
+                        <TableHead>Flags</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="w-20">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {items.map(td => (
+                        <TableRow key={td.id} data-testid={`row-tax-deduction-${td.id}`} className={td.isReferenceOnly ? "bg-blue-50/50 dark:bg-blue-950/20" : ""}>
+                          <TableCell className="font-medium">{td.name}</TableCell>
+                          <TableCell>
+                            <Badge variant={td.type === "tax" ? "default" : td.type === "benefit" ? "secondary" : "outline"} className="text-xs">
+                              {td.type}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-xs">{APPLIES_TO_LABELS[td.appliesTo || "all"] || "All"}</TableCell>
+                          <TableCell className="text-xs">{td.calculationType === "percentage" ? "%" : "$"}</TableCell>
+                          <TableCell>{td.calculationType === "percentage" ? `${Number(td.rate || 0)}%` : `$${Number(td.rate || 0).toFixed(2)}`}</TableCell>
+                          <TableCell className="text-xs">{td.maxAmount ? `$${Number(td.maxAmount).toLocaleString()}` : "—"}</TableCell>
+                          <TableCell>
+                            <div className="flex gap-1">
+                              {td.isEmployerPaid && <Badge variant="outline" className="text-[10px]">Employer</Badge>}
+                              {td.isReferenceOnly && <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-600">Ref Only</Badge>}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <button
+                              onClick={() => toggleActiveMutation.mutate({ id: td.id, isActive: !td.isActive })}
+                              data-testid={`toggle-active-${td.id}`}
+                              className="cursor-pointer"
+                            >
+                              <Badge variant={td.isActive ? "default" : "outline"} className="text-xs cursor-pointer">
+                                {td.isActive ? "Active" : "Inactive"}
+                              </Badge>
+                            </button>
+                          </TableCell>
+                          <TableCell>
+                            <Button size="icon" variant="ghost" data-testid={`button-delete-td-${td.id}`} onClick={() => deleteMutation.mutate(td.id)}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })
+      )}
     </div>
   );
 }
@@ -998,177 +1136,136 @@ function RemittanceAgenciesTab() {
   );
 }
 
-const WIZARD_STEPS = [
-  { id: "select", label: "Select Events", icon: Calendar },
-  { id: "review", label: "Review & Verify", icon: FileText },
-  { id: "submit", label: "Submit", icon: ArrowRight },
-  { id: "complete", label: "Complete", icon: Check },
+const TAX_WIZARD_STEPS = [
+  { id: "configure", label: "Configure", icon: Settings },
+  { id: "workers", label: "Workers & Summary", icon: Calculator },
+  { id: "forms", label: "Generate Forms", icon: FileText },
+  { id: "complete", label: "Review & Complete", icon: Check },
 ] as const;
 
-type WizardStepId = typeof WIZARD_STEPS[number]["id"];
+type TaxWizardStepId = typeof TAX_WIZARD_STEPS[number]["id"];
+
+const RUN_TYPE_OPTIONS = [
+  { value: "quarterly_q1", label: "Q1 Quarterly (Jan-Mar)", description: "941, state withholding" },
+  { value: "quarterly_q2", label: "Q2 Quarterly (Apr-Jun)", description: "941, state withholding" },
+  { value: "quarterly_q3", label: "Q3 Quarterly (Jul-Sep)", description: "941, state withholding" },
+  { value: "quarterly_q4", label: "Q4 Quarterly (Oct-Dec)", description: "941, state withholding" },
+  { value: "annual", label: "Annual Year-End", description: "W-2s, 1099-NECs, 940, W-3" },
+  { value: "audit", label: "Audit / Review", description: "Full tax summary for audit" },
+];
+
+const TAX_FORMS = [
+  { id: "w2", label: "W-2 (Wage & Tax Statement)", description: "For each employee", appliesTo: "employee", runTypes: ["annual"] },
+  { id: "1099nec", label: "1099-NEC (Nonemployee Compensation)", description: "For each contractor paid $600+", appliesTo: "contractor", runTypes: ["annual"] },
+  { id: "941", label: "Form 941 (Quarterly Federal Tax Return)", description: "Federal employment taxes", appliesTo: "company", runTypes: ["quarterly_q1", "quarterly_q2", "quarterly_q3", "quarterly_q4"] },
+  { id: "940", label: "Form 940 (Annual FUTA Tax Return)", description: "Federal unemployment tax", appliesTo: "company", runTypes: ["annual"] },
+  { id: "w3", label: "W-3 (Transmittal of Wage Statements)", description: "Summary transmittal for all W-2s", appliesTo: "company", runTypes: ["annual"] },
+  { id: "state_withholding", label: "State Withholding Return", description: "State income tax withholding", appliesTo: "company", runTypes: ["quarterly_q1", "quarterly_q2", "quarterly_q3", "quarterly_q4", "annual"] },
+  { id: "tax_summary", label: "Tax Summary Report", description: "Complete tax liability summary", appliesTo: "company", runTypes: ["quarterly_q1", "quarterly_q2", "quarterly_q3", "quarterly_q4", "annual", "audit"] },
+];
 
 function TaxWizardTab() {
   const { toast } = useToast();
-  const [wizardStep, setWizardStep] = useState<WizardStepId>("select");
-  const [selectedEventIds, setSelectedEventIds] = useState<Set<string>>(new Set());
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [addDialogOpen, setAddDialogOpen] = useState(false);
-  const [editingEvent, setEditingEvent] = useState<RemittanceAgencyEvent | null>(null);
-  const [formData, setFormData] = useState({
-    agencyId: "", type: "payment", status: "enabled", frequency: "quarterly",
-    dueDateDelayDays: 0, effectiveDate: "", reminderDays: 7,
-  });
-  const [selectedCompanyFilter, setSelectedCompanyFilter] = useState<string>("all");
-  const [newAgencyName, setNewAgencyName] = useState("");
-  const [newAgencyCompanyId, setNewAgencyCompanyId] = useState("");
-  const [newAgencyType, setNewAgencyType] = useState("federal");
+  const [wizardStep, setWizardStep] = useState<TaxWizardStepId>("configure");
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
+  const [taxYear, setTaxYear] = useState<string>(String(new Date().getFullYear()));
+  const [runType, setRunType] = useState<string>("");
+  const [selectedForms, setSelectedForms] = useState<Set<string>>(new Set());
 
-  const { data: agencies = [], isLoading: agenciesLoading } = useQuery<RemittanceAgency[]>({ queryKey: ["/api/remittance-agencies"] });
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
   const { data: legalEntities = [] } = useQuery<LegalEntity[]>({ queryKey: ["/api/legal-entities"] });
+  const { data: taxesDeductions = [] } = useQuery<TaxDeduction[]>({ queryKey: ["/api/taxes-deductions"] });
+  const { data: payrollRuns = [] } = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"] });
 
-  const allEventsQueries = agencies.map(a => a.id);
-  const { data: allEvents = [], isLoading: eventsLoading } = useQuery<RemittanceAgencyEvent[]>({
-    queryKey: ["/api/remittance-agency-events", "all"],
-    queryFn: async () => {
-      const results: RemittanceAgencyEvent[] = [];
-      for (const agencyId of allEventsQueries) {
-        const res = await fetch(`/api/remittance-agency-events?agencyId=${agencyId}`, { credentials: "include" });
-        if (res.ok) {
-          const data = await res.json();
-          results.push(...data);
-        }
+  const selectedCompany = companies.find(c => c.id === selectedCompanyId);
+  const selectedLegalEntity = selectedCompany?.legalEntityId
+    ? legalEntities.find(le => le.id === selectedCompany.legalEntityId)
+    : null;
+
+  const companyWorkers = workers.filter(w => w.companyId === selectedCompanyId);
+  const employees = companyWorkers.filter(w => w.workerType === "employee" || !w.workerType);
+  const contractors = companyWorkers.filter(w => w.workerType === "contractor");
+  const companyDeductions = taxesDeductions.filter(td => td.companyId === selectedCompanyId);
+
+  const companyPayrollRuns = payrollRuns.filter(pr => pr.companyId === selectedCompanyId && pr.status === "processed");
+
+  const calcWorkerTax = (worker: Worker) => {
+    const grossPay = Number(worker.payRate || 0) * 2080;
+    const isContractor = worker.workerType === "contractor";
+    const applicableDeductions = companyDeductions.filter(td => {
+      if (!td.isActive) return false;
+      const appliesTo = td.appliesTo || "all";
+      if (appliesTo === "employee" && isContractor) return false;
+      if (appliesTo === "contractor" && !isContractor) return false;
+      return true;
+    });
+    let totalTax = 0;
+    let totalRef = 0;
+    const breakdown: { name: string; amount: number; isRef: boolean }[] = [];
+    for (const td of applicableDeductions) {
+      if (td.isEmployerPaid) continue;
+      let amount = 0;
+      if (td.calculationType === "percentage") {
+        const base = td.maxAmount ? Math.min(grossPay, Number(td.maxAmount)) : grossPay;
+        amount = base * (Number(td.rate || 0) / 100);
+      } else {
+        amount = Number(td.rate || 0) * 26;
       }
-      return results;
-    },
-    enabled: agencies.length > 0,
-  });
-
-  const createAgencyMutation = useMutation({
-    mutationFn: async (data: { name: string; companyId: string; type: string }) => {
-      const res = await apiRequest("POST", "/api/remittance-agencies", data);
-      return res.json();
-    },
-    onSuccess: (newAgency: RemittanceAgency) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/remittance-agencies"] });
-      setFormData(p => ({ ...p, agencyId: newAgency.id }));
-      setNewAgencyName("");
-      setNewAgencyCompanyId("");
-      setNewAgencyType("federal");
-      toast({ title: "Agency created" });
-    },
-    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
-  });
-
-  const createMutation = useMutation({
-    mutationFn: async (data: typeof formData) => {
-      const res = await apiRequest("POST", "/api/remittance-agency-events", {
-        ...data, effectiveDate: data.effectiveDate || null,
-      });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/remittance-agency-events", "all"] });
-      toast({ title: "Tax event created" });
-      setAddDialogOpen(false);
-      setFormData({ agencyId: "", type: "payment", status: "enabled", frequency: "quarterly", dueDateDelayDays: 0, effectiveDate: "", reminderDays: 7 });
-    },
-    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) => {
-      const res = await apiRequest("PATCH", `/api/remittance-agency-events/${id}`, data);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/remittance-agency-events", "all"] });
-      toast({ title: "Event updated" });
-      setEditDialogOpen(false);
-      setEditingEvent(null);
-    },
-    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      await apiRequest("DELETE", `/api/remittance-agency-events/${id}`);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/remittance-agency-events", "all"] });
-      toast({ title: "Event deleted" });
-    },
-    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
-  });
-
-  const today = new Date();
-  const sortedEvents = [...allEvents].sort((a, b) => {
-    const dateA = a.effectiveDate ? new Date(a.effectiveDate).getTime() : 0;
-    const dateB = b.effectiveDate ? new Date(b.effectiveDate).getTime() : 0;
-    return dateA - dateB;
-  });
-
-  const getAgency = (agencyId: string) => agencies.find(a => a.id === agencyId);
-  const getAgencyName = (agencyId: string) => getAgency(agencyId)?.name || "Unknown";
-  const getCompanyForAgency = (agencyId: string) => {
-    const agency = getAgency(agencyId);
-    if (!agency?.companyId) return null;
-    return companies.find(c => c.id === agency.companyId);
-  };
-  const getLegalEntityForCompany = (companyId: string | null | undefined) => {
-    if (!companyId) return null;
-    const company = companies.find(c => c.id === companyId);
-    if (!company?.legalEntityId) return null;
-    return legalEntities.find(le => le.id === company.legalEntityId);
+      const isRef = td.isReferenceOnly || false;
+      breakdown.push({ name: td.name, amount, isRef });
+      if (isRef) totalRef += amount;
+      else totalTax += amount;
+    }
+    return { grossPay, totalTax, totalRef, netPay: grossPay - totalTax, breakdown, isContractor };
   };
 
-  const filteredEvents = selectedCompanyFilter === "all"
-    ? sortedEvents
-    : sortedEvents.filter(ev => {
-        const agency = getAgency(ev.agencyId);
-        return agency?.companyId === selectedCompanyFilter;
-      });
+  const availableForms = TAX_FORMS.filter(f => f.runTypes.includes(runType));
 
-  const isEventPastDue = (ev: RemittanceAgencyEvent) => {
-    if (!ev.effectiveDate) return true;
-    return new Date(ev.effectiveDate) <= today;
+  const currentStepIndex = TAX_WIZARD_STEPS.findIndex(s => s.id === wizardStep);
+  const canGoNext = () => {
+    if (wizardStep === "configure") return !!selectedCompanyId && !!runType;
+    if (wizardStep === "workers") return true;
+    if (wizardStep === "forms") return selectedForms.size > 0;
+    return true;
+  };
+  const goNext = () => {
+    if (wizardStep === "configure") {
+      const defaultForms = availableForms.map(f => f.id);
+      setSelectedForms(new Set(defaultForms));
+    }
+    if (currentStepIndex < TAX_WIZARD_STEPS.length - 1) setWizardStep(TAX_WIZARD_STEPS[currentStepIndex + 1].id);
+  };
+  const goPrev = () => {
+    if (currentStepIndex > 0) setWizardStep(TAX_WIZARD_STEPS[currentStepIndex - 1].id);
+  };
+  const resetWizard = () => {
+    setWizardStep("configure");
+    setSelectedCompanyId("");
+    setRunType("");
+    setSelectedForms(new Set());
   };
 
-  const selectedEvents = sortedEvents.filter(e => selectedEventIds.has(e.id));
-
-  const toggleEvent = (id: string) => {
-    setSelectedEventIds(prev => {
+  const toggleForm = (formId: string) => {
+    setSelectedForms(prev => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(formId)) next.delete(formId);
+      else next.add(formId);
       return next;
     });
   };
 
-  const currentStepIndex = WIZARD_STEPS.findIndex(s => s.id === wizardStep);
-  const canGoNext = wizardStep === "select" ? selectedEventIds.size > 0 : true;
-  const goNext = () => {
-    if (currentStepIndex < WIZARD_STEPS.length - 1) setWizardStep(WIZARD_STEPS[currentStepIndex + 1].id);
-  };
-  const goPrev = () => {
-    if (currentStepIndex > 0) setWizardStep(WIZARD_STEPS[currentStepIndex - 1].id);
-  };
-  const resetWizard = () => {
-    setWizardStep("select");
-    setSelectedEventIds(new Set());
-  };
+  const runTypeLabel = RUN_TYPE_OPTIONS.find(r => r.value === runType)?.label || runType;
 
-  const openEditDialog = (ev: RemittanceAgencyEvent) => {
-    setEditingEvent(ev);
-    setEditDialogOpen(true);
-  };
+  const w2Count = employees.length;
+  const nec1099Count = contractors.filter(c => Number(c.payRate || 0) * 2080 >= 600).length;
 
-  if (agenciesLoading) return <div data-testid="loading-tax-wizard"><Skeleton className="h-64 w-full" /></div>;
+  const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   return (
     <div className="space-y-6" data-testid="tax-wizard">
       <div className="flex items-center gap-2 flex-wrap">
-        {WIZARD_STEPS.map((step, idx) => {
+        {TAX_WIZARD_STEPS.map((step, idx) => {
           const StepIcon = step.icon;
           const isActive = step.id === wizardStep;
           const isCompleted = idx < currentStepIndex;
@@ -1177,10 +1274,7 @@ function TaxWizardTab() {
               {idx > 0 && <div className={`h-px w-6 ${isCompleted ? "bg-primary" : "bg-border"}`} />}
               <button
                 data-testid={`wizard-step-${step.id}`}
-                onClick={() => {
-                  if (idx <= currentStepIndex || (wizardStep === "select" && selectedEventIds.size > 0))
-                    setWizardStep(step.id);
-                }}
+                onClick={() => { if (idx <= currentStepIndex) setWizardStep(step.id); }}
                 className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                   isActive ? "bg-primary text-primary-foreground" : isCompleted ? "bg-primary/10 text-primary" : "text-muted-foreground"
                 }`}
@@ -1193,227 +1287,78 @@ function TaxWizardTab() {
         })}
       </div>
 
-      {wizardStep === "select" && (
+      {wizardStep === "configure" && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div>
-              <h3 className="text-lg font-semibold">Select Tax Events</h3>
-              <p className="text-sm text-muted-foreground">Choose tax events to process. Reports are by company, filings submit under the legal entity.</p>
-            </div>
-            <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-              <DialogTrigger asChild>
-                <Button data-testid="button-add-agency-event"><Plus className="mr-2 h-4 w-4" />Add Event</Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-lg">
-                <DialogHeader><DialogTitle>Add Tax Event</DialogTitle></DialogHeader>
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Agency</Label>
-                    {agencies.length > 0 ? (
-                      <Select value={formData.agencyId} onValueChange={v => setFormData(p => ({ ...p, agencyId: v }))}>
-                        <SelectTrigger data-testid="select-ae-agency"><SelectValue placeholder="Select agency" /></SelectTrigger>
-                        <SelectContent>
-                          {agencies.map(a => {
-                            const comp = companies.find(c => c.id === a.companyId);
-                            return <SelectItem key={a.id} value={a.id}>{a.name}{comp ? ` (${comp.name})` : ""}</SelectItem>;
-                          })}
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <div className="border rounded-md p-3 space-y-3 bg-muted/30">
-                        <p className="text-sm text-muted-foreground">No agencies exist yet. Create one to get started:</p>
-                        <div className="space-y-2">
-                          <Input value={newAgencyName} onChange={e => setNewAgencyName(e.target.value)} placeholder="Agency name (e.g., IRS, State Tax Board)" data-testid="input-new-agency-name" />
-                          <div className="grid grid-cols-2 gap-2">
-                            <Select value={newAgencyCompanyId} onValueChange={setNewAgencyCompanyId}>
-                              <SelectTrigger data-testid="select-new-agency-company"><SelectValue placeholder="Company" /></SelectTrigger>
-                              <SelectContent>
-                                {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                            <Select value={newAgencyType} onValueChange={setNewAgencyType}>
-                              <SelectTrigger data-testid="select-new-agency-type"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="federal">Federal</SelectItem>
-                                <SelectItem value="state">State</SelectItem>
-                                <SelectItem value="local">Local</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            disabled={!newAgencyName || !newAgencyCompanyId || createAgencyMutation.isPending}
-                            onClick={() => createAgencyMutation.mutate({ name: newAgencyName, companyId: newAgencyCompanyId, type: newAgencyType })}
-                            data-testid="button-create-agency"
-                          >
-                            {createAgencyMutation.isPending ? "Creating..." : "Create Agency"}
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Type</Label>
-                      <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
-                        <SelectTrigger data-testid="select-ae-type"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="payment">Payment</SelectItem>
-                          <SelectItem value="filing">Filing</SelectItem>
-                          <SelectItem value="reporting">Reporting</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Status</Label>
-                      <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
-                        <SelectTrigger data-testid="select-ae-status"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="enabled">Enabled</SelectItem>
-                          <SelectItem value="disabled">Disabled</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Frequency</Label>
-                      <Select value={formData.frequency} onValueChange={v => setFormData(p => ({ ...p, frequency: v }))}>
-                        <SelectTrigger data-testid="select-ae-frequency"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="quarterly">Quarterly</SelectItem>
-                          <SelectItem value="monthly">Monthly</SelectItem>
-                          <SelectItem value="annually">Annually</SelectItem>
-                          <SelectItem value="semi_annually">Semi-Annually</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Due Date Delay (Days)</Label>
-                      <Input type="number" data-testid="input-ae-delay" value={formData.dueDateDelayDays} onChange={e => setFormData(p => ({ ...p, dueDateDelayDays: Number(e.target.value) }))} />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Effective Date</Label>
-                      <Input type="date" data-testid="input-ae-effective-date" value={formData.effectiveDate} onChange={e => setFormData(p => ({ ...p, effectiveDate: e.target.value }))} />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Reminder Days</Label>
-                      <Input type="number" data-testid="input-ae-reminder" value={formData.reminderDays} onChange={e => setFormData(p => ({ ...p, reminderDays: Number(e.target.value) }))} />
-                    </div>
-                  </div>
-                  <Button
-                    className="w-full"
-                    data-testid="button-submit-agency-event"
-                    disabled={createMutation.isPending || !formData.agencyId}
-                    onClick={() => createMutation.mutate(formData)}
-                  >
-                    {createMutation.isPending ? "Creating..." : "Create Event"}
-                  </Button>
-                </div>
-              </DialogContent>
-            </Dialog>
+          <div>
+            <h3 className="text-lg font-semibold">Configure Tax Run</h3>
+            <p className="text-sm text-muted-foreground">Select the company, tax year, and type of tax run to process.</p>
           </div>
-
-          {companies.length > 1 && (
-            <div className="flex items-center gap-2">
-              <Label className="text-sm">Filter by Company:</Label>
-              <Select value={selectedCompanyFilter} onValueChange={setSelectedCompanyFilter}>
-                <SelectTrigger className="w-[200px]" data-testid="select-company-filter"><SelectValue /></SelectTrigger>
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-2">
+              <Label>Company</Label>
+              <Select value={selectedCompanyId} onValueChange={setSelectedCompanyId}>
+                <SelectTrigger data-testid="select-wizard-company"><SelectValue placeholder="Select company" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Companies</SelectItem>
                   {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
                 </SelectContent>
               </Select>
+              {selectedCompany && selectedLegalEntity && (
+                <p className="text-xs text-muted-foreground">Legal Entity: {selectedLegalEntity.legalName}</p>
+              )}
             </div>
-          )}
-
-          {eventsLoading ? (
-            <Skeleton className="h-48 w-full" />
-          ) : filteredEvents.length === 0 ? (
+            <div className="space-y-2">
+              <Label>Tax Year</Label>
+              <Select value={taxYear} onValueChange={setTaxYear}>
+                <SelectTrigger data-testid="select-wizard-year"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {[0, 1, 2].map(offset => {
+                    const y = String(new Date().getFullYear() - offset);
+                    return <SelectItem key={y} value={y}>{y}</SelectItem>;
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Run Type</Label>
+              <Select value={runType} onValueChange={setRunType}>
+                <SelectTrigger data-testid="select-wizard-run-type"><SelectValue placeholder="Select type" /></SelectTrigger>
+                <SelectContent>
+                  {RUN_TYPE_OPTIONS.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          {selectedCompanyId && runType && (
             <Card>
-              <CardContent className="p-6 text-center text-muted-foreground">
-                {sortedEvents.length === 0
-                  ? "No tax events found. Click \"Add Event\" to create your first tax event."
-                  : "No events match the selected company filter."}
+              <CardContent className="p-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+                  <div>
+                    <p className="text-2xl font-bold">{employees.length}</p>
+                    <p className="text-xs text-muted-foreground">Employees</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold">{contractors.length}</p>
+                    <p className="text-xs text-muted-foreground">Contractors</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold">{companyDeductions.filter(d => d.isActive).length}</p>
+                    <p className="text-xs text-muted-foreground">Active Tax Items</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold">{companyPayrollRuns.length}</p>
+                    <p className="text-xs text-muted-foreground">Payroll Runs</p>
+                  </div>
+                </div>
               </CardContent>
             </Card>
-          ) : (
-            <Card>
-              <CardContent className="p-0">
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-12"></TableHead>
-                        <TableHead>Agency</TableHead>
-                        <TableHead>Company</TableHead>
-                        <TableHead>Legal Entity</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Frequency</TableHead>
-                        <TableHead>Due Date</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredEvents.map(ev => {
-                        const pastDue = isEventPastDue(ev);
-                        const isSelected = selectedEventIds.has(ev.id);
-                        const company = getCompanyForAgency(ev.agencyId);
-                        const legalEntity = getLegalEntityForCompany(company?.id);
-                        return (
-                          <TableRow
-                            key={ev.id}
-                            data-testid={`row-wizard-event-${ev.id}`}
-                            className={!pastDue ? "opacity-50" : isSelected ? "bg-primary/5" : ""}
-                          >
-                            <TableCell>
-                              <Checkbox
-                                data-testid={`checkbox-event-${ev.id}`}
-                                checked={isSelected}
-                                disabled={!pastDue}
-                                onCheckedChange={() => toggleEvent(ev.id)}
-                              />
-                            </TableCell>
-                            <TableCell className="font-medium">{getAgencyName(ev.agencyId)}</TableCell>
-                            <TableCell className="text-sm">{company?.name || "—"}</TableCell>
-                            <TableCell className="text-sm">{legalEntity?.legalName || "—"}</TableCell>
-                            <TableCell>
-                              <Badge variant={ev.type === "payment" ? "default" : ev.type === "filing" ? "secondary" : "outline"}>
-                                {ev.type}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="capitalize">{ev.frequency?.replace("_", " ") || "—"}</TableCell>
-                            <TableCell>
-                              {ev.effectiveDate ? (
-                                <span className={pastDue ? "text-destructive font-medium" : ""}>
-                                  {new Date(ev.effectiveDate).toLocaleDateString()}
-                                </span>
-                              ) : "—"}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={ev.status === "enabled" ? "default" : "outline"} className="text-xs">
-                                {ev.status}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex gap-1">
-                                <Button size="icon" variant="ghost" data-testid={`button-edit-event-${ev.id}`} onClick={() => openEditDialog(ev)}>
-                                  <Pencil className="h-4 w-4" />
-                                </Button>
-                                <Button size="icon" variant="ghost" data-testid={`button-delete-event-${ev.id}`} onClick={() => deleteMutation.mutate(ev.id)}>
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
+          )}
+          {selectedCompanyId && companyDeductions.length === 0 && (
+            <Card className="border-amber-200 dark:border-amber-800">
+              <CardContent className="p-4 flex items-center gap-3">
+                <AlertCircle className="h-5 w-5 text-amber-500 shrink-0" />
+                <div>
+                  <p className="text-sm font-medium">No tax items configured for this company.</p>
+                  <p className="text-xs text-muted-foreground">Go to Taxes & Deductions tab and use Quick Setup to add standard US tax items first.</p>
                 </div>
               </CardContent>
             </Card>
@@ -1421,124 +1366,226 @@ function TaxWizardTab() {
         </div>
       )}
 
-      {wizardStep === "review" && (
+      {wizardStep === "workers" && (
         <div className="space-y-4">
           <div>
-            <h3 className="text-lg font-semibold">Review & Verify</h3>
-            <p className="text-sm text-muted-foreground">Review the selected events before submitting. Click an event to edit its details.</p>
+            <h3 className="text-lg font-semibold">Workers & Tax Summary</h3>
+            <p className="text-sm text-muted-foreground">{selectedCompany?.name} — {taxYear} {runTypeLabel}. Estimated annual figures based on pay rates.</p>
           </div>
-          {selectedEvents.length === 0 ? (
+          {companyWorkers.length === 0 ? (
             <Card>
               <CardContent className="p-6 text-center text-muted-foreground">
                 <AlertCircle className="h-8 w-8 mx-auto mb-2" />
-                No events selected. Go back to select events.
+                No workers found for this company.
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-3">
-              {selectedEvents.map((ev, idx) => {
-                const company = getCompanyForAgency(ev.agencyId);
-                const legalEntity = getLegalEntityForCompany(company?.id);
-                return (
-                  <Card key={ev.id} className="hover-elevate cursor-pointer" onClick={() => openEditDialog(ev)} data-testid={`card-review-event-${ev.id}`}>
-                    <CardContent className="p-4">
-                      <div className="flex items-center gap-4 flex-wrap">
-                        <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary font-semibold text-sm">
-                          {idx + 1}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-medium">{getAgencyName(ev.agencyId)}</span>
-                            <Badge variant={ev.type === "payment" ? "default" : ev.type === "filing" ? "secondary" : "outline"} className="text-xs">
-                              {ev.type}
-                            </Badge>
-                            <Badge variant="outline" className="text-xs capitalize">{ev.frequency?.replace("_", " ")}</Badge>
-                          </div>
-                          <div className="text-sm text-muted-foreground mt-1">
-                            {company?.name || "—"} {legalEntity ? `· Filed under: ${legalEntity.legalName}` : ""} · Due: {ev.effectiveDate ? new Date(ev.effectiveDate).toLocaleDateString() : "No date"}
-                          </div>
-                        </div>
-                        <Pencil className="h-4 w-4 text-muted-foreground" />
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
+            <>
+              {employees.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Employees ({employees.length})</CardTitle></CardHeader>
+                  <CardContent className="p-0">
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Employee</TableHead>
+                            <TableHead className="text-right">Est. Gross</TableHead>
+                            <TableHead className="text-right">Est. Taxes</TableHead>
+                            <TableHead className="text-right">Est. Net</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {employees.map(w => {
+                            const tax = calcWorkerTax(w);
+                            return (
+                              <TableRow key={w.id} data-testid={`row-worker-${w.id}`}>
+                                <TableCell className="font-medium">{w.firstName} {w.lastName}<span className="text-xs text-muted-foreground ml-2">#{w.employeeNumber || "—"}</span></TableCell>
+                                <TableCell className="text-right">${fmt(tax.grossPay)}</TableCell>
+                                <TableCell className="text-right text-destructive">${fmt(tax.totalTax)}</TableCell>
+                                <TableCell className="text-right font-medium">${fmt(tax.netPay)}</TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+              {contractors.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Contractors ({contractors.length})</CardTitle></CardHeader>
+                  <CardContent className="p-0">
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Contractor</TableHead>
+                            <TableHead className="text-right">Est. Gross</TableHead>
+                            <TableHead className="text-right">Est. Net (Paid)</TableHead>
+                            <TableHead className="text-right">SE Tax (Reference)</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {contractors.map(w => {
+                            const tax = calcWorkerTax(w);
+                            return (
+                              <TableRow key={w.id} data-testid={`row-worker-${w.id}`}>
+                                <TableCell className="font-medium">{w.firstName} {w.lastName}</TableCell>
+                                <TableCell className="text-right">${fmt(tax.grossPay)}</TableCell>
+                                <TableCell className="text-right font-medium">${fmt(tax.netPay)}</TableCell>
+                                <TableCell className="text-right">
+                                  {tax.totalRef > 0 ? (
+                                    <span className="text-blue-600 dark:text-blue-400" title="Self-employment tax the contractor is responsible for paying independently">
+                                      ${fmt(tax.totalRef)}
+                                    </span>
+                                  ) : "—"}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </CardContent>
+                  <CardContent className="pt-0 pb-3">
+                    <p className="text-xs text-blue-600 dark:text-blue-400">
+                      Self-Employment Tax is shown for reference only. Contractors are responsible for paying their own Social Security (12.4%) and Medicare (2.9%) taxes.
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
+            </>
           )}
         </div>
       )}
 
-      {wizardStep === "submit" && (
+      {wizardStep === "forms" && (
         <div className="space-y-4">
           <div>
-            <h3 className="text-lg font-semibold">Submit Events</h3>
-            <p className="text-sm text-muted-foreground">Confirm submission of {selectedEvents.length} event(s) for processing.</p>
+            <h3 className="text-lg font-semibold">Generate Tax Forms</h3>
+            <p className="text-sm text-muted-foreground">Select which forms to generate for {taxYear} {runTypeLabel}.</p>
           </div>
-          <Card>
-            <CardContent className="p-6">
-              <div className="space-y-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
-                    <FileText className="h-5 w-5 text-primary" />
-                  </div>
-                  <div>
-                    <div className="font-semibold">{selectedEvents.length} Event(s) Ready</div>
-                    <div className="text-sm text-muted-foreground">
-                      {selectedEvents.filter(e => e.type === "payment").length} payments, {selectedEvents.filter(e => e.type === "filing").length} filings, {selectedEvents.filter(e => e.type === "reporting").length} reports
+          <div className="grid gap-3 md:grid-cols-2">
+            {availableForms.map(form => {
+              const isSelected = selectedForms.has(form.id);
+              let count = "";
+              if (form.id === "w2") count = `${w2Count} form(s)`;
+              else if (form.id === "1099nec") count = `${nec1099Count} form(s)`;
+              return (
+                <button
+                  key={form.id}
+                  data-testid={`form-option-${form.id}`}
+                  onClick={() => toggleForm(form.id)}
+                  className={`p-4 border rounded-lg text-left transition-all ${
+                    isSelected ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-accent/50"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-4 h-4 rounded border flex items-center justify-center ${isSelected ? "bg-primary border-primary" : "border-muted-foreground"}`}>
+                        {isSelected && <Check className="h-3 w-3 text-primary-foreground" />}
+                      </div>
+                      <span className="font-medium text-sm">{form.label}</span>
                     </div>
+                    {count && <Badge variant="secondary" className="text-xs">{count}</Badge>}
                   </div>
-                </div>
-                <div className="border-t pt-4">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Agency</TableHead>
-                        <TableHead>Company</TableHead>
-                        <TableHead>Legal Entity</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Due Date</TableHead>
-                        <TableHead>Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {selectedEvents.map(ev => {
-                        const company = getCompanyForAgency(ev.agencyId);
-                        const legalEntity = getLegalEntityForCompany(company?.id);
-                        return (
-                          <TableRow key={ev.id} data-testid={`row-submit-event-${ev.id}`}>
-                            <TableCell className="font-medium">{getAgencyName(ev.agencyId)}</TableCell>
-                            <TableCell>{company?.name || "—"}</TableCell>
-                            <TableCell>{legalEntity?.legalName || "—"}</TableCell>
-                            <TableCell><Badge variant="outline" className="text-xs">{ev.type}</Badge></TableCell>
-                            <TableCell>{ev.effectiveDate ? new Date(ev.effectiveDate).toLocaleDateString() : "—"}</TableCell>
-                            <TableCell><Badge variant="default" className="text-xs">Ready</Badge></TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+                  <p className="text-xs text-muted-foreground mt-1 ml-6">{form.description}</p>
+                </button>
+              );
+            })}
+          </div>
+          {availableForms.length === 0 && (
+            <Card><CardContent className="p-6 text-center text-muted-foreground">No forms available for this run type.</CardContent></Card>
+          )}
         </div>
       )}
 
       {wizardStep === "complete" && (
         <div className="space-y-4">
           <Card>
-            <CardContent className="p-8 text-center">
+            <CardContent className="p-6">
               <div className="flex items-center justify-center w-16 h-16 rounded-full bg-green-100 dark:bg-green-900/30 mx-auto mb-4">
                 <Check className="h-8 w-8 text-green-600 dark:text-green-400" />
               </div>
-              <h3 className="text-xl font-semibold mb-2">Processing Complete</h3>
-              <p className="text-muted-foreground mb-6">
-                {selectedEvents.length} tax event(s) have been successfully processed and submitted.
+              <h3 className="text-xl font-semibold text-center mb-2">Tax Run Complete</h3>
+              <p className="text-center text-muted-foreground mb-6">
+                {taxYear} {runTypeLabel} for {selectedCompany?.name}
               </p>
-              <Button data-testid="button-wizard-restart" onClick={resetWizard}>
-                Process More Events
-              </Button>
+
+              <div className="space-y-4">
+                <div className="border rounded-lg p-4">
+                  <h4 className="font-semibold mb-3">Generated Forms</h4>
+                  <div className="space-y-2">
+                    {[...selectedForms].map(formId => {
+                      const form = TAX_FORMS.find(f => f.id === formId);
+                      if (!form) return null;
+                      let count = 1;
+                      if (formId === "w2") count = w2Count;
+                      if (formId === "1099nec") count = nec1099Count;
+                      return (
+                        <div key={formId} className="flex items-center justify-between py-1" data-testid={`generated-form-${formId}`}>
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-4 w-4 text-primary" />
+                            <span className="text-sm">{form.label}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline" className="text-xs">{count} form(s)</Badge>
+                            <Button size="sm" variant="outline" data-testid={`button-download-${formId}`}>
+                              <Download className="h-3 w-3 mr-1" />Print/Export
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {contractors.length > 0 && (
+                  <div className="border rounded-lg p-4 border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
+                    <h4 className="font-semibold mb-2 text-blue-700 dark:text-blue-300">Contractor Self-Employment Tax Reference</h4>
+                    <p className="text-xs text-muted-foreground mb-3">The following amounts are what contractors owe for self-employment tax (not deducted from their pay):</p>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Contractor</TableHead>
+                          <TableHead className="text-right">Total Paid</TableHead>
+                          <TableHead className="text-right">SE Tax (SS 12.4%)</TableHead>
+                          <TableHead className="text-right">SE Tax (Medicare 2.9%)</TableHead>
+                          <TableHead className="text-right">Total SE Tax</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {contractors.map(c => {
+                          const gross = Number(c.payRate || 0) * 2080;
+                          const ssBase = Math.min(gross, 168600);
+                          const ssTax = ssBase * 0.124;
+                          const medTax = gross * 0.029;
+                          return (
+                            <TableRow key={c.id}>
+                              <TableCell className="font-medium">{c.firstName} {c.lastName}</TableCell>
+                              <TableCell className="text-right">${fmt(gross)}</TableCell>
+                              <TableCell className="text-right">${fmt(ssTax)}</TableCell>
+                              <TableCell className="text-right">${fmt(medTax)}</TableCell>
+                              <TableCell className="text-right font-medium text-blue-600">${fmt(ssTax + medTax)}</TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-center gap-3 pt-4">
+                  <Button data-testid="button-wizard-restart" onClick={resetWizard}>
+                    Start New Tax Run
+                  </Button>
+                  <Button variant="outline" data-testid="button-wizard-print-all" onClick={() => window.print()}>
+                    <Printer className="mr-2 h-4 w-4" />Print Summary
+                  </Button>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </div>
@@ -1546,104 +1593,15 @@ function TaxWizardTab() {
 
       {wizardStep !== "complete" && (
         <div className="flex items-center justify-between gap-4">
-          <Button
-            variant="outline"
-            data-testid="button-wizard-prev"
-            disabled={currentStepIndex === 0}
-            onClick={goPrev}
-          >
-            <ChevronLeft className="mr-2 h-4 w-4" />
-            Back
+          <Button variant="outline" data-testid="button-wizard-prev" disabled={currentStepIndex === 0} onClick={goPrev}>
+            <ChevronLeft className="mr-2 h-4 w-4" />Back
           </Button>
-          <Button
-            data-testid="button-wizard-next"
-            disabled={!canGoNext}
-            onClick={goNext}
-          >
-            {wizardStep === "submit" ? "Complete" : "Next"}
+          <Button data-testid="button-wizard-next" disabled={!canGoNext()} onClick={goNext}>
+            {wizardStep === "forms" ? "Generate & Complete" : "Next"}
             <ChevronRight className="ml-2 h-4 w-4" />
           </Button>
         </div>
       )}
-
-      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Edit Agency Event</DialogTitle></DialogHeader>
-          {editingEvent && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Type</Label>
-                  <Select value={editingEvent.type} onValueChange={v => setEditingEvent({ ...editingEvent, type: v })}>
-                    <SelectTrigger data-testid="select-edit-ae-type"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="payment">Payment</SelectItem>
-                      <SelectItem value="filing">Filing</SelectItem>
-                      <SelectItem value="reporting">Reporting</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Status</Label>
-                  <Select value={editingEvent.status} onValueChange={v => setEditingEvent({ ...editingEvent, status: v })}>
-                    <SelectTrigger data-testid="select-edit-ae-status"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="enabled">Enabled</SelectItem>
-                      <SelectItem value="disabled">Disabled</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Frequency</Label>
-                  <Select value={editingEvent.frequency || "quarterly"} onValueChange={v => setEditingEvent({ ...editingEvent, frequency: v })}>
-                    <SelectTrigger data-testid="select-edit-ae-frequency"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="quarterly">Quarterly</SelectItem>
-                      <SelectItem value="monthly">Monthly</SelectItem>
-                      <SelectItem value="annually">Annually</SelectItem>
-                      <SelectItem value="semi_annually">Semi-Annually</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Due Date Delay (Days)</Label>
-                  <Input type="number" data-testid="input-edit-ae-delay" value={editingEvent.dueDateDelayDays ?? 0} onChange={e => setEditingEvent({ ...editingEvent, dueDateDelayDays: Number(e.target.value) })} />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Effective Date</Label>
-                  <Input type="date" data-testid="input-edit-ae-effective-date" value={editingEvent.effectiveDate || ""} onChange={e => setEditingEvent({ ...editingEvent, effectiveDate: e.target.value })} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Reminder Days</Label>
-                  <Input type="number" data-testid="input-edit-ae-reminder" value={editingEvent.reminderDays ?? 7} onChange={e => setEditingEvent({ ...editingEvent, reminderDays: Number(e.target.value) })} />
-                </div>
-              </div>
-              <Button
-                className="w-full"
-                data-testid="button-save-edit-event"
-                disabled={updateMutation.isPending}
-                onClick={() => updateMutation.mutate({
-                  id: editingEvent.id,
-                  data: {
-                    type: editingEvent.type,
-                    status: editingEvent.status,
-                    frequency: editingEvent.frequency,
-                    dueDateDelayDays: editingEvent.dueDateDelayDays,
-                    effectiveDate: editingEvent.effectiveDate || null,
-                    reminderDays: editingEvent.reminderDays,
-                  },
-                })}
-              >
-                {updateMutation.isPending ? "Saving..." : "Save Changes"}
-              </Button>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

@@ -1158,6 +1158,56 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/taxes-deductions/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getTaxesDeductions(companyId);
+      const existingNames = new Set(existing.map(e => e.name));
+      const standardItems = [
+        { companyId, name: "Federal Income Tax", type: "tax", category: "mandatory_tax", subcategory: "federal", calculationType: "percentage", rate: "22", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "State Income Tax", type: "tax", category: "mandatory_tax", subcategory: "state", calculationType: "percentage", rate: "5", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "Social Security (FICA)", type: "tax", category: "mandatory_tax", subcategory: "federal", calculationType: "percentage", rate: "6.2", maxAmount: "168600", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "Medicare", type: "tax", category: "mandatory_tax", subcategory: "federal", calculationType: "percentage", rate: "1.45", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "Social Security - Employer", type: "tax", category: "mandatory_tax", subcategory: "federal", calculationType: "percentage", rate: "6.2", maxAmount: "168600", isEmployerPaid: true, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "Medicare - Employer", type: "tax", category: "mandatory_tax", subcategory: "federal", calculationType: "percentage", rate: "1.45", isEmployerPaid: true, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "State Disability Insurance (SDI)", type: "tax", category: "mandatory_tax", subcategory: "state", calculationType: "percentage", rate: "1.1", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "FUTA (Federal Unemployment)", type: "tax", category: "mandatory_tax", subcategory: "federal", calculationType: "percentage", rate: "0.6", maxAmount: "7000", isEmployerPaid: true, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "SUTA (State Unemployment)", type: "tax", category: "mandatory_tax", subcategory: "state", calculationType: "percentage", rate: "2.7", maxAmount: "7000", isEmployerPaid: true, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "SE Tax - Social Security (Reference)", type: "tax", category: "mandatory_tax", subcategory: "self_employment", calculationType: "percentage", rate: "12.4", maxAmount: "168600", isEmployerPaid: false, isReferenceOnly: true, appliesTo: "contractor" },
+        { companyId, name: "SE Tax - Medicare (Reference)", type: "tax", category: "mandatory_tax", subcategory: "self_employment", calculationType: "percentage", rate: "2.9", isEmployerPaid: false, isReferenceOnly: true, appliesTo: "contractor" },
+        { companyId, name: "Child Support", type: "deduction", category: "garnishment", subcategory: "court_ordered", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "all", isActive: false },
+        { companyId, name: "Wage Garnishments", type: "deduction", category: "garnishment", subcategory: "court_ordered", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "all", isActive: false },
+        { companyId, name: "Tax Levies", type: "deduction", category: "garnishment", subcategory: "tax", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "all", isActive: false },
+        { companyId, name: "Bankruptcy Payments", type: "deduction", category: "garnishment", subcategory: "court_ordered", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "all", isActive: false },
+        { companyId, name: "Health Insurance", type: "deduction", category: "benefit_deduction", subcategory: "insurance", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "Dental Insurance", type: "deduction", category: "benefit_deduction", subcategory: "insurance", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "Vision Insurance", type: "deduction", category: "benefit_deduction", subcategory: "insurance", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "401(k) Retirement", type: "deduction", category: "benefit_deduction", subcategory: "retirement", calculationType: "percentage", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "HSA Contributions", type: "deduction", category: "benefit_deduction", subcategory: "health", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "Life Insurance", type: "deduction", category: "voluntary_deduction", subcategory: "insurance", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee", isActive: false },
+        { companyId, name: "Charity Donations", type: "deduction", category: "voluntary_deduction", subcategory: "voluntary", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee", isActive: false },
+        { companyId, name: "Parking", type: "deduction", category: "voluntary_deduction", subcategory: "voluntary", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee", isActive: false },
+        { companyId, name: "Gym Membership", type: "deduction", category: "voluntary_deduction", subcategory: "voluntary", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee", isActive: false },
+        { companyId, name: "Company Loan Repayment", type: "deduction", category: "voluntary_deduction", subcategory: "voluntary", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee", isActive: false },
+        { companyId, name: "Union Dues", type: "deduction", category: "voluntary_deduction", subcategory: "membership", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee", isActive: false },
+      ];
+      const created = [];
+      const skipped = [];
+      for (const item of standardItems) {
+        if (existingNames.has(item.name)) {
+          skipped.push(item.name);
+          continue;
+        }
+        const result = await storage.createTaxDeduction(item as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} items${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up taxes/deductions" });
+    }
+  });
+
   // Policy Groups
   app.get("/api/policy-groups", async (req, res) => {
     try {

@@ -121,18 +121,47 @@ function StubPortion({
   const grossPay = Number(item.grossPay || 0);
   const totalDeductions = Number(item.deductions || 0);
 
+  const isContractor = worker.workerType === "contractor";
+
   const deductionBreakdown = deductions
-    .filter(d => d.isActive && !d.isEmployerPaid)
+    .filter(d => d.isActive && !d.isEmployerPaid && !d.isReferenceOnly)
+    .filter(d => {
+      const appliesTo = d.appliesTo || "all";
+      if (appliesTo === "employee" && isContractor) return false;
+      if (appliesTo === "contractor" && !isContractor) return false;
+      return true;
+    })
     .map(d => {
       let amount = 0;
       if (d.calculationType === "percentage") {
-        amount = grossPay * (Number(d.rate || 0) / 100);
+        const base = d.maxAmount ? Math.min(grossPay, Number(d.maxAmount)) : grossPay;
+        amount = base * (Number(d.rate || 0) / 100);
       } else {
         amount = Number(d.rate || 0);
       }
       return { name: d.name, amount };
     })
     .filter(d => d.amount > 0);
+
+  const seRefItems = isContractor ? deductions
+    .filter(d => d.isActive && d.isReferenceOnly)
+    .filter(d => {
+      const appliesTo = d.appliesTo || "all";
+      return appliesTo === "contractor" || appliesTo === "all";
+    })
+    .map(d => {
+      let amount = 0;
+      if (d.calculationType === "percentage") {
+        const base = d.maxAmount ? Math.min(grossPay, Number(d.maxAmount)) : grossPay;
+        amount = base * (Number(d.rate || 0) / 100);
+      } else {
+        amount = Number(d.rate || 0);
+      }
+      return { name: d.name.replace(" (Reference)", ""), amount };
+    })
+    .filter(d => d.amount > 0) : [];
+
+  const totalSeTax = seRefItems.reduce((sum, d) => sum + d.amount, 0);
 
   return (
     <div style={{ padding: "0.2in 0.4in", fontSize: "10px", height: "100%", display: "flex", flexDirection: "column" }}>
@@ -148,8 +177,8 @@ function StubPortion({
           </div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div><strong>Employee:</strong> {worker.firstName} {worker.lastName}</div>
-          <div><strong>Employee #:</strong> {worker.employeeNumber || "—"}</div>
+          <div><strong>{isContractor ? "Contractor" : "Employee"}:</strong> {worker.firstName} {worker.lastName}</div>
+          <div><strong>{isContractor ? "Contractor" : "Employee"} #:</strong> {worker.employeeNumber || "—"}</div>
           <div><strong>SSN:</strong> {worker.ssn ? "XXX-XX-" + worker.ssn.slice(-4) : "XXX-XX-XXXX"}</div>
         </div>
       </div>
@@ -249,6 +278,31 @@ function StubPortion({
               <div><div style={{ fontSize: "8px", color: "#666" }}>YTD DEDUCTIONS</div><div style={{ fontWeight: "bold" }}>${fmt(item.ytdDeductions)}</div></div>
               <div><div style={{ fontSize: "8px", color: "#666" }}>YTD NET</div><div style={{ fontWeight: "bold" }}>${fmt(item.ytdNet)}</div></div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {isContractor && seRefItems.length > 0 && (
+        <div style={{ marginTop: "8px", border: "1px solid #4a90d9", padding: "6px 8px", background: "#f0f5ff" }}>
+          <div style={{ fontWeight: "bold", fontSize: "9px", color: "#2b5ea7", marginBottom: "4px" }}>
+            SELF-EMPLOYMENT TAX (Reference Only — Not Deducted)
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <tbody>
+              {seRefItems.map((d, i) => (
+                <tr key={i}>
+                  <td style={{ padding: "1px 2px", color: "#2b5ea7" }}>{d.name}</td>
+                  <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>${fmt(d.amount)}</td>
+                </tr>
+              ))}
+              <tr style={{ borderTop: "1px solid #4a90d9", fontWeight: "bold" }}>
+                <td style={{ padding: "2px", color: "#2b5ea7" }}>TOTAL SE TAX</td>
+                <td style={{ textAlign: "right", padding: "2px", color: "#2b5ea7" }}>${fmt(totalSeTax)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style={{ fontSize: "7px", color: "#666", marginTop: "2px" }}>
+            As an independent contractor, you are responsible for paying self-employment tax (Social Security 12.4% + Medicare 2.9%) directly to the IRS.
           </div>
         </div>
       )}
