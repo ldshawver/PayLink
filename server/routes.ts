@@ -980,6 +980,34 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/accrual-accounts/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getAccrualAccounts(companyId);
+      const existingNames = new Set(existing.map(e => e.name));
+      const defaultAccounts = [
+        { companyId, name: "Vacation", type: "vacation", accrualRate: "3.08", accrualFrequency: "per_pay_period", maxBalance: "240" },
+        { companyId, name: "Sick Leave", type: "sick", accrualRate: "1.0", accrualFrequency: "per_pay_period", maxBalance: "48" },
+        { companyId, name: "PTO (Paid Time Off)", type: "pto", accrualRate: "4.0", accrualFrequency: "per_pay_period", maxBalance: "320" },
+        { companyId, name: "Personal Days", type: "personal", accrualRate: "1.33", accrualFrequency: "monthly", maxBalance: "16" },
+        { companyId, name: "Comp Time", type: "pto", accrualRate: "0", accrualFrequency: "per_pay_period", maxBalance: "80" },
+        { companyId, name: "Bereavement Leave", type: "personal", accrualRate: "0", accrualFrequency: "annually", maxBalance: "24" },
+        { companyId, name: "Jury Duty", type: "personal", accrualRate: "0", accrualFrequency: "annually", maxBalance: "40" },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const acct of defaultAccounts) {
+        if (existingNames.has(acct.name)) { skipped.push(acct.name); continue; }
+        const item = await storage.createAccrualAccount(acct);
+        created.push(item);
+      }
+      res.json({ message: `Created ${created.length} accrual accounts${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to set up accrual accounts" });
+    }
+  });
+
   // Accrual Balances
   app.get("/api/accrual-balances", async (req, res) => {
     try {
@@ -2161,6 +2189,36 @@ export async function registerRoutes(
       res.json({ message: "Deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete contributing pay code" });
+    }
+  });
+
+  app.post("/api/contributing-pay-codes/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getContributingPayCodes(companyId);
+      const existingNames = new Set(existing.map(e => e.name));
+      const payCodes = await storage.getPayCodes(companyId);
+      const codeMap = new Map(payCodes.map(pc => [pc.code, pc.id]));
+      const defaultGroups = [
+        { name: "Regular & Overtime", codes: ["REGULAR", "OVERTIME", "DOUBLE_TIME"] },
+        { name: "All Paid Time", codes: ["REGULAR", "OVERTIME", "DOUBLE_TIME", "VACATION", "SICK", "HOLIDAY"] },
+        { name: "Leave Codes", codes: ["VACATION", "SICK", "UNPAID_LEAVE"] },
+        { name: "Premium Eligible", codes: ["REGULAR", "OVERTIME", "DOUBLE_TIME", "ON_CALL"] },
+        { name: "OT Threshold Hours", codes: ["REGULAR", "OVERTIME", "DOUBLE_TIME"] },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const group of defaultGroups) {
+        if (existingNames.has(group.name)) { skipped.push(group.name); continue; }
+        const matchedIds = group.codes.map(c => codeMap.get(c)).filter(Boolean).join(",");
+        if (!matchedIds) { skipped.push(group.name + " (no matching pay codes)"); continue; }
+        const item = await storage.createContributingPayCode({ companyId, name: group.name, payCodeIds: matchedIds });
+        created.push(item);
+      }
+      res.json({ message: `Created ${created.length} contributing pay codes${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to set up contributing pay codes" });
     }
   });
 
