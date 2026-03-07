@@ -1606,21 +1606,34 @@ function TaxWizardTab() {
   );
 }
 
+const PSA_TYPE_LABELS: Record<string, string> = {
+  earning: "Earnings",
+  tax: "Taxes",
+  deduction: "Deductions",
+  employer_contribution: "Employer Contributions",
+  benefit: "Benefits",
+  other: "Other",
+};
+const PSA_TYPE_ORDER = ["earning", "tax", "deduction", "employer_contribution", "benefit", "other"];
+
 function PayStubAccountsTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedCompany, setSelectedCompany] = useState<string>("all");
   const [formData, setFormData] = useState({
-    companyId: "", name: "", type: "earning", status: "enabled",
+    companyId: "", legalEntityId: "", name: "", type: "earning", status: "enabled",
     displayOrder: 0, debitAccount: "", creditAccount: "",
   });
 
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: legalEntities = [] } = useQuery<LegalEntity[]>({ queryKey: ["/api/legal-entities"] });
   const { data: payStubAccounts = [], isLoading } = useQuery<PayStubAccount[]>({ queryKey: ["/api/pay-stub-accounts"] });
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
       const res = await apiRequest("POST", "/api/pay-stub-accounts", {
         ...data,
+        legalEntityId: data.legalEntityId && data.legalEntityId !== "none" ? data.legalEntityId : null,
         debitAccount: data.debitAccount || null,
         creditAccount: data.creditAccount || null,
       });
@@ -1630,126 +1643,251 @@ function PayStubAccountsTab() {
       queryClient.invalidateQueries({ queryKey: ["/api/pay-stub-accounts"] });
       toast({ title: "Pay stub account created" });
       setDialogOpen(false);
-      setFormData({ companyId: "", name: "", type: "earning", status: "enabled", displayOrder: 0, debitAccount: "", creditAccount: "" });
+      setFormData({ companyId: "", legalEntityId: "", name: "", type: "earning", status: "enabled", displayOrder: 0, debitAccount: "", creditAccount: "" });
     },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async ({ companyId, legalEntityId }: { companyId: string; legalEntityId: string }) => {
+      const res = await apiRequest("POST", "/api/pay-stub-accounts/quick-setup", { companyId, legalEntityId: legalEntityId || null });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-stub-accounts"] });
+      toast({ title: "Quick Setup Complete", description: data.message });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/pay-stub-accounts/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-stub-accounts"] });
+      toast({ title: "Account deleted" });
+    },
+  });
+
+  const toggleStatusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      await apiRequest("PATCH", `/api/pay-stub-accounts/${id}`, { status });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-stub-accounts"] });
     },
   });
 
   if (isLoading) return <div data-testid="loading-pay-stub-accounts"><Skeleton className="h-64 w-full" /></div>;
 
+  const getLegalEntityName = (leId: string | null | undefined) => {
+    if (!leId) return null;
+    return legalEntities.find(le => le.id === leId)?.legalName || null;
+  };
+
+  const selectedComp = companies.find(c => c.id === selectedCompany);
+  const selectedCompLegalEntityId = selectedComp?.legalEntityId || "";
+
+  const filteredAccounts = selectedCompany === "all"
+    ? payStubAccounts
+    : payStubAccounts.filter(a => a.companyId === selectedCompany);
+
+  const sortedAccounts = [...filteredAccounts].sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0));
+
+  const groupedAccounts: Record<string, PayStubAccount[]> = {};
+  for (const t of PSA_TYPE_ORDER) groupedAccounts[t] = [];
+  for (const a of sortedAccounts) {
+    const t = a.type || "other";
+    if (!groupedAccounts[t]) groupedAccounts[t] = [];
+    groupedAccounts[t].push(a);
+  }
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-pay-stub-account"><Plus className="mr-2 h-4 w-4" />Add Pay Stub Account</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader><DialogTitle>Add Pay Stub Account</DialogTitle></DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label>Company</Label>
-                <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v }))}>
-                  <SelectTrigger data-testid="select-psa-company"><SelectValue placeholder="Select company" /></SelectTrigger>
-                  <SelectContent>
-                    {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <Select value={selectedCompany} onValueChange={setSelectedCompany}>
+          <SelectTrigger className="w-[200px]" data-testid="select-psa-filter-company">
+            <SelectValue placeholder="All companies" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Companies</SelectItem>
+            {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <div className="flex items-center gap-2">
+          {selectedCompany !== "all" && (
+            <Button
+              variant="outline"
+              data-testid="button-psa-quick-setup"
+              disabled={quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate({ companyId: selectedCompany, legalEntityId: selectedCompLegalEntityId })}
+            >
+              <Zap className="mr-2 h-4 w-4" />
+              {quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+          )}
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-pay-stub-account"><Plus className="mr-2 h-4 w-4" />Add Account</Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-lg">
+              <DialogHeader><DialogTitle>Add Pay Stub Account</DialogTitle></DialogHeader>
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Company</Label>
+                    <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v }))}>
+                      <SelectTrigger data-testid="select-psa-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                      <SelectContent>
+                        {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Paid By (Legal Entity)</Label>
+                    <Select value={formData.legalEntityId} onValueChange={v => setFormData(p => ({ ...p, legalEntityId: v }))}>
+                      <SelectTrigger data-testid="select-psa-legal-entity"><SelectValue placeholder="Optional" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        {legalEntities.map(le => <SelectItem key={le.id} value={le.id}>{le.legalName}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Name</Label>
+                  <Input data-testid="input-psa-name" value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Type</Label>
+                    <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
+                      <SelectTrigger data-testid="select-psa-type"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="earning">Earning</SelectItem>
+                        <SelectItem value="tax">Tax</SelectItem>
+                        <SelectItem value="deduction">Deduction</SelectItem>
+                        <SelectItem value="employer_contribution">Employer Contribution</SelectItem>
+                        <SelectItem value="benefit">Benefit</SelectItem>
+                        <SelectItem value="other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Status</Label>
+                    <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
+                      <SelectTrigger data-testid="select-psa-status"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="enabled">Enabled</SelectItem>
+                        <SelectItem value="disabled">Disabled</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Display Order</Label>
+                    <Input type="number" data-testid="input-psa-display-order" value={formData.displayOrder} onChange={e => setFormData(p => ({ ...p, displayOrder: Number(e.target.value) }))} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Debit Account (GL)</Label>
+                    <Input data-testid="input-psa-debit" value={formData.debitAccount} onChange={e => setFormData(p => ({ ...p, debitAccount: e.target.value }))} placeholder="Optional" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Credit Account (GL)</Label>
+                    <Input data-testid="input-psa-credit" value={formData.creditAccount} onChange={e => setFormData(p => ({ ...p, creditAccount: e.target.value }))} placeholder="Optional" />
+                  </div>
+                </div>
+                <Button
+                  className="w-full"
+                  data-testid="button-submit-pay-stub-account"
+                  disabled={createMutation.isPending || !formData.companyId || !formData.name}
+                  onClick={() => createMutation.mutate(formData)}
+                >
+                  {createMutation.isPending ? "Creating..." : "Create Account"}
+                </Button>
               </div>
-              <div className="space-y-2">
-                <Label>Name</Label>
-                <Input data-testid="input-psa-name" value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Type</Label>
-                <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
-                  <SelectTrigger data-testid="select-psa-type"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="earning">Earning</SelectItem>
-                    <SelectItem value="deduction">Deduction</SelectItem>
-                    <SelectItem value="benefit">Benefit</SelectItem>
-                    <SelectItem value="employer_contribution">Employer Contribution</SelectItem>
-                    <SelectItem value="other">Other</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Status</Label>
-                <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
-                  <SelectTrigger data-testid="select-psa-status"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="enabled">Enabled</SelectItem>
-                    <SelectItem value="disabled">Disabled</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Display Order</Label>
-                <Input type="number" data-testid="input-psa-display-order" value={formData.displayOrder} onChange={e => setFormData(p => ({ ...p, displayOrder: Number(e.target.value) }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Debit Account</Label>
-                <Input data-testid="input-psa-debit" value={formData.debitAccount} onChange={e => setFormData(p => ({ ...p, debitAccount: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Credit Account</Label>
-                <Input data-testid="input-psa-credit" value={formData.creditAccount} onChange={e => setFormData(p => ({ ...p, creditAccount: e.target.value }))} />
-              </div>
-              <Button
-                className="w-full"
-                data-testid="button-submit-pay-stub-account"
-                disabled={createMutation.isPending}
-                onClick={() => createMutation.mutate(formData)}
-              >
-                {createMutation.isPending ? "Creating..." : "Create Pay Stub Account"}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
-      <Card>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Display Order</TableHead>
-                  <TableHead>Debit Account</TableHead>
-                  <TableHead>Credit Account</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {payStubAccounts.map(psa => (
-                  <TableRow key={psa.id} data-testid={`row-pay-stub-account-${psa.id}`}>
-                    <TableCell className="font-medium">{psa.name}</TableCell>
-                    <TableCell>
-                      <Badge variant={psa.type === "earning" ? "default" : psa.type === "deduction" ? "secondary" : "outline"} data-testid={`badge-psa-type-${psa.id}`}>
-                        {psa.type}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={psa.status === "enabled" ? "default" : "outline"} data-testid={`badge-psa-status-${psa.id}`}>
-                        {psa.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{psa.displayOrder ?? 0}</TableCell>
-                    <TableCell>{psa.debitAccount || "—"}</TableCell>
-                    <TableCell>{psa.creditAccount || "—"}</TableCell>
-                  </TableRow>
-                ))}
-                {payStubAccounts.length === 0 && (
-                  <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">No pay stub accounts configured</TableCell></TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
+
+      {filteredAccounts.length === 0 ? (
+        <Card>
+          <CardContent className="p-8 text-center">
+            <Receipt className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+            <p className="text-muted-foreground mb-2">No pay stub accounts configured.</p>
+            {selectedCompany !== "all" && (
+              <p className="text-sm text-muted-foreground">Use Quick Setup to add standard earnings, taxes, deductions, and employer contributions.</p>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        PSA_TYPE_ORDER.map(type => {
+          const items = groupedAccounts[type];
+          if (!items || items.length === 0) return null;
+          return (
+            <Card key={type}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                  {PSA_TYPE_LABELS[type] || type}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Company</TableHead>
+                        <TableHead>Paid By (Legal Entity)</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Order</TableHead>
+                        <TableHead>Debit</TableHead>
+                        <TableHead>Credit</TableHead>
+                        <TableHead className="w-20">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {items.map(psa => {
+                        const comp = companies.find(c => c.id === psa.companyId);
+                        const leName = getLegalEntityName(psa.legalEntityId);
+                        return (
+                          <TableRow key={psa.id} data-testid={`row-pay-stub-account-${psa.id}`}>
+                            <TableCell className="font-medium">{psa.name}</TableCell>
+                            <TableCell className="text-sm">{comp?.name || "—"}</TableCell>
+                            <TableCell className="text-sm">{leName || "—"}</TableCell>
+                            <TableCell>
+                              <button
+                                onClick={() => toggleStatusMutation.mutate({ id: psa.id, status: psa.status === "enabled" ? "disabled" : "enabled" })}
+                                className="cursor-pointer"
+                                data-testid={`toggle-psa-status-${psa.id}`}
+                              >
+                                <Badge variant={psa.status === "enabled" ? "default" : "outline"} className="text-xs cursor-pointer">
+                                  {psa.status}
+                                </Badge>
+                              </button>
+                            </TableCell>
+                            <TableCell>{psa.displayOrder ?? 0}</TableCell>
+                            <TableCell className="text-xs">{psa.debitAccount || "—"}</TableCell>
+                            <TableCell className="text-xs">{psa.creditAccount || "—"}</TableCell>
+                            <TableCell>
+                              <Button size="icon" variant="ghost" data-testid={`button-delete-psa-${psa.id}`} onClick={() => deleteMutation.mutate(psa.id)}>
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })
+      )}
     </div>
   );
 }

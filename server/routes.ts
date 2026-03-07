@@ -1609,6 +1609,42 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/pay-stub-accounts/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId, legalEntityId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getPayStubAccounts(companyId);
+      const existingNames = new Set(existing.map(e => e.name));
+      const standardAccounts = [
+        { companyId, legalEntityId: legalEntityId || null, name: "Regular Wages", type: "earning", displayOrder: 1, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "Overtime", type: "earning", displayOrder: 2, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "Vacation", type: "earning", displayOrder: 3, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "Federal Income Tax", type: "tax", displayOrder: 10, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "Social Security", type: "tax", displayOrder: 11, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "Medicare", type: "tax", displayOrder: 12, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "California State Tax", type: "tax", displayOrder: 13, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "Health Insurance", type: "deduction", displayOrder: 20, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "401k", type: "deduction", displayOrder: 21, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "Employer Social Security", type: "employer_contribution", displayOrder: 30, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "Employer Medicare", type: "employer_contribution", displayOrder: 31, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "Unemployment Insurance", type: "employer_contribution", displayOrder: 32, status: "enabled" },
+      ];
+      const created = [];
+      const skipped = [];
+      for (const item of standardAccounts) {
+        if (existingNames.has(item.name)) {
+          skipped.push(item.name);
+          continue;
+        }
+        const result = await storage.createPayStubAccount(item as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} accounts${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up pay stub accounts" });
+    }
+  });
+
   app.get("/api/pay-stub-amendments", async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
