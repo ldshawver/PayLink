@@ -2020,13 +2020,17 @@ function Form941Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
 function Form940Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [companyId, setCompanyId] = useState("all");
-  const { workers, companies, payrollRuns } = usePayrollData(open);
+  const { workers, companies } = usePayrollData(open);
+  const summary = usePayrollSummary(open, year, "", companyId);
 
   const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
   const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
 
-  const totalWages = filtered.reduce((s, w) => s + Number(w.payRate || 0) * 2080, 0);
-  const futaWages = filtered.reduce((s, w) => s + Math.min(Number(w.payRate || 0) * 2080, 7000), 0);
+  const totalWages = summary.grandTotal.grossPay;
+  const futaWages = summary.workerTotals.reduce((s, wt) => {
+    const w = filtered.find(e => e.id === wt.workerId);
+    return w ? s + Math.min(wt.grossPay, 7000) : s;
+  }, 0);
   const futaTax = futaWages * 0.006;
   const stateCredit = futaWages * 0.054;
 
@@ -2079,15 +2083,23 @@ function DE9Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: bo
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [quarter, setQuarter] = useState("Q1");
   const [companyId, setCompanyId] = useState("all");
-  const { workers, companies } = usePayrollData(open);
+  const { workers, companies, deductions } = usePayrollData(open);
+  const summary = usePayrollSummary(open, year, quarter, companyId);
 
   const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
   const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
 
-  const totalWages = filtered.reduce((s, w) => s + Number(w.payRate || 0) * 520, 0);
-  const pitWithheld = totalWages * 0.05;
-  const sdiWithheld = totalWages * 0.011;
-  const suiWages = filtered.reduce((s, w) => s + Math.min(Number(w.payRate || 0) * 520, 7000), 0);
+  const totalWages = summary.grandTotal.grossPay;
+  const pitDed = deductions.find(d => d.name.toLowerCase().includes("state income") && d.isActive && !d.isEmployerPaid && !d.isReferenceOnly);
+  const pitRate = pitDed ? Number(pitDed.rate || 0) / 100 : 0.05;
+  const pitWithheld = totalWages * pitRate;
+  const sdiDed = deductions.find(d => d.name.toLowerCase().includes("sdi") && d.isActive && !d.isEmployerPaid);
+  const sdiRate = sdiDed ? Number(sdiDed.rate || 0) / 100 : 0.011;
+  const sdiWithheld = totalWages * sdiRate;
+  const suiWages = summary.workerTotals.reduce((s, wt) => {
+    const w = filtered.find(e => e.id === wt.workerId);
+    return w ? s + Math.min(wt.grossPay, 7000) : s;
+  }, 0);
   const suiContrib = suiWages * 0.034;
   const ettContrib = suiWages * 0.001;
 
@@ -2147,19 +2159,30 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [quarter, setQuarter] = useState("Q1");
   const [companyId, setCompanyId] = useState("all");
-  const { workers, companies } = usePayrollData(open);
+  const { workers, companies, deductions } = usePayrollData(open);
+  const summary = usePayrollSummary(open, year, quarter, companyId);
 
   const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
   const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
 
+  const pitDed = deductions.find(d => d.name.toLowerCase().includes("state income") && d.isActive && !d.isEmployerPaid && !d.isReferenceOnly);
+  const pitRate = pitDed ? Number(pitDed.rate || 0) / 100 : 0.05;
+  const sdiDed = deductions.find(d => d.name.toLowerCase().includes("sdi") && d.isActive && !d.isEmployerPaid);
+  const sdiRate = sdiDed ? Number(sdiDed.rate || 0) / 100 : 0.011;
+
+  const getWorkerWages = (w: typeof employees[0]) => {
+    const wt = summary.workerTotals.find(t => t.workerId === w.id);
+    return wt ? wt.grossPay : 0;
+  };
+
   const handleExportCSV = () => {
     const headers = ["SSN", "Last Name", "First Name", "PIT Wages", "PIT Withheld", "SDI Wages", "SDI Withheld"];
     const rows = filtered.map(w => {
-      const wages = Number(w.payRate || 0) * 520;
+      const wages = getWorkerWages(w);
       return [
         w.ssn || "N/A", w.lastName, w.firstName,
-        wages.toFixed(2), (wages * 0.05).toFixed(2),
-        wages.toFixed(2), (wages * 0.011).toFixed(2),
+        wages.toFixed(2), (wages * pitRate).toFixed(2),
+        wages.toFixed(2), (wages * sdiRate).toFixed(2),
       ];
     });
     downloadCSV(headers, rows, `de9c_${year}_${quarter}.csv`);
@@ -2178,7 +2201,7 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-de9c"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-de9c"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
-          <SaveReportButton reportType="de9c" category="tax" defaultName="DE 9C" headers={["Employee", "SSN", "PIT Wages", "PIT Withheld", "SDI Wages", "SDI Withheld"]} rows={employees.map(e => [e.firstName + " " + e.lastName, e.ssn || "", "$" + (Number(e.payRate || 0) * 520).toFixed(2), "$" + ((Number(e.payRate || 0) * 520) * 0.04).toFixed(2), "$" + (Number(e.payRate || 0) * 520).toFixed(2), "$" + ((Number(e.payRate || 0) * 520) * 0.009).toFixed(2)])} />
+          <SaveReportButton reportType="de9c" category="tax" defaultName="DE 9C" headers={["Employee", "SSN", "PIT Wages", "PIT Withheld", "SDI Wages", "SDI Withheld"]} rows={filtered.map(e => { const w = getWorkerWages(e); return [e.firstName + " " + e.lastName, e.ssn || "", "$" + w.toFixed(2), "$" + (w * pitRate).toFixed(2), "$" + w.toFixed(2), "$" + (w * sdiRate).toFixed(2)]; })} />
         </div>
         {filtered.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-de9c">No employees found for the selected period.</p>
@@ -2193,25 +2216,25 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
             </TableHeader>
             <TableBody>
               {filtered.map(w => {
-                const wages = Number(w.payRate || 0) * 520;
+                const wages = getWorkerWages(w);
                 return (
                   <TableRow key={w.id} data-testid={`row-de9c-${w.id}`}>
                     <TableCell>{w.ssn ? `***-**-${w.ssn.slice(-4)}` : "N/A"}</TableCell>
                     <TableCell>{w.lastName}</TableCell>
                     <TableCell>{w.firstName}</TableCell>
                     <TableCell className="text-right">${wages.toFixed(2)}</TableCell>
-                    <TableCell className="text-right">${(wages * 0.05).toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${(wages * pitRate).toFixed(2)}</TableCell>
                     <TableCell className="text-right">${wages.toFixed(2)}</TableCell>
-                    <TableCell className="text-right">${(wages * 0.011).toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${(wages * sdiRate).toFixed(2)}</TableCell>
                   </TableRow>
                 );
               })}
               <TableRow className="font-bold border-t-2">
                 <TableCell colSpan={3}>Totals</TableCell>
-                <TableCell className="text-right">${filtered.reduce((s, w) => s + Number(w.payRate || 0) * 520, 0).toFixed(2)}</TableCell>
-                <TableCell className="text-right">${(filtered.reduce((s, w) => s + Number(w.payRate || 0) * 520, 0) * 0.05).toFixed(2)}</TableCell>
-                <TableCell className="text-right">${filtered.reduce((s, w) => s + Number(w.payRate || 0) * 520, 0).toFixed(2)}</TableCell>
-                <TableCell className="text-right">${(filtered.reduce((s, w) => s + Number(w.payRate || 0) * 520, 0) * 0.011).toFixed(2)}</TableCell>
+                <TableCell className="text-right">${summary.grandTotal.grossPay.toFixed(2)}</TableCell>
+                <TableCell className="text-right">${(summary.grandTotal.grossPay * pitRate).toFixed(2)}</TableCell>
+                <TableCell className="text-right">${summary.grandTotal.grossPay.toFixed(2)}</TableCell>
+                <TableCell className="text-right">${(summary.grandTotal.grossPay * sdiRate).toFixed(2)}</TableCell>
               </TableRow>
             </TableBody>
           </Table>
@@ -2226,11 +2249,18 @@ function Form1096Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [companyId, setCompanyId] = useState("all");
   const { workers, companies } = usePayrollData(open);
+  const summary = usePayrollSummary(open, year, "", companyId);
 
   const contractors = workers.filter(w => w.workerType === "contractor" && w.isActive);
   const filtered = companyId === "all" ? contractors : contractors.filter(w => w.companyId === companyId);
-  const eligible = filtered.filter(w => Number(w.payRate || 0) * 2080 >= 600);
-  const totalComp = eligible.reduce((s, w) => s + Number(w.payRate || 0) * 2080, 0);
+  const eligible = filtered.filter(w => {
+    const wt = summary.workerTotals.find(t => t.workerId === w.id);
+    return wt ? wt.grossPay >= 600 : false;
+  });
+  const totalComp = eligible.reduce((s, w) => {
+    const wt = summary.workerTotals.find(t => t.workerId === w.id);
+    return s + (wt ? wt.grossPay : 0);
+  }, 0);
 
   const handleExportCSV = () => {
     const headers = ["Line Item", "Value"];

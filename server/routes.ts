@@ -39,6 +39,22 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+function requireRole(...roles: string[]) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.session?.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const user = await storage.getUser(req.session.userId);
+    if (!user) {
+      return res.status(401).json({ message: "User not found" });
+    }
+    if (!roles.includes(user.role || "")) {
+      return res.status(403).json({ message: "Insufficient permissions" });
+    }
+    next();
+  };
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -187,7 +203,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/companies", async (req, res) => {
+  app.post("/api/companies", requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.enterpriseId === "") data.enterpriseId = null;
@@ -200,12 +216,12 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/companies/:id", async (req, res) => {
+  app.patch("/api/companies/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.enterpriseId === "") data.enterpriseId = null;
       if (data.legalEntityId === "") data.legalEntityId = null;
-      const company = await storage.updateCompany(req.params.id, data);
+      const company = await storage.updateCompany(req.params.id as string, data);
       if (!company) {
         return res.status(404).json({ message: "Company not found" });
       }
@@ -227,7 +243,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/workers", async (req, res) => {
+  app.post("/api/workers", requireRole("admin", "manager"), async (req, res) => {
     try {
       if (!req.body.companyId) return res.status(400).json({ message: "Company is required" });
       if (!req.body.firstName) return res.status(400).json({ message: "First name is required" });
@@ -240,9 +256,9 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/workers/:id", async (req, res) => {
+  app.patch("/api/workers/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const worker = await storage.updateWorker(req.params.id, req.body);
+      const worker = await storage.updateWorker(req.params.id as string, req.body);
       if (!worker) {
         return res.status(404).json({ message: "Worker not found" });
       }
@@ -427,9 +443,9 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/payroll-runs/:id", requireAuth, async (req, res) => {
+  app.delete("/api/payroll-runs/:id", requireRole("admin"), async (req, res) => {
     try {
-      const run = await storage.getPayrollRun(req.params.id);
+      const run = await storage.getPayrollRun(req.params.id as string);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
       if (run.status === "processed") return res.status(400).json({ message: "Cannot delete a processed payroll run. Void it instead." });
       const items = await storage.getPayrollItems(run.id);
@@ -664,7 +680,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/payroll-runs", async (req, res) => {
+  app.post("/api/payroll-runs", requireRole("admin", "manager"), async (req, res) => {
     try {
       const { companyId, periodStart, periodEnd } = req.body;
 
@@ -683,8 +699,10 @@ export async function registerRoutes(
         workerId: string;
         regularHours: number;
         overtimeHours: number;
+        doubleTimeHours: number;
         regularPay: number;
         overtimePay: number;
+        doubleTimePay: number;
         grossPay: number;
         payRate: number;
         payType: string;
@@ -694,10 +712,12 @@ export async function registerRoutes(
         const workerEntries = entries.filter(e => e.workerId === worker.id);
         const totalHours = workerEntries.reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
         const overtimeHours = workerEntries.reduce((sum, e) => sum + Number(e.overtimeHours || 0), 0);
-        const regularHours = totalHours - overtimeHours;
+        const doubleTimeHours = workerEntries.reduce((sum, e) => sum + Number((e as any).doubleTimeHours || 0), 0);
+        const regularHours = totalHours - overtimeHours - doubleTimeHours;
 
         let regularPay = 0;
         let overtimePay = 0;
+        let doubleTimePay = 0;
         let grossPay = 0;
 
         if (worker.payType === "salary") {
@@ -712,7 +732,8 @@ export async function registerRoutes(
           const rate = Number(worker.payRate);
           regularPay = regularHours * rate;
           overtimePay = overtimeHours * rate * overtimeMultiplier;
-          grossPay = regularPay + overtimePay;
+          doubleTimePay = doubleTimeHours * rate * 2;
+          grossPay = regularPay + overtimePay + doubleTimePay;
         }
 
         if (totalHours > 0 || worker.payType === "salary") {
@@ -720,8 +741,10 @@ export async function registerRoutes(
             workerId: worker.id,
             regularHours,
             overtimeHours,
+            doubleTimeHours,
             regularPay,
             overtimePay,
+            doubleTimePay,
             grossPay,
             payRate: Number(worker.payRate),
             payType: worker.payType || "hourly",
@@ -730,7 +753,7 @@ export async function registerRoutes(
       }
 
       const totalGross = workerPayData.reduce((sum, w) => sum + w.grossPay, 0);
-      const totalHours = workerPayData.reduce((sum, w) => sum + w.regularHours + w.overtimeHours, 0);
+      const totalHours = workerPayData.reduce((sum, w) => sum + w.regularHours + w.overtimeHours + w.doubleTimeHours, 0);
       const totalOT = workerPayData.reduce((sum, w) => sum + w.overtimeHours, 0);
 
       const payrollRun = await storage.createPayrollRun({
@@ -752,8 +775,10 @@ export async function registerRoutes(
           workerId: wp.workerId,
           regularHours: wp.regularHours.toFixed(2),
           overtimeHours: wp.overtimeHours.toFixed(2),
+          doubleTimeHours: wp.doubleTimeHours.toFixed(2),
           regularPay: wp.regularPay.toFixed(2),
           overtimePay: wp.overtimePay.toFixed(2),
+          doubleTimePay: wp.doubleTimePay.toFixed(2),
           grossPay: wp.grossPay.toFixed(2),
           payRate: wp.payRate.toFixed(2),
           payType: wp.payType,
@@ -766,9 +791,9 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/payroll-runs/:id", async (req, res) => {
+  app.patch("/api/payroll-runs/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const run = await storage.updatePayrollRun(req.params.id, req.body);
+      const run = await storage.updatePayrollRun(req.params.id as string, req.body);
       if (!run) {
         return res.status(404).json({ message: "Payroll run not found" });
       }
@@ -2176,7 +2201,7 @@ export async function registerRoutes(
 
   app.delete("/api/worker-documents/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteWorkerDocument(req.params.id);
+      await storage.deleteWorkerDocument(req.params.id as string);
       res.json({ message: "Document deleted" });
     } catch (error) {
       console.error(error);
@@ -2196,7 +2221,7 @@ export async function registerRoutes(
 
   app.get("/api/saved-reports/:id", requireAuth, async (req, res) => {
     try {
-      const report = await storage.getSavedReport(req.params.id);
+      const report = await storage.getSavedReport(req.params.id as string);
       if (!report) return res.status(404).json({ message: "Report not found" });
       res.json(report);
     } catch (error) {
@@ -2211,7 +2236,6 @@ export async function registerRoutes(
       if (!name || !reportType || !category) {
         return res.status(400).json({ message: "Name, reportType, and category are required" });
       }
-      const user = req.user as any;
       const report = await storage.createSavedReport({
         name,
         reportType,
@@ -2221,7 +2245,7 @@ export async function registerRoutes(
         data: typeof data === "string" ? data : JSON.stringify(data),
         headers: typeof headers === "string" ? headers : JSON.stringify(headers),
         rowCount: rowCount || 0,
-        createdBy: user?.username || "unknown",
+        createdBy: req.session?.username || "unknown",
       });
       res.json(report);
     } catch (error) {
@@ -2232,7 +2256,7 @@ export async function registerRoutes(
 
   app.delete("/api/saved-reports/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteSavedReport(req.params.id);
+      await storage.deleteSavedReport(req.params.id as string);
       res.json({ message: "Report deleted" });
     } catch (error) {
       console.error(error);
@@ -3832,7 +3856,7 @@ export async function registerRoutes(
   });
   app.get("/api/check-templates/:id", requireAuth, async (req, res) => {
     try {
-      const template = await storage.getCheckTemplate(req.params.id);
+      const template = await storage.getCheckTemplate(req.params.id as string);
       if (!template) return res.status(404).json({ message: "Template not found" });
       res.json(template);
     } catch (error) {
@@ -3851,7 +3875,7 @@ export async function registerRoutes(
   });
   app.patch("/api/check-templates/:id", requireAuth, async (req, res) => {
     try {
-      const template = await storage.updateCheckTemplate(req.params.id, req.body);
+      const template = await storage.updateCheckTemplate(req.params.id as string, req.body);
       if (!template) return res.status(404).json({ message: "Template not found" });
       res.json(template);
     } catch (error) {
@@ -3861,7 +3885,7 @@ export async function registerRoutes(
   });
   app.delete("/api/check-templates/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteCheckTemplate(req.params.id);
+      await storage.deleteCheckTemplate(req.params.id as string);
       res.json({ success: true });
     } catch (error) {
       console.error(error);
