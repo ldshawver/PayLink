@@ -74,8 +74,12 @@ import {
   type UserRole, type InsertUserRole,
   workerDocuments, savedReports,
   kpiGroups, qualificationGroups, workerLanguages, workerMemberships,
+  stations, secondaryWageGroups, currencies,
   type WorkerDocument, type InsertWorkerDocument,
   type SavedReport, type InsertSavedReport,
+  type Station, type InsertStation,
+  type SecondaryWageGroup, type InsertSecondaryWageGroup,
+  type Currency, type InsertCurrency,
   type KpiGroup, type InsertKpiGroup,
   type QualificationGroup, type InsertQualificationGroup,
   type WorkerLanguage, type InsertWorkerLanguage,
@@ -390,6 +394,21 @@ export interface IStorage {
   createWorkerMembership(data: InsertWorkerMembership): Promise<WorkerMembership>;
   updateWorkerMembership(id: string, data: Partial<WorkerMembership>): Promise<WorkerMembership | undefined>;
   deleteWorkerMembership(id: string): Promise<void>;
+
+  getStations(companyId?: string): Promise<Station[]>;
+  createStation(data: InsertStation): Promise<Station>;
+  updateStation(id: string, data: Partial<Station>): Promise<Station | undefined>;
+  deleteStation(id: string): Promise<void>;
+
+  getSecondaryWageGroups(companyId?: string): Promise<SecondaryWageGroup[]>;
+  createSecondaryWageGroup(data: InsertSecondaryWageGroup): Promise<SecondaryWageGroup>;
+  updateSecondaryWageGroup(id: string, data: Partial<SecondaryWageGroup>): Promise<SecondaryWageGroup | undefined>;
+  deleteSecondaryWageGroup(id: string): Promise<void>;
+
+  getCurrencies(companyId?: string): Promise<Currency[]>;
+  createCurrency(data: InsertCurrency): Promise<Currency>;
+  updateCurrency(id: string, data: Partial<Currency>): Promise<Currency | undefined>;
+  deleteCurrency(id: string): Promise<void>;
 
   getSavedReports(): Promise<SavedReport[]>;
   getSavedReport(id: string): Promise<SavedReport | undefined>;
@@ -1488,6 +1507,54 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteSavedReport(id: string): Promise<void> {
     await db.delete(savedReports).where(eq(savedReports.id, id));
+  }
+
+  async getStations(companyId?: string): Promise<Station[]> {
+    if (companyId) return db.select().from(stations).where(eq(stations.companyId, companyId)).orderBy(stations.stationName);
+    return db.select().from(stations).orderBy(stations.stationName);
+  }
+  async createStation(data: InsertStation): Promise<Station> {
+    const [r] = await db.insert(stations).values(data).returning();
+    return r;
+  }
+  async updateStation(id: string, data: Partial<Station>): Promise<Station | undefined> {
+    const [r] = await db.update(stations).set(data).where(eq(stations.id, id)).returning();
+    return r;
+  }
+  async deleteStation(id: string): Promise<void> {
+    await db.delete(stations).where(eq(stations.id, id));
+  }
+
+  async getSecondaryWageGroups(companyId?: string): Promise<SecondaryWageGroup[]> {
+    if (companyId) return db.select().from(secondaryWageGroups).where(eq(secondaryWageGroups.companyId, companyId)).orderBy(secondaryWageGroups.name);
+    return db.select().from(secondaryWageGroups).orderBy(secondaryWageGroups.name);
+  }
+  async createSecondaryWageGroup(data: InsertSecondaryWageGroup): Promise<SecondaryWageGroup> {
+    const [r] = await db.insert(secondaryWageGroups).values(data).returning();
+    return r;
+  }
+  async updateSecondaryWageGroup(id: string, data: Partial<SecondaryWageGroup>): Promise<SecondaryWageGroup | undefined> {
+    const [r] = await db.update(secondaryWageGroups).set(data).where(eq(secondaryWageGroups.id, id)).returning();
+    return r;
+  }
+  async deleteSecondaryWageGroup(id: string): Promise<void> {
+    await db.delete(secondaryWageGroups).where(eq(secondaryWageGroups.id, id));
+  }
+
+  async getCurrencies(companyId?: string): Promise<Currency[]> {
+    if (companyId) return db.select().from(currencies).where(eq(currencies.companyId, companyId)).orderBy(currencies.currencyCode);
+    return db.select().from(currencies).orderBy(currencies.currencyCode);
+  }
+  async createCurrency(data: InsertCurrency): Promise<Currency> {
+    const [r] = await db.insert(currencies).values(data).returning();
+    return r;
+  }
+  async updateCurrency(id: string, data: Partial<Currency>): Promise<Currency | undefined> {
+    const [r] = await db.update(currencies).set(data).where(eq(currencies.id, id)).returning();
+    return r;
+  }
+  async deleteCurrency(id: string): Promise<void> {
+    await db.delete(currencies).where(eq(currencies.id, id));
   }
 }
 
