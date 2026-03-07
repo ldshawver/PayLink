@@ -1159,11 +1159,30 @@ function ContributingShiftsTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<ContributingShift | null>(null);
-  const defaultForm = { companyId: "", name: "", filterType: "date", includeHolidayType: "no_effect", sunFilter: true, monFilter: true, tueFilter: true, wedFilter: true, thuFilter: true, friFilter: true, satFilter: true };
+  const defaultForm = {
+    companyId: "", name: "", shiftTypeCode: "", filterType: "date", includeHolidayType: "no_effect",
+    contributesToOvertime: true, contributesToAccrual: true, contributesToPremium: true, contributesToCompliance: true,
+    sunFilter: true, monFilter: true, tueFilter: true, wedFilter: true, thuFilter: true, friFilter: true, satFilter: true,
+  };
   const [form, setForm] = useState(defaultForm);
+  const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<ContributingShift[]>({ queryKey: ["/api/contributing-shifts"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async (companyId: string) => {
+      const res = await apiRequest("POST", "/api/contributing-shifts/quick-setup", { companyId });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contributing-shifts"] });
+      toast({ title: data.message || "Contributing shifts created" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
@@ -1201,7 +1220,10 @@ function ContributingShiftsTab() {
   const handleEdit = (item: ContributingShift) => {
     setEditItem(item);
     setForm({
-      companyId: item.companyId, name: item.name, filterType: item.filterType || "date", includeHolidayType: item.includeHolidayType || "no_effect",
+      companyId: item.companyId, name: item.name, shiftTypeCode: item.shiftTypeCode || "",
+      filterType: item.filterType || "date", includeHolidayType: item.includeHolidayType || "no_effect",
+      contributesToOvertime: item.contributesToOvertime ?? true, contributesToAccrual: item.contributesToAccrual ?? true,
+      contributesToPremium: item.contributesToPremium ?? true, contributesToCompliance: item.contributesToCompliance ?? true,
       sunFilter: item.sunFilter ?? true, monFilter: item.monFilter ?? true, tueFilter: item.tueFilter ?? true, wedFilter: item.wedFilter ?? true,
       thuFilter: item.thuFilter ?? true, friFilter: item.friFilter ?? true, satFilter: item.satFilter ?? true,
     });
@@ -1231,83 +1253,131 @@ function ContributingShiftsTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Contributing Shifts</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-contributing-shift"><Plus className="w-4 h-4 mr-1" /> Add Contributing Shift</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{editItem ? "Edit Contributing Shift" : "Add Contributing Shift"}</DialogTitle>
-            </DialogHeader>
-            <div className="grid gap-4">
-              <div className="grid gap-2">
-                <Label>Company</Label>
-                <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
-                  <SelectTrigger data-testid="select-contributing-shift-company">
-                    <SelectValue placeholder="Select company" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {companies?.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+            <SelectTrigger data-testid="select-contributing-shift-quick-company" className="w-[180px]">
+              <SelectValue placeholder="Select company" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            data-testid="button-quick-setup-contributing-shifts"
+            disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+            onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+          >
+            <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+          </Button>
+          <Dialog open={open} onOpenChange={handleDialogChange}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-contributing-shift"><Plus className="w-4 h-4 mr-1" /> Add Contributing Shift</Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>{editItem ? "Edit Contributing Shift" : "Add Contributing Shift"}</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label>Company</Label>
+                    <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
+                      <SelectTrigger data-testid="select-contributing-shift-company">
+                        <SelectValue placeholder="Select company" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {companies?.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Shift Type Code</Label>
+                    <Input data-testid="input-contributing-shift-type-code" placeholder="e.g. DAY_SHIFT" value={form.shiftTypeCode} onChange={(e) => setForm({ ...form, shiftTypeCode: e.target.value.toUpperCase() })} />
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label>Name</Label>
+                  <Input data-testid="input-contributing-shift-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                </div>
+                <div className="grid gap-2">
+                  <Label className="text-sm font-medium">Contributes To</Label>
+                  <div className="flex flex-wrap gap-4">
+                    {([
+                      { key: "contributesToOvertime", label: "Overtime" },
+                      { key: "contributesToAccrual", label: "PTO Accrual" },
+                      { key: "contributesToPremium", label: "Shift Premium" },
+                      { key: "contributesToCompliance", label: "Compliance" },
+                    ] as const).map(({ key, label }) => (
+                      <div key={key} className="flex items-center gap-1">
+                        <Checkbox
+                          id={`shift-${key}`}
+                          data-testid={`checkbox-contributing-shift-${key}`}
+                          checked={form[key] as boolean}
+                          onCheckedChange={(v) => setForm({ ...form, [key]: !!v })}
+                        />
+                        <Label htmlFor={`shift-${key}`}>{label}</Label>
+                      </div>
                     ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label>Name</Label>
-                <Input data-testid="input-contributing-shift-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label>Filter Type</Label>
-                  <Select value={form.filterType} onValueChange={(v) => setForm({ ...form, filterType: v })}>
-                    <SelectTrigger data-testid="select-contributing-shift-filter-type">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="date">Date</SelectItem>
-                      <SelectItem value="time">Time</SelectItem>
-                      <SelectItem value="branch">Branch</SelectItem>
-                      <SelectItem value="department">Department</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label>Filter Type</Label>
+                    <Select value={form.filterType} onValueChange={(v) => setForm({ ...form, filterType: v })}>
+                      <SelectTrigger data-testid="select-contributing-shift-filter-type">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="date">Date</SelectItem>
+                        <SelectItem value="time">Time</SelectItem>
+                        <SelectItem value="branch">Branch</SelectItem>
+                        <SelectItem value="department">Department</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Holiday Type</Label>
+                    <Select value={form.includeHolidayType} onValueChange={(v) => setForm({ ...form, includeHolidayType: v })}>
+                      <SelectTrigger data-testid="select-contributing-shift-holiday-type">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="no_effect">No Effect</SelectItem>
+                        <SelectItem value="always_on_holidays">Always on Holidays</SelectItem>
+                        <SelectItem value="never_on_holidays">Never on Holidays</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
                 <div className="grid gap-2">
-                  <Label>Holiday Type</Label>
-                  <Select value={form.includeHolidayType} onValueChange={(v) => setForm({ ...form, includeHolidayType: v })}>
-                    <SelectTrigger data-testid="select-contributing-shift-holiday-type">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="no_effect">No Effect</SelectItem>
-                      <SelectItem value="always_on_holidays">Always on Holidays</SelectItem>
-                      <SelectItem value="never_on_holidays">Never on Holidays</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label className="text-sm font-medium">Active Days</Label>
+                  <div className="flex flex-wrap gap-4">
+                    {(["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const).map((day) => {
+                      const key = `${day}Filter` as keyof typeof form;
+                      return (
+                        <div key={day} className="flex items-center gap-1">
+                          <Checkbox
+                            id={`shift-${day}`}
+                            data-testid={`checkbox-contributing-shift-${day}`}
+                            checked={form[key] as boolean}
+                            onCheckedChange={(v) => setForm({ ...form, [key]: !!v })}
+                          />
+                          <Label htmlFor={`shift-${day}`}>{day.charAt(0).toUpperCase() + day.slice(1)}</Label>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
+                <Button data-testid="button-submit-contributing-shift" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
+                  {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
+                </Button>
               </div>
-              <div className="flex flex-wrap gap-4">
-                {(["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const).map((day) => {
-                  const key = `${day}Filter` as keyof typeof form;
-                  return (
-                    <div key={day} className="flex items-center gap-1">
-                      <Checkbox
-                        id={`shift-${day}`}
-                        data-testid={`checkbox-contributing-shift-${day}`}
-                        checked={form[key] as boolean}
-                        onCheckedChange={(v) => setForm({ ...form, [key]: !!v })}
-                      />
-                      <Label htmlFor={`shift-${day}`}>{day.charAt(0).toUpperCase() + day.slice(1)}</Label>
-                    </div>
-                  );
-                })}
-              </div>
-              <Button data-testid="button-submit-contributing-shift" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
-                {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -1315,8 +1385,9 @@ function ContributingShiftsTab() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
-                <TableHead>Filter Type</TableHead>
-                <TableHead>Holiday Type</TableHead>
+                <TableHead>Shift Code</TableHead>
+                <TableHead>Contributes To</TableHead>
+                <TableHead>Filter</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -1325,8 +1396,17 @@ function ContributingShiftsTab() {
               {items && items.length > 0 ? items.map((item) => (
                 <TableRow key={item.id} data-testid={`row-contributing-shift-${item.id}`}>
                   <TableCell className="font-medium">{item.name}</TableCell>
+                  <TableCell><Badge variant="outline" className="font-mono text-xs">{item.shiftTypeCode || "—"}</Badge></TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {item.contributesToOvertime && <Badge variant="secondary" className="text-xs">OT</Badge>}
+                      {item.contributesToAccrual && <Badge variant="secondary" className="text-xs">Accrual</Badge>}
+                      {item.contributesToPremium && <Badge variant="secondary" className="text-xs">Premium</Badge>}
+                      {item.contributesToCompliance && <Badge variant="secondary" className="text-xs">Compliance</Badge>}
+                      {!item.contributesToOvertime && !item.contributesToAccrual && !item.contributesToPremium && !item.contributesToCompliance && <span className="text-muted-foreground text-xs">None</span>}
+                    </div>
+                  </TableCell>
                   <TableCell><Badge variant="secondary">{filterTypeLabels[item.filterType || ""] || item.filterType}</Badge></TableCell>
-                  <TableCell>{holidayTypeLabels[item.includeHolidayType || ""] || item.includeHolidayType}</TableCell>
                   <TableCell>{item.isActive ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Inactive</Badge>}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
@@ -1337,7 +1417,7 @@ function ContributingShiftsTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">No contributing shifts yet</TableCell>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No contributing shifts yet</TableCell>
                 </TableRow>
               )}
             </TableBody>

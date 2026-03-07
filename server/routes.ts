@@ -2202,6 +2202,35 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/contributing-shifts/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getContributingShifts(companyId);
+      const existingCodes = new Set(existing.map(e => e.shiftTypeCode));
+      const defaultShifts = [
+        { companyId, name: "Day Shift", shiftTypeCode: "DAY_SHIFT", contributesToOvertime: true, contributesToAccrual: true, contributesToPremium: true, contributesToCompliance: true, filterType: "date", includeHolidayType: "no_effect" },
+        { companyId, name: "Night Shift", shiftTypeCode: "NIGHT_SHIFT", contributesToOvertime: true, contributesToAccrual: true, contributesToPremium: true, contributesToCompliance: true, filterType: "date", includeHolidayType: "no_effect" },
+        { companyId, name: "Training Shift", shiftTypeCode: "TRAINING_SHIFT", contributesToOvertime: false, contributesToAccrual: false, contributesToPremium: false, contributesToCompliance: false, filterType: "date", includeHolidayType: "no_effect" },
+        { companyId, name: "On-Call Shift", shiftTypeCode: "ON_CALL_SHIFT", contributesToOvertime: false, contributesToAccrual: false, contributesToPremium: true, contributesToCompliance: true, filterType: "date", includeHolidayType: "no_effect" },
+        { companyId, name: "Holiday Shift", shiftTypeCode: "HOLIDAY_SHIFT", contributesToOvertime: false, contributesToAccrual: true, contributesToPremium: true, contributesToCompliance: true, filterType: "date", includeHolidayType: "always_on_holidays" },
+        { companyId, name: "Orientation Shift", shiftTypeCode: "ORIENTATION_SHIFT", contributesToOvertime: false, contributesToAccrual: false, contributesToPremium: false, contributesToCompliance: false, filterType: "date", includeHolidayType: "no_effect" },
+        { companyId, name: "Volunteer Shift", shiftTypeCode: "VOLUNTEER_SHIFT", contributesToOvertime: false, contributesToAccrual: false, contributesToPremium: false, contributesToCompliance: false, filterType: "date", includeHolidayType: "no_effect" },
+        { companyId, name: "Admin Time", shiftTypeCode: "ADMIN_TIME", contributesToOvertime: true, contributesToAccrual: true, contributesToPremium: false, contributesToCompliance: true, filterType: "date", includeHolidayType: "no_effect" },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const shift of defaultShifts) {
+        if (existingCodes.has(shift.shiftTypeCode)) { skipped.push(shift.name); continue; }
+        const item = await storage.createContributingShift(shift);
+        created.push(item);
+      }
+      res.json({ message: `Created ${created.length} contributing shifts${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to set up contributing shifts" });
+    }
+  });
+
   // Regular Time Policies
   app.get("/api/regular-time-policies", async (_req, res) => {
     try {
