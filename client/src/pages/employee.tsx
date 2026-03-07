@@ -26,7 +26,7 @@ import {
   Users, Plus, MoreHorizontal, Settings, DollarSign, CreditCard,
   Briefcase, UserPlus, Clock, Calendar, Building2,
   Pencil, Trash2, ChevronRight, Hash, Globe, Phone, Mail, MapPin, FileText,
-  Upload, Download
+  Upload, Download, ExternalLink
 } from "lucide-react";
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -1107,6 +1107,55 @@ function DocumentsTab() {
           </DialogContent>
         </Dialog>
       </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileText className="h-4 w-4" />Official Government Forms
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">Download official blank forms from IRS, USCIS, and California EDD. Print, complete, and upload the signed copies above.</p>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <a href="https://www.irs.gov/pub/irs-pdf/fw4.pdf" target="_blank" rel="noopener noreferrer" data-testid="link-form-w4" className="flex items-center gap-3 p-3 border rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="flex-shrink-0 w-10 h-10 rounded-md bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
+                <FileText className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+              </div>
+              <div className="min-w-0">
+                <div className="font-medium text-sm flex items-center gap-1">Form W-4 <ExternalLink className="h-3 w-3" /></div>
+                <p className="text-xs text-muted-foreground">Federal tax withholding — IRS</p>
+              </div>
+            </a>
+            <a href="https://edd.ca.gov/siteassets/files/pdf_pub_ctr/de4.pdf" target="_blank" rel="noopener noreferrer" data-testid="link-form-de4" className="flex items-center gap-3 p-3 border rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="flex-shrink-0 w-10 h-10 rounded-md bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
+                <FileText className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+              </div>
+              <div className="min-w-0">
+                <div className="font-medium text-sm flex items-center gap-1">Form DE-4 <ExternalLink className="h-3 w-3" /></div>
+                <p className="text-xs text-muted-foreground">CA state tax withholding — EDD</p>
+              </div>
+            </a>
+            <a href="https://www.uscis.gov/sites/default/files/document/forms/i-9-paper-version.pdf" target="_blank" rel="noopener noreferrer" data-testid="link-form-i9" className="flex items-center gap-3 p-3 border rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="flex-shrink-0 w-10 h-10 rounded-md bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
+                <FileText className="h-5 w-5 text-green-600 dark:text-green-400" />
+              </div>
+              <div className="min-w-0">
+                <div className="font-medium text-sm flex items-center gap-1">Form I-9 <ExternalLink className="h-3 w-3" /></div>
+                <p className="text-xs text-muted-foreground">Employment eligibility — USCIS</p>
+              </div>
+            </a>
+            <a href="https://www.irs.gov/pub/irs-pdf/fw9.pdf" target="_blank" rel="noopener noreferrer" data-testid="link-form-w9" className="flex items-center gap-3 p-3 border rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="flex-shrink-0 w-10 h-10 rounded-md bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
+                <FileText className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+              </div>
+              <div className="min-w-0">
+                <div className="font-medium text-sm flex items-center gap-1">Form W-9 <ExternalLink className="h-3 w-3" /></div>
+                <p className="text-xs text-muted-foreground">Taxpayer ID request — IRS (contractors)</p>
+              </div>
+            </a>
+          </div>
+        </CardContent>
+      </Card>
 
       {!workerFilter ? (
         <Card>

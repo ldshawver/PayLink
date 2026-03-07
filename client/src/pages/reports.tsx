@@ -19,8 +19,18 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   FolderOpen, Users, ClipboardList, DollarSign, FileText, UserCheck,
   Clock, CalendarDays, AlertTriangle, Download, Printer, BarChart3,
-  Shield, Star, Award, Receipt, Building, Calculator
+  Shield, Star, Award, Receipt, Building, Calculator, ExternalLink
 } from "lucide-react";
+
+const OFFICIAL_FORM_URLS: Record<string, { url: string; source: string }> = {
+  w2: { url: "https://www.irs.gov/pub/irs-pdf/fw2.pdf", source: "IRS" },
+  "1099nec": { url: "https://www.irs.gov/pub/irs-pdf/f1099nec.pdf", source: "IRS" },
+  "941": { url: "https://www.irs.gov/pub/irs-pdf/f941.pdf", source: "IRS" },
+  "940": { url: "https://www.irs.gov/pub/irs-pdf/f940.pdf", source: "IRS" },
+  "1096": { url: "https://www.irs.gov/pub/irs-pdf/f1096.pdf", source: "IRS" },
+  de9: { url: "https://edd.ca.gov/siteassets/files/pdf_pub_ctr/de9.pdf", source: "CA EDD" },
+  de9c: { url: "https://edd.ca.gov/siteassets/files/pdf_pub_ctr/de9c.pdf", source: "CA EDD" },
+};
 
 function useTabParam(): [string, (tab: string) => void] {
   const search = useSearch();
@@ -1552,7 +1562,12 @@ function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-5xl max-h-[80vh] overflow-y-auto">
-        <DialogHeader><DialogTitle data-testid="text-dialog-title-w2">W-2 Annual Wage & Tax Statement — {year}</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle data-testid="text-dialog-title-w2">W-2 Annual Wage & Tax Statement — {year}</DialogTitle>
+          <a href={OFFICIAL_FORM_URLS.w2.url} target="_blank" rel="noopener noreferrer" data-testid="link-official-w2" className="text-xs text-primary hover:underline flex items-center gap-1 mt-1">
+            <ExternalLink className="h-3 w-3" />Download Official IRS Form W-2 (PDF)
+          </a>
+        </DialogHeader>
         <TaxReportFilters year={year} setYear={setYear} quarter="" setQuarter={() => {}} companyId={companyId} setCompanyId={setCompanyId} companies={companies} />
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={handlePrint} data-testid="button-print-w2"><Printer className="mr-2 h-4 w-4" />Print</Button>
@@ -1630,7 +1645,12 @@ function Form1099NECDialog({ open, onOpenChange }: { open: boolean; onOpenChange
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-5xl max-h-[80vh] overflow-y-auto">
-        <DialogHeader><DialogTitle data-testid="text-dialog-title-1099">Form 1099-NEC — Non-Employee Compensation</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle data-testid="text-dialog-title-1099">Form 1099-NEC — Non-Employee Compensation</DialogTitle>
+          <a href={OFFICIAL_FORM_URLS["1099nec"].url} target="_blank" rel="noopener noreferrer" data-testid="link-official-1099nec" className="text-xs text-primary hover:underline flex items-center gap-1 mt-1">
+            <ExternalLink className="h-3 w-3" />Download Official IRS Form 1099-NEC (PDF)
+          </a>
+        </DialogHeader>
         <div className="flex items-end gap-3 flex-wrap">
           <div className="space-y-1">
             <Label className="text-xs">Report Type</Label>
@@ -1721,7 +1741,12 @@ function Form941Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
-        <DialogHeader><DialogTitle data-testid="text-dialog-title-941">Form 941 — Quarterly Federal Tax Return</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle data-testid="text-dialog-title-941">Form 941 — Quarterly Federal Tax Return</DialogTitle>
+          <a href={OFFICIAL_FORM_URLS["941"].url} target="_blank" rel="noopener noreferrer" data-testid="link-official-941" className="text-xs text-primary hover:underline flex items-center gap-1 mt-1">
+            <ExternalLink className="h-3 w-3" />Download Official IRS Form 941 (PDF)
+          </a>
+        </DialogHeader>
         <TaxReportFilters year={year} setYear={setYear} quarter={quarter} setQuarter={setQuarter} companyId={companyId} setCompanyId={setCompanyId} companies={companies} showQuarter />
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-941"><Printer className="mr-2 h-4 w-4" />Print</Button>
@@ -1775,7 +1800,12 @@ function Form940Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
-        <DialogHeader><DialogTitle data-testid="text-dialog-title-940">Form 940 — Annual FUTA Tax Return — {year}</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle data-testid="text-dialog-title-940">Form 940 — Annual FUTA Tax Return — {year}</DialogTitle>
+          <a href={OFFICIAL_FORM_URLS["940"].url} target="_blank" rel="noopener noreferrer" data-testid="link-official-940" className="text-xs text-primary hover:underline flex items-center gap-1 mt-1">
+            <ExternalLink className="h-3 w-3" />Download Official IRS Form 940 (PDF)
+          </a>
+        </DialogHeader>
         <TaxReportFilters year={year} setYear={setYear} quarter="" setQuarter={() => {}} companyId={companyId} setCompanyId={setCompanyId} companies={companies} />
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-940"><Printer className="mr-2 h-4 w-4" />Print</Button>
@@ -1833,7 +1863,12 @@ function DE9Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: bo
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
-        <DialogHeader><DialogTitle data-testid="text-dialog-title-de9">DE 9 — Quarterly Contribution Return — {quarter} {year}</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle data-testid="text-dialog-title-de9">DE 9 — Quarterly Contribution Return — {quarter} {year}</DialogTitle>
+          <a href={OFFICIAL_FORM_URLS.de9.url} target="_blank" rel="noopener noreferrer" data-testid="link-official-de9" className="text-xs text-primary hover:underline flex items-center gap-1 mt-1">
+            <ExternalLink className="h-3 w-3" />Download Official CA EDD Form DE 9 (PDF)
+          </a>
+        </DialogHeader>
         <TaxReportFilters year={year} setYear={setYear} quarter={quarter} setQuarter={setQuarter} companyId={companyId} setCompanyId={setCompanyId} companies={companies} showQuarter />
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-de9"><Printer className="mr-2 h-4 w-4" />Print</Button>
@@ -1886,7 +1921,12 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-5xl max-h-[80vh] overflow-y-auto">
-        <DialogHeader><DialogTitle data-testid="text-dialog-title-de9c">DE 9C — Quarterly Employee Detail — {quarter} {year}</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle data-testid="text-dialog-title-de9c">DE 9C — Quarterly Employee Detail — {quarter} {year}</DialogTitle>
+          <a href={OFFICIAL_FORM_URLS.de9c.url} target="_blank" rel="noopener noreferrer" data-testid="link-official-de9c" className="text-xs text-primary hover:underline flex items-center gap-1 mt-1">
+            <ExternalLink className="h-3 w-3" />Download Official CA EDD Form DE 9C (PDF)
+          </a>
+        </DialogHeader>
         <TaxReportFilters year={year} setYear={setYear} quarter={quarter} setQuarter={setQuarter} companyId={companyId} setCompanyId={setCompanyId} companies={companies} showQuarter />
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-de9c"><Printer className="mr-2 h-4 w-4" />Print</Button>
@@ -1934,6 +1974,61 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
   );
 }
 
+function Form1096Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [companyId, setCompanyId] = useState("all");
+  const { workers, companies } = usePayrollData(open);
+
+  const contractors = workers.filter(w => w.workerType === "contractor" && w.isActive);
+  const filtered = companyId === "all" ? contractors : contractors.filter(w => w.companyId === companyId);
+  const eligible = filtered.filter(w => Number(w.payRate || 0) * 2080 >= 600);
+  const totalComp = eligible.reduce((s, w) => s + Number(w.payRate || 0) * 2080, 0);
+
+  const handleExportCSV = () => {
+    const headers = ["Line Item", "Value"];
+    const rows = [
+      ["Tax Year", year],
+      ["Form Type", "1099-NEC"],
+      ["Number of Forms", String(eligible.length)],
+      ["Total Amount Reported", totalComp.toFixed(2)],
+      ["Federal Income Tax Withheld", "0.00"],
+    ];
+    downloadCSV(headers, rows, `form_1096_${year}.csv`);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle data-testid="text-dialog-title-1096">Form 1096 — Annual Summary and Transmittal — {year}</DialogTitle>
+          <a href={OFFICIAL_FORM_URLS["1096"].url} target="_blank" rel="noopener noreferrer" data-testid="link-official-1096" className="text-xs text-primary hover:underline flex items-center gap-1 mt-1">
+            <ExternalLink className="h-3 w-3" />Download Official IRS Form 1096 (PDF)
+          </a>
+        </DialogHeader>
+        <TaxReportFilters year={year} setYear={setYear} quarter="" setQuarter={() => {}} companyId={companyId} setCompanyId={setCompanyId} companies={companies} />
+        <div className="flex items-center gap-2 mt-2">
+          <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-1096"><Printer className="mr-2 h-4 w-4" />Print</Button>
+          <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-1096"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+        </div>
+        <div className="border rounded-lg p-4 space-y-3 mt-2">
+          <h3 className="font-semibold text-sm">Form 1096 — Annual Summary and Transmittal of U.S. Information Returns — {year}</h3>
+          <p className="text-xs text-muted-foreground">This form accompanies paper filings of 1099-NEC forms submitted to the IRS.</p>
+          <Table>
+            <TableBody>
+              <TableRow><TableCell>Filer's name and address</TableCell><TableCell className="text-right font-medium">{companyId !== "all" ? companies.find(c => c.id === companyId)?.name || "—" : "All Companies"}</TableCell></TableRow>
+              <TableRow><TableCell>Type of form being transmitted</TableCell><TableCell className="text-right font-medium">1099-NEC</TableCell></TableRow>
+              <TableRow><TableCell>Box 3 — Number of forms</TableCell><TableCell className="text-right font-medium">{eligible.length}</TableCell></TableRow>
+              <TableRow><TableCell>Box 4 — Federal income tax withheld</TableCell><TableCell className="text-right font-medium">$0.00</TableCell></TableRow>
+              <TableRow className="font-bold"><TableCell>Box 5 — Total amount reported</TableCell><TableCell className="text-right">${totalComp.toFixed(2)}</TableCell></TableRow>
+            </TableBody>
+          </Table>
+          <p className="text-xs text-muted-foreground">File with: Internal Revenue Service (IRS) — accompanies paper 1099-NEC submissions</p>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function ReportsPage() {
   const [tab, setTab] = useTabParam();
   const [whosInOpen, setWhosInOpen] = useState(false);
@@ -1953,6 +2048,7 @@ export default function ReportsPage() {
   const [reviewSummaryOpen, setReviewSummaryOpen] = useState(false);
   const [w2Open, setW2Open] = useState(false);
   const [form1099Open, setForm1099Open] = useState(false);
+  const [form1096Open, setForm1096Open] = useState(false);
   const [form941Open, setForm941Open] = useState(false);
   const [form940Open, setForm940Open] = useState(false);
   const [de9Open, setDE9Open] = useState(false);
@@ -2104,6 +2200,12 @@ export default function ReportsPage() {
               onGenerate={() => setForm940Open(true)}
             />
             <ReportCard
+              title="Form 1096"
+              description="Annual Summary & Transmittal of 1099 forms (IRS)."
+              icon={<FileText className="h-5 w-5" />}
+              onGenerate={() => setForm1096Open(true)}
+            />
+            <ReportCard
               title="DE 9"
               description="California Quarterly Contribution Return (EDD)."
               icon={<FileText className="h-5 w-5" />}
@@ -2153,6 +2255,7 @@ export default function ReportsPage() {
       <Form1099NECDialog open={form1099Open} onOpenChange={setForm1099Open} />
       <Form941Dialog open={form941Open} onOpenChange={setForm941Open} />
       <Form940Dialog open={form940Open} onOpenChange={setForm940Open} />
+      <Form1096Dialog open={form1096Open} onOpenChange={setForm1096Open} />
       <DE9Dialog open={de9Open} onOpenChange={setDE9Open} />
       <DE9CDialog open={de9cOpen} onOpenChange={setDE9COpen} />
       <QualificationSummaryDialog open={qualificationSummaryOpen} onOpenChange={setQualificationSummaryOpen} />

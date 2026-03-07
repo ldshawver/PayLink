@@ -21,7 +21,7 @@ import {
   DollarSign, Clock, Calendar, ChevronDown, ChevronUp, Plus, Download, Printer,
   Calculator, FileText, CreditCard, CalendarDays, Settings, Building, Receipt, Zap,
   ChevronLeft, ChevronRight, Check, AlertCircle, ArrowRight, Pencil, Trash2,
-  Layout, Eye, EyeOff, Image, Save, Copy
+  Layout, Eye, EyeOff, Image, Save, Copy, ExternalLink
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
@@ -1228,12 +1228,26 @@ const RUN_TYPE_OPTIONS = [
   { value: "audit", label: "Audit / Review", description: "Full tax summary for audit" },
 ];
 
+const OFFICIAL_FORM_URLS: Record<string, string> = {
+  w2: "https://www.irs.gov/pub/irs-pdf/fw2.pdf",
+  "1099nec": "https://www.irs.gov/pub/irs-pdf/f1099nec.pdf",
+  "941": "https://www.irs.gov/pub/irs-pdf/f941.pdf",
+  "940": "https://www.irs.gov/pub/irs-pdf/f940.pdf",
+  w3: "https://www.irs.gov/pub/irs-pdf/fw3.pdf",
+  "1096": "https://www.irs.gov/pub/irs-pdf/f1096.pdf",
+  de9: "https://edd.ca.gov/siteassets/files/pdf_pub_ctr/de9.pdf",
+  de9c: "https://edd.ca.gov/siteassets/files/pdf_pub_ctr/de9c.pdf",
+};
+
 const TAX_FORMS = [
-  { id: "w2", label: "W-2 (Wage & Tax Statement)", description: "For each employee", appliesTo: "employee", runTypes: ["annual"] },
-  { id: "1099nec", label: "1099-NEC (Nonemployee Compensation)", description: "For each contractor paid $600+", appliesTo: "contractor", runTypes: ["annual"] },
-  { id: "941", label: "Form 941 (Quarterly Federal Tax Return)", description: "Federal employment taxes", appliesTo: "company", runTypes: ["quarterly_q1", "quarterly_q2", "quarterly_q3", "quarterly_q4"] },
-  { id: "940", label: "Form 940 (Annual FUTA Tax Return)", description: "Federal unemployment tax", appliesTo: "company", runTypes: ["annual"] },
-  { id: "w3", label: "W-3 (Transmittal of Wage Statements)", description: "Summary transmittal for all W-2s", appliesTo: "company", runTypes: ["annual"] },
+  { id: "w2", label: "W-2 (Wage & Tax Statement)", description: "For each employee — IRS", appliesTo: "employee", runTypes: ["annual"] },
+  { id: "1099nec", label: "1099-NEC (Nonemployee Compensation)", description: "For each contractor paid $600+ — IRS", appliesTo: "contractor", runTypes: ["annual"] },
+  { id: "941", label: "Form 941 (Quarterly Federal Tax Return)", description: "Federal employment taxes — IRS", appliesTo: "company", runTypes: ["quarterly_q1", "quarterly_q2", "quarterly_q3", "quarterly_q4"] },
+  { id: "940", label: "Form 940 (Annual FUTA Tax Return)", description: "Federal unemployment tax — IRS", appliesTo: "company", runTypes: ["annual"] },
+  { id: "w3", label: "W-3 (Transmittal of Wage Statements)", description: "Summary transmittal for all W-2s — IRS", appliesTo: "company", runTypes: ["annual"] },
+  { id: "1096", label: "Form 1096 (Annual Summary & Transmittal)", description: "Transmittal for 1099 forms — IRS", appliesTo: "company", runTypes: ["annual"] },
+  { id: "de9", label: "DE 9 (Quarterly Contribution Return)", description: "CA quarterly employment taxes — EDD", appliesTo: "company", runTypes: ["quarterly_q1", "quarterly_q2", "quarterly_q3", "quarterly_q4"] },
+  { id: "de9c", label: "DE 9C (Quarterly Employee Detail)", description: "CA individual employee wage detail — EDD", appliesTo: "company", runTypes: ["quarterly_q1", "quarterly_q2", "quarterly_q3", "quarterly_q4"] },
   { id: "state_withholding", label: "State Withholding Return", description: "State income tax withholding", appliesTo: "company", runTypes: ["quarterly_q1", "quarterly_q2", "quarterly_q3", "quarterly_q4", "annual"] },
   { id: "tax_summary", label: "Tax Summary Report", description: "Complete tax liability summary", appliesTo: "company", runTypes: ["quarterly_q1", "quarterly_q2", "quarterly_q3", "quarterly_q4", "annual", "audit"] },
 ];
@@ -1565,7 +1579,21 @@ function TaxWizardTab() {
                     </div>
                     {count && <Badge variant="secondary" className="text-xs">{count}</Badge>}
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1 ml-6">{form.description}</p>
+                  <div className="flex items-center gap-2 mt-1 ml-6">
+                    <p className="text-xs text-muted-foreground">{form.description}</p>
+                    {OFFICIAL_FORM_URLS[form.id] && (
+                      <a
+                        href={OFFICIAL_FORM_URLS[form.id]}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        data-testid={`link-official-form-${form.id}`}
+                        onClick={e => e.stopPropagation()}
+                        className="text-xs text-primary hover:underline flex items-center gap-0.5 flex-shrink-0"
+                      >
+                        Official PDF <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </div>
                 </button>
               );
             })}
@@ -1606,6 +1634,11 @@ function TaxWizardTab() {
                           </div>
                           <div className="flex items-center gap-2">
                             <Badge variant="outline" className="text-xs">{count} form(s)</Badge>
+                            {OFFICIAL_FORM_URLS[formId] && (
+                              <a href={OFFICIAL_FORM_URLS[formId]} target="_blank" rel="noopener noreferrer" data-testid={`link-blank-form-${formId}`}>
+                                <Button size="sm" variant="ghost" className="text-xs"><ExternalLink className="h-3 w-3 mr-1" />Blank Form</Button>
+                              </a>
+                            )}
                             <Button size="sm" variant="outline" data-testid={`button-download-${formId}`}>
                               <Download className="h-3 w-3 mr-1" />Print/Export
                             </Button>
