@@ -495,6 +495,7 @@ export const remittanceAgencyEvents = pgTable("remittance_agency_events", {
 export const payStubAccounts = pgTable("pay_stub_accounts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id),
+  legalEntityId: varchar("legal_entity_id").references(() => legalEntities.id),
   name: text("name").notNull(),
   status: text("status").default("enabled"),
   type: text("type").notNull().default("earning"),
