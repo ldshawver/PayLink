@@ -444,9 +444,24 @@ function AccrualAccountsTab() {
   const [editItem, setEditItem] = useState<AccrualAccount | null>(null);
   const defaultForm = { companyId: "", name: "", type: "pto", accrualRate: "", accrualFrequency: "per_pay_period", maxBalance: "" };
   const [form, setForm] = useState(defaultForm);
+  const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: accounts, isLoading } = useQuery<AccrualAccount[]>({ queryKey: ["/api/accrual-accounts"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async (companyId: string) => {
+      const res = await apiRequest("POST", "/api/accrual-accounts/quick-setup", { companyId });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/accrual-accounts"] });
+      toast({ title: data.message || "Accrual accounts created" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
@@ -514,77 +529,95 @@ function AccrualAccountsTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Accrual Accounts</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-accrual-account"><Plus className="w-4 h-4 mr-1" /> Add Accrual Account</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{editItem ? "Edit Accrual Account" : "Add Accrual Account"}</DialogTitle>
-            </DialogHeader>
-            <div className="grid gap-4">
-              <div className="grid gap-2">
-                <Label>Company</Label>
-                <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
-                  <SelectTrigger data-testid="select-accrual-company">
-                    <SelectValue placeholder="Select company" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {companies?.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label>Name</Label>
-                <Input data-testid="input-accrual-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+            <SelectTrigger data-testid="select-accrual-quick-company" className="w-[180px]">
+              <SelectValue placeholder="Select company" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            data-testid="button-quick-setup-accrual-accounts"
+            disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+            onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+          >
+            <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+          </Button>
+          <Dialog open={open} onOpenChange={handleDialogChange}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-accrual-account"><Plus className="w-4 h-4 mr-1" /> Add Accrual Account</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{editItem ? "Edit Accrual Account" : "Add Accrual Account"}</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-4">
                 <div className="grid gap-2">
-                  <Label>Type</Label>
-                  <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
-                    <SelectTrigger data-testid="select-accrual-type">
-                      <SelectValue />
+                  <Label>Company</Label>
+                  <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
+                    <SelectTrigger data-testid="select-accrual-company">
+                      <SelectValue placeholder="Select company" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="pto">PTO</SelectItem>
-                      <SelectItem value="sick">Sick</SelectItem>
-                      <SelectItem value="vacation">Vacation</SelectItem>
-                      <SelectItem value="personal">Personal</SelectItem>
+                      {companies?.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="grid gap-2">
-                  <Label>Accrual Rate</Label>
-                  <Input data-testid="input-accrual-rate" type="number" step="0.01" value={form.accrualRate} onChange={(e) => setForm({ ...form, accrualRate: e.target.value })} />
+                  <Label>Name</Label>
+                  <Input data-testid="input-accrual-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
                 </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label>Type</Label>
+                    <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
+                      <SelectTrigger data-testid="select-accrual-type">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pto">PTO</SelectItem>
+                        <SelectItem value="sick">Sick</SelectItem>
+                        <SelectItem value="vacation">Vacation</SelectItem>
+                        <SelectItem value="personal">Personal</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Accrual Rate</Label>
+                    <Input data-testid="input-accrual-rate" type="number" step="0.01" value={form.accrualRate} onChange={(e) => setForm({ ...form, accrualRate: e.target.value })} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label>Frequency</Label>
+                    <Select value={form.accrualFrequency} onValueChange={(v) => setForm({ ...form, accrualFrequency: v })}>
+                      <SelectTrigger data-testid="select-accrual-frequency">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="per_pay_period">Per Pay Period</SelectItem>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                        <SelectItem value="annually">Annually</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Max Balance</Label>
+                    <Input data-testid="input-accrual-max-balance" type="number" step="0.01" value={form.maxBalance} onChange={(e) => setForm({ ...form, maxBalance: e.target.value })} />
+                  </div>
+                </div>
+                <Button data-testid="button-submit-accrual-account" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
+                  {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
+                </Button>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label>Frequency</Label>
-                  <Select value={form.accrualFrequency} onValueChange={(v) => setForm({ ...form, accrualFrequency: v })}>
-                    <SelectTrigger data-testid="select-accrual-frequency">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="per_pay_period">Per Pay Period</SelectItem>
-                      <SelectItem value="monthly">Monthly</SelectItem>
-                      <SelectItem value="annually">Annually</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid gap-2">
-                  <Label>Max Balance</Label>
-                  <Input data-testid="input-accrual-max-balance" type="number" step="0.01" value={form.maxBalance} onChange={(e) => setForm({ ...form, maxBalance: e.target.value })} />
-                </div>
-              </div>
-              <Button data-testid="button-submit-accrual-account" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
-                {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -1018,9 +1051,24 @@ function ContributingPayCodesTab() {
   const [editItem, setEditItem] = useState<ContributingPayCode | null>(null);
   const defaultForm = { companyId: "", name: "", payCodeIds: "" };
   const [form, setForm] = useState(defaultForm);
+  const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<ContributingPayCode[]>({ queryKey: ["/api/contributing-pay-codes"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async (companyId: string) => {
+      const res = await apiRequest("POST", "/api/contributing-pay-codes/quick-setup", { companyId });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contributing-pay-codes"] });
+      toast({ title: data.message || "Contributing pay codes created" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
@@ -1081,42 +1129,60 @@ function ContributingPayCodesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Contributing Pay Codes</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-contributing-pay-code"><Plus className="w-4 h-4 mr-1" /> Add Contributing Pay Code</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{editItem ? "Edit Contributing Pay Code" : "Add Contributing Pay Code"}</DialogTitle>
-            </DialogHeader>
-            <div className="grid gap-4">
-              <div className="grid gap-2">
-                <Label>Company</Label>
-                <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
-                  <SelectTrigger data-testid="select-contributing-pay-code-company">
-                    <SelectValue placeholder="Select company" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {companies?.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+            <SelectTrigger data-testid="select-contributing-pay-code-quick-company" className="w-[180px]">
+              <SelectValue placeholder="Select company" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            data-testid="button-quick-setup-contributing-pay-codes"
+            disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+            onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+          >
+            <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+          </Button>
+          <Dialog open={open} onOpenChange={handleDialogChange}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-contributing-pay-code"><Plus className="w-4 h-4 mr-1" /> Add Contributing Pay Code</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{editItem ? "Edit Contributing Pay Code" : "Add Contributing Pay Code"}</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-4">
+                <div className="grid gap-2">
+                  <Label>Company</Label>
+                  <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
+                    <SelectTrigger data-testid="select-contributing-pay-code-company">
+                      <SelectValue placeholder="Select company" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {companies?.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  <Label>Name</Label>
+                  <Input data-testid="input-contributing-pay-code-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                </div>
+                <div className="grid gap-2">
+                  <Label>Pay Code IDs (comma-separated)</Label>
+                  <Input data-testid="input-contributing-pay-code-ids" value={form.payCodeIds} onChange={(e) => setForm({ ...form, payCodeIds: e.target.value })} />
+                </div>
+                <Button data-testid="button-submit-contributing-pay-code" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
+                  {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
+                </Button>
               </div>
-              <div className="grid gap-2">
-                <Label>Name</Label>
-                <Input data-testid="input-contributing-pay-code-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              </div>
-              <div className="grid gap-2">
-                <Label>Pay Code IDs (comma-separated)</Label>
-                <Input data-testid="input-contributing-pay-code-ids" value={form.payCodeIds} onChange={(e) => setForm({ ...form, payCodeIds: e.target.value })} />
-              </div>
-              <Button data-testid="button-submit-contributing-pay-code" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
-                {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
