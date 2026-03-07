@@ -3,7 +3,7 @@ import { useRoute } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Printer, ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
-import type { PayrollRun, PayrollItem, Worker, Company, TaxDeduction, CheckTemplate, PayStubAccount } from "@shared/schema";
+import type { PayrollRun, PayrollItem, Worker, Company, TaxDeduction, CheckTemplate, PayStubAccount, AccrualAccount, AccrualBalance } from "@shared/schema";
 
 function numberToWords(num: number): string {
   const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
@@ -113,13 +113,27 @@ function CheckPortion({
 }
 
 function StubPortion({
-  item, worker, company, run, deductions, config, payStubAccounts = [],
+  item, worker, company, run, deductions, config, payStubAccounts = [], accrualAccounts = [], accrualBalances = [],
 }: {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts?: PayStubAccount[];
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts?: PayStubAccount[]; accrualAccounts?: AccrualAccount[]; accrualBalances?: AccrualBalance[];
 }) {
   const netPay = Number(item.netPay || 0);
   const grossPay = Number(item.grossPay || 0);
   const totalDeductions = Number(item.deductions || 0);
+  const regularHours = Number(item.regularHours || 0);
+  const overtimeHours = Number(item.overtimeHours || 0);
+  const doubleTimeHours = Number(item.doubleTimeHours || 0);
+  const totalHours = regularHours + overtimeHours + doubleTimeHours;
+
+  const workerAccrualBalances = accrualBalances.filter(b => b.workerId === worker.id);
+  const sickAccounts = accrualAccounts.filter(a => a.type === "sick" && a.isActive);
+  const workerLeaveBalances = workerAccrualBalances
+    .map(b => {
+      const account = accrualAccounts.find(a => a.id === b.accrualAccountId);
+      if (!account || !account.isActive) return null;
+      return { name: account.name, type: account.type, balance: Number(b.balance || 0), used: Number(b.usedHours || 0) };
+    })
+    .filter((b): b is NonNullable<typeof b> => b !== null);
 
   const isContractor = worker.workerType === "contractor";
 
@@ -189,6 +203,11 @@ function StubPortion({
             {config.showCompanyName && <div style={{ fontSize: "12px", fontWeight: "bold" }}>PAY STUB — {company.name}</div>}
             {!config.showCompanyName && <div style={{ fontSize: "12px", fontWeight: "bold" }}>PAY STUB</div>}
             {company.ein && <div>EIN: {company.ein}</div>}
+            {config.showCompanyAddress && company.address && <div>{company.address}</div>}
+            {config.showCompanyAddress && (company.city || company.state || company.zip) && (
+              <div>{[company.city, company.state].filter(Boolean).join(", ")} {company.zip}</div>
+            )}
+            {config.showCompanyAddress && company.phone && <div>{company.phone}</div>}
           </div>
         </div>
         <div style={{ textAlign: "right" }}>
@@ -227,7 +246,7 @@ function StubPortion({
                   <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.regularPay)}</td>
                   {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdGross)}</td>}
                 </tr>
-                {Number(item.overtimeHours || 0) > 0 && (
+                {overtimeHours > 0 && (
                   <tr>
                     <td style={{ padding: "2px" }}>Overtime</td>
                     <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.overtimeHours)}</td>
@@ -236,9 +255,25 @@ function StubPortion({
                     {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
                   </tr>
                 )}
+                {doubleTimeHours > 0 && (
+                  <tr>
+                    <td style={{ padding: "2px" }}>Double Time</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.doubleTimeHours)}</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(Number(item.payRate || 0) * 2)}</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.doubleTimePay)}</td>
+                    {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
+                  </tr>
+                )}
+                <tr style={{ borderTop: "1px solid #666" }}>
+                  <td style={{ padding: "2px", fontWeight: "bold" }}>TOTAL HOURS</td>
+                  <td style={{ textAlign: "right", padding: "2px", fontWeight: "bold" }}>{fmt(totalHours)}</td>
+                  <td style={{ padding: "2px" }}></td>
+                  <td style={{ padding: "2px" }}></td>
+                  {config.showYtdTotals && <td style={{ padding: "2px" }}></td>}
+                </tr>
                 <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
                   <td style={{ padding: "2px" }}>GROSS PAY</td>
-                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(Number(item.regularHours || 0) + Number(item.overtimeHours || 0))}</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(totalHours)}</td>
                   <td style={{ padding: "2px" }}></td>
                   <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.grossPay)}</td>
                   {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdGross)}</td>}
@@ -322,6 +357,41 @@ function StubPortion({
         </div>
       )}
 
+      {!isContractor && workerLeaveBalances.length > 0 && (
+        <div style={{ marginTop: "8px", border: "1px solid #999", padding: "6px 8px" }}>
+          <div style={{ fontWeight: "bold", fontSize: "9px", marginBottom: "4px" }}>
+            LEAVE BALANCES
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #999" }}>
+                <th style={{ textAlign: "left", padding: "2px", fontSize: "9px" }}>TYPE</th>
+                <th style={{ textAlign: "right", padding: "2px", fontSize: "9px" }}>AVAILABLE (HRS)</th>
+                <th style={{ textAlign: "right", padding: "2px", fontSize: "9px" }}>USED (HRS)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {workerLeaveBalances.map((lb, i) => (
+                <tr key={i}>
+                  <td style={{ padding: "2px" }}>{lb.name}</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(lb.balance)}</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(lb.used)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!isContractor && workerLeaveBalances.length === 0 && sickAccounts.length > 0 && (
+        <div style={{ marginTop: "8px", border: "1px solid #999", padding: "6px 8px" }}>
+          <div style={{ fontWeight: "bold", fontSize: "9px", marginBottom: "4px" }}>
+            LEAVE BALANCES
+          </div>
+          <div style={{ fontSize: "9px", color: "#666" }}>Sick Leave: 0.00 hrs available</div>
+        </div>
+      )}
+
       <div style={{ marginTop: "6px", textAlign: "center", fontSize: "8px", color: "#999", borderTop: "1px solid #ccc", paddingTop: "4px" }}>
         This is a computer-generated document. {company.name} {company.ein ? `- EIN: ${company.ein}` : ""}
       </div>
@@ -329,58 +399,50 @@ function StubPortion({
   );
 }
 
-function StandardCheck({
-  item, worker, company, run, deductions, config, payStubAccounts,
-}: {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts: PayStubAccount[];
-}) {
+interface CheckProps {
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts: PayStubAccount[]; accrualAccounts: AccrualAccount[]; accrualBalances: AccrualBalance[];
+}
+
+function StandardCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances }: CheckProps) {
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Courier New', monospace" }}>
       <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
         <CheckPortion item={item} worker={worker} company={company} run={run} config={config} />
       </div>
       <div style={{ height: "7.333in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
       </div>
     </div>
   );
 }
 
-function VoucherCheck({
-  item, worker, company, run, deductions, config, payStubAccounts,
-}: {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts: PayStubAccount[];
-}) {
+function VoucherCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances }: CheckProps) {
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Courier New', monospace" }}>
       <div style={{ height: "3.333in", borderBottom: "1px dashed #999" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
       </div>
       <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
         <CheckPortion item={item} worker={worker} company={company} run={run} config={config} />
       </div>
       <div style={{ height: "4in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
       </div>
     </div>
   );
 }
 
-function ThreePartCheck({
-  item, worker, company, run, deductions, config, payStubAccounts,
-}: {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts: PayStubAccount[];
-}) {
+function ThreePartCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances }: CheckProps) {
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Courier New', monospace" }}>
       <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
       </div>
       <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
       </div>
       <div style={{ height: "3.666in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
       </div>
     </div>
   );
@@ -414,6 +476,8 @@ export default function PrintCheckPage() {
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: taxesDeductions = [] } = useQuery<TaxDeduction[]>({ queryKey: ["/api/taxes-deductions"] });
   const { data: payStubAccounts = [] } = useQuery<PayStubAccount[]>({ queryKey: ["/api/pay-stub-accounts"] });
+  const { data: accrualAccountsList = [] } = useQuery<AccrualAccount[]>({ queryKey: ["/api/accrual-accounts"] });
+  const { data: accrualBalancesList = [] } = useQuery<AccrualBalance[]>({ queryKey: ["/api/accrual-balances"] });
 
   const company = run ? companies.find(c => c.id === run.companyId) : undefined;
 
@@ -464,6 +528,7 @@ export default function PrintCheckPage() {
 
   const companyDeductions = taxesDeductions.filter(d => d.companyId === run.companyId);
   const companyPSAccounts = payStubAccounts.filter(a => a.companyId === run.companyId);
+  const companyAccrualAccounts = accrualAccountsList.filter(a => a.companyId === run.companyId);
   const getWorker = (id: string) => workers.find(w => w.id === id);
 
   const CheckComponent = templateType === "voucher" ? VoucherCheck :
@@ -499,6 +564,8 @@ export default function PrintCheckPage() {
               deductions={companyDeductions}
               config={config}
               payStubAccounts={companyPSAccounts}
+              accrualAccounts={companyAccrualAccounts}
+              accrualBalances={accrualBalancesList}
             />
           );
         })}
