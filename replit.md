@@ -35,7 +35,7 @@ Sidebar with collapsible sections:
 3. **Schedule** - Schedules (week view), Scheduled Shifts, Recurring Schedule, Recurring Templates (tabs)
 4. **Employee** - Employee list/CRUD (enhanced form with Employment/Identity/Contact/Payroll/Notes sections), Contacts, Preferences, Wages (wage history with effective dates), Pay Methods (with remittance source/priority/amount type), Titles (CRUD), Employee Groups (CRUD with hierarchy), Ethnic Groups, New Hire Defaults (CRUD)
 5. **Company** - Company Info (with enterprise assignment), Legal Entity (full CRUD), Enterprise (CRUD for top-level holding entities), Divisions (CRUD with company assignment), Branches (with division assignment), Departments (with division assignment), Positions (CRUD with department/reporting hierarchy/salary range), Cost Centers (CRUD for labor cost tracking), Jobs/Projects (CRUD with cost center/dates/status), Hierarchy (visual org tree: Enterprise → Companies → Divisions → Branches → Departments → Positions), Currencies, Quick Start, Permissions (Roles CRUD, Permission Matrix with resource/action toggles, User Role Assignments with scope), Import (tabs)
-6. **Payroll** - Process Payroll, Tax Wizard (4-step wizard: Select Events → Review/Verify → Submit → Complete), Pay Stubs, Pay Periods, Taxes & Deductions, Remittance, Check Layout (template editor with Standard/Voucher/3-Part types, layout toggle switches, live preview) (tabs)
+6. **Payroll** - Process Payroll, Tax Wizard (self-contained 4-step wizard: Configure → Workers & Summary → Generate Forms → Review & Complete; supports Quarterly Q1-Q4/Annual/Audit runs; W-2/1099-NEC/941/940/W-3/state withholding form generation; SE tax reference for contractors), Pay Stubs, Pay Periods, Taxes & Deductions (category-grouped: Mandatory Taxes/Garnishments/Benefits/Voluntary; Quick Setup seeds 26 standard US items; active/inactive toggle; SE tax reference items for contractors), Remittance, Check Layout (template editor with Standard/Voucher/3-Part types, layout toggle switches, live preview) (tabs)
 7. **Policy** - Policy Groups, Pay Codes, Accrual Accounts, Recurring Holidays, Pay Formulas, Contributing Pay Codes, Contributing Shifts, Regular Time, Overtime, Premium, Meal, Break, Schedule, Exception, Accrual, Absence, Holiday, Rounding policies (18 tabs, all with full CRUD)
 8. **HR** - Reviews, Qualifications, KPI Groups, Skills, Education, Memberships, Licenses, Languages (tabs)
 9. **Report** - Saved Reports, Employee Reports (Who's In, Employee Info, Audit Trail), Timesheet Reports (Schedule/Timesheet Summary/Detail, Punch Summary, Accrual Balance, Exception Summary), Payroll Reports (Paystub Summary, Payroll Export, General Ledger), Tax Reports, HR Reports (Qualification/Review Summary) - all with CSV export
@@ -66,7 +66,7 @@ Extended tables:
 - `employee_contacts` - Emergency/personal contacts
 - `pay_methods` - Direct deposit/check payment methods
 - `pay_periods` - Pay period definitions
-- `taxes_deductions` - Tax and deduction configurations
+- `taxes_deductions` - Tax and deduction configurations (category, subcategory, isReferenceOnly, appliesTo fields for grouping and filtering)
 - `policy_groups` - Named policy groupings
 - `pay_codes` - Pay code definitions
 - `holidays` - Recurring and one-time holidays
