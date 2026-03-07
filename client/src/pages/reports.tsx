@@ -134,8 +134,12 @@ function SavedReportViewDialog({ open, onOpenChange, reportId }: { open: boolean
     enabled: open && !!reportId,
   });
 
-  const headers: string[] = report?.headers ? JSON.parse(report.headers) : [];
-  const rows: string[][] = report?.data ? JSON.parse(report.data) : [];
+  let headers: string[] = [];
+  let rows: string[][] = [];
+  try {
+    headers = report?.headers ? JSON.parse(report.headers) : [];
+    rows = report?.data ? JSON.parse(report.data) : [];
+  } catch { }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

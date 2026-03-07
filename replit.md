@@ -52,7 +52,7 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 -   **Remittance Management:** Quick Setup creates default company checking account (Remittance Source), IRS and CA EDD (Remittance Agencies). Agencies link to sources for tax payment routing.
 -   **Policy Management:** Extensive policy engine covering regular time, overtime, premium pay, meal/break rules, scheduling, exceptions, accruals, absences, holidays, and rounding. Policy Groups link to all 12 individual policy types via FK columns. Quick Setup endpoints seed CA-compliant defaults for all policy types and 10 US recurring holidays.
 -   **HR Functions:** Modules for reviews, qualifications, KPI groups, skills, education, memberships, and licenses.
--   **Reporting:** Employee, Timesheet, Payroll, Tax (W-2 Annual, 1099-NEC quarterly/annual, Form 941, Form 940, DE 9, DE 9C), and HR reports with CSV export and print functionality.
+-   **Reporting:** Employee, Timesheet, Payroll, Tax (W-2 Annual, 1099-NEC quarterly/annual, Form 941, Form 940, DE 9, DE 9C), and HR reports with CSV export and print functionality. Saved Reports system allows saving any generated report to a `saved_reports` table, browsing saved reports with search/category filters, viewing saved data, re-exporting CSV, and deleting reports.
 -   **File Upload:** Supports secure document uploads for employee records (W-4, I-9, DE 4, Photo ID, tax forms, employment/contractor agreements; PDF/DOC/images up to 10MB).
 
 ## External Dependencies
