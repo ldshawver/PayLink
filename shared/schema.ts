@@ -148,6 +148,7 @@ export const timeEntries = pgTable("time_entries", {
   breakMinutes: integer("break_minutes").default(0),
   totalHours: numeric("total_hours").default("0"),
   overtimeHours: numeric("overtime_hours").default("0"),
+  doubleTimeHours: numeric("double_time_hours").default("0"),
   status: timesheetStatusEnum("status").default("pending"),
   note: text("note"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -187,8 +188,10 @@ export const payrollItems = pgTable("payroll_items", {
   workerId: varchar("worker_id").notNull().references(() => workers.id),
   regularHours: numeric("regular_hours").default("0"),
   overtimeHours: numeric("overtime_hours").default("0"),
+  doubleTimeHours: numeric("double_time_hours").default("0"),
   regularPay: numeric("regular_pay").default("0"),
   overtimePay: numeric("overtime_pay").default("0"),
+  doubleTimePay: numeric("double_time_pay").default("0"),
   grossPay: numeric("gross_pay").default("0"),
   deductions: numeric("deductions").default("0"),
   netPay: numeric("net_pay").default("0"),
@@ -1088,6 +1091,60 @@ export type CheckTemplate = typeof checkTemplates.$inferSelect;
 export type InsertCheckTemplate = z.infer<typeof insertCheckTemplateSchema>;
 export type WorkerDocument = typeof workerDocuments.$inferSelect;
 export type InsertWorkerDocument = z.infer<typeof insertWorkerDocumentSchema>;
+
+export const kpiGroups = pgTable("kpi_groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const qualificationGroups = pgTable("qualification_groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const workerLanguages = pgTable("worker_languages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  workerId: varchar("worker_id").references(() => workers.id),
+  language: text("language").notNull(),
+  proficiency: text("proficiency").default("basic"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const workerMemberships = pgTable("worker_memberships", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  workerId: varchar("worker_id").references(() => workers.id),
+  organization: text("organization").notNull(),
+  membershipNumber: text("membership_number"),
+  startDate: date("start_date"),
+  expirationDate: date("expiration_date"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertKpiGroupSchema = createInsertSchema(kpiGroups).omit({ id: true, createdAt: true });
+export const insertQualificationGroupSchema = createInsertSchema(qualificationGroups).omit({ id: true, createdAt: true });
+export const insertWorkerLanguageSchema = createInsertSchema(workerLanguages).omit({ id: true, createdAt: true });
+export const insertWorkerMembershipSchema = createInsertSchema(workerMemberships).omit({ id: true, createdAt: true });
+
+export type KpiGroup = typeof kpiGroups.$inferSelect;
+export type InsertKpiGroup = z.infer<typeof insertKpiGroupSchema>;
+export type QualificationGroup = typeof qualificationGroups.$inferSelect;
+export type InsertQualificationGroup = z.infer<typeof insertQualificationGroupSchema>;
+export type WorkerLanguage = typeof workerLanguages.$inferSelect;
+export type InsertWorkerLanguage = z.infer<typeof insertWorkerLanguageSchema>;
+export type WorkerMembership = typeof workerMemberships.$inferSelect;
+export type InsertWorkerMembership = z.infer<typeof insertWorkerMembershipSchema>;
 
 export const savedReports = pgTable("saved_reports", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

@@ -73,8 +73,13 @@ import {
   type RolePermission, type InsertRolePermission,
   type UserRole, type InsertUserRole,
   workerDocuments, savedReports,
+  kpiGroups, qualificationGroups, workerLanguages, workerMemberships,
   type WorkerDocument, type InsertWorkerDocument,
   type SavedReport, type InsertSavedReport,
+  type KpiGroup, type InsertKpiGroup,
+  type QualificationGroup, type InsertQualificationGroup,
+  type WorkerLanguage, type InsertWorkerLanguage,
+  type WorkerMembership, type InsertWorkerMembership,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -111,6 +116,8 @@ export interface IStorage {
 
   getPayrollItems(payrollRunId: string): Promise<PayrollItem[]>;
   createPayrollItem(data: InsertPayrollItem): Promise<PayrollItem>;
+  deletePayrollItem(id: string): Promise<void>;
+  deletePayrollRun(id: string): Promise<void>;
 
   getDepartments(companyId?: string): Promise<Department[]>;
   createDepartment(data: InsertDepartment): Promise<Department>;
@@ -364,6 +371,26 @@ export interface IStorage {
   createWorkerDocument(data: InsertWorkerDocument): Promise<WorkerDocument>;
   deleteWorkerDocument(id: string): Promise<void>;
 
+  getKpiGroups(companyId?: string): Promise<KpiGroup[]>;
+  createKpiGroup(data: InsertKpiGroup): Promise<KpiGroup>;
+  updateKpiGroup(id: string, data: Partial<KpiGroup>): Promise<KpiGroup | undefined>;
+  deleteKpiGroup(id: string): Promise<void>;
+
+  getQualificationGroups(companyId?: string): Promise<QualificationGroup[]>;
+  createQualificationGroup(data: InsertQualificationGroup): Promise<QualificationGroup>;
+  updateQualificationGroup(id: string, data: Partial<QualificationGroup>): Promise<QualificationGroup | undefined>;
+  deleteQualificationGroup(id: string): Promise<void>;
+
+  getWorkerLanguages(companyId?: string): Promise<WorkerLanguage[]>;
+  createWorkerLanguage(data: InsertWorkerLanguage): Promise<WorkerLanguage>;
+  updateWorkerLanguage(id: string, data: Partial<WorkerLanguage>): Promise<WorkerLanguage | undefined>;
+  deleteWorkerLanguage(id: string): Promise<void>;
+
+  getWorkerMemberships(companyId?: string): Promise<WorkerMembership[]>;
+  createWorkerMembership(data: InsertWorkerMembership): Promise<WorkerMembership>;
+  updateWorkerMembership(id: string, data: Partial<WorkerMembership>): Promise<WorkerMembership | undefined>;
+  deleteWorkerMembership(id: string): Promise<void>;
+
   getSavedReports(): Promise<SavedReport[]>;
   getSavedReport(id: string): Promise<SavedReport | undefined>;
   createSavedReport(data: InsertSavedReport): Promise<SavedReport>;
@@ -502,6 +529,12 @@ export class DatabaseStorage implements IStorage {
   async createPayrollItem(data: InsertPayrollItem): Promise<PayrollItem> {
     const [item] = await db.insert(payrollItems).values(data).returning();
     return item;
+  }
+  async deletePayrollItem(id: string): Promise<void> {
+    await db.delete(payrollItems).where(eq(payrollItems.id, id));
+  }
+  async deletePayrollRun(id: string): Promise<void> {
+    await db.delete(payrollRuns).where(eq(payrollRuns.id, id));
   }
 
   async getDepartments(companyId?: string): Promise<Department[]> {
@@ -1364,6 +1397,70 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteWorkerDocument(id: string): Promise<void> {
     await db.delete(workerDocuments).where(eq(workerDocuments.id, id));
+  }
+
+  async getKpiGroups(companyId?: string): Promise<KpiGroup[]> {
+    if (companyId) return db.select().from(kpiGroups).where(eq(kpiGroups.companyId, companyId)).orderBy(kpiGroups.name);
+    return db.select().from(kpiGroups).orderBy(kpiGroups.name);
+  }
+  async createKpiGroup(data: InsertKpiGroup): Promise<KpiGroup> {
+    const [r] = await db.insert(kpiGroups).values(data).returning();
+    return r;
+  }
+  async updateKpiGroup(id: string, data: Partial<KpiGroup>): Promise<KpiGroup | undefined> {
+    const [r] = await db.update(kpiGroups).set(data).where(eq(kpiGroups.id, id)).returning();
+    return r;
+  }
+  async deleteKpiGroup(id: string): Promise<void> {
+    await db.delete(kpiGroups).where(eq(kpiGroups.id, id));
+  }
+
+  async getQualificationGroups(companyId?: string): Promise<QualificationGroup[]> {
+    if (companyId) return db.select().from(qualificationGroups).where(eq(qualificationGroups.companyId, companyId)).orderBy(qualificationGroups.name);
+    return db.select().from(qualificationGroups).orderBy(qualificationGroups.name);
+  }
+  async createQualificationGroup(data: InsertQualificationGroup): Promise<QualificationGroup> {
+    const [r] = await db.insert(qualificationGroups).values(data).returning();
+    return r;
+  }
+  async updateQualificationGroup(id: string, data: Partial<QualificationGroup>): Promise<QualificationGroup | undefined> {
+    const [r] = await db.update(qualificationGroups).set(data).where(eq(qualificationGroups.id, id)).returning();
+    return r;
+  }
+  async deleteQualificationGroup(id: string): Promise<void> {
+    await db.delete(qualificationGroups).where(eq(qualificationGroups.id, id));
+  }
+
+  async getWorkerLanguages(companyId?: string): Promise<WorkerLanguage[]> {
+    if (companyId) return db.select().from(workerLanguages).where(eq(workerLanguages.companyId, companyId)).orderBy(workerLanguages.language);
+    return db.select().from(workerLanguages).orderBy(workerLanguages.language);
+  }
+  async createWorkerLanguage(data: InsertWorkerLanguage): Promise<WorkerLanguage> {
+    const [r] = await db.insert(workerLanguages).values(data).returning();
+    return r;
+  }
+  async updateWorkerLanguage(id: string, data: Partial<WorkerLanguage>): Promise<WorkerLanguage | undefined> {
+    const [r] = await db.update(workerLanguages).set(data).where(eq(workerLanguages.id, id)).returning();
+    return r;
+  }
+  async deleteWorkerLanguage(id: string): Promise<void> {
+    await db.delete(workerLanguages).where(eq(workerLanguages.id, id));
+  }
+
+  async getWorkerMemberships(companyId?: string): Promise<WorkerMembership[]> {
+    if (companyId) return db.select().from(workerMemberships).where(eq(workerMemberships.companyId, companyId)).orderBy(workerMemberships.organization);
+    return db.select().from(workerMemberships).orderBy(workerMemberships.organization);
+  }
+  async createWorkerMembership(data: InsertWorkerMembership): Promise<WorkerMembership> {
+    const [r] = await db.insert(workerMemberships).values(data).returning();
+    return r;
+  }
+  async updateWorkerMembership(id: string, data: Partial<WorkerMembership>): Promise<WorkerMembership | undefined> {
+    const [r] = await db.update(workerMemberships).set(data).where(eq(workerMemberships.id, id)).returning();
+    return r;
+  }
+  async deleteWorkerMembership(id: string): Promise<void> {
+    await db.delete(workerMemberships).where(eq(workerMemberships.id, id));
   }
 
   async getSavedReports(): Promise<SavedReport[]> {

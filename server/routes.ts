@@ -39,6 +39,22 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+function requireRole(...roles: string[]) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.session?.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const user = await storage.getUser(req.session.userId);
+    if (!user) {
+      return res.status(401).json({ message: "User not found" });
+    }
+    if (!roles.includes(user.role || "")) {
+      return res.status(403).json({ message: "Insufficient permissions" });
+    }
+    next();
+  };
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -62,6 +78,7 @@ export async function registerRoutes(
       req.session.username = user.username;
       res.json({ id: user.id, username: user.username, role: user.role });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Login failed" });
     }
   });
@@ -92,11 +109,73 @@ export async function registerRoutes(
     requireAuth(req, res, next);
   });
 
+  app.get("/api/payroll-summary", async (req, res) => {
+    try {
+      const { year, quarter, companyId } = req.query;
+      const allRuns = companyId && companyId !== "all"
+        ? await storage.getPayrollRuns(companyId as string)
+        : await storage.getPayrollRuns();
+      const processedRuns = allRuns.filter(r => r.status === "processed");
+
+      let filteredRuns = processedRuns;
+      if (year) {
+        filteredRuns = filteredRuns.filter(r => {
+          const d = new Date(r.periodEnd);
+          return d.getFullYear() === parseInt(year as string);
+        });
+      }
+      if (quarter && quarter !== "") {
+        filteredRuns = filteredRuns.filter(r => {
+          const d = new Date(r.periodEnd);
+          const m = d.getMonth();
+          const q = m < 3 ? "Q1" : m < 6 ? "Q2" : m < 9 ? "Q3" : "Q4";
+          return q === quarter;
+        });
+      }
+
+      const workerTotals: Record<string, { workerId: string; grossPay: number; regularPay: number; overtimePay: number; doubleTimePay: number; deductions: number; netPay: number; regularHours: number; overtimeHours: number; doubleTimeHours: number }> = {};
+
+      for (const run of filteredRuns) {
+        const items = await storage.getPayrollItems(run.id);
+        for (const item of items) {
+          if (!workerTotals[item.workerId]) {
+            workerTotals[item.workerId] = { workerId: item.workerId, grossPay: 0, regularPay: 0, overtimePay: 0, doubleTimePay: 0, deductions: 0, netPay: 0, regularHours: 0, overtimeHours: 0, doubleTimeHours: 0 };
+          }
+          const t = workerTotals[item.workerId];
+          t.grossPay += parseFloat(item.grossPay || "0");
+          t.regularPay += parseFloat(item.regularPay || "0");
+          t.overtimePay += parseFloat(item.overtimePay || "0");
+          t.doubleTimePay += parseFloat((item as any).doubleTimePay || "0");
+          t.deductions += parseFloat(item.deductions || "0");
+          t.netPay += parseFloat(item.netPay || "0");
+          t.regularHours += parseFloat(item.regularHours || "0");
+          t.overtimeHours += parseFloat(item.overtimeHours || "0");
+          t.doubleTimeHours += parseFloat((item as any).doubleTimeHours || "0");
+        }
+      }
+
+      const totals = Object.values(workerTotals);
+      const grandTotal = {
+        grossPay: totals.reduce((s, t) => s + t.grossPay, 0),
+        deductions: totals.reduce((s, t) => s + t.deductions, 0),
+        netPay: totals.reduce((s, t) => s + t.netPay, 0),
+        regularHours: totals.reduce((s, t) => s + t.regularHours, 0),
+        overtimeHours: totals.reduce((s, t) => s + t.overtimeHours, 0),
+      };
+
+      res.json({ workerTotals: totals, grandTotal, runCount: filteredRuns.length });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to get payroll summary" });
+    }
+  });
+
   app.get("/api/dashboard/stats", async (_req, res) => {
     try {
       const stats = await storage.getDashboardStats();
       res.json(stats);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch dashboard stats" });
     }
   });
@@ -106,6 +185,7 @@ export async function registerRoutes(
       const companies = await storage.getCompanies();
       res.json(companies);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch companies" });
     }
   });
@@ -118,11 +198,12 @@ export async function registerRoutes(
       }
       res.json(company);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch company" });
     }
   });
 
-  app.post("/api/companies", async (req, res) => {
+  app.post("/api/companies", requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.enterpriseId === "") data.enterpriseId = null;
@@ -130,21 +211,23 @@ export async function registerRoutes(
       const company = await storage.createCompany(data);
       res.status(201).json(company);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create company" });
     }
   });
 
-  app.patch("/api/companies/:id", async (req, res) => {
+  app.patch("/api/companies/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.enterpriseId === "") data.enterpriseId = null;
       if (data.legalEntityId === "") data.legalEntityId = null;
-      const company = await storage.updateCompany(req.params.id, data);
+      const company = await storage.updateCompany(req.params.id as string, data);
       if (!company) {
         return res.status(404).json({ message: "Company not found" });
       }
       res.json(company);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update company" });
     }
   });
@@ -155,11 +238,12 @@ export async function registerRoutes(
       const workers = await storage.getWorkers(companyId);
       res.json(workers);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch workers" });
     }
   });
 
-  app.post("/api/workers", async (req, res) => {
+  app.post("/api/workers", requireRole("admin", "manager"), async (req, res) => {
     try {
       if (!req.body.companyId) return res.status(400).json({ message: "Company is required" });
       if (!req.body.firstName) return res.status(400).json({ message: "First name is required" });
@@ -172,14 +256,15 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/workers/:id", async (req, res) => {
+  app.patch("/api/workers/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const worker = await storage.updateWorker(req.params.id, req.body);
+      const worker = await storage.updateWorker(req.params.id as string, req.body);
       if (!worker) {
         return res.status(404).json({ message: "Worker not found" });
       }
       res.json(worker);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update worker" });
     }
   });
@@ -200,6 +285,7 @@ export async function registerRoutes(
       const company = await storage.getCompany(worker.companyId);
       res.json({ worker, company });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Authentication failed" });
     }
   });
@@ -219,7 +305,6 @@ export async function registerRoutes(
       const activeWorkers = allWorkers.filter(w => w.isActive);
 
       const companyDeductions = await storage.getTaxesDeductions(run.companyId);
-      const activeDeductions = companyDeductions.filter(d => d.isActive && !d.isEmployerPaid);
 
       const existingItems = await storage.getPayrollItems(run.id);
       const existingYtdByWorker: Record<string, { gross: number; deductions: number; net: number }> = {};
@@ -249,36 +334,55 @@ export async function registerRoutes(
 
       for (const worker of activeWorkers) {
         const workerEntries = entries.filter(e => e.workerId === worker.id);
-        let regHrs = 0, otHrs = 0;
+        let regHrs = 0, otHrs = 0, dtHrs = 0;
         for (const e of workerEntries) {
-          regHrs += parseFloat(e.totalHours || "0") - parseFloat(e.overtimeHours || "0");
-          otHrs += parseFloat(e.overtimeHours || "0");
+          const entryTotal = parseFloat(e.totalHours || "0");
+          const entryOt = parseFloat(e.overtimeHours || "0");
+          const entryDt = parseFloat((e as any).doubleTimeHours || "0");
+          dtHrs += entryDt;
+          otHrs += entryOt;
+          regHrs += entryTotal - entryOt - entryDt;
         }
 
         const rate = parseFloat(worker.payRate || "0");
-        let regPay = 0, otPay = 0, grossPay = 0;
+        const otMultiplier = parseFloat(company.overtimeMultiplier || "1.5");
+        const dtMultiplier = 2.0;
+        let regPay = 0, otPay = 0, dtPay = 0, grossPay = 0;
 
         if (worker.payType === "salary") {
-          const periodDays = Math.max(1,
-            (new Date(run.periodEnd).getTime() - new Date(run.periodStart).getTime()) / (1000 * 60 * 60 * 24) + 1
-          );
           let periodsPerYear = 26;
           if (company.payFrequency === "weekly") periodsPerYear = 52;
           else if (company.payFrequency === "monthly") periodsPerYear = 12;
           else if (company.payFrequency === "semimonthly") periodsPerYear = 24;
+          const hourlyEquiv = rate / 2080;
           regPay = rate / periodsPerYear;
-          otPay = otHrs * (rate / 2080) * parseFloat(company.overtimeMultiplier || "1.5");
-          grossPay = regPay + otPay;
+          otPay = otHrs * hourlyEquiv * otMultiplier;
+          dtPay = dtHrs * hourlyEquiv * dtMultiplier;
+          grossPay = regPay + otPay + dtPay;
         } else {
           regPay = regHrs * rate;
-          otPay = otHrs * rate * parseFloat(company.overtimeMultiplier || "1.5");
-          grossPay = regPay + otPay;
+          otPay = otHrs * rate * otMultiplier;
+          dtPay = dtHrs * rate * dtMultiplier;
+          grossPay = regPay + otPay + dtPay;
         }
 
+        const isContractor = worker.workerType === "contractor";
+        const workerDeductions = companyDeductions.filter(d => {
+          if (!d.isActive || d.isEmployerPaid) return false;
+          if (d.isReferenceOnly) return false;
+          const appliesTo = d.appliesTo || "all";
+          if (appliesTo === "employee" && isContractor) return false;
+          if (appliesTo === "contractor" && !isContractor) return false;
+          const nameLower = d.name.toLowerCase();
+          if (!isContractor && (nameLower.includes("se tax") || nameLower.includes("self-employment") || nameLower.includes("self employment"))) return false;
+          return true;
+        });
+
         let totalDeductions = 0;
-        for (const ded of activeDeductions) {
+        for (const ded of workerDeductions) {
           if (ded.calculationType === "percentage") {
-            totalDeductions += grossPay * (parseFloat(ded.rate || "0") / 100);
+            const base = ded.maxAmount ? Math.min(grossPay, parseFloat(ded.maxAmount)) : grossPay;
+            totalDeductions += base * (parseFloat(ded.rate || "0") / 100);
           } else {
             totalDeductions += parseFloat(ded.rate || "0");
           }
@@ -289,7 +393,7 @@ export async function registerRoutes(
 
         totalGross += grossPay;
         totalNet += netPay;
-        totalHours += regHrs + otHrs;
+        totalHours += regHrs + otHrs + dtHrs;
         totalOT += otHrs;
 
         const alreadyExists = existingItems.find(i => i.workerId === worker.id);
@@ -299,8 +403,10 @@ export async function registerRoutes(
             workerId: worker.id,
             regularHours: regHrs.toFixed(2),
             overtimeHours: otHrs.toFixed(2),
+            doubleTimeHours: dtHrs.toFixed(2),
             regularPay: regPay.toFixed(2),
             overtimePay: otPay.toFixed(2),
+            doubleTimePay: dtPay.toFixed(2),
             grossPay: grossPay.toFixed(2),
             deductions: totalDeductions.toFixed(2),
             netPay: netPay.toFixed(2),
@@ -337,11 +443,29 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/payroll-runs/:id", requireRole("admin"), async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id as string);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      if (run.status === "processed") return res.status(400).json({ message: "Cannot delete a processed payroll run. Void it instead." });
+      const items = await storage.getPayrollItems(run.id);
+      for (const item of items) {
+        await storage.deletePayrollItem(item.id);
+      }
+      await storage.deletePayrollRun(run.id);
+      res.json({ message: "Payroll run deleted" });
+    } catch (error) {
+      console.error("Failed to delete payroll run:", error);
+      res.status(500).json({ message: "Failed to delete payroll run" });
+    }
+  });
+
   app.get("/api/time-punches", async (_req, res) => {
     try {
       const punches = await storage.getTimePunches();
       res.json(punches);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch time punches" });
     }
   });
@@ -361,6 +485,25 @@ export async function registerRoutes(
           clockIn: new Date(),
           status: "pending",
         });
+      } else if (punch.punchType === "break_start") {
+        // nothing extra needed — punch is recorded
+      } else if (punch.punchType === "break_end") {
+        const allPunches = await storage.getTimePunches(punch.companyId);
+        const workerPunches = allPunches
+          .filter(p => p.workerId === punch.workerId)
+          .sort((a, b) => new Date(a.punchTime).getTime() - new Date(b.punchTime).getTime());
+        const lastBreakStart = [...workerPunches].reverse().find(p => p.punchType === "break_start" && p.id !== punch.id);
+        if (lastBreakStart) {
+          const breakDuration = Math.round((new Date(punch.punchTime).getTime() - new Date(lastBreakStart.punchTime).getTime()) / (1000 * 60));
+          const entries = await storage.getTimeEntries();
+          const openEntry = entries.find(e => e.workerId === punch.workerId && e.clockIn && !e.clockOut);
+          if (openEntry) {
+            const currentBreak = openEntry.breakMinutes || 0;
+            await storage.updateTimeEntry(openEntry.id, {
+              breakMinutes: currentBreak + breakDuration,
+            });
+          }
+        }
       } else if (punch.punchType === "clock_out") {
         const entries = await storage.getTimeEntries();
         const openEntry = entries.find(
@@ -368,24 +511,35 @@ export async function registerRoutes(
         );
         if (openEntry) {
           const company = await storage.getCompany(punch.companyId);
-          const dailyOTThreshold = (company?.overtimeThreshold ?? 40) / 5;
+          const dailyOTThreshold = parseFloat(String(company?.overtimeThreshold ?? 8));
+          const doubleTimeThreshold = 12;
 
           const clockIn = new Date(openEntry.clockIn!);
           const clockOut = new Date();
           const diffMs = clockOut.getTime() - clockIn.getTime();
           const totalHours = Math.max(0, (diffMs / (1000 * 60 * 60)) - (openEntry.breakMinutes || 0) / 60);
-          const overtimeHours = Math.max(0, totalHours - dailyOTThreshold);
+
+          let overtimeHours = 0;
+          let doubleTimeHours = 0;
+          if (totalHours > doubleTimeThreshold) {
+            doubleTimeHours = totalHours - doubleTimeThreshold;
+            overtimeHours = doubleTimeThreshold - dailyOTThreshold;
+          } else if (totalHours > dailyOTThreshold) {
+            overtimeHours = totalHours - dailyOTThreshold;
+          }
 
           await storage.updateTimeEntry(openEntry.id, {
             clockOut: clockOut,
             totalHours: totalHours.toFixed(2),
-            overtimeHours: overtimeHours.toFixed(2),
+            overtimeHours: Math.max(0, overtimeHours).toFixed(2),
+            doubleTimeHours: Math.max(0, doubleTimeHours).toFixed(2),
           });
         }
       }
 
       res.status(201).json(punch);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create time punch" });
     }
   });
@@ -395,6 +549,7 @@ export async function registerRoutes(
       const entries = await storage.getTimeEntries();
       res.json(entries);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch time entries" });
     }
   });
@@ -407,6 +562,7 @@ export async function registerRoutes(
       }
       res.json(entry);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update time entry" });
     }
   });
@@ -416,6 +572,7 @@ export async function registerRoutes(
       const allSchedules = await storage.getSchedules();
       res.json(allSchedules);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch schedules" });
     }
   });
@@ -425,6 +582,7 @@ export async function registerRoutes(
       const schedule = await storage.createSchedule(req.body);
       res.status(201).json(schedule);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create schedule" });
     }
   });
@@ -437,6 +595,7 @@ export async function registerRoutes(
       }
       res.json(schedule);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update schedule" });
     }
   });
@@ -446,6 +605,7 @@ export async function registerRoutes(
       await storage.deleteSchedule(req.params.id);
       res.json({ message: "Schedule deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete schedule" });
     }
   });
@@ -481,6 +641,7 @@ export async function registerRoutes(
       }
       res.status(201).json({ created: created.length, schedules: created });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to generate schedules" });
     }
   });
@@ -491,6 +652,7 @@ export async function registerRoutes(
       const runs = await storage.getPayrollRuns(companyId);
       res.json(runs);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch payroll runs" });
     }
   });
@@ -503,6 +665,7 @@ export async function registerRoutes(
       }
       res.json(run);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch payroll run" });
     }
   });
@@ -512,11 +675,12 @@ export async function registerRoutes(
       const items = await storage.getPayrollItems(req.params.id);
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch payroll items" });
     }
   });
 
-  app.post("/api/payroll-runs", async (req, res) => {
+  app.post("/api/payroll-runs", requireRole("admin", "manager"), async (req, res) => {
     try {
       const { companyId, periodStart, periodEnd } = req.body;
 
@@ -535,8 +699,10 @@ export async function registerRoutes(
         workerId: string;
         regularHours: number;
         overtimeHours: number;
+        doubleTimeHours: number;
         regularPay: number;
         overtimePay: number;
+        doubleTimePay: number;
         grossPay: number;
         payRate: number;
         payType: string;
@@ -546,10 +712,12 @@ export async function registerRoutes(
         const workerEntries = entries.filter(e => e.workerId === worker.id);
         const totalHours = workerEntries.reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
         const overtimeHours = workerEntries.reduce((sum, e) => sum + Number(e.overtimeHours || 0), 0);
-        const regularHours = totalHours - overtimeHours;
+        const doubleTimeHours = workerEntries.reduce((sum, e) => sum + Number((e as any).doubleTimeHours || 0), 0);
+        const regularHours = totalHours - overtimeHours - doubleTimeHours;
 
         let regularPay = 0;
         let overtimePay = 0;
+        let doubleTimePay = 0;
         let grossPay = 0;
 
         if (worker.payType === "salary") {
@@ -564,7 +732,8 @@ export async function registerRoutes(
           const rate = Number(worker.payRate);
           regularPay = regularHours * rate;
           overtimePay = overtimeHours * rate * overtimeMultiplier;
-          grossPay = regularPay + overtimePay;
+          doubleTimePay = doubleTimeHours * rate * 2;
+          grossPay = regularPay + overtimePay + doubleTimePay;
         }
 
         if (totalHours > 0 || worker.payType === "salary") {
@@ -572,8 +741,10 @@ export async function registerRoutes(
             workerId: worker.id,
             regularHours,
             overtimeHours,
+            doubleTimeHours,
             regularPay,
             overtimePay,
+            doubleTimePay,
             grossPay,
             payRate: Number(worker.payRate),
             payType: worker.payType || "hourly",
@@ -582,7 +753,7 @@ export async function registerRoutes(
       }
 
       const totalGross = workerPayData.reduce((sum, w) => sum + w.grossPay, 0);
-      const totalHours = workerPayData.reduce((sum, w) => sum + w.regularHours + w.overtimeHours, 0);
+      const totalHours = workerPayData.reduce((sum, w) => sum + w.regularHours + w.overtimeHours + w.doubleTimeHours, 0);
       const totalOT = workerPayData.reduce((sum, w) => sum + w.overtimeHours, 0);
 
       const payrollRun = await storage.createPayrollRun({
@@ -604,8 +775,10 @@ export async function registerRoutes(
           workerId: wp.workerId,
           regularHours: wp.regularHours.toFixed(2),
           overtimeHours: wp.overtimeHours.toFixed(2),
+          doubleTimeHours: wp.doubleTimeHours.toFixed(2),
           regularPay: wp.regularPay.toFixed(2),
           overtimePay: wp.overtimePay.toFixed(2),
+          doubleTimePay: wp.doubleTimePay.toFixed(2),
           grossPay: wp.grossPay.toFixed(2),
           payRate: wp.payRate.toFixed(2),
           payType: wp.payType,
@@ -618,14 +791,15 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/payroll-runs/:id", async (req, res) => {
+  app.patch("/api/payroll-runs/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const run = await storage.updatePayrollRun(req.params.id, req.body);
+      const run = await storage.updatePayrollRun(req.params.id as string, req.body);
       if (!run) {
         return res.status(404).json({ message: "Payroll run not found" });
       }
       res.json(run);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update payroll run" });
     }
   });
@@ -637,6 +811,7 @@ export async function registerRoutes(
       const departments = await storage.getDepartments(companyId);
       res.json(departments);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch departments" });
     }
   });
@@ -646,6 +821,7 @@ export async function registerRoutes(
       const department = await storage.createDepartment(req.body);
       res.status(201).json(department);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create department" });
     }
   });
@@ -658,6 +834,7 @@ export async function registerRoutes(
       }
       res.json(department);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update department" });
     }
   });
@@ -667,6 +844,7 @@ export async function registerRoutes(
       await storage.deleteDepartment(req.params.id);
       res.json({ message: "Department deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete department" });
     }
   });
@@ -678,6 +856,7 @@ export async function registerRoutes(
       const branches = await storage.getBranches(companyId);
       res.json(branches);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch branches" });
     }
   });
@@ -703,6 +882,7 @@ export async function registerRoutes(
       }
       res.json(branch);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update branch" });
     }
   });
@@ -712,6 +892,7 @@ export async function registerRoutes(
       await storage.deleteBranch(req.params.id);
       res.json({ message: "Branch deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete branch" });
     }
   });
@@ -722,6 +903,7 @@ export async function registerRoutes(
       const result = await storage.getEnterprises();
       res.json(result);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch enterprises" });
     }
   });
@@ -747,6 +929,7 @@ export async function registerRoutes(
       }
       res.json(enterprise);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update enterprise" });
     }
   });
@@ -756,6 +939,7 @@ export async function registerRoutes(
       await storage.deleteEnterprise(req.params.id);
       res.json({ message: "Enterprise deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete enterprise" });
     }
   });
@@ -767,6 +951,7 @@ export async function registerRoutes(
       const result = await storage.getDivisions(companyId);
       res.json(result);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch divisions" });
     }
   });
@@ -792,6 +977,7 @@ export async function registerRoutes(
       }
       res.json(division);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update division" });
     }
   });
@@ -801,6 +987,7 @@ export async function registerRoutes(
       await storage.deleteDivision(req.params.id);
       res.json({ message: "Division deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete division" });
     }
   });
@@ -812,6 +999,7 @@ export async function registerRoutes(
       const result = await storage.getPositions(companyId);
       res.json(result);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch positions" });
     }
   });
@@ -837,6 +1025,7 @@ export async function registerRoutes(
       }
       res.json(position);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update position" });
     }
   });
@@ -846,6 +1035,7 @@ export async function registerRoutes(
       await storage.deletePosition(req.params.id);
       res.json({ message: "Position deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete position" });
     }
   });
@@ -857,6 +1047,7 @@ export async function registerRoutes(
       const result = await storage.getCostCenters(companyId);
       res.json(result);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch cost centers" });
     }
   });
@@ -882,6 +1073,7 @@ export async function registerRoutes(
       }
       res.json(costCenter);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update cost center" });
     }
   });
@@ -891,6 +1083,7 @@ export async function registerRoutes(
       await storage.deleteCostCenter(req.params.id);
       res.json({ message: "Cost center deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete cost center" });
     }
   });
@@ -902,6 +1095,7 @@ export async function registerRoutes(
       const result = await storage.getJobs(companyId);
       res.json(result);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch jobs" });
     }
   });
@@ -927,6 +1121,7 @@ export async function registerRoutes(
       }
       res.json(job);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update job" });
     }
   });
@@ -936,6 +1131,7 @@ export async function registerRoutes(
       await storage.deleteJob(req.params.id);
       res.json({ message: "Job deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete job" });
     }
   });
@@ -947,6 +1143,7 @@ export async function registerRoutes(
       const accounts = await storage.getAccrualAccounts(companyId);
       res.json(accounts);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch accrual accounts" });
     }
   });
@@ -956,6 +1153,7 @@ export async function registerRoutes(
       const account = await storage.createAccrualAccount(req.body);
       res.status(201).json(account);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create accrual account" });
     }
   });
@@ -968,6 +1166,7 @@ export async function registerRoutes(
       }
       res.json(account);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update accrual account" });
     }
   });
@@ -980,6 +1179,7 @@ export async function registerRoutes(
       }
       res.json({ success: true });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete accrual account" });
     }
   });
@@ -1008,6 +1208,7 @@ export async function registerRoutes(
       }
       res.json({ message: `Created ${created.length} accrual accounts${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to set up accrual accounts" });
     }
   });
@@ -1019,6 +1220,7 @@ export async function registerRoutes(
       const balances = await storage.getAccrualBalances(workerId);
       res.json(balances);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch accrual balances" });
     }
   });
@@ -1028,6 +1230,7 @@ export async function registerRoutes(
       const balance = await storage.createAccrualBalance(req.body);
       res.status(201).json(balance);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create accrual balance" });
     }
   });
@@ -1040,6 +1243,7 @@ export async function registerRoutes(
       }
       res.json(balance);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update accrual balance" });
     }
   });
@@ -1051,6 +1255,7 @@ export async function registerRoutes(
       const contacts = await storage.getEmployeeContacts(workerId);
       res.json(contacts);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch employee contacts" });
     }
   });
@@ -1060,6 +1265,7 @@ export async function registerRoutes(
       const contact = await storage.createEmployeeContact(req.body);
       res.status(201).json(contact);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create employee contact" });
     }
   });
@@ -1072,6 +1278,7 @@ export async function registerRoutes(
       }
       res.json(contact);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update employee contact" });
     }
   });
@@ -1081,6 +1288,7 @@ export async function registerRoutes(
       await storage.deleteEmployeeContact(req.params.id);
       res.json({ message: "Employee contact deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete employee contact" });
     }
   });
@@ -1092,6 +1300,7 @@ export async function registerRoutes(
       const methods = await storage.getPayMethods(workerId);
       res.json(methods);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch pay methods" });
     }
   });
@@ -1101,6 +1310,7 @@ export async function registerRoutes(
       const method = await storage.createPayMethod(req.body);
       res.status(201).json(method);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create pay method" });
     }
   });
@@ -1113,6 +1323,7 @@ export async function registerRoutes(
       }
       res.json(method);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update pay method" });
     }
   });
@@ -1122,6 +1333,7 @@ export async function registerRoutes(
       await storage.deletePayMethod(req.params.id);
       res.json({ message: "Pay method deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete pay method" });
     }
   });
@@ -1133,6 +1345,7 @@ export async function registerRoutes(
       const periods = await storage.getPayPeriods(companyId);
       res.json(periods);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch pay periods" });
     }
   });
@@ -1142,6 +1355,7 @@ export async function registerRoutes(
       const period = await storage.createPayPeriod(req.body);
       res.status(201).json(period);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create pay period" });
     }
   });
@@ -1154,6 +1368,7 @@ export async function registerRoutes(
       }
       res.json(period);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update pay period" });
     }
   });
@@ -1165,6 +1380,7 @@ export async function registerRoutes(
       const taxesDeductions = await storage.getTaxesDeductions(companyId);
       res.json(taxesDeductions);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch taxes and deductions" });
     }
   });
@@ -1174,6 +1390,7 @@ export async function registerRoutes(
       const taxDeduction = await storage.createTaxDeduction(req.body);
       res.status(201).json(taxDeduction);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create tax/deduction" });
     }
   });
@@ -1186,6 +1403,7 @@ export async function registerRoutes(
       }
       res.json(taxDeduction);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update tax/deduction" });
     }
   });
@@ -1195,6 +1413,7 @@ export async function registerRoutes(
       await storage.deleteTaxDeduction(req.params.id);
       res.json({ message: "Tax/deduction deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete tax/deduction" });
     }
   });
@@ -1258,6 +1477,7 @@ export async function registerRoutes(
       const groups = await storage.getPolicyGroups(companyId);
       res.json(groups);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch policy groups" });
     }
   });
@@ -1267,6 +1487,7 @@ export async function registerRoutes(
       const group = await storage.createPolicyGroup(req.body);
       res.status(201).json(group);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create policy group" });
     }
   });
@@ -1279,6 +1500,7 @@ export async function registerRoutes(
       }
       res.json(group);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update policy group" });
     }
   });
@@ -1288,6 +1510,7 @@ export async function registerRoutes(
       await storage.deletePolicyGroup(req.params.id);
       res.json({ message: "Policy group deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete policy group" });
     }
   });
@@ -1325,6 +1548,7 @@ export async function registerRoutes(
       const codes = await storage.getPayCodes(companyId);
       res.json(codes);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch pay codes" });
     }
   });
@@ -1334,6 +1558,7 @@ export async function registerRoutes(
       const code = await storage.createPayCode(req.body);
       res.status(201).json(code);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create pay code" });
     }
   });
@@ -1346,6 +1571,7 @@ export async function registerRoutes(
       }
       res.json(code);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update pay code" });
     }
   });
@@ -1355,6 +1581,7 @@ export async function registerRoutes(
       await storage.deletePayCode(req.params.id);
       res.json({ message: "Pay code deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete pay code" });
     }
   });
@@ -1395,6 +1622,7 @@ export async function registerRoutes(
       const holidays = await storage.getHolidays(companyId);
       res.json(holidays);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch holidays" });
     }
   });
@@ -1404,6 +1632,7 @@ export async function registerRoutes(
       const holiday = await storage.createHoliday(req.body);
       res.status(201).json(holiday);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create holiday" });
     }
   });
@@ -1416,6 +1645,7 @@ export async function registerRoutes(
       }
       res.json(holiday);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update holiday" });
     }
   });
@@ -1425,6 +1655,7 @@ export async function registerRoutes(
       await storage.deleteHoliday(req.params.id);
       res.json({ message: "Holiday deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete holiday" });
     }
   });
@@ -1469,6 +1700,7 @@ export async function registerRoutes(
       const qualifications = await storage.getQualifications(companyId, workerId);
       res.json(qualifications);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch qualifications" });
     }
   });
@@ -1478,6 +1710,7 @@ export async function registerRoutes(
       const qualification = await storage.createQualification(req.body);
       res.status(201).json(qualification);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create qualification" });
     }
   });
@@ -1490,6 +1723,7 @@ export async function registerRoutes(
       }
       res.json(qualification);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update qualification" });
     }
   });
@@ -1499,6 +1733,7 @@ export async function registerRoutes(
       await storage.deleteQualification(req.params.id);
       res.json({ message: "Qualification deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete qualification" });
     }
   });
@@ -1511,6 +1746,7 @@ export async function registerRoutes(
       const reviews = await storage.getReviews(companyId, workerId);
       res.json(reviews);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch reviews" });
     }
   });
@@ -1520,6 +1756,7 @@ export async function registerRoutes(
       const review = await storage.createReview(req.body);
       res.status(201).json(review);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create review" });
     }
   });
@@ -1532,6 +1769,7 @@ export async function registerRoutes(
       }
       res.json(review);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update review" });
     }
   });
@@ -1541,7 +1779,176 @@ export async function registerRoutes(
       await storage.deleteReview(req.params.id);
       res.json({ message: "Review deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete review" });
+    }
+  });
+
+  app.get("/api/kpi-groups", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const groups = await storage.getKpiGroups(companyId);
+      res.json(groups);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch KPI groups" });
+    }
+  });
+
+  app.post("/api/kpi-groups", async (req, res) => {
+    try {
+      const group = await storage.createKpiGroup(req.body);
+      res.status(201).json(group);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to create KPI group" });
+    }
+  });
+
+  app.patch("/api/kpi-groups/:id", async (req, res) => {
+    try {
+      const group = await storage.updateKpiGroup(req.params.id, req.body);
+      if (!group) return res.status(404).json({ message: "KPI group not found" });
+      res.json(group);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update KPI group" });
+    }
+  });
+
+  app.delete("/api/kpi-groups/:id", async (req, res) => {
+    try {
+      await storage.deleteKpiGroup(req.params.id);
+      res.json({ message: "KPI group deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete KPI group" });
+    }
+  });
+
+  app.get("/api/qualification-groups", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const groups = await storage.getQualificationGroups(companyId);
+      res.json(groups);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch qualification groups" });
+    }
+  });
+
+  app.post("/api/qualification-groups", async (req, res) => {
+    try {
+      const group = await storage.createQualificationGroup(req.body);
+      res.status(201).json(group);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to create qualification group" });
+    }
+  });
+
+  app.patch("/api/qualification-groups/:id", async (req, res) => {
+    try {
+      const group = await storage.updateQualificationGroup(req.params.id, req.body);
+      if (!group) return res.status(404).json({ message: "Qualification group not found" });
+      res.json(group);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update qualification group" });
+    }
+  });
+
+  app.delete("/api/qualification-groups/:id", async (req, res) => {
+    try {
+      await storage.deleteQualificationGroup(req.params.id);
+      res.json({ message: "Qualification group deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete qualification group" });
+    }
+  });
+
+  app.get("/api/worker-languages", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const languages = await storage.getWorkerLanguages(companyId);
+      res.json(languages);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch languages" });
+    }
+  });
+
+  app.post("/api/worker-languages", async (req, res) => {
+    try {
+      const language = await storage.createWorkerLanguage(req.body);
+      res.status(201).json(language);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to create language" });
+    }
+  });
+
+  app.patch("/api/worker-languages/:id", async (req, res) => {
+    try {
+      const language = await storage.updateWorkerLanguage(req.params.id, req.body);
+      if (!language) return res.status(404).json({ message: "Language not found" });
+      res.json(language);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update language" });
+    }
+  });
+
+  app.delete("/api/worker-languages/:id", async (req, res) => {
+    try {
+      await storage.deleteWorkerLanguage(req.params.id);
+      res.json({ message: "Language deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete language" });
+    }
+  });
+
+  app.get("/api/worker-memberships", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const memberships = await storage.getWorkerMemberships(companyId);
+      res.json(memberships);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch memberships" });
+    }
+  });
+
+  app.post("/api/worker-memberships", async (req, res) => {
+    try {
+      const membership = await storage.createWorkerMembership(req.body);
+      res.status(201).json(membership);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to create membership" });
+    }
+  });
+
+  app.patch("/api/worker-memberships/:id", async (req, res) => {
+    try {
+      const membership = await storage.updateWorkerMembership(req.params.id, req.body);
+      if (!membership) return res.status(404).json({ message: "Membership not found" });
+      res.json(membership);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update membership" });
+    }
+  });
+
+  app.delete("/api/worker-memberships/:id", async (req, res) => {
+    try {
+      await storage.deleteWorkerMembership(req.params.id);
+      res.json({ message: "Membership deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete membership" });
     }
   });
 
@@ -1552,6 +1959,7 @@ export async function registerRoutes(
       const schedules = await storage.getRecurringSchedules(companyId);
       res.json(schedules);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch recurring schedules" });
     }
   });
@@ -1561,6 +1969,7 @@ export async function registerRoutes(
       const schedule = await storage.createRecurringSchedule(req.body);
       res.status(201).json(schedule);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create recurring schedule" });
     }
   });
@@ -1573,6 +1982,7 @@ export async function registerRoutes(
       }
       res.json(schedule);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update recurring schedule" });
     }
   });
@@ -1582,6 +1992,7 @@ export async function registerRoutes(
       await storage.deleteRecurringSchedule(req.params.id);
       res.json({ message: "Recurring schedule deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete recurring schedule" });
     }
   });
@@ -1592,6 +2003,7 @@ export async function registerRoutes(
       const sources = await storage.getRemittanceSources(companyId);
       res.json(sources);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch remittance sources" });
     }
   });
@@ -1601,6 +2013,7 @@ export async function registerRoutes(
       const source = await storage.createRemittanceSource(req.body);
       res.status(201).json(source);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create remittance source" });
     }
   });
@@ -1611,6 +2024,7 @@ export async function registerRoutes(
       if (!source) return res.status(404).json({ message: "Not found" });
       res.json(source);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update remittance source" });
     }
   });
@@ -1620,6 +2034,7 @@ export async function registerRoutes(
       await storage.deleteRemittanceSource(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete remittance source" });
     }
   });
@@ -1630,6 +2045,7 @@ export async function registerRoutes(
       const agencies = await storage.getRemittanceAgencies(companyId);
       res.json(agencies);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch remittance agencies" });
     }
   });
@@ -1639,6 +2055,7 @@ export async function registerRoutes(
       const agency = await storage.createRemittanceAgency(req.body);
       res.status(201).json(agency);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create remittance agency" });
     }
   });
@@ -1649,6 +2066,7 @@ export async function registerRoutes(
       if (!agency) return res.status(404).json({ message: "Not found" });
       res.json(agency);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update remittance agency" });
     }
   });
@@ -1658,6 +2076,7 @@ export async function registerRoutes(
       await storage.deleteRemittanceAgency(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete remittance agency" });
     }
   });
@@ -1669,6 +2088,7 @@ export async function registerRoutes(
       const events = await storage.getRemittanceAgencyEvents(agencyId);
       res.json(events);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch events" });
     }
   });
@@ -1678,6 +2098,7 @@ export async function registerRoutes(
       const event = await storage.createRemittanceAgencyEvent(req.body);
       res.status(201).json(event);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create event" });
     }
   });
@@ -1688,6 +2109,7 @@ export async function registerRoutes(
       if (!event) return res.status(404).json({ message: "Not found" });
       res.json(event);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update event" });
     }
   });
@@ -1697,6 +2119,7 @@ export async function registerRoutes(
       await storage.deleteRemittanceAgencyEvent(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete event" });
     }
   });
@@ -1755,6 +2178,7 @@ export async function registerRoutes(
       const docs = await storage.getWorkerDocuments(workerId);
       res.json(docs);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch documents" });
     }
   });
@@ -1770,15 +2194,17 @@ export async function registerRoutes(
       const doc = await storage.createWorkerDocument({ workerId, name, documentType: documentType || "other", fileUrl, notes: notes || null });
       res.status(201).json(doc);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to upload document" });
     }
   });
 
   app.delete("/api/worker-documents/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteWorkerDocument(req.params.id);
+      await storage.deleteWorkerDocument(req.params.id as string);
       res.json({ message: "Document deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete document" });
     }
   });
@@ -1788,16 +2214,18 @@ export async function registerRoutes(
       const reports = await storage.getSavedReports();
       res.json(reports);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch saved reports" });
     }
   });
 
   app.get("/api/saved-reports/:id", requireAuth, async (req, res) => {
     try {
-      const report = await storage.getSavedReport(req.params.id);
+      const report = await storage.getSavedReport(req.params.id as string);
       if (!report) return res.status(404).json({ message: "Report not found" });
       res.json(report);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch saved report" });
     }
   });
@@ -1808,7 +2236,6 @@ export async function registerRoutes(
       if (!name || !reportType || !category) {
         return res.status(400).json({ message: "Name, reportType, and category are required" });
       }
-      const user = req.user as any;
       const report = await storage.createSavedReport({
         name,
         reportType,
@@ -1818,19 +2245,21 @@ export async function registerRoutes(
         data: typeof data === "string" ? data : JSON.stringify(data),
         headers: typeof headers === "string" ? headers : JSON.stringify(headers),
         rowCount: rowCount || 0,
-        createdBy: user?.username || "unknown",
+        createdBy: req.session?.username || "unknown",
       });
       res.json(report);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to save report" });
     }
   });
 
   app.delete("/api/saved-reports/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteSavedReport(req.params.id);
+      await storage.deleteSavedReport(req.params.id as string);
       res.json({ message: "Report deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete report" });
     }
   });
@@ -1841,6 +2270,7 @@ export async function registerRoutes(
       const accounts = await storage.getPayStubAccounts(companyId);
       res.json(accounts);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch pay stub accounts" });
     }
   });
@@ -1850,6 +2280,7 @@ export async function registerRoutes(
       const account = await storage.createPayStubAccount(req.body);
       res.status(201).json(account);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create pay stub account" });
     }
   });
@@ -1860,6 +2291,7 @@ export async function registerRoutes(
       if (!account) return res.status(404).json({ message: "Not found" });
       res.json(account);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update pay stub account" });
     }
   });
@@ -1869,6 +2301,7 @@ export async function registerRoutes(
       await storage.deletePayStubAccount(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete pay stub account" });
     }
   });
@@ -1920,6 +2353,7 @@ export async function registerRoutes(
       const amendments = await storage.getPayStubAmendments(companyId);
       res.json(amendments);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch pay stub amendments" });
     }
   });
@@ -1929,6 +2363,7 @@ export async function registerRoutes(
       const amendment = await storage.createPayStubAmendment(req.body);
       res.status(201).json(amendment);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create pay stub amendment" });
     }
   });
@@ -1939,6 +2374,7 @@ export async function registerRoutes(
       if (!amendment) return res.status(404).json({ message: "Not found" });
       res.json(amendment);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update pay stub amendment" });
     }
   });
@@ -1948,6 +2384,7 @@ export async function registerRoutes(
       await storage.deletePayStubAmendment(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete pay stub amendment" });
     }
   });
@@ -1958,6 +2395,7 @@ export async function registerRoutes(
       const transactions = await storage.getPayStubTransactions(companyId);
       res.json(transactions);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch pay stub transactions" });
     }
   });
@@ -1967,6 +2405,7 @@ export async function registerRoutes(
       const transaction = await storage.createPayStubTransaction(req.body);
       res.status(201).json(transaction);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create pay stub transaction" });
     }
   });
@@ -1977,6 +2416,7 @@ export async function registerRoutes(
       if (!transaction) return res.status(404).json({ message: "Not found" });
       res.json(transaction);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update pay stub transaction" });
     }
   });
@@ -1987,6 +2427,7 @@ export async function registerRoutes(
       const schedules = await storage.getPayPeriodSchedules(companyId);
       res.json(schedules);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch pay period schedules" });
     }
   });
@@ -1996,6 +2437,7 @@ export async function registerRoutes(
       const schedule = await storage.createPayPeriodSchedule(req.body);
       res.status(201).json(schedule);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create pay period schedule" });
     }
   });
@@ -2006,6 +2448,7 @@ export async function registerRoutes(
       if (!schedule) return res.status(404).json({ message: "Not found" });
       res.json(schedule);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update pay period schedule" });
     }
   });
@@ -2015,6 +2458,7 @@ export async function registerRoutes(
       await storage.deletePayPeriodSchedule(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete pay period schedule" });
     }
   });
@@ -2026,6 +2470,7 @@ export async function registerRoutes(
       const titles = await storage.getEmployeeTitles(companyId);
       res.json(titles);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch employee titles" });
     }
   });
@@ -2035,6 +2480,7 @@ export async function registerRoutes(
       const title = await storage.createEmployeeTitle(req.body);
       res.status(201).json(title);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create employee title" });
     }
   });
@@ -2045,6 +2491,7 @@ export async function registerRoutes(
       if (!title) return res.status(404).json({ message: "Not found" });
       res.json(title);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update employee title" });
     }
   });
@@ -2054,6 +2501,7 @@ export async function registerRoutes(
       await storage.deleteEmployeeTitle(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete employee title" });
     }
   });
@@ -2065,6 +2513,7 @@ export async function registerRoutes(
       const groups = await storage.getEmployeeGroups(companyId);
       res.json(groups);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch employee groups" });
     }
   });
@@ -2074,6 +2523,7 @@ export async function registerRoutes(
       const group = await storage.createEmployeeGroup(req.body);
       res.status(201).json(group);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create employee group" });
     }
   });
@@ -2084,6 +2534,7 @@ export async function registerRoutes(
       if (!group) return res.status(404).json({ message: "Not found" });
       res.json(group);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update employee group" });
     }
   });
@@ -2093,6 +2544,7 @@ export async function registerRoutes(
       await storage.deleteEmployeeGroup(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete employee group" });
     }
   });
@@ -2104,6 +2556,7 @@ export async function registerRoutes(
       const entries = await storage.getWageHistory(workerId);
       res.json(entries);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch wage history" });
     }
   });
@@ -2113,6 +2566,7 @@ export async function registerRoutes(
       const entry = await storage.createWageHistory(req.body);
       res.status(201).json(entry);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create wage history entry" });
     }
   });
@@ -2123,6 +2577,7 @@ export async function registerRoutes(
       if (!entry) return res.status(404).json({ message: "Not found" });
       res.json(entry);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update wage history entry" });
     }
   });
@@ -2132,6 +2587,7 @@ export async function registerRoutes(
       await storage.deleteWageHistory(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete wage history entry" });
     }
   });
@@ -2143,6 +2599,7 @@ export async function registerRoutes(
       const defaults = await storage.getNewHireDefaults(companyId);
       res.json(defaults);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch new hire defaults" });
     }
   });
@@ -2152,6 +2609,7 @@ export async function registerRoutes(
       const entry = await storage.createNewHireDefault(req.body);
       res.status(201).json(entry);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create new hire default" });
     }
   });
@@ -2162,6 +2620,7 @@ export async function registerRoutes(
       if (!entry) return res.status(404).json({ message: "Not found" });
       res.json(entry);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update new hire default" });
     }
   });
@@ -2171,6 +2630,7 @@ export async function registerRoutes(
       await storage.deleteNewHireDefault(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete new hire default" });
     }
   });
@@ -2181,6 +2641,7 @@ export async function registerRoutes(
       const items = await storage.getPayFormulas();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch pay formulas" });
     }
   });
@@ -2190,6 +2651,7 @@ export async function registerRoutes(
       const item = await storage.createPayFormula(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create pay formula" });
     }
   });
@@ -2200,6 +2662,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update pay formula" });
     }
   });
@@ -2209,6 +2672,7 @@ export async function registerRoutes(
       await storage.deletePayFormula(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete pay formula" });
     }
   });
@@ -2248,6 +2712,7 @@ export async function registerRoutes(
       const items = await storage.getContributingPayCodes();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch contributing pay codes" });
     }
   });
@@ -2257,6 +2722,7 @@ export async function registerRoutes(
       const item = await storage.createContributingPayCode(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create contributing pay code" });
     }
   });
@@ -2267,6 +2733,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update contributing pay code" });
     }
   });
@@ -2276,6 +2743,7 @@ export async function registerRoutes(
       await storage.deleteContributingPayCode(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete contributing pay code" });
     }
   });
@@ -2306,6 +2774,7 @@ export async function registerRoutes(
       }
       res.json({ message: `Created ${created.length} contributing pay codes${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to set up contributing pay codes" });
     }
   });
@@ -2316,6 +2785,7 @@ export async function registerRoutes(
       const items = await storage.getContributingShifts();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch contributing shifts" });
     }
   });
@@ -2325,6 +2795,7 @@ export async function registerRoutes(
       const item = await storage.createContributingShift(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create contributing shift" });
     }
   });
@@ -2335,6 +2806,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update contributing shift" });
     }
   });
@@ -2344,6 +2816,7 @@ export async function registerRoutes(
       await storage.deleteContributingShift(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete contributing shift" });
     }
   });
@@ -2373,6 +2846,7 @@ export async function registerRoutes(
       }
       res.json({ message: `Created ${created.length} contributing shifts${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to set up contributing shifts" });
     }
   });
@@ -2383,6 +2857,7 @@ export async function registerRoutes(
       const items = await storage.getRegularTimePolicies();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch regular time policies" });
     }
   });
@@ -2392,6 +2867,7 @@ export async function registerRoutes(
       const item = await storage.createRegularTimePolicy(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create regular time policy" });
     }
   });
@@ -2402,6 +2878,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update regular time policy" });
     }
   });
@@ -2411,6 +2888,7 @@ export async function registerRoutes(
       await storage.deleteRegularTimePolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete regular time policy" });
     }
   });
@@ -2434,6 +2912,7 @@ export async function registerRoutes(
       }
       res.json({ message: `Created ${created.length} regular time policies${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to set up regular time policies" });
     }
   });
@@ -2444,6 +2923,7 @@ export async function registerRoutes(
       const items = await storage.getOvertimePolicies();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch overtime policies" });
     }
   });
@@ -2453,6 +2933,7 @@ export async function registerRoutes(
       const item = await storage.createOvertimePolicy(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create overtime policy" });
     }
   });
@@ -2463,6 +2944,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update overtime policy" });
     }
   });
@@ -2472,6 +2954,7 @@ export async function registerRoutes(
       await storage.deleteOvertimePolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete overtime policy" });
     }
   });
@@ -2496,6 +2979,7 @@ export async function registerRoutes(
       }
       res.json({ message: `Created ${created.length} overtime policies${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to set up overtime policies" });
     }
   });
@@ -2506,6 +2990,7 @@ export async function registerRoutes(
       const items = await storage.getPremiumPolicies();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch premium policies" });
     }
   });
@@ -2515,6 +3000,7 @@ export async function registerRoutes(
       const item = await storage.createPremiumPolicy(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create premium policy" });
     }
   });
@@ -2525,6 +3011,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update premium policy" });
     }
   });
@@ -2534,6 +3021,7 @@ export async function registerRoutes(
       await storage.deletePremiumPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete premium policy" });
     }
   });
@@ -2544,6 +3032,7 @@ export async function registerRoutes(
       const items = await storage.getMealPolicies();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch meal policies" });
     }
   });
@@ -2553,6 +3042,7 @@ export async function registerRoutes(
       const item = await storage.createMealPolicy(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create meal policy" });
     }
   });
@@ -2563,6 +3053,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update meal policy" });
     }
   });
@@ -2572,6 +3063,7 @@ export async function registerRoutes(
       await storage.deleteMealPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete meal policy" });
     }
   });
@@ -2595,6 +3087,7 @@ export async function registerRoutes(
       }
       res.json({ message: `Created ${created.length} meal policies${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to set up meal policies" });
     }
   });
@@ -2605,6 +3098,7 @@ export async function registerRoutes(
       const items = await storage.getBreakPolicies();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch break policies" });
     }
   });
@@ -2614,6 +3108,7 @@ export async function registerRoutes(
       const item = await storage.createBreakPolicy(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create break policy" });
     }
   });
@@ -2624,6 +3119,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update break policy" });
     }
   });
@@ -2633,6 +3129,7 @@ export async function registerRoutes(
       await storage.deleteBreakPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete break policy" });
     }
   });
@@ -2656,6 +3153,7 @@ export async function registerRoutes(
       }
       res.json({ message: `Created ${created.length} break policies${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to set up break policies" });
     }
   });
@@ -2666,6 +3164,7 @@ export async function registerRoutes(
       const items = await storage.getSchedulePolicies();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch schedule policies" });
     }
   });
@@ -2675,6 +3174,7 @@ export async function registerRoutes(
       const item = await storage.createSchedulePolicy(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create schedule policy" });
     }
   });
@@ -2685,6 +3185,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update schedule policy" });
     }
   });
@@ -2694,6 +3195,7 @@ export async function registerRoutes(
       await storage.deleteSchedulePolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete schedule policy" });
     }
   });
@@ -2704,6 +3206,7 @@ export async function registerRoutes(
       const items = await storage.getExceptionPolicies();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch exception policies" });
     }
   });
@@ -2713,6 +3216,7 @@ export async function registerRoutes(
       const item = await storage.createExceptionPolicy(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create exception policy" });
     }
   });
@@ -2723,6 +3227,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update exception policy" });
     }
   });
@@ -2732,6 +3237,7 @@ export async function registerRoutes(
       await storage.deleteExceptionPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete exception policy" });
     }
   });
@@ -2742,6 +3248,7 @@ export async function registerRoutes(
       const items = await storage.getAccrualPolicies();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch accrual policies" });
     }
   });
@@ -2751,6 +3258,7 @@ export async function registerRoutes(
       const item = await storage.createAccrualPolicy(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create accrual policy" });
     }
   });
@@ -2761,6 +3269,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update accrual policy" });
     }
   });
@@ -2770,6 +3279,7 @@ export async function registerRoutes(
       await storage.deleteAccrualPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete accrual policy" });
     }
   });
@@ -2782,6 +3292,7 @@ export async function registerRoutes(
       const items = await storage.getAccrualPolicyMilestones(accrualPolicyId);
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch milestones" });
     }
   });
@@ -2791,6 +3302,7 @@ export async function registerRoutes(
       const item = await storage.createAccrualPolicyMilestone(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create milestone" });
     }
   });
@@ -2800,6 +3312,7 @@ export async function registerRoutes(
       await storage.deleteAccrualPolicyMilestone(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete milestone" });
     }
   });
@@ -2810,6 +3323,7 @@ export async function registerRoutes(
       const items = await storage.getAbsencePolicies();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch absence policies" });
     }
   });
@@ -2819,6 +3333,7 @@ export async function registerRoutes(
       const item = await storage.createAbsencePolicy(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create absence policy" });
     }
   });
@@ -2829,6 +3344,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update absence policy" });
     }
   });
@@ -2838,6 +3354,7 @@ export async function registerRoutes(
       await storage.deleteAbsencePolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete absence policy" });
     }
   });
@@ -2848,6 +3365,7 @@ export async function registerRoutes(
       const items = await storage.getHolidayPolicies();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch holiday policies" });
     }
   });
@@ -2857,6 +3375,7 @@ export async function registerRoutes(
       const item = await storage.createHolidayPolicy(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create holiday policy" });
     }
   });
@@ -2867,6 +3386,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update holiday policy" });
     }
   });
@@ -2876,6 +3396,7 @@ export async function registerRoutes(
       await storage.deleteHolidayPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete holiday policy" });
     }
   });
@@ -2886,6 +3407,7 @@ export async function registerRoutes(
       const items = await storage.getRoundingPolicies();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch rounding policies" });
     }
   });
@@ -2895,6 +3417,7 @@ export async function registerRoutes(
       const item = await storage.createRoundingPolicy(req.body);
       res.status(201).json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to create rounding policy" });
     }
   });
@@ -2905,6 +3428,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update rounding policy" });
     }
   });
@@ -2914,6 +3438,7 @@ export async function registerRoutes(
       await storage.deleteRoundingPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete rounding policy" });
     }
   });
@@ -3086,6 +3611,7 @@ export async function registerRoutes(
       }
       res.json({ message: `Created ${created.length} rounding policies${skipped.length > 0 ? `, skipped ${skipped.length} existing` : ""}`, created, skipped });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to set up rounding policies" });
     }
   });
@@ -3095,6 +3621,7 @@ export async function registerRoutes(
       const items = await storage.getLegalEntities();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to fetch legal entities" });
     }
   });
@@ -3127,6 +3654,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update legal entity" });
     }
   });
@@ -3136,6 +3664,7 @@ export async function registerRoutes(
       await storage.deleteLegalEntity(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete legal entity" });
     }
   });
@@ -3145,6 +3674,7 @@ export async function registerRoutes(
       const items = await storage.getRoles();
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to get roles" });
     }
   });
@@ -3171,6 +3701,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update role" });
     }
   });
@@ -3184,6 +3715,7 @@ export async function registerRoutes(
       await storage.deleteRole(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete role" });
     }
   });
@@ -3199,6 +3731,7 @@ export async function registerRoutes(
         res.json(items);
       }
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to get role permissions" });
     }
   });
@@ -3223,6 +3756,7 @@ export async function registerRoutes(
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update role permission" });
     }
   });
@@ -3234,6 +3768,7 @@ export async function registerRoutes(
       await storage.deleteRolePermission(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete role permission" });
     }
   });
@@ -3253,6 +3788,7 @@ export async function registerRoutes(
       }
       res.json(results);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to save role permissions" });
     }
   });
@@ -3263,6 +3799,7 @@ export async function registerRoutes(
       const items = await storage.getUserRoles(userId);
       res.json(items);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to get user roles" });
     }
   });
@@ -3286,6 +3823,7 @@ export async function registerRoutes(
       await storage.deleteUserRole(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to remove role assignment" });
     }
   });
@@ -3295,6 +3833,7 @@ export async function registerRoutes(
       const allUsers = await storage.getUsers();
       res.json(allUsers.map(u => ({ id: u.id, username: u.username, role: u.role, companyId: u.companyId })));
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to get users" });
     }
   });
@@ -3311,15 +3850,17 @@ export async function registerRoutes(
       const templates = await storage.getCheckTemplates(companyId);
       res.json(templates);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to get check templates" });
     }
   });
   app.get("/api/check-templates/:id", requireAuth, async (req, res) => {
     try {
-      const template = await storage.getCheckTemplate(req.params.id);
+      const template = await storage.getCheckTemplate(req.params.id as string);
       if (!template) return res.status(404).json({ message: "Template not found" });
       res.json(template);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to get check template" });
     }
   });
@@ -3334,18 +3875,20 @@ export async function registerRoutes(
   });
   app.patch("/api/check-templates/:id", requireAuth, async (req, res) => {
     try {
-      const template = await storage.updateCheckTemplate(req.params.id, req.body);
+      const template = await storage.updateCheckTemplate(req.params.id as string, req.body);
       if (!template) return res.status(404).json({ message: "Template not found" });
       res.json(template);
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to update template" });
     }
   });
   app.delete("/api/check-templates/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deleteCheckTemplate(req.params.id);
+      await storage.deleteCheckTemplate(req.params.id as string);
       res.json({ success: true });
     } catch (error) {
+      console.error(error);
       res.status(500).json({ message: "Failed to delete template" });
     }
   });

@@ -892,7 +892,7 @@ function LegalEntityTab() {
                     <TableCell>{item.tradeName || "-"}</TableCell>
                     <TableCell>{(item as any).ein || "-"}</TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{LEGAL_ENTITY_TYPES[item.type] || item.type}</Badge>
+                      <Badge variant="secondary">{item.type ? LEGAL_ENTITY_TYPES[item.type as string] || item.type : "-"}</Badge>
                     </TableCell>
                     <TableCell>
                       <Badge variant={item.status === "active" ? "default" : "secondary"}>

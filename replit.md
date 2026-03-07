@@ -36,7 +36,8 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 **Backend:**
 -   **Framework:** Express.js + TypeScript.
 -   **Authentication:** Session-based using `express-session` and `connect-pg-simple` (PostgreSQL session store), with `bcrypt` for password hashing. All API routes, except authentication endpoints and the time clock, are protected.
--   **API Design:** Provides a comprehensive set of RESTful API endpoints for managing various entities like companies, workers, time punches, schedules, payroll, and HR components.
+-   **RBAC:** Write operations on companies, workers, and payroll require `admin` or `manager` role via `requireRole()` middleware. Deleting payroll runs requires `admin` only.
+-   **API Design:** Provides a comprehensive set of RESTful API endpoints for managing various entities like companies, workers, time punches, schedules, payroll, and HR components. Includes `/api/payroll-summary` for aggregated payroll data used by tax reports.
 
 **Database:**
 -   **Type:** PostgreSQL, managed with Drizzle ORM.
@@ -48,11 +49,11 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 -   **Time & Attendance:** Includes timesheet, punches, accrual balances, and scheduling capabilities.
 -   **Employee Management:** Comprehensive CRUD for employees, contacts, preferences, documents, wages, pay methods, titles, and groups.
 -   **Company Management:** Full CRUD for company information, legal entities, enterprise structures, divisions, branches, departments, positions, cost centers, jobs, and hierarchical visualization. Includes permission management with role-based access.
--   **Payroll Processing:** Features a multi-step tax wizard for payroll processing, generation of tax forms (W-2, 1099-NEC, 941, 940), management of pay stubs, pay periods, taxes, and deductions. Quick Setup seeds 28 CA-compliant tax items (Federal + CA state taxes, employer taxes, SE tax references). Supports check layout customization.
+-   **Payroll Processing:** Features a multi-step tax wizard for payroll processing, generation of tax forms (W-2, 1099-NEC, 941, 940), management of pay stubs, pay periods, taxes, and deductions. Quick Setup seeds 28 CA-compliant tax items (Federal + CA state taxes, employer taxes, SE tax references). Supports check layout customization with MICR font. Payroll engine supports daily OT (8hr threshold), double time (12hr threshold at 2x), and SE Tax filtering (excluded for W-2 employees). Pay stubs show employer address, total hours, and accrual/leave balances.
 -   **Remittance Management:** Quick Setup creates default company checking account (Remittance Source), IRS and CA EDD (Remittance Agencies). Agencies link to sources for tax payment routing.
 -   **Policy Management:** Extensive policy engine covering regular time, overtime, premium pay, meal/break rules, scheduling, exceptions, accruals, absences, holidays, and rounding. Policy Groups link to all 12 individual policy types via FK columns. Quick Setup endpoints seed CA-compliant defaults for all policy types and 10 US recurring holidays.
--   **HR Functions:** Modules for reviews, qualifications, KPI groups, skills, education, memberships, and licenses.
--   **Reporting:** Employee, Timesheet, Payroll, Tax (W-2 Annual, 1099-NEC quarterly/annual, Form 941, Form 940, DE 9, DE 9C), and HR reports with CSV export and print functionality. Saved Reports system allows saving any generated report to a `saved_reports` table, browsing saved reports with search/category filters, viewing saved data, re-exporting CSV, and deleting reports.
+-   **HR Functions:** Full CRUD modules for reviews, qualifications, qualification groups, KPI groups, skills, education, languages, memberships, and licenses. Skills/Education/Licenses filter from qualifications table by type; KPI groups, qualification groups, languages, and memberships have dedicated tables.
+-   **Reporting:** Employee, Timesheet, Payroll, Tax (W-2 Annual, 1099-NEC quarterly/annual, Form 941, Form 940, DE 9, DE 9C, Form 1096), and HR reports with CSV export and print functionality. Tax reports use actual payroll data from `/api/payroll-summary` endpoint (not estimates). Saved Reports system allows saving any generated report to a `saved_reports` table, browsing saved reports with search/category filters, viewing saved data, re-exporting CSV, and deleting reports.
 -   **File Upload:** Supports secure document uploads for employee records (W-4, I-9, DE 4, Photo ID, tax forms, employment/contractor agreements; PDF/DOC/images up to 10MB).
 
 ## External Dependencies

@@ -1620,7 +1620,7 @@ function TaxWizardTab() {
                 <div className="border rounded-lg p-4">
                   <h4 className="font-semibold mb-3">Generated Forms</h4>
                   <div className="space-y-2">
-                    {[...selectedForms].map(formId => {
+                    {Array.from(selectedForms).map(formId => {
                       const form = TAX_FORMS.find(f => f.id === formId);
                       if (!form) return null;
                       let count = 1;
@@ -2196,8 +2196,6 @@ function PayStubTransactionsTab() {
         transactionDate: data.transactionDate || null,
         checkNumber: data.checkNumber || null,
         reference: data.reference || null,
-        remittanceSourceId: data.remittanceSourceId || null,
-        payrollItemId: data.payrollItemId || null,
       });
       return res.json();
     },

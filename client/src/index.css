@@ -2,6 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'MICR';
+  src: url('https://cdn.jsdelivr.net/gh/AlfredoRamos/micr-e13b-font@master/MICR_E13B.woff2') format('woff2'),
+       url('https://cdn.jsdelivr.net/gh/AlfredoRamos/micr-e13b-font@master/MICR_E13B.woff') format('woff');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+.font-micr {
+  font-family: 'MICR', 'Courier New', monospace;
+  letter-spacing: 0.05em;
+}
+
 /* LIGHT MODE */
 :root {
   --button-outline: rgba(0,0,0, .10);
