@@ -81,7 +81,7 @@ Extended tables:
 - `remittance_sources` - Bank accounts/payment sources for paying employees
 - `remittance_agencies` - Government entities for tax filings/payments
 - `remittance_agency_events` - Scheduled events (payments/filings) for agencies
-- `pay_stub_accounts` - Pay stub line item categories (earnings/taxes/deductions/employer contributions) with legalEntityId for "paid by" tracking; Quick Setup seeds 12 standard US accounts per company
+- `pay_stub_accounts` - Pay stub line item categories (earnings/taxes/deductions/employer contributions/employee contributions) with legalEntityId for "paid by" tracking; Quick Setup seeds 14 standard US accounts per company including Employee Social Security (12.4%) and Employee Medicare (2.9%) shown on contractor checks as reference only (not deducted)
 - `pay_stub_amendments` - One-time pay adjustments per worker
 - `pay_stub_transactions` - Payment transaction records
 - `pay_period_schedules` - Recurring pay period schedule definitions

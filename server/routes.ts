@@ -1628,6 +1628,8 @@ export async function registerRoutes(
         { companyId, legalEntityId: legalEntityId || null, name: "Employer Social Security", type: "employer_contribution", displayOrder: 30, status: "enabled" },
         { companyId, legalEntityId: legalEntityId || null, name: "Employer Medicare", type: "employer_contribution", displayOrder: 31, status: "enabled" },
         { companyId, legalEntityId: legalEntityId || null, name: "Unemployment Insurance", type: "employer_contribution", displayOrder: 32, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "Employee Social Security (12.4%)", type: "employee_contribution", displayOrder: 40, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "Employee Medicare (2.9%)", type: "employee_contribution", displayOrder: 41, status: "enabled" },
       ];
       const created = [];
       const skipped = [];
