@@ -365,6 +365,17 @@ export const policyGroups = pgTable("policy_groups", {
   name: text("name").notNull(),
   description: text("description"),
   isDefault: boolean("is_default").default(false),
+  regularTimePolicyId: varchar("regular_time_policy_id"),
+  overtimePolicyId: varchar("overtime_policy_id"),
+  premiumPolicyId: varchar("premium_policy_id"),
+  mealPolicyId: varchar("meal_policy_id"),
+  breakPolicyId: varchar("break_policy_id"),
+  schedulePolicyId: varchar("schedule_policy_id"),
+  exceptionPolicyId: varchar("exception_policy_id"),
+  accrualPolicyId: varchar("accrual_policy_id"),
+  absencePolicyId: varchar("absence_policy_id"),
+  holidayPolicyId: varchar("holiday_policy_id"),
+  roundingPolicyId: varchar("rounding_policy_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
