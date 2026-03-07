@@ -1260,6 +1260,32 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/policy-groups/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getPolicyGroups(companyId);
+      const existingNames = new Set(existing.map(e => e.name));
+      const defaultGroups = [
+        { companyId, name: "Full-Time Employees", description: "Policy group for full-time employees with standard benefits, overtime after 8 hrs/day, meal/break rules, and vacation accrual.", isDefault: true },
+        { companyId, name: "Part-Time Employees", description: "Policy group for part-time employees with prorated benefits and limited overtime eligibility." },
+        { companyId, name: "Hourly Workers", description: "Policy group for hourly workers with overtime rules, meal/break policies, and time-clock requirements." },
+        { companyId, name: "Managers", description: "Policy group for managers/supervisors — may be exempt from overtime under CA executive exemption." },
+        { companyId, name: "Contractors", description: "Policy group for independent contractors — no overtime, benefits, or tax withholding applies." },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const group of defaultGroups) {
+        if (existingNames.has(group.name)) { skipped.push(group.name); continue; }
+        const result = await storage.createPolicyGroup(group as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} policy groups${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up policy groups" });
+    }
+  });
+
   // Pay Codes
   app.get("/api/pay-codes", async (req, res) => {
     try {
@@ -1298,6 +1324,35 @@ export async function registerRoutes(
       res.json({ message: "Pay code deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete pay code" });
+    }
+  });
+
+  app.post("/api/pay-codes/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getPayCodes(companyId);
+      const existingCodes = new Set(existing.map(e => e.code));
+      const defaultCodes = [
+        { companyId, code: "REGULAR", name: "Regular Time", type: "regular", rate: "1.0" },
+        { companyId, code: "OVERTIME", name: "Overtime (1.5x)", type: "overtime", rate: "1.5" },
+        { companyId, code: "DOUBLE_TIME", name: "Double Time (2x)", type: "premium", rate: "2.0" },
+        { companyId, code: "VACATION", name: "Vacation", type: "vacation", rate: "1.0" },
+        { companyId, code: "SICK", name: "Sick Leave", type: "sick", rate: "1.0" },
+        { companyId, code: "HOLIDAY", name: "Holiday Pay", type: "holiday", rate: "1.0" },
+        { companyId, code: "UNPAID_LEAVE", name: "Unpaid Leave", type: "regular", rate: "0" },
+        { companyId, code: "ON_CALL", name: "On Call", type: "premium", rate: "0.5" },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const code of defaultCodes) {
+        if (existingCodes.has(code.code)) { skipped.push(code.code); continue; }
+        const result = await storage.createPayCode(code as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} pay codes${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up pay codes" });
     }
   });
 
@@ -2039,6 +2094,35 @@ export async function registerRoutes(
       res.json({ message: "Deleted" });
     } catch (error) {
       res.status(500).json({ message: "Failed to delete pay formula" });
+    }
+  });
+
+  app.post("/api/pay-formulas/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getPayFormulas();
+      const companyFormulas = existing.filter(f => f.companyId === companyId);
+      const existingNames = new Set(companyFormulas.map(e => e.name));
+      const defaultFormulas = [
+        { companyId, name: "Regular Pay", payType: "pay_multiplied_by_factor", wageSourceType: "hourly_rate", accrualRate: "1.0" },
+        { companyId, name: "Overtime Pay (1.5x)", payType: "pay_multiplied_by_factor", wageSourceType: "hourly_rate", accrualRate: "1.5" },
+        { companyId, name: "Double Time Pay (2x)", payType: "pay_multiplied_by_factor", wageSourceType: "hourly_rate", accrualRate: "2.0" },
+        { companyId, name: "Vacation Pay", payType: "pay_multiplied_by_factor", wageSourceType: "hourly_rate", accrualRate: "1.0" },
+        { companyId, name: "Sick Leave Pay", payType: "pay_multiplied_by_factor", wageSourceType: "hourly_rate", accrualRate: "1.0" },
+        { companyId, name: "Holiday Pay", payType: "pay_multiplied_by_factor", wageSourceType: "hourly_rate", accrualRate: "1.0" },
+        { companyId, name: "Salary Pay", payType: "pay_multiplied_by_factor", wageSourceType: "annual_salary", accrualRate: "1.0" },
+      ];
+      const created: any[] = [];
+      const skipped: string[] = [];
+      for (const formula of defaultFormulas) {
+        if (existingNames.has(formula.name)) { skipped.push(formula.name); continue; }
+        const result = await storage.createPayFormula(formula as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} pay formulas${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up pay formulas" });
     }
   });
 

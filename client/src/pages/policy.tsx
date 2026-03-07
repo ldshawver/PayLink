@@ -24,7 +24,7 @@ import {
   Shield, Plus, Code, Calculator, Layers, Clock, Calendar,
   CalendarDays, RotateCcw, UtensilsCrossed, Coffee, Timer,
   AlertTriangle, Award, FileText, Briefcase, TreePine, Ban,
-  Pencil, Trash2
+  Pencil, Trash2, Zap
 } from "lucide-react";
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -44,9 +44,24 @@ function PolicyGroupsTab() {
   const [editItem, setEditItem] = useState<PolicyGroup | null>(null);
   const defaultForm = { companyId: "", name: "", description: "", isDefault: false };
   const [form, setForm] = useState(defaultForm);
+  const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: groups, isLoading } = useQuery<PolicyGroup[]>({ queryKey: ["/api/policy-groups"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async (companyId: string) => {
+      const res = await apiRequest("POST", "/api/policy-groups/quick-setup", { companyId });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/policy-groups"] });
+      toast({ title: data.message || "Policy groups created" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
@@ -107,51 +122,69 @@ function PolicyGroupsTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Policy Groups</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-policy-group"><Plus className="w-4 h-4 mr-1" /> Add Policy Group</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{editItem ? "Edit Policy Group" : "Add Policy Group"}</DialogTitle>
-            </DialogHeader>
-            <div className="grid gap-4">
-              <div className="grid gap-2">
-                <Label>Company</Label>
-                <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
-                  <SelectTrigger data-testid="select-policy-group-company">
-                    <SelectValue placeholder="Select company" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {companies?.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+            <SelectTrigger data-testid="select-policy-group-quick-company" className="w-[180px]">
+              <SelectValue placeholder="Select company" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            data-testid="button-quick-setup-policy-groups"
+            disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+            onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+          >
+            <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+          </Button>
+          <Dialog open={open} onOpenChange={handleDialogChange}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-policy-group"><Plus className="w-4 h-4 mr-1" /> Add Policy Group</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{editItem ? "Edit Policy Group" : "Add Policy Group"}</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-4">
+                <div className="grid gap-2">
+                  <Label>Company</Label>
+                  <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
+                    <SelectTrigger data-testid="select-policy-group-company">
+                      <SelectValue placeholder="Select company" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {companies?.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  <Label>Name</Label>
+                  <Input data-testid="input-policy-group-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                </div>
+                <div className="grid gap-2">
+                  <Label>Description</Label>
+                  <Input data-testid="input-policy-group-description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="policy-group-default"
+                    data-testid="checkbox-policy-group-default"
+                    checked={form.isDefault}
+                    onCheckedChange={(v) => setForm({ ...form, isDefault: !!v })}
+                  />
+                  <Label htmlFor="policy-group-default">Default</Label>
+                </div>
+                <Button data-testid="button-submit-policy-group" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
+                  {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
+                </Button>
               </div>
-              <div className="grid gap-2">
-                <Label>Name</Label>
-                <Input data-testid="input-policy-group-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              </div>
-              <div className="grid gap-2">
-                <Label>Description</Label>
-                <Input data-testid="input-policy-group-description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-              </div>
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="policy-group-default"
-                  data-testid="checkbox-policy-group-default"
-                  checked={form.isDefault}
-                  onCheckedChange={(v) => setForm({ ...form, isDefault: !!v })}
-                />
-                <Label htmlFor="policy-group-default">Default</Label>
-              </div>
-              <Button data-testid="button-submit-policy-group" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
-                {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -198,9 +231,24 @@ function PayCodesTab() {
   const [editItem, setEditItem] = useState<PayCode | null>(null);
   const defaultForm = { companyId: "", code: "", name: "", type: "regular", rate: "" };
   const [form, setForm] = useState(defaultForm);
+  const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: payCodes, isLoading } = useQuery<PayCode[]>({ queryKey: ["/api/pay-codes"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async (companyId: string) => {
+      const res = await apiRequest("POST", "/api/pay-codes/quick-setup", { companyId });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-codes"] });
+      toast({ title: data.message || "Pay codes created" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
@@ -270,66 +318,84 @@ function PayCodesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Pay Codes</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-pay-code"><Plus className="w-4 h-4 mr-1" /> Add Pay Code</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{editItem ? "Edit Pay Code" : "Add Pay Code"}</DialogTitle>
-            </DialogHeader>
-            <div className="grid gap-4">
-              <div className="grid gap-2">
-                <Label>Company</Label>
-                <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
-                  <SelectTrigger data-testid="select-pay-code-company">
-                    <SelectValue placeholder="Select company" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {companies?.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+            <SelectTrigger data-testid="select-pay-code-quick-company" className="w-[180px]">
+              <SelectValue placeholder="Select company" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            data-testid="button-quick-setup-pay-codes"
+            disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+            onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+          >
+            <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+          </Button>
+          <Dialog open={open} onOpenChange={handleDialogChange}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-pay-code"><Plus className="w-4 h-4 mr-1" /> Add Pay Code</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{editItem ? "Edit Pay Code" : "Add Pay Code"}</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-4">
                 <div className="grid gap-2">
-                  <Label>Code</Label>
-                  <Input data-testid="input-pay-code-code" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
-                </div>
-                <div className="grid gap-2">
-                  <Label>Name</Label>
-                  <Input data-testid="input-pay-code-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label>Type</Label>
-                  <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
-                    <SelectTrigger data-testid="select-pay-code-type">
-                      <SelectValue />
+                  <Label>Company</Label>
+                  <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
+                    <SelectTrigger data-testid="select-pay-code-company">
+                      <SelectValue placeholder="Select company" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="regular">Regular</SelectItem>
-                      <SelectItem value="overtime">Overtime</SelectItem>
-                      <SelectItem value="premium">Premium</SelectItem>
-                      <SelectItem value="holiday">Holiday</SelectItem>
-                      <SelectItem value="sick">Sick</SelectItem>
-                      <SelectItem value="vacation">Vacation</SelectItem>
+                      {companies?.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="grid gap-2">
-                  <Label>Rate</Label>
-                  <Input data-testid="input-pay-code-rate" type="number" step="0.01" value={form.rate} onChange={(e) => setForm({ ...form, rate: e.target.value })} />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label>Code</Label>
+                    <Input data-testid="input-pay-code-code" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Name</Label>
+                    <Input data-testid="input-pay-code-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                  </div>
                 </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label>Type</Label>
+                    <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
+                      <SelectTrigger data-testid="select-pay-code-type">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="regular">Regular</SelectItem>
+                        <SelectItem value="overtime">Overtime</SelectItem>
+                        <SelectItem value="premium">Premium</SelectItem>
+                        <SelectItem value="holiday">Holiday</SelectItem>
+                        <SelectItem value="sick">Sick</SelectItem>
+                        <SelectItem value="vacation">Vacation</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Rate</Label>
+                    <Input data-testid="input-pay-code-rate" type="number" step="0.01" value={form.rate} onChange={(e) => setForm({ ...form, rate: e.target.value })} />
+                  </div>
+                </div>
+                <Button data-testid="button-submit-pay-code" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
+                  {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
+                </Button>
               </div>
-              <Button data-testid="button-submit-pay-code" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
-                {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -723,9 +789,24 @@ function PayFormulasTab() {
   const [editItem, setEditItem] = useState<PayFormula | null>(null);
   const defaultForm = { companyId: "", name: "", payType: "pay_multiplied_by_factor", wageSourceType: "hourly_rate", accrualRate: "", wageGroup: "" };
   const [form, setForm] = useState(defaultForm);
+  const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: items, isLoading } = useQuery<PayFormula[]>({ queryKey: ["/api/pay-formulas"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async (companyId: string) => {
+      const res = await apiRequest("POST", "/api/pay-formulas/quick-setup", { companyId });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-formulas"] });
+      toast({ title: data.message || "Pay formulas created" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
@@ -800,77 +881,95 @@ function PayFormulasTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Pay Formulas</h3>
-        <Dialog open={open} onOpenChange={handleDialogChange}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-pay-formula"><Plus className="w-4 h-4 mr-1" /> Add Pay Formula</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{editItem ? "Edit Pay Formula" : "Add Pay Formula"}</DialogTitle>
-            </DialogHeader>
-            <div className="grid gap-4">
-              <div className="grid gap-2">
-                <Label>Company</Label>
-                <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
-                  <SelectTrigger data-testid="select-pay-formula-company">
-                    <SelectValue placeholder="Select company" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {companies?.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label>Name</Label>
-                <Input data-testid="input-pay-formula-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
+            <SelectTrigger data-testid="select-pay-formula-quick-company" className="w-[180px]">
+              <SelectValue placeholder="Select company" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            data-testid="button-quick-setup-pay-formulas"
+            disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
+            onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+          >
+            <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+          </Button>
+          <Dialog open={open} onOpenChange={handleDialogChange}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-pay-formula"><Plus className="w-4 h-4 mr-1" /> Add Pay Formula</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{editItem ? "Edit Pay Formula" : "Add Pay Formula"}</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-4">
                 <div className="grid gap-2">
-                  <Label>Pay Type</Label>
-                  <Select value={form.payType} onValueChange={(v) => setForm({ ...form, payType: v })}>
-                    <SelectTrigger data-testid="select-pay-formula-pay-type">
-                      <SelectValue />
+                  <Label>Company</Label>
+                  <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
+                    <SelectTrigger data-testid="select-pay-formula-company">
+                      <SelectValue placeholder="Select company" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="pay_multiplied_by_factor">Pay Multiplied by Factor</SelectItem>
-                      <SelectItem value="flat_rate">Flat Rate</SelectItem>
-                      <SelectItem value="hourly_rate">Hourly Rate</SelectItem>
-                      <SelectItem value="annual_salary">Annual Salary</SelectItem>
+                      {companies?.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="grid gap-2">
-                  <Label>Wage Source</Label>
-                  <Select value={form.wageSourceType} onValueChange={(v) => setForm({ ...form, wageSourceType: v })}>
-                    <SelectTrigger data-testid="select-pay-formula-wage-source">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="hourly_rate">Hourly Rate</SelectItem>
-                      <SelectItem value="annual_salary">Annual Salary</SelectItem>
-                      <SelectItem value="contributing_shift">Contributing Shift</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label>Name</Label>
+                  <Input data-testid="input-pay-formula-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
                 </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label>Pay Type</Label>
+                    <Select value={form.payType} onValueChange={(v) => setForm({ ...form, payType: v })}>
+                      <SelectTrigger data-testid="select-pay-formula-pay-type">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pay_multiplied_by_factor">Pay Multiplied by Factor</SelectItem>
+                        <SelectItem value="flat_rate">Flat Rate</SelectItem>
+                        <SelectItem value="hourly_rate">Hourly Rate</SelectItem>
+                        <SelectItem value="annual_salary">Annual Salary</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Wage Source</Label>
+                    <Select value={form.wageSourceType} onValueChange={(v) => setForm({ ...form, wageSourceType: v })}>
+                      <SelectTrigger data-testid="select-pay-formula-wage-source">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="hourly_rate">Hourly Rate</SelectItem>
+                        <SelectItem value="annual_salary">Annual Salary</SelectItem>
+                        <SelectItem value="contributing_shift">Contributing Shift</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label>Accrual Rate</Label>
+                    <Input data-testid="input-pay-formula-accrual-rate" type="number" step="0.01" value={form.accrualRate} onChange={(e) => setForm({ ...form, accrualRate: e.target.value })} />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Wage Group</Label>
+                    <Input data-testid="input-pay-formula-wage-group" value={form.wageGroup} onChange={(e) => setForm({ ...form, wageGroup: e.target.value })} />
+                  </div>
+                </div>
+                <Button data-testid="button-submit-pay-formula" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
+                  {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
+                </Button>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label>Accrual Rate</Label>
-                  <Input data-testid="input-pay-formula-accrual-rate" type="number" step="0.01" value={form.accrualRate} onChange={(e) => setForm({ ...form, accrualRate: e.target.value })} />
-                </div>
-                <div className="grid gap-2">
-                  <Label>Wage Group</Label>
-                  <Input data-testid="input-pay-formula-wage-group" value={form.wageGroup} onChange={(e) => setForm({ ...form, wageGroup: e.target.value })} />
-                </div>
-              </div>
-              <Button data-testid="button-submit-pay-formula" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
-                {mutation.isPending ? (editItem ? "Updating..." : "Creating...") : (editItem ? "Update" : "Create")}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
