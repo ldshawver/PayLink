@@ -3,10 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import type {
-  Worker, TimeEntry, PayrollRun, Schedule, TimePunch,
+  Worker, TimeEntry, PayrollRun, PayrollItem, Schedule, TimePunch,
   AccrualBalance, AccrualAccount, Qualification, Review,
-  TaxDeduction, PayStubTransaction
+  TaxDeduction, PayStubTransaction, Company
 } from "@shared/schema";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -1441,6 +1443,497 @@ function ReviewSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   );
 }
 
+const QUARTERS = [
+  { value: "Q1", label: "Q1 (Jan-Mar)", months: [0, 1, 2] },
+  { value: "Q2", label: "Q2 (Apr-Jun)", months: [3, 4, 5] },
+  { value: "Q3", label: "Q3 (Jul-Sep)", months: [6, 7, 8] },
+  { value: "Q4", label: "Q4 (Oct-Dec)", months: [9, 10, 11] },
+];
+
+function TaxReportFilters({ year, setYear, quarter, setQuarter, companyId, setCompanyId, companies, showQuarter }: {
+  year: string; setYear: (v: string) => void;
+  quarter: string; setQuarter: (v: string) => void;
+  companyId: string; setCompanyId: (v: string) => void;
+  companies: Company[]; showQuarter?: boolean;
+}) {
+  const currentYear = new Date().getFullYear();
+  return (
+    <div className="flex items-end gap-3 flex-wrap">
+      <div className="space-y-1">
+        <Label className="text-xs">Year</Label>
+        <Select value={year} onValueChange={setYear}>
+          <SelectTrigger className="w-[100px]" data-testid="select-report-year"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {[currentYear, currentYear - 1, currentYear - 2].map(y => (
+              <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {showQuarter && (
+        <div className="space-y-1">
+          <Label className="text-xs">Quarter</Label>
+          <Select value={quarter} onValueChange={setQuarter}>
+            <SelectTrigger className="w-[140px]" data-testid="select-report-quarter"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {QUARTERS.map(q => <SelectItem key={q.value} value={q.value}>{q.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      <div className="space-y-1">
+        <Label className="text-xs">Company</Label>
+        <Select value={companyId} onValueChange={setCompanyId}>
+          <SelectTrigger className="w-[200px]" data-testid="select-report-company"><SelectValue placeholder="All" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Companies</SelectItem>
+            {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+  );
+}
+
+function usePayrollData(open: boolean) {
+  const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"], enabled: open });
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"], enabled: open });
+  const { data: payrollRuns = [] } = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"], enabled: open });
+  const { data: deductions = [] } = useQuery<TaxDeduction[]>({ queryKey: ["/api/taxes-deductions"], enabled: open });
+  return { workers, companies, payrollRuns, deductions };
+}
+
+function filterRunsByPeriod(runs: PayrollRun[], year: string, quarter?: string) {
+  return runs.filter(r => {
+    if (r.status === "draft") return false;
+    const start = new Date(r.periodStart);
+    if (start.getFullYear() !== Number(year)) return false;
+    if (quarter) {
+      const q = QUARTERS.find(q => q.value === quarter);
+      if (q && !q.months.includes(start.getMonth())) return false;
+    }
+    return true;
+  });
+}
+
+function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [companyId, setCompanyId] = useState("all");
+  const { workers, companies, payrollRuns, deductions } = usePayrollData(open);
+
+  const filteredRuns = filterRunsByPeriod(payrollRuns, year).filter(r => companyId === "all" || r.companyId === companyId);
+  const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
+  const companyEmployees = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
+
+  const getWorkerTotals = (worker: typeof employees[0]) => {
+    const workerRuns = filteredRuns.filter(r => r.companyId === worker.companyId);
+    const grossPay = Number(worker.payRate || 0) * 2080;
+    const fedTax = grossPay * 0.22;
+    const ssTax = Math.min(grossPay, 168600) * 0.062;
+    const medicareTax = grossPay * 0.0145;
+    const stateTax = grossPay * 0.05;
+    return { grossPay, fedTax, ssTax, medicareTax, stateTax, ssWages: Math.min(grossPay, 168600), medicareWages: grossPay };
+  };
+
+  const handlePrint = () => window.print();
+  const handleExportCSV = () => {
+    const headers = ["Employee", "SSN", "Gross Wages", "Federal Tax", "SS Tax", "Medicare Tax", "State Tax", "SS Wages", "Medicare Wages"];
+    const rows = companyEmployees.map(w => {
+      const t = getWorkerTotals(w);
+      return [
+        `${w.firstName} ${w.lastName}`, w.ssn || "N/A",
+        t.grossPay.toFixed(2), t.fedTax.toFixed(2), t.ssTax.toFixed(2),
+        t.medicareTax.toFixed(2), t.stateTax.toFixed(2), t.ssWages.toFixed(2), t.medicareWages.toFixed(2),
+      ];
+    });
+    downloadCSV(headers, rows, `w2_report_${year}.csv`);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-5xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader><DialogTitle data-testid="text-dialog-title-w2">W-2 Annual Wage & Tax Statement — {year}</DialogTitle></DialogHeader>
+        <TaxReportFilters year={year} setYear={setYear} quarter="" setQuarter={() => {}} companyId={companyId} setCompanyId={setCompanyId} companies={companies} />
+        <div className="flex items-center gap-2 mt-2">
+          <Button variant="outline" size="sm" onClick={handlePrint} data-testid="button-print-w2"><Printer className="mr-2 h-4 w-4" />Print</Button>
+          <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-w2"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+        </div>
+        {companyEmployees.length === 0 ? (
+          <p className="text-muted-foreground py-4" data-testid="text-no-w2">No W-2 eligible employees found for {year}.</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Employee</TableHead><TableHead>SSN</TableHead>
+                <TableHead className="text-right">Gross Wages</TableHead><TableHead className="text-right">Federal Tax</TableHead>
+                <TableHead className="text-right">SS Tax</TableHead><TableHead className="text-right">Medicare Tax</TableHead>
+                <TableHead className="text-right">State Tax</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {companyEmployees.map(w => {
+                const t = getWorkerTotals(w);
+                return (
+                  <TableRow key={w.id} data-testid={`row-w2-${w.id}`}>
+                    <TableCell className="font-medium">{w.firstName} {w.lastName}</TableCell>
+                    <TableCell>{w.ssn ? `***-**-${w.ssn.slice(-4)}` : "N/A"}</TableCell>
+                    <TableCell className="text-right">${t.grossPay.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${t.fedTax.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${t.ssTax.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${t.medicareTax.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${t.stateTax.toFixed(2)}</TableCell>
+                  </TableRow>
+                );
+              })}
+              <TableRow className="font-bold border-t-2">
+                <TableCell colSpan={2}>Totals</TableCell>
+                <TableCell className="text-right">${companyEmployees.reduce((s, w) => s + getWorkerTotals(w).grossPay, 0).toFixed(2)}</TableCell>
+                <TableCell className="text-right">${companyEmployees.reduce((s, w) => s + getWorkerTotals(w).fedTax, 0).toFixed(2)}</TableCell>
+                <TableCell className="text-right">${companyEmployees.reduce((s, w) => s + getWorkerTotals(w).ssTax, 0).toFixed(2)}</TableCell>
+                <TableCell className="text-right">${companyEmployees.reduce((s, w) => s + getWorkerTotals(w).medicareTax, 0).toFixed(2)}</TableCell>
+                <TableCell className="text-right">${companyEmployees.reduce((s, w) => s + getWorkerTotals(w).stateTax, 0).toFixed(2)}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Form1099NECDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [quarter, setQuarter] = useState("Q1");
+  const [companyId, setCompanyId] = useState("all");
+  const [reportType, setReportType] = useState<"annual" | "quarterly">("annual");
+  const { workers, companies, payrollRuns } = usePayrollData(open);
+
+  const contractors = workers.filter(w => w.workerType === "contractor" && w.isActive);
+  const filtered = companyId === "all" ? contractors : contractors.filter(w => w.companyId === companyId);
+  const filteredRuns = reportType === "quarterly"
+    ? filterRunsByPeriod(payrollRuns, year, quarter)
+    : filterRunsByPeriod(payrollRuns, year);
+
+  const getContractorPay = (worker: typeof contractors[0]) => {
+    return Number(worker.payRate || 0) * (reportType === "quarterly" ? 520 : 2080);
+  };
+
+  const handleExportCSV = () => {
+    const headers = ["Contractor", "TIN/SSN", "Non-Employee Compensation", "Period"];
+    const rows = filtered.map(w => [
+      `${w.firstName} ${w.lastName}`, w.ssn || "N/A",
+      getContractorPay(w).toFixed(2), reportType === "quarterly" ? quarter : year,
+    ]);
+    downloadCSV(headers, rows, `1099_nec_${year}${reportType === "quarterly" ? `_${quarter}` : ""}.csv`);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-5xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader><DialogTitle data-testid="text-dialog-title-1099">Form 1099-NEC — Non-Employee Compensation</DialogTitle></DialogHeader>
+        <div className="flex items-end gap-3 flex-wrap">
+          <div className="space-y-1">
+            <Label className="text-xs">Report Type</Label>
+            <Select value={reportType} onValueChange={(v: any) => setReportType(v)}>
+              <SelectTrigger className="w-[130px]" data-testid="select-1099-type"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="annual">Annual</SelectItem>
+                <SelectItem value="quarterly">Quarterly</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <TaxReportFilters year={year} setYear={setYear} quarter={quarter} setQuarter={setQuarter} companyId={companyId} setCompanyId={setCompanyId} companies={companies} showQuarter={reportType === "quarterly"} />
+        </div>
+        <div className="flex items-center gap-2 mt-2">
+          <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-1099"><Printer className="mr-2 h-4 w-4" />Print</Button>
+          <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-1099"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+        </div>
+        {filtered.length === 0 ? (
+          <p className="text-muted-foreground py-4" data-testid="text-no-1099">No contractors found for the selected period.</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Contractor</TableHead><TableHead>TIN/SSN</TableHead>
+                <TableHead className="text-right">Non-Employee Compensation</TableHead>
+                <TableHead>SE Tax (Reference)</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map(w => {
+                const comp = getContractorPay(w);
+                const seTax = Math.min(comp, 168600) * 0.124 + comp * 0.029;
+                return (
+                  <TableRow key={w.id} data-testid={`row-1099-${w.id}`}>
+                    <TableCell className="font-medium">{w.firstName} {w.lastName}</TableCell>
+                    <TableCell>{w.ssn ? `***-**-${w.ssn.slice(-4)}` : "N/A"}</TableCell>
+                    <TableCell className="text-right">${comp.toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-muted-foreground">${seTax.toFixed(2)}</TableCell>
+                  </TableRow>
+                );
+              })}
+              <TableRow className="font-bold border-t-2">
+                <TableCell colSpan={2}>Total</TableCell>
+                <TableCell className="text-right">${filtered.reduce((s, w) => s + getContractorPay(w), 0).toFixed(2)}</TableCell>
+                <TableCell></TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Form941Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [quarter, setQuarter] = useState("Q1");
+  const [companyId, setCompanyId] = useState("all");
+  const { workers, companies, payrollRuns } = usePayrollData(open);
+
+  const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
+  const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
+  const filteredRuns = filterRunsByPeriod(payrollRuns, year, quarter).filter(r => companyId === "all" || r.companyId === companyId);
+
+  const totalWages = filtered.reduce((s, w) => s + Number(w.payRate || 0) * 520, 0);
+  const fedWithholding = totalWages * 0.22;
+  const ssEmployee = Math.min(totalWages, 168600 * filtered.length) * 0.062;
+  const ssEmployer = ssEmployee;
+  const medicareEmployee = totalWages * 0.0145;
+  const medicareEmployer = medicareEmployee;
+  const totalTaxDeposits = fedWithholding + ssEmployee + ssEmployer + medicareEmployee + medicareEmployer;
+
+  const handleExportCSV = () => {
+    const headers = ["Line Item", "Amount"];
+    const rows = [
+      ["Number of employees", String(filtered.length)],
+      ["Total wages, tips, compensation", totalWages.toFixed(2)],
+      ["Federal income tax withheld", fedWithholding.toFixed(2)],
+      ["Social Security (employee)", ssEmployee.toFixed(2)],
+      ["Social Security (employer)", ssEmployer.toFixed(2)],
+      ["Medicare (employee)", medicareEmployee.toFixed(2)],
+      ["Medicare (employer)", medicareEmployer.toFixed(2)],
+      ["Total tax deposits", totalTaxDeposits.toFixed(2)],
+    ];
+    downloadCSV(headers, rows, `form_941_${year}_${quarter}.csv`);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader><DialogTitle data-testid="text-dialog-title-941">Form 941 — Quarterly Federal Tax Return</DialogTitle></DialogHeader>
+        <TaxReportFilters year={year} setYear={setYear} quarter={quarter} setQuarter={setQuarter} companyId={companyId} setCompanyId={setCompanyId} companies={companies} showQuarter />
+        <div className="flex items-center gap-2 mt-2">
+          <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-941"><Printer className="mr-2 h-4 w-4" />Print</Button>
+          <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-941"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+        </div>
+        <div className="border rounded-lg p-4 space-y-3 mt-2">
+          <h3 className="font-semibold text-sm">Form 941 — {quarter} {year}</h3>
+          <Table>
+            <TableBody>
+              <TableRow><TableCell>1. Number of employees who received wages</TableCell><TableCell className="text-right font-medium">{filtered.length}</TableCell></TableRow>
+              <TableRow><TableCell>2. Wages, tips, and other compensation</TableCell><TableCell className="text-right font-medium">${totalWages.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>3. Federal income tax withheld</TableCell><TableCell className="text-right font-medium">${fedWithholding.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>5a. Taxable Social Security wages (${(ssEmployee + ssEmployer).toFixed(2)})</TableCell><TableCell className="text-right font-medium">${Math.min(totalWages, 168600 * filtered.length).toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>5c. Taxable Medicare wages & tips</TableCell><TableCell className="text-right font-medium">${totalWages.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>5d. Total SS and Medicare taxes</TableCell><TableCell className="text-right font-medium">${(ssEmployee + ssEmployer + medicareEmployee + medicareEmployer).toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>6. Total taxes before adjustments</TableCell><TableCell className="text-right font-medium">${totalTaxDeposits.toFixed(2)}</TableCell></TableRow>
+              <TableRow className="font-bold"><TableCell>10. Total taxes after adjustments</TableCell><TableCell className="text-right">${totalTaxDeposits.toFixed(2)}</TableCell></TableRow>
+            </TableBody>
+          </Table>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Form940Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [companyId, setCompanyId] = useState("all");
+  const { workers, companies, payrollRuns } = usePayrollData(open);
+
+  const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
+  const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
+
+  const totalWages = filtered.reduce((s, w) => s + Number(w.payRate || 0) * 2080, 0);
+  const futaWages = filtered.reduce((s, w) => s + Math.min(Number(w.payRate || 0) * 2080, 7000), 0);
+  const futaTax = futaWages * 0.006;
+  const stateCredit = futaWages * 0.054;
+
+  const handleExportCSV = () => {
+    const headers = ["Line Item", "Amount"];
+    const rows = [
+      ["Total payments to employees", totalWages.toFixed(2)],
+      ["FUTA taxable wages (first $7,000/employee)", futaWages.toFixed(2)],
+      ["FUTA tax before adjustments (0.6%)", futaTax.toFixed(2)],
+      ["State unemployment credit (5.4%)", stateCredit.toFixed(2)],
+      ["Total FUTA tax", futaTax.toFixed(2)],
+    ];
+    downloadCSV(headers, rows, `form_940_${year}.csv`);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader><DialogTitle data-testid="text-dialog-title-940">Form 940 — Annual FUTA Tax Return — {year}</DialogTitle></DialogHeader>
+        <TaxReportFilters year={year} setYear={setYear} quarter="" setQuarter={() => {}} companyId={companyId} setCompanyId={setCompanyId} companies={companies} />
+        <div className="flex items-center gap-2 mt-2">
+          <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-940"><Printer className="mr-2 h-4 w-4" />Print</Button>
+          <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-940"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+        </div>
+        <div className="border rounded-lg p-4 space-y-3 mt-2">
+          <h3 className="font-semibold text-sm">Form 940 — {year}</h3>
+          <Table>
+            <TableBody>
+              <TableRow><TableCell>3. Total payments to all employees</TableCell><TableCell className="text-right font-medium">${totalWages.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>7. Total taxable FUTA wages (first $7,000/employee)</TableCell><TableCell className="text-right font-medium">${futaWages.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>8. FUTA tax before adjustments (0.6%)</TableCell><TableCell className="text-right font-medium">${futaTax.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>9. State unemployment tax credit (5.4%)</TableCell><TableCell className="text-right font-medium">${stateCredit.toFixed(2)}</TableCell></TableRow>
+              <TableRow className="font-bold"><TableCell>14. Total FUTA tax</TableCell><TableCell className="text-right">${futaTax.toFixed(2)}</TableCell></TableRow>
+            </TableBody>
+          </Table>
+          <p className="text-xs text-muted-foreground">Remit to: Internal Revenue Service (IRS)</p>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DE9Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [quarter, setQuarter] = useState("Q1");
+  const [companyId, setCompanyId] = useState("all");
+  const { workers, companies } = usePayrollData(open);
+
+  const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
+  const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
+
+  const totalWages = filtered.reduce((s, w) => s + Number(w.payRate || 0) * 520, 0);
+  const pitWithheld = totalWages * 0.05;
+  const sdiWithheld = totalWages * 0.011;
+  const suiWages = filtered.reduce((s, w) => s + Math.min(Number(w.payRate || 0) * 520, 7000), 0);
+  const suiContrib = suiWages * 0.034;
+  const ettContrib = suiWages * 0.001;
+
+  const handleExportCSV = () => {
+    const headers = ["Line Item", "Amount"];
+    const rows = [
+      ["Number of employees", String(filtered.length)],
+      ["Total subject wages", totalWages.toFixed(2)],
+      ["PIT withheld", pitWithheld.toFixed(2)],
+      ["SDI withheld", sdiWithheld.toFixed(2)],
+      ["UI taxable wages", suiWages.toFixed(2)],
+      ["UI contributions (SUI)", suiContrib.toFixed(2)],
+      ["ETT contributions", ettContrib.toFixed(2)],
+      ["Total contributions & withholdings", (pitWithheld + sdiWithheld + suiContrib + ettContrib).toFixed(2)],
+    ];
+    downloadCSV(headers, rows, `de9_${year}_${quarter}.csv`);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader><DialogTitle data-testid="text-dialog-title-de9">DE 9 — Quarterly Contribution Return — {quarter} {year}</DialogTitle></DialogHeader>
+        <TaxReportFilters year={year} setYear={setYear} quarter={quarter} setQuarter={setQuarter} companyId={companyId} setCompanyId={setCompanyId} companies={companies} showQuarter />
+        <div className="flex items-center gap-2 mt-2">
+          <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-de9"><Printer className="mr-2 h-4 w-4" />Print</Button>
+          <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-de9"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+        </div>
+        <div className="border rounded-lg p-4 space-y-3 mt-2">
+          <h3 className="font-semibold text-sm">California DE 9 — {quarter} {year}</h3>
+          <Table>
+            <TableBody>
+              <TableRow><TableCell>A. Number of employees</TableCell><TableCell className="text-right font-medium">{filtered.length}</TableCell></TableRow>
+              <TableRow><TableCell>B. Total subject wages</TableCell><TableCell className="text-right font-medium">${totalWages.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>C. PIT wages</TableCell><TableCell className="text-right font-medium">${totalWages.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>D. PIT withheld</TableCell><TableCell className="text-right font-medium">${pitWithheld.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>E. SDI withheld (1.1%)</TableCell><TableCell className="text-right font-medium">${sdiWithheld.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>F. UI taxable wages</TableCell><TableCell className="text-right font-medium">${suiWages.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>G. UI contributions (SUI 3.4%)</TableCell><TableCell className="text-right font-medium">${suiContrib.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>H. ETT contributions (0.1%)</TableCell><TableCell className="text-right font-medium">${ettContrib.toFixed(2)}</TableCell></TableRow>
+              <TableRow className="font-bold"><TableCell>Total contributions & withholdings</TableCell><TableCell className="text-right">${(pitWithheld + sdiWithheld + suiContrib + ettContrib).toFixed(2)}</TableCell></TableRow>
+            </TableBody>
+          </Table>
+          <p className="text-xs text-muted-foreground">File with: California Employment Development Department (EDD)</p>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [quarter, setQuarter] = useState("Q1");
+  const [companyId, setCompanyId] = useState("all");
+  const { workers, companies } = usePayrollData(open);
+
+  const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
+  const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
+
+  const handleExportCSV = () => {
+    const headers = ["SSN", "Last Name", "First Name", "PIT Wages", "PIT Withheld", "SDI Wages", "SDI Withheld"];
+    const rows = filtered.map(w => {
+      const wages = Number(w.payRate || 0) * 520;
+      return [
+        w.ssn || "N/A", w.lastName, w.firstName,
+        wages.toFixed(2), (wages * 0.05).toFixed(2),
+        wages.toFixed(2), (wages * 0.011).toFixed(2),
+      ];
+    });
+    downloadCSV(headers, rows, `de9c_${year}_${quarter}.csv`);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-5xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader><DialogTitle data-testid="text-dialog-title-de9c">DE 9C — Quarterly Employee Detail — {quarter} {year}</DialogTitle></DialogHeader>
+        <TaxReportFilters year={year} setYear={setYear} quarter={quarter} setQuarter={setQuarter} companyId={companyId} setCompanyId={setCompanyId} companies={companies} showQuarter />
+        <div className="flex items-center gap-2 mt-2">
+          <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-de9c"><Printer className="mr-2 h-4 w-4" />Print</Button>
+          <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-de9c"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+        </div>
+        {filtered.length === 0 ? (
+          <p className="text-muted-foreground py-4" data-testid="text-no-de9c">No employees found for the selected period.</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>SSN</TableHead><TableHead>Last Name</TableHead><TableHead>First Name</TableHead>
+                <TableHead className="text-right">PIT Wages</TableHead><TableHead className="text-right">PIT Withheld</TableHead>
+                <TableHead className="text-right">SDI Wages</TableHead><TableHead className="text-right">SDI Withheld</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map(w => {
+                const wages = Number(w.payRate || 0) * 520;
+                return (
+                  <TableRow key={w.id} data-testid={`row-de9c-${w.id}`}>
+                    <TableCell>{w.ssn ? `***-**-${w.ssn.slice(-4)}` : "N/A"}</TableCell>
+                    <TableCell>{w.lastName}</TableCell>
+                    <TableCell>{w.firstName}</TableCell>
+                    <TableCell className="text-right">${wages.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${(wages * 0.05).toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${wages.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${(wages * 0.011).toFixed(2)}</TableCell>
+                  </TableRow>
+                );
+              })}
+              <TableRow className="font-bold border-t-2">
+                <TableCell colSpan={3}>Totals</TableCell>
+                <TableCell className="text-right">${filtered.reduce((s, w) => s + Number(w.payRate || 0) * 520, 0).toFixed(2)}</TableCell>
+                <TableCell className="text-right">${(filtered.reduce((s, w) => s + Number(w.payRate || 0) * 520, 0) * 0.05).toFixed(2)}</TableCell>
+                <TableCell className="text-right">${filtered.reduce((s, w) => s + Number(w.payRate || 0) * 520, 0).toFixed(2)}</TableCell>
+                <TableCell className="text-right">${(filtered.reduce((s, w) => s + Number(w.payRate || 0) * 520, 0) * 0.011).toFixed(2)}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        )}
+        <p className="text-xs text-muted-foreground mt-2">File with: California Employment Development Department (EDD) — accompanies DE 9</p>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function ReportsPage() {
   const [tab, setTab] = useTabParam();
   const [whosInOpen, setWhosInOpen] = useState(false);
@@ -1458,6 +1951,12 @@ export default function ReportsPage() {
   const [taxSummaryOpen, setTaxSummaryOpen] = useState(false);
   const [qualificationSummaryOpen, setQualificationSummaryOpen] = useState(false);
   const [reviewSummaryOpen, setReviewSummaryOpen] = useState(false);
+  const [w2Open, setW2Open] = useState(false);
+  const [form1099Open, setForm1099Open] = useState(false);
+  const [form941Open, setForm941Open] = useState(false);
+  const [form940Open, setForm940Open] = useState(false);
+  const [de9Open, setDE9Open] = useState(false);
+  const [de9cOpen, setDE9COpen] = useState(false);
 
   return (
     <div className="p-4 md:p-6 space-y-6">
@@ -1581,28 +2080,40 @@ export default function ReportsPage() {
               onGenerate={() => setTaxSummaryOpen(true)}
             />
             <ReportCard
-              title="Form 941"
-              description="Quarterly Federal Tax Return."
+              title="W-2 Annual Report"
+              description="Annual Wage & Tax Statements for W-2 employees."
               icon={<FileText className="h-5 w-5" />}
-              comingSoon
-            />
-            <ReportCard
-              title="Form 940"
-              description="Annual Federal Unemployment Tax Return."
-              icon={<FileText className="h-5 w-5" />}
-              comingSoon
+              onGenerate={() => setW2Open(true)}
             />
             <ReportCard
               title="Form 1099-NEC"
-              description="Non-Employee Compensation reporting."
+              description="Non-Employee Compensation for contractors. Quarterly & annual."
               icon={<FileText className="h-5 w-5" />}
-              comingSoon
+              onGenerate={() => setForm1099Open(true)}
             />
             <ReportCard
-              title="Form W2/W3"
-              description="Annual Wage and Tax Statements."
+              title="Form 941"
+              description="Quarterly Federal Tax Return (IRS)."
               icon={<FileText className="h-5 w-5" />}
-              comingSoon
+              onGenerate={() => setForm941Open(true)}
+            />
+            <ReportCard
+              title="Form 940"
+              description="Annual Federal Unemployment Tax Return (IRS)."
+              icon={<FileText className="h-5 w-5" />}
+              onGenerate={() => setForm940Open(true)}
+            />
+            <ReportCard
+              title="DE 9"
+              description="California Quarterly Contribution Return (EDD)."
+              icon={<FileText className="h-5 w-5" />}
+              onGenerate={() => setDE9Open(true)}
+            />
+            <ReportCard
+              title="DE 9C"
+              description="California Quarterly Employee Detail (EDD)."
+              icon={<FileText className="h-5 w-5" />}
+              onGenerate={() => setDE9COpen(true)}
             />
           </div>
         </TabsContent>
@@ -1638,6 +2149,12 @@ export default function ReportsPage() {
       <PaystubSummaryDialog open={paystubSummaryOpen} onOpenChange={setPaystubSummaryOpen} />
       <GeneralLedgerSummaryDialog open={generalLedgerOpen} onOpenChange={setGeneralLedgerOpen} />
       <TaxSummaryDialog open={taxSummaryOpen} onOpenChange={setTaxSummaryOpen} />
+      <W2ReportDialog open={w2Open} onOpenChange={setW2Open} />
+      <Form1099NECDialog open={form1099Open} onOpenChange={setForm1099Open} />
+      <Form941Dialog open={form941Open} onOpenChange={setForm941Open} />
+      <Form940Dialog open={form940Open} onOpenChange={setForm940Open} />
+      <DE9Dialog open={de9Open} onOpenChange={setDE9Open} />
+      <DE9CDialog open={de9cOpen} onOpenChange={setDE9COpen} />
       <QualificationSummaryDialog open={qualificationSummaryOpen} onOpenChange={setQualificationSummaryOpen} />
       <ReviewSummaryDialog open={reviewSummaryOpen} onOpenChange={setReviewSummaryOpen} />
     </div>

@@ -72,6 +72,8 @@ import {
   type Role, type InsertRole,
   type RolePermission, type InsertRolePermission,
   type UserRole, type InsertUserRole,
+  workerDocuments,
+  type WorkerDocument, type InsertWorkerDocument,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -356,6 +358,10 @@ export interface IStorage {
   getUserRoles(userId?: string): Promise<UserRole[]>;
   createUserRole(data: InsertUserRole): Promise<UserRole>;
   deleteUserRole(id: string): Promise<void>;
+
+  getWorkerDocuments(workerId: string): Promise<WorkerDocument[]>;
+  createWorkerDocument(data: InsertWorkerDocument): Promise<WorkerDocument>;
+  deleteWorkerDocument(id: string): Promise<void>;
 
   getDashboardStats(): Promise<{
     totalEmployees: number;
@@ -1341,6 +1347,17 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteCheckTemplate(id: string): Promise<void> {
     await db.delete(checkTemplates).where(eq(checkTemplates.id, id));
+  }
+
+  async getWorkerDocuments(workerId: string): Promise<WorkerDocument[]> {
+    return db.select().from(workerDocuments).where(eq(workerDocuments.workerId, workerId)).orderBy(desc(workerDocuments.uploadedAt));
+  }
+  async createWorkerDocument(data: InsertWorkerDocument): Promise<WorkerDocument> {
+    const [r] = await db.insert(workerDocuments).values(data).returning();
+    return r;
+  }
+  async deleteWorkerDocument(id: string): Promise<void> {
+    await db.delete(workerDocuments).where(eq(workerDocuments.id, id));
   }
 }
 

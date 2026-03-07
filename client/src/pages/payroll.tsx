@@ -818,6 +818,7 @@ function TaxesDeductionsTab() {
 function RemittanceSourcesTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedCompany, setSelectedCompany] = useState<string>("all");
   const [formData, setFormData] = useState({
     companyId: "", name: "", type: "check", status: "enabled",
     country: "US", currency: "USD", routingNumber: "", accountNumber: "",
@@ -826,6 +827,18 @@ function RemittanceSourcesTab() {
 
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: remittanceSources = [], isLoading } = useQuery<RemittanceSource[]>({ queryKey: ["/api/remittance-sources"] });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async (companyId: string) => {
+      const res = await apiRequest("POST", "/api/remittance-sources/quick-setup", { companyId });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/remittance-sources"] });
+      toast({ title: "Quick Setup Complete", description: data.message || `Created ${data.count} remittance sources` });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
@@ -852,7 +865,30 @@ function RemittanceSourcesTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <Select value={selectedCompany} onValueChange={setSelectedCompany}>
+            <SelectTrigger className="w-[200px]" data-testid="select-rs-filter-company">
+              <SelectValue placeholder="All companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center gap-2">
+          {selectedCompany !== "all" && (
+            <Button
+              variant="secondary"
+              data-testid="button-rs-quick-setup"
+              disabled={quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate(selectedCompany)}
+            >
+              <Zap className="mr-2 h-4 w-4" />
+              {quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+          )}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-remittance-source"><Plus className="mr-2 h-4 w-4" />Add Remittance Source</Button>
@@ -929,6 +965,7 @@ function RemittanceSourcesTab() {
             </div>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">
@@ -980,6 +1017,7 @@ function RemittanceSourcesTab() {
 function RemittanceAgenciesTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedCompany, setSelectedCompany] = useState<string>("all");
   const [formData, setFormData] = useState({
     companyId: "", name: "", type: "federal", status: "enabled",
     country: "US", provinceState: "", agency: "", startDate: "", endDate: "",
@@ -987,6 +1025,18 @@ function RemittanceAgenciesTab() {
 
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: remittanceAgencies = [], isLoading } = useQuery<RemittanceAgency[]>({ queryKey: ["/api/remittance-agencies"] });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async (companyId: string) => {
+      const res = await apiRequest("POST", "/api/remittance-agencies/quick-setup", { companyId });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/remittance-agencies"] });
+      toast({ title: "Quick Setup Complete", description: data.message || `Created ${data.count} remittance agencies` });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
@@ -1014,7 +1064,30 @@ function RemittanceAgenciesTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <Select value={selectedCompany} onValueChange={setSelectedCompany}>
+            <SelectTrigger className="w-[200px]" data-testid="select-ra-filter-company">
+              <SelectValue placeholder="All companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center gap-2">
+          {selectedCompany !== "all" && (
+            <Button
+              variant="secondary"
+              data-testid="button-ra-quick-setup"
+              disabled={quickSetupMutation.isPending}
+              onClick={() => quickSetupMutation.mutate(selectedCompany)}
+            >
+              <Zap className="mr-2 h-4 w-4" />
+              {quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
+            </Button>
+          )}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-remittance-agency"><Plus className="mr-2 h-4 w-4" />Add Remittance Agency</Button>
@@ -1088,6 +1161,7 @@ function RemittanceAgenciesTab() {
             </div>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
       <Card>
         <CardContent className="p-0">

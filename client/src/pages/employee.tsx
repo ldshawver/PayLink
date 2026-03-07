@@ -6,7 +6,8 @@ import { useToast } from "@/hooks/use-toast";
 import type {
   Worker, Company, EmployeeContact, PayMethod,
   EmployeeTitle, EmployeeGroup, WageHistory, NewHireDefault,
-  RemittanceSource, Branch, Department, PolicyGroup, PayPeriodSchedule
+  RemittanceSource, Branch, Department, PolicyGroup, PayPeriodSchedule,
+  WorkerDocument
 } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -24,7 +25,8 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Users, Plus, MoreHorizontal, Settings, DollarSign, CreditCard,
   Briefcase, UserPlus, Clock, Calendar, Building2,
-  Pencil, Trash2, ChevronRight, Hash, Globe, Phone, Mail, MapPin, FileText
+  Pencil, Trash2, ChevronRight, Hash, Globe, Phone, Mail, MapPin, FileText,
+  Upload, Download
 } from "lucide-react";
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -921,6 +923,266 @@ function PreferencesTab() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function DocumentsTab() {
+  const { toast } = useToast();
+  const [companyFilter, setCompanyFilter] = useState<string>("all");
+  const [workerFilter, setWorkerFilter] = useState<string>("");
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [docName, setDocName] = useState("");
+  const [docType, setDocType] = useState("Other");
+  const [docNotes, setDocNotes] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
+  const companiesQuery = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const workersQuery = useQuery<Worker[]>({
+    queryKey: ["/api/workers", companyFilter !== "all" ? `?companyId=${companyFilter}` : ""],
+  });
+  const documentsQuery = useQuery<WorkerDocument[]>({
+    queryKey: ["/api/worker-documents", `?workerId=${workerFilter}`],
+    enabled: !!workerFilter,
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async (formData: FormData) => {
+      const res = await fetch("/api/worker-documents", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Upload failed" }));
+        throw new Error(err.message || "Upload failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/worker-documents"] });
+      toast({ title: "Document uploaded successfully" });
+      setUploadOpen(false);
+      resetUploadForm();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/worker-documents/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/worker-documents"] });
+      toast({ title: "Document deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  function resetUploadForm() {
+    setDocName("");
+    setDocType("Other");
+    setDocNotes("");
+    setSelectedFile(null);
+  }
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] || null;
+    setSelectedFile(file);
+    if (file && !docName) {
+      setDocName(file.name.replace(/\.[^/.]+$/, ""));
+    }
+  }
+
+  function handleUpload() {
+    if (!selectedFile || !workerFilter || !docName) return;
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+    formData.append("workerId", workerFilter);
+    formData.append("name", docName);
+    formData.append("documentType", docType);
+    if (docNotes) formData.append("notes", docNotes);
+    uploadMutation.mutate(formData);
+  }
+
+  const companies = companiesQuery.data || [];
+  const workers = workersQuery.data || [];
+  const documents = documentsQuery.data || [];
+
+  const documentTypeOptions = [
+    "W-4 Tax Withholding",
+    "I-9 Employment Eligibility",
+    "DE 4 (CA Withholding)",
+    "Photo ID",
+    "Tax Forms",
+    "Employment Agreement",
+    "Contractor Agreement",
+    "Other",
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-4 flex-wrap">
+          <Select value={companyFilter} onValueChange={v => { setCompanyFilter(v); setWorkerFilter(""); }}>
+            <SelectTrigger data-testid="select-doc-company-filter" className="w-[200px]">
+              <SelectValue placeholder="Filter by company" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map(c => (
+                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={workerFilter} onValueChange={setWorkerFilter}>
+            <SelectTrigger data-testid="select-doc-worker-filter" className="w-[200px]">
+              <SelectValue placeholder="Select employee" />
+            </SelectTrigger>
+            <SelectContent>
+              {workers.map(w => (
+                <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Dialog open={uploadOpen} onOpenChange={v => { setUploadOpen(v); if (!v) resetUploadForm(); }}>
+          <DialogTrigger asChild>
+            <Button data-testid="button-upload-document" disabled={!workerFilter}>
+              <Upload className="mr-2 h-4 w-4" />Upload Document
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-lg">
+            <DialogHeader><DialogTitle>Upload Document</DialogTitle></DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="space-y-2">
+                <Label>File</Label>
+                <Input
+                  data-testid="input-doc-file"
+                  type="file"
+                  accept=".jpg,.jpeg,.png,.gif,.pdf,.doc,.docx"
+                  onChange={handleFileChange}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Name</Label>
+                <Input
+                  data-testid="input-doc-name"
+                  value={docName}
+                  onChange={e => setDocName(e.target.value)}
+                  placeholder="Document name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Document Type</Label>
+                <Select value={docType} onValueChange={setDocType}>
+                  <SelectTrigger data-testid="select-doc-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {documentTypeOptions.map(opt => (
+                      <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Notes (optional)</Label>
+                <Textarea
+                  data-testid="input-doc-notes"
+                  value={docNotes}
+                  onChange={e => setDocNotes(e.target.value)}
+                  placeholder="Additional notes"
+                />
+              </div>
+              <Button
+                data-testid="button-submit-document"
+                onClick={handleUpload}
+                disabled={uploadMutation.isPending || !selectedFile || !docName}
+              >
+                {uploadMutation.isPending ? "Uploading..." : "Upload"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {!workerFilter ? (
+        <Card>
+          <CardContent className="py-8 text-center text-muted-foreground">
+            Select an employee to view their documents
+          </CardContent>
+        </Card>
+      ) : documentsQuery.isLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+        </div>
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Upload Date</TableHead>
+                  <TableHead>Notes</TableHead>
+                  <TableHead className="w-24">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {documents.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                      No documents found
+                    </TableCell>
+                  </TableRow>
+                ) : documents.map(doc => (
+                  <TableRow key={doc.id} data-testid={`row-document-${doc.id}`}>
+                    <TableCell data-testid={`text-doc-name-${doc.id}`}>
+                      <div className="flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                        {doc.name}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="secondary" className="text-xs">{doc.documentType || "Other"}</Badge>
+                    </TableCell>
+                    <TableCell data-testid={`text-doc-date-${doc.id}`}>
+                      {doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : "—"}
+                    </TableCell>
+                    <TableCell>{doc.notes || "—"}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          data-testid={`button-download-doc-${doc.id}`}
+                          onClick={() => window.open(doc.fileUrl, "_blank")}
+                        >
+                          <Download className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          data-testid={`button-delete-doc-${doc.id}`}
+                          onClick={() => {
+                            if (confirm("Delete this document?")) deleteMutation.mutate(doc.id);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }
 
@@ -2170,6 +2432,9 @@ export default function EmployeePage() {
           <TabsTrigger value="preferences" data-testid="tab-preferences">
             <Settings className="mr-2 h-4 w-4" />Preferences
           </TabsTrigger>
+          <TabsTrigger value="documents" data-testid="tab-documents">
+            <FileText className="mr-2 h-4 w-4" />Documents
+          </TabsTrigger>
           <TabsTrigger value="wages" data-testid="tab-wages">
             <DollarSign className="mr-2 h-4 w-4" />Wages
           </TabsTrigger>
@@ -2193,6 +2458,7 @@ export default function EmployeePage() {
         <TabsContent value="employee"><EmployeeTab /></TabsContent>
         <TabsContent value="contacts"><EmployeeContactsTab /></TabsContent>
         <TabsContent value="preferences"><PreferencesTab /></TabsContent>
+        <TabsContent value="documents"><DocumentsTab /></TabsContent>
         <TabsContent value="wages"><WagesTab /></TabsContent>
         <TabsContent value="pay-methods"><PayMethodsTab /></TabsContent>
         <TabsContent value="titles"><TitlesTab /></TabsContent>

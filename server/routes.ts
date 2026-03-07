@@ -22,6 +22,15 @@ const upload = multer({
     else cb(new Error("Only image files are allowed"));
   },
 });
+const documentUpload = multer({
+  storage: uploadStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = /\.(jpg|jpeg|png|gif|svg|webp|pdf|doc|docx)$/i;
+    if (allowed.test(path.extname(file.originalname))) cb(null, true);
+    else cb(new Error("Only image and document files are allowed"));
+  },
+});
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.session?.userId) {
@@ -1166,14 +1175,16 @@ export async function registerRoutes(
       const existingNames = new Set(existing.map(e => e.name));
       const standardItems = [
         { companyId, name: "Federal Income Tax", type: "tax", category: "mandatory_tax", subcategory: "federal", calculationType: "percentage", rate: "22", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
-        { companyId, name: "State Income Tax", type: "tax", category: "mandatory_tax", subcategory: "state", calculationType: "percentage", rate: "5", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "California Personal Income Tax (PIT)", type: "tax", category: "mandatory_tax", subcategory: "state", calculationType: "percentage", rate: "5", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
         { companyId, name: "Social Security (FICA)", type: "tax", category: "mandatory_tax", subcategory: "federal", calculationType: "percentage", rate: "6.2", maxAmount: "168600", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
         { companyId, name: "Medicare", type: "tax", category: "mandatory_tax", subcategory: "federal", calculationType: "percentage", rate: "1.45", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "Additional Medicare", type: "tax", category: "mandatory_tax", subcategory: "federal", calculationType: "percentage", rate: "0.9", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "CA State Disability Insurance (SDI)", type: "tax", category: "mandatory_tax", subcategory: "state", calculationType: "percentage", rate: "1.1", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
         { companyId, name: "Social Security - Employer", type: "tax", category: "mandatory_tax", subcategory: "federal", calculationType: "percentage", rate: "6.2", maxAmount: "168600", isEmployerPaid: true, isReferenceOnly: false, appliesTo: "employee" },
         { companyId, name: "Medicare - Employer", type: "tax", category: "mandatory_tax", subcategory: "federal", calculationType: "percentage", rate: "1.45", isEmployerPaid: true, isReferenceOnly: false, appliesTo: "employee" },
-        { companyId, name: "State Disability Insurance (SDI)", type: "tax", category: "mandatory_tax", subcategory: "state", calculationType: "percentage", rate: "1.1", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "employee" },
         { companyId, name: "FUTA (Federal Unemployment)", type: "tax", category: "mandatory_tax", subcategory: "federal", calculationType: "percentage", rate: "0.6", maxAmount: "7000", isEmployerPaid: true, isReferenceOnly: false, appliesTo: "employee" },
-        { companyId, name: "SUTA (State Unemployment)", type: "tax", category: "mandatory_tax", subcategory: "state", calculationType: "percentage", rate: "2.7", maxAmount: "7000", isEmployerPaid: true, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "CA Unemployment Insurance (SUI)", type: "tax", category: "mandatory_tax", subcategory: "state", calculationType: "percentage", rate: "3.4", maxAmount: "7000", isEmployerPaid: true, isReferenceOnly: false, appliesTo: "employee" },
+        { companyId, name: "CA Employment Training Tax (ETT)", type: "tax", category: "mandatory_tax", subcategory: "state", calculationType: "percentage", rate: "0.1", maxAmount: "7000", isEmployerPaid: true, isReferenceOnly: false, appliesTo: "employee" },
         { companyId, name: "SE Tax - Social Security (Reference)", type: "tax", category: "mandatory_tax", subcategory: "self_employment", calculationType: "percentage", rate: "12.4", maxAmount: "168600", isEmployerPaid: false, isReferenceOnly: true, appliesTo: "contractor" },
         { companyId, name: "SE Tax - Medicare (Reference)", type: "tax", category: "mandatory_tax", subcategory: "self_employment", calculationType: "percentage", rate: "2.9", isEmployerPaid: false, isReferenceOnly: true, appliesTo: "contractor" },
         { companyId, name: "Child Support", type: "deduction", category: "garnishment", subcategory: "court_ordered", calculationType: "fixed", rate: "0", isEmployerPaid: false, isReferenceOnly: false, appliesTo: "all", isActive: false },
@@ -1571,6 +1582,88 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/remittance-sources/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getRemittanceSources(companyId);
+      const existingNames = new Set(existing.map(e => e.name));
+      const sources = [
+        { companyId, name: "Company Checking Account", status: "enabled", type: "check", country: "US", currency: "USD" },
+      ];
+      const created = [];
+      const skipped = [];
+      for (const item of sources) {
+        if (existingNames.has(item.name)) { skipped.push(item.name); continue; }
+        const result = await storage.createRemittanceSource(item as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} source(s)${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length, items: created });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up remittance sources" });
+    }
+  });
+
+  app.post("/api/remittance-agencies/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const existing = await storage.getRemittanceAgencies(companyId);
+      const existingNames = new Set(existing.map(e => e.name));
+      const sources = await storage.getRemittanceSources(companyId);
+      const defaultSourceId = sources.length > 0 ? sources[0].id : null;
+      const agencies = [
+        { companyId, name: "Internal Revenue Service (IRS)", status: "enabled", type: "federal", country: "US", agency: "IRS", remittanceSourceId: defaultSourceId },
+        { companyId, name: "California Employment Development Department (EDD)", status: "enabled", type: "state", country: "US", provinceState: "CA", agency: "EDD", remittanceSourceId: defaultSourceId },
+      ];
+      const created = [];
+      const skipped = [];
+      for (const item of agencies) {
+        if (existingNames.has(item.name)) { skipped.push(item.name); continue; }
+        const result = await storage.createRemittanceAgency(item as any);
+        created.push(result);
+      }
+      res.json({ message: `Created ${created.length} agency(ies)${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message || "Failed to set up remittance agencies" });
+    }
+  });
+
+  app.get("/api/worker-documents", requireAuth, async (req, res) => {
+    try {
+      const workerId = req.query.workerId as string;
+      if (!workerId) return res.status(400).json({ message: "workerId required" });
+      const docs = await storage.getWorkerDocuments(workerId);
+      res.json(docs);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch documents" });
+    }
+  });
+
+  app.post("/api/worker-documents", requireAuth, documentUpload.single("file"), async (req: any, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const fileUrl = `/uploads/${req.file.filename}`;
+      const { workerId, name, documentType, notes } = req.body;
+      if (!workerId || !name) return res.status(400).json({ message: "workerId and name required" });
+      const worker = await storage.getWorker(workerId);
+      if (!worker) return res.status(404).json({ message: "Worker not found" });
+      const doc = await storage.createWorkerDocument({ workerId, name, documentType: documentType || "other", fileUrl, notes: notes || null });
+      res.status(201).json(doc);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to upload document" });
+    }
+  });
+
+  app.delete("/api/worker-documents/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteWorkerDocument(req.params.id);
+      res.json({ message: "Document deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete document" });
+    }
+  });
+
   app.get("/api/pay-stub-accounts", async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
@@ -1622,12 +1715,15 @@ export async function registerRoutes(
         { companyId, legalEntityId: legalEntityId || null, name: "Federal Income Tax", type: "tax", displayOrder: 10, status: "enabled" },
         { companyId, legalEntityId: legalEntityId || null, name: "Social Security", type: "tax", displayOrder: 11, status: "enabled" },
         { companyId, legalEntityId: legalEntityId || null, name: "Medicare", type: "tax", displayOrder: 12, status: "enabled" },
-        { companyId, legalEntityId: legalEntityId || null, name: "California State Tax", type: "tax", displayOrder: 13, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "CA Personal Income Tax", type: "tax", displayOrder: 13, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "CA State Disability Insurance", type: "tax", displayOrder: 14, status: "enabled" },
         { companyId, legalEntityId: legalEntityId || null, name: "Health Insurance", type: "deduction", displayOrder: 20, status: "enabled" },
         { companyId, legalEntityId: legalEntityId || null, name: "401k", type: "deduction", displayOrder: 21, status: "enabled" },
         { companyId, legalEntityId: legalEntityId || null, name: "Employer Social Security", type: "employer_contribution", displayOrder: 30, status: "enabled" },
         { companyId, legalEntityId: legalEntityId || null, name: "Employer Medicare", type: "employer_contribution", displayOrder: 31, status: "enabled" },
-        { companyId, legalEntityId: legalEntityId || null, name: "Unemployment Insurance", type: "employer_contribution", displayOrder: 32, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "FUTA", type: "employer_contribution", displayOrder: 32, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "CA Unemployment Insurance (SUI)", type: "employer_contribution", displayOrder: 33, status: "enabled" },
+        { companyId, legalEntityId: legalEntityId || null, name: "CA Employment Training Tax (ETT)", type: "employer_contribution", displayOrder: 34, status: "enabled" },
         { companyId, legalEntityId: legalEntityId || null, name: "Employee Social Security (12.4%)", type: "employee_contribution", displayOrder: 40, status: "enabled" },
         { companyId, legalEntityId: legalEntityId || null, name: "Employee Medicare (2.9%)", type: "employee_contribution", displayOrder: 41, status: "enabled" },
       ];

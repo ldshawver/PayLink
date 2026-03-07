@@ -906,6 +906,18 @@ export const checkTemplates = pgTable("check_templates", {
 
 export const insertCheckTemplateSchema = createInsertSchema(checkTemplates).omit({ id: true, createdAt: true });
 
+export const workerDocuments = pgTable("worker_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").references(() => workers.id).notNull(),
+  name: text("name").notNull(),
+  documentType: text("document_type").default("other"),
+  fileUrl: text("file_url").notNull(),
+  notes: text("notes"),
+  uploadedAt: timestamp("uploaded_at").defaultNow(),
+});
+
+export const insertWorkerDocumentSchema = createInsertSchema(workerDocuments).omit({ id: true, uploadedAt: true });
+
 export const roleScopeEnum = pgEnum("role_scope", ["enterprise", "company", "department", "branch"]);
 
 export const roles = pgTable("roles", {
@@ -1058,3 +1070,5 @@ export type LegalEntity = typeof legalEntities.$inferSelect;
 export type InsertLegalEntity = z.infer<typeof insertLegalEntitySchema>;
 export type CheckTemplate = typeof checkTemplates.$inferSelect;
 export type InsertCheckTemplate = z.infer<typeof insertCheckTemplateSchema>;
+export type WorkerDocument = typeof workerDocuments.$inferSelect;
+export type InsertWorkerDocument = z.infer<typeof insertWorkerDocumentSchema>;
