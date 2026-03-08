@@ -22,7 +22,7 @@ import {
   DollarSign, Network, Shield, Monitor, Import, Rocket, CheckCircle2,
   Globe, Briefcase, Target, CircleDot, FolderKanban, ChevronRight, Scale,
   UserPlus, Users, Lock, Eye, FilePlus, Edit3, Trash, Save, Upload, Image, X,
-  FileUp, AlertCircle, ArrowRight, Check
+  FileUp, AlertCircle, ArrowRight, Check, Download
 } from "lucide-react";
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -2864,6 +2864,7 @@ function CompanyHierarchyNode({ company, divisions, branches, departments, posit
 }
 
 const PERMISSION_RESOURCES = [
+  { key: "dashboard", label: "Dashboard" },
   { key: "companies", label: "Companies" },
   { key: "workers", label: "Employees" },
   { key: "schedules", label: "Schedules" },
@@ -2876,8 +2877,10 @@ const PERMISSION_RESOURCES = [
   { key: "policies", label: "Policies" },
   { key: "hr", label: "HR" },
   { key: "reports", label: "Reports" },
+  { key: "timeclock", label: "Time Clock" },
   { key: "settings", label: "Settings" },
   { key: "permissions", label: "Permissions" },
+  { key: "system_admin", label: "System Administration" },
 ];
 
 function PermissionsTab() {
@@ -2910,14 +2913,16 @@ function PermissionsTab() {
   const departmentsQuery = useQuery<Department[]>({ queryKey: ["/api/departments"] });
   const branchesQuery = useQuery<Branch[]>({ queryKey: ["/api/branches"] });
 
-  const [localPerms, setLocalPerms] = useState<Record<string, { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean }>>({});
+  type PermState = { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean; canExport: boolean; canApprove: boolean };
+  const emptyPerm: PermState = { canView: false, canCreate: false, canEdit: false, canDelete: false, canExport: false, canApprove: false };
+  const [localPerms, setLocalPerms] = useState<Record<string, PermState>>({});
   const [permsDirty, setPermsDirty] = useState(false);
 
   useEffect(() => {
     if (permissionsQuery.data && selectedRoleId) {
-      const map: Record<string, { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean }> = {};
+      const map: Record<string, PermState> = {};
       for (const p of permissionsQuery.data) {
-        map[p.resource] = { canView: !!p.canView, canCreate: !!p.canCreate, canEdit: !!p.canEdit, canDelete: !!p.canDelete };
+        map[p.resource] = { canView: !!p.canView, canCreate: !!p.canCreate, canEdit: !!p.canEdit, canDelete: !!p.canDelete, canExport: !!p.canExport, canApprove: !!p.canApprove };
       }
       setLocalPerms(map);
       setPermsDirty(false);
@@ -3002,6 +3007,19 @@ function PermissionsTab() {
     },
   });
 
+  const quickSetupMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/permission-groups/quick-setup");
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/roles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/role-permissions"] });
+      toast({ title: "Permission groups configured", description: data.message });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const roles = rolesQuery.data || [];
   const userRolesList = userRolesQuery.data || [];
   const allUsers = usersQuery.data || [];
@@ -3047,6 +3065,16 @@ function PermissionsTab() {
           data-testid="btn-section-assignments"
         >
           <Users className="h-4 w-4 mr-1" /> User Assignments
+        </Button>
+        <div className="flex-1" />
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => quickSetupMutation.mutate()}
+          disabled={quickSetupMutation.isPending}
+          data-testid="btn-quick-setup-permissions"
+        >
+          <Rocket className="h-4 w-4 mr-1" /> {quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
         </Button>
       </div>
 
@@ -3185,15 +3213,17 @@ function PermissionsTab() {
                       <TableHead className="text-center w-20"><FilePlus className="h-4 w-4 inline" /> Create</TableHead>
                       <TableHead className="text-center w-20"><Edit3 className="h-4 w-4 inline" /> Edit</TableHead>
                       <TableHead className="text-center w-20"><Trash className="h-4 w-4 inline" /> Delete</TableHead>
+                      <TableHead className="text-center w-20"><Download className="h-4 w-4 inline" /> Export</TableHead>
+                      <TableHead className="text-center w-20"><CheckCircle2 className="h-4 w-4 inline" /> Approve</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {PERMISSION_RESOURCES.map(res => {
-                      const perm = localPerms[res.key] || { canView: false, canCreate: false, canEdit: false, canDelete: false };
-                      const togglePerm = (field: "canView" | "canCreate" | "canEdit" | "canDelete") => {
+                      const perm = localPerms[res.key] || emptyPerm;
+                      const togglePerm = (field: keyof PermState) => {
                         setLocalPerms(prev => ({
                           ...prev,
-                          [res.key]: { ...prev[res.key] || { canView: false, canCreate: false, canEdit: false, canDelete: false }, [field]: !(prev[res.key]?.[field] ?? false) }
+                          [res.key]: { ...(prev[res.key] || emptyPerm), [field]: !(prev[res.key]?.[field] ?? false) }
                         }));
                         setPermsDirty(true);
                       };
@@ -3204,6 +3234,8 @@ function PermissionsTab() {
                           <TableCell className="text-center"><Checkbox checked={perm.canCreate} onCheckedChange={() => togglePerm("canCreate")} data-testid={`check-${res.key}-create`} /></TableCell>
                           <TableCell className="text-center"><Checkbox checked={perm.canEdit} onCheckedChange={() => togglePerm("canEdit")} data-testid={`check-${res.key}-edit`} /></TableCell>
                           <TableCell className="text-center"><Checkbox checked={perm.canDelete} onCheckedChange={() => togglePerm("canDelete")} data-testid={`check-${res.key}-delete`} /></TableCell>
+                          <TableCell className="text-center"><Checkbox checked={perm.canExport} onCheckedChange={() => togglePerm("canExport")} data-testid={`check-${res.key}-export`} /></TableCell>
+                          <TableCell className="text-center"><Checkbox checked={perm.canApprove} onCheckedChange={() => togglePerm("canApprove")} data-testid={`check-${res.key}-approve`} /></TableCell>
                         </TableRow>
                       );
                     })}
@@ -3935,6 +3967,7 @@ function QuickStartTab() {
   const { data: jobs } = useQuery<Job[]>({ queryKey: ["/api/jobs"] });
   const { data: policyGroups } = useQuery<any[]>({ queryKey: ["/api/policy-groups"] });
   const { data: payPeriods } = useQuery<any[]>({ queryKey: ["/api/pay-periods"] });
+  const { data: rolesData } = useQuery<Role[]>({ queryKey: ["/api/roles"] });
   const [, setLocation] = useLocation();
 
   const steps = [
@@ -3944,6 +3977,7 @@ function QuickStartTab() {
     { label: "Add Employees", done: (workers?.length || 0) > 0, link: "/employees", icon: Users },
     { label: "Set Pay Policies", done: (policyGroups?.length || 0) > 0, link: "/policies", icon: Shield },
     { label: "Configure Pay Periods", done: (payPeriods?.length || 0) > 0, link: "/payroll", icon: DollarSign },
+    { label: "Configure Permission Groups", done: (rolesData?.length || 0) >= 5, link: "/company?tab=permissions", icon: Lock },
   ];
 
   const completed = steps.filter(s => s.done).length;

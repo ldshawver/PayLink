@@ -42,7 +42,7 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 **Database:**
 -   **Type:** PostgreSQL, managed with Drizzle ORM.
 -   **Schema Design:** Features a robust schema supporting enterprise hierarchy (enterprises, companies, divisions, positions, cost centers, jobs), core operational data (workers, time punches, time entries, schedules, payroll runs), and extended functionalities (accruals, legal entities, pay methods, policies, taxes, HR records).
--   **Permissions:** A flexible role-based access control system is implemented via `roles`, `role_permissions`, and `user_roles` tables, allowing granular control over resource access and actions (view, create, edit, delete).
+-   **Permissions:** A flexible role-based access control system is implemented via `roles`, `role_permissions`, and `user_roles` tables, allowing granular control over resource access and actions (view, create, edit, delete, export, approve). Five standard Permission Groups are seeded: System Administrator, HR Manager, Payroll Manager, Department Manager, Employee. Quick Setup endpoint at POST `/api/permission-groups/quick-setup` creates/updates all 5 groups with proper permissions. The Permission Matrix UI in the Company page shows 6 action columns (View, Create, Edit, Delete, Export, Approve) across 17 resource modules.
 
 **Key Features:**
 -   **Dashboard:** Configurable with various dashlets.

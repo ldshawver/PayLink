@@ -960,6 +960,8 @@ export const rolePermissions = pgTable("role_permissions", {
   canCreate: boolean("can_create").default(false),
   canEdit: boolean("can_edit").default(false),
   canDelete: boolean("can_delete").default(false),
+  canExport: boolean("can_export").default(false),
+  canApprove: boolean("can_approve").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
