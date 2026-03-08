@@ -149,6 +149,7 @@ export const timeEntries = pgTable("time_entries", {
   totalHours: numeric("total_hours").default("0"),
   overtimeHours: numeric("overtime_hours").default("0"),
   doubleTimeHours: numeric("double_time_hours").default("0"),
+  wageGroupId: varchar("wage_group_id"),
   status: timesheetStatusEnum("status").default("pending"),
   note: text("note"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -1183,9 +1184,18 @@ export const currencies = pgTable("currencies", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const employeeWageGroups = pgTable("employee_wage_groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  wageGroupId: varchar("wage_group_id").notNull().references(() => secondaryWageGroups.id),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const insertStationSchema = createInsertSchema(stations).omit({ id: true, createdAt: true });
 export const insertSecondaryWageGroupSchema = createInsertSchema(secondaryWageGroups).omit({ id: true, createdAt: true });
 export const insertCurrencySchema = createInsertSchema(currencies).omit({ id: true, createdAt: true });
+export const insertEmployeeWageGroupSchema = createInsertSchema(employeeWageGroups).omit({ id: true, createdAt: true });
 
 export type Station = typeof stations.$inferSelect;
 export type InsertStation = z.infer<typeof insertStationSchema>;
@@ -1193,6 +1203,8 @@ export type SecondaryWageGroup = typeof secondaryWageGroups.$inferSelect;
 export type InsertSecondaryWageGroup = z.infer<typeof insertSecondaryWageGroupSchema>;
 export type Currency = typeof currencies.$inferSelect;
 export type InsertCurrency = z.infer<typeof insertCurrencySchema>;
+export type EmployeeWageGroup = typeof employeeWageGroups.$inferSelect;
+export type InsertEmployeeWageGroup = z.infer<typeof insertEmployeeWageGroupSchema>;
 
 export const savedReports = pgTable("saved_reports", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

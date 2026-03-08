@@ -7,7 +7,7 @@ import type {
   Worker, Company, EmployeeContact, PayMethod,
   EmployeeTitle, EmployeeGroup, WageHistory, NewHireDefault,
   RemittanceSource, Branch, Department, PolicyGroup, PayPeriodSchedule,
-  WorkerDocument
+  WorkerDocument, EmployeeWageGroup, SecondaryWageGroup
 } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -2458,6 +2458,101 @@ function NewHireDefaultsTab() {
   );
 }
 
+function WageGroupsTab() {
+  const { toast } = useToast();
+  const search = useSearch();
+  const workerId = new URLSearchParams(search).get("id") || "";
+  const { data: assignments, isLoading } = useQuery<EmployeeWageGroup[]>({
+    queryKey: ["/api/employee-wage-groups", workerId],
+    queryFn: async () => {
+      const res = await fetch(`/api/employee-wage-groups?workerId=${workerId}`);
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: !!workerId,
+  });
+  const { data: allWageGroups } = useQuery<SecondaryWageGroup[]>({ queryKey: ["/api/secondary-wage-groups"] });
+  const [selectedWgId, setSelectedWgId] = useState("");
+
+  const addMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/employee-wage-groups", { workerId, wageGroupId: selectedWgId });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/employee-wage-groups", workerId] });
+      setSelectedWgId("");
+      toast({ title: "Wage group assigned" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+  const removeMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/employee-wage-groups/${id}`); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/employee-wage-groups", workerId] });
+      toast({ title: "Wage group removed" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const assignedIds = new Set(assignments?.map(a => a.wageGroupId) || []);
+  const availableGroups = allWageGroups?.filter(wg => !assignedIds.has(wg.id) && wg.isActive) || [];
+  const wgLookup: Record<string, SecondaryWageGroup> = {};
+  allWageGroups?.forEach(wg => { wgLookup[wg.id] = wg; });
+
+  if (isLoading) return <Skeleton className="h-64 w-full" />;
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><DollarSign className="h-5 w-5" />Assigned Wage Groups</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-3">
+            <Select value={selectedWgId} onValueChange={setSelectedWgId}>
+              <SelectTrigger className="w-64" data-testid="select-assign-wage-group"><SelectValue placeholder="Select wage group to assign" /></SelectTrigger>
+              <SelectContent>
+                {availableGroups.map(wg => (
+                  <SelectItem key={wg.id} value={wg.id}>{wg.name} (${Number(wg.hourlyRate || 0).toFixed(2)}/hr)</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button disabled={!selectedWgId || addMutation.isPending} onClick={() => addMutation.mutate()} data-testid="button-assign-wage-group">
+              <Plus className="mr-2 h-4 w-4" />{addMutation.isPending ? "Assigning..." : "Assign"}
+            </Button>
+          </div>
+
+          <Table>
+            <TableHeader><TableRow>
+              <TableHead>Wage Group</TableHead><TableHead>Hourly Rate</TableHead><TableHead>OT Rate</TableHead><TableHead>Description</TableHead><TableHead className="w-12"></TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {(!assignments || assignments.length === 0) ? (
+                <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-8">No wage groups assigned. Use the dropdown above to assign one.</TableCell></TableRow>
+              ) : assignments.map(a => {
+                const wg = wgLookup[a.wageGroupId];
+                return (
+                  <TableRow key={a.id} data-testid={`row-ewg-${a.id}`}>
+                    <TableCell className="font-medium">{wg?.name || a.wageGroupId}</TableCell>
+                    <TableCell>${Number(wg?.hourlyRate || 0).toFixed(2)}</TableCell>
+                    <TableCell>${Number(wg?.overtimeRate || 0).toFixed(2)}</TableCell>
+                    <TableCell>{wg?.description || "—"}</TableCell>
+                    <TableCell>
+                      <Button variant="ghost" size="icon" className="text-red-600" onClick={() => removeMutation.mutate(a.id)} data-testid={`remove-ewg-${a.id}`}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export default function EmployeePage() {
   const [activeTab, handleTabChange] = useTabParam("employee");
 
@@ -2502,6 +2597,9 @@ export default function EmployeePage() {
           <TabsTrigger value="new-hire-defaults" data-testid="tab-new-hire-defaults">
             <Clock className="mr-2 h-4 w-4" />New Hire Defaults
           </TabsTrigger>
+          <TabsTrigger value="wage-groups" data-testid="tab-wage-groups">
+            <DollarSign className="mr-2 h-4 w-4" />Wage Groups
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="employee"><EmployeeTab /></TabsContent>
@@ -2514,6 +2612,7 @@ export default function EmployeePage() {
         <TabsContent value="employee-groups"><EmployeeGroupsTab /></TabsContent>
         <TabsContent value="ethnic-groups"><EthnicGroupsTab /></TabsContent>
         <TabsContent value="new-hire-defaults"><NewHireDefaultsTab /></TabsContent>
+        <TabsContent value="wage-groups"><WageGroupsTab /></TabsContent>
       </Tabs>
     </div>
   );

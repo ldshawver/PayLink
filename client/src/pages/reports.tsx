@@ -6,7 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import type {
   Worker, TimeEntry, PayrollRun, PayrollItem, Schedule, TimePunch,
   AccrualBalance, AccrualAccount, Qualification, Review,
-  TaxDeduction, PayStubTransaction, Company, SavedReport
+  TaxDeduction, PayStubTransaction, Company, SavedReport, SecondaryWageGroup
 } from "@shared/schema";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
@@ -799,18 +799,32 @@ function TimesheetDetailDialog({ open, onOpenChange }: { open: boolean; onOpenCh
     queryKey: ["/api/workers"],
     enabled: open,
   });
+  const { data: wageGroups = [] } = useQuery<SecondaryWageGroup[]>({
+    queryKey: ["/api/secondary-wage-groups"],
+    enabled: open,
+  });
 
   const isLoading = loadingEntries || loadingWorkers;
   const getWorkerName = (id: string) => {
     const w = workers.find((w) => w.id === id);
     return w ? `${w.firstName} ${w.lastName}` : id;
   };
+  const wgLookup: Record<string, SecondaryWageGroup> = {};
+  wageGroups.forEach(wg => { wgLookup[wg.id] = wg; });
+  const getWageGroupName = (id: string | null | undefined) => {
+    if (!id) return "Default";
+    return wgLookup[id]?.name || "Default";
+  };
+  const getWageGroupRate = (id: string | null | undefined) => {
+    if (!id || !wgLookup[id]) return "";
+    return `$${Number(wgLookup[id].hourlyRate || 0).toFixed(2)}/hr`;
+  };
 
   const sorted = [...timeEntries].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   const handlePrint = () => window.print();
   const handleExportCSV = () => {
-    const headers = ["Employee", "Date", "Clock In", "Clock Out", "Break Mins", "Total Hours", "OT Hours", "Status"];
+    const headers = ["Employee", "Date", "Clock In", "Clock Out", "Break Mins", "Total Hours", "OT Hours", "Wage Group", "Rate", "Status"];
     const rows = sorted.map((e) => [
       getWorkerName(e.workerId),
       e.date,
@@ -819,6 +833,8 @@ function TimesheetDetailDialog({ open, onOpenChange }: { open: boolean; onOpenCh
       String(e.breakMinutes || 0),
       Number(e.totalHours || 0).toFixed(2),
       Number(e.overtimeHours || 0).toFixed(2),
+      getWageGroupName(e.wageGroupId),
+      getWageGroupRate(e.wageGroupId),
       e.status || "",
     ]);
     downloadCSV(headers, rows, "timesheet_detail.csv");
@@ -839,7 +855,7 @@ function TimesheetDetailDialog({ open, onOpenChange }: { open: boolean; onOpenCh
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
-          <SaveReportButton reportType="timesheet-detail" category="timesheet" defaultName="Timesheet Detail" headers={["Employee", "Date", "Clock In", "Clock Out", "Break Mins", "Total Hours", "OT Hours", "Status"]} rows={sorted.map(e => [getWorkerName(e.workerId), e.date, e.clockIn ? new Date(e.clockIn).toLocaleTimeString() : "", e.clockOut ? new Date(e.clockOut).toLocaleTimeString() : "", String(e.breakMinutes || 0), String(Number(e.totalHours || 0).toFixed(2)), String(Number(e.overtimeHours || 0).toFixed(2)), e.status || ""])} />
+          <SaveReportButton reportType="timesheet-detail" category="timesheet" defaultName="Timesheet Detail" headers={["Employee", "Date", "Clock In", "Clock Out", "Break Mins", "Total Hours", "OT Hours", "Wage Group", "Rate", "Status"]} rows={sorted.map(e => [getWorkerName(e.workerId), e.date, e.clockIn ? new Date(e.clockIn).toLocaleTimeString() : "", e.clockOut ? new Date(e.clockOut).toLocaleTimeString() : "", String(e.breakMinutes || 0), String(Number(e.totalHours || 0).toFixed(2)), String(Number(e.overtimeHours || 0).toFixed(2)), getWageGroupName(e.wageGroupId), getWageGroupRate(e.wageGroupId), e.status || ""])} />
         </div>
         {isLoading ? (
           <div className="space-y-2">
@@ -860,6 +876,8 @@ function TimesheetDetailDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                 <TableHead className="text-right">Break Mins</TableHead>
                 <TableHead className="text-right">Total Hours</TableHead>
                 <TableHead className="text-right">OT Hours</TableHead>
+                <TableHead>Wage Group</TableHead>
+                <TableHead className="text-right">Rate</TableHead>
                 <TableHead>Status</TableHead>
               </TableRow>
             </TableHeader>
@@ -873,6 +891,8 @@ function TimesheetDetailDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                   <TableCell className="text-right">{e.breakMinutes || 0}</TableCell>
                   <TableCell className="text-right">{Number(e.totalHours || 0).toFixed(2)}</TableCell>
                   <TableCell className="text-right">{Number(e.overtimeHours || 0).toFixed(2)}</TableCell>
+                  <TableCell>{getWageGroupName(e.wageGroupId)}</TableCell>
+                  <TableCell className="text-right">{getWageGroupRate(e.wageGroupId)}</TableCell>
                   <TableCell>
                     <Badge variant="secondary">{e.status || "pending"}</Badge>
                   </TableCell>
