@@ -332,6 +332,15 @@ export async function registerRoutes(
       let checkNum = 1001;
       const items: any[] = [];
 
+      const allWageGroups = await storage.getSecondaryWageGroups(run.companyId);
+      const wageGroupMap: Record<string, { hourlyRate: number; overtimeRate: number }> = {};
+      for (const wg of allWageGroups) {
+        wageGroupMap[wg.id] = {
+          hourlyRate: parseFloat(wg.hourlyRate || "0"),
+          overtimeRate: parseFloat(wg.overtimeRate || "0"),
+        };
+      }
+
       for (const worker of activeWorkers) {
         const workerEntries = entries.filter(e => e.workerId === worker.id);
         let regHrs = 0, otHrs = 0, dtHrs = 0;
@@ -344,7 +353,7 @@ export async function registerRoutes(
           regHrs += entryTotal - entryOt - entryDt;
         }
 
-        const rate = parseFloat(worker.payRate || "0");
+        const defaultRate = parseFloat(worker.payRate || "0");
         const otMultiplier = parseFloat(company.overtimeMultiplier || "1.5");
         const dtMultiplier = 2.0;
         let regPay = 0, otPay = 0, dtPay = 0, grossPay = 0;
@@ -354,17 +363,31 @@ export async function registerRoutes(
           if (company.payFrequency === "weekly") periodsPerYear = 52;
           else if (company.payFrequency === "monthly") periodsPerYear = 12;
           else if (company.payFrequency === "semimonthly") periodsPerYear = 24;
-          const hourlyEquiv = rate / 2080;
-          regPay = rate / periodsPerYear;
+          const hourlyEquiv = defaultRate / 2080;
+          regPay = defaultRate / periodsPerYear;
           otPay = otHrs * hourlyEquiv * otMultiplier;
           dtPay = dtHrs * hourlyEquiv * dtMultiplier;
           grossPay = regPay + otPay + dtPay;
         } else {
-          regPay = regHrs * rate;
-          otPay = otHrs * rate * otMultiplier;
-          dtPay = dtHrs * rate * dtMultiplier;
+          for (const e of workerEntries) {
+            const entryTotal = parseFloat(e.totalHours || "0");
+            const entryOt = parseFloat(e.overtimeHours || "0");
+            const entryDt = parseFloat(e.doubleTimeHours || "0");
+            const entryReg = entryTotal - entryOt - entryDt;
+
+            const wgId = e.wageGroupId;
+            const wg = wgId ? wageGroupMap[wgId] : null;
+            const rate = wg ? wg.hourlyRate : defaultRate;
+            const otRate = wg && wg.overtimeRate > 0 ? wg.overtimeRate : rate * otMultiplier;
+
+            regPay += entryReg * rate;
+            otPay += entryOt * otRate;
+            dtPay += entryDt * rate * dtMultiplier;
+          }
           grossPay = regPay + otPay + dtPay;
         }
+
+        const rate = defaultRate;
 
         const isContractor = worker.workerType === "contractor";
         const workerDeductions = companyDeductions.filter(d => {
@@ -478,13 +501,17 @@ export async function registerRoutes(
       });
 
       if (punch.punchType === "clock_in") {
-        await storage.createTimeEntry({
+        const entryData: any = {
           workerId: punch.workerId,
           companyId: punch.companyId,
           date: new Date().toISOString().split("T")[0],
           clockIn: new Date(),
           status: "pending",
-        });
+        };
+        if (req.body.wageGroupId) {
+          entryData.wageGroupId = req.body.wageGroupId;
+        }
+        await storage.createTimeEntry(entryData);
       } else if (punch.punchType === "break_start") {
         // nothing extra needed — punch is recorded
       } else if (punch.punchType === "break_end") {
@@ -2071,6 +2098,43 @@ export async function registerRoutes(
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to delete secondary wage group" });
+    }
+  });
+
+  app.get("/api/employee-wage-groups", async (req, res) => {
+    try {
+      const workerId = req.query.workerId as string | undefined;
+      const items = await storage.getEmployeeWageGroups(workerId);
+      res.json(items);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch employee wage groups" });
+    }
+  });
+  app.post("/api/employee-wage-groups", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { workerId, wageGroupId } = req.body;
+      if (!workerId || !wageGroupId) {
+        return res.status(400).json({ message: "workerId and wageGroupId are required" });
+      }
+      const existing = await storage.getEmployeeWageGroups(workerId);
+      if (existing.some(e => e.wageGroupId === wageGroupId)) {
+        return res.status(409).json({ message: "This wage group is already assigned to this employee" });
+      }
+      const item = await storage.createEmployeeWageGroup(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to assign wage group" });
+    }
+  });
+  app.delete("/api/employee-wage-groups/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      await storage.deleteEmployeeWageGroup(req.params.id as string);
+      res.json({ message: "Wage group assignment removed" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to remove wage group assignment" });
     }
   });
 

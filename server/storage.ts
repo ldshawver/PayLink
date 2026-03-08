@@ -74,12 +74,13 @@ import {
   type UserRole, type InsertUserRole,
   workerDocuments, savedReports,
   kpiGroups, qualificationGroups, workerLanguages, workerMemberships,
-  stations, secondaryWageGroups, currencies,
+  stations, secondaryWageGroups, currencies, employeeWageGroups,
   type WorkerDocument, type InsertWorkerDocument,
   type SavedReport, type InsertSavedReport,
   type Station, type InsertStation,
   type SecondaryWageGroup, type InsertSecondaryWageGroup,
   type Currency, type InsertCurrency,
+  type EmployeeWageGroup, type InsertEmployeeWageGroup,
   type KpiGroup, type InsertKpiGroup,
   type QualificationGroup, type InsertQualificationGroup,
   type WorkerLanguage, type InsertWorkerLanguage,
@@ -409,6 +410,10 @@ export interface IStorage {
   createCurrency(data: InsertCurrency): Promise<Currency>;
   updateCurrency(id: string, data: Partial<Currency>): Promise<Currency | undefined>;
   deleteCurrency(id: string): Promise<void>;
+
+  getEmployeeWageGroups(workerId?: string): Promise<EmployeeWageGroup[]>;
+  createEmployeeWageGroup(data: InsertEmployeeWageGroup): Promise<EmployeeWageGroup>;
+  deleteEmployeeWageGroup(id: string): Promise<void>;
 
   getSavedReports(): Promise<SavedReport[]>;
   getSavedReport(id: string): Promise<SavedReport | undefined>;
@@ -1555,6 +1560,18 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteCurrency(id: string): Promise<void> {
     await db.delete(currencies).where(eq(currencies.id, id));
+  }
+
+  async getEmployeeWageGroups(workerId?: string): Promise<EmployeeWageGroup[]> {
+    if (workerId) return db.select().from(employeeWageGroups).where(eq(employeeWageGroups.workerId, workerId));
+    return db.select().from(employeeWageGroups);
+  }
+  async createEmployeeWageGroup(data: InsertEmployeeWageGroup): Promise<EmployeeWageGroup> {
+    const [r] = await db.insert(employeeWageGroups).values(data).returning();
+    return r;
+  }
+  async deleteEmployeeWageGroup(id: string): Promise<void> {
+    await db.delete(employeeWageGroups).where(eq(employeeWageGroups.id, id));
   }
 }
 

@@ -17,7 +17,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import type { EmployeeWageGroup, SecondaryWageGroup } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Worker, Company, TimePunch } from "@shared/schema";
 import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
@@ -88,6 +90,8 @@ function PunchButton({
   variant,
   workerId,
   companyId,
+  wageGroupId,
+  onSuccess: onSuccessCallback,
 }: {
   type: string;
   icon: any;
@@ -95,22 +99,23 @@ function PunchButton({
   variant: "default" | "destructive" | "secondary";
   workerId: string;
   companyId: string;
+  wageGroupId?: string;
+  onSuccess?: () => void;
 }) {
   const { toast } = useToast();
 
   const punchMutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("POST", "/api/time-punches", {
-        workerId,
-        companyId,
-        punchType: type,
-      });
+      const body: any = { workerId, companyId, punchType: type };
+      if (wageGroupId) body.wageGroupId = wageGroupId;
+      await apiRequest("POST", "/api/time-punches", body);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/time-punches"] });
       queryClient.invalidateQueries({ queryKey: ["/api/time-entries"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       toast({ title: `${label} recorded` });
+      onSuccessCallback?.();
     },
     onError: (error: Error) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -140,11 +145,33 @@ export default function TimeClock() {
   const [pin, setPin] = useState("");
   const [activeField, setActiveField] = useState<"empNum" | "pin">("empNum");
   const [authError, setAuthError] = useState("");
+  const [selectedWageGroupId, setSelectedWageGroupId] = useState("");
 
   const { data: punches } = useQuery<TimePunch[]>({
     queryKey: ["/api/time-punches"],
     enabled: !!authenticatedWorker,
   });
+
+  const { data: employeeWageAssignments } = useQuery<EmployeeWageGroup[]>({
+    queryKey: ["/api/employee-wage-groups", authenticatedWorker?.id],
+    queryFn: async () => {
+      const res = await fetch(`/api/employee-wage-groups?workerId=${authenticatedWorker!.id}`);
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: !!authenticatedWorker,
+  });
+
+  const { data: allWageGroups } = useQuery<SecondaryWageGroup[]>({
+    queryKey: ["/api/secondary-wage-groups"],
+    enabled: !!authenticatedWorker,
+  });
+
+  const wgLookup: Record<string, SecondaryWageGroup> = {};
+  allWageGroups?.forEach(wg => { wgLookup[wg.id] = wg; });
+  const assignedWageGroups = (employeeWageAssignments || [])
+    .map(a => wgLookup[a.wageGroupId])
+    .filter(Boolean) as SecondaryWageGroup[];
 
   const authMutation = useMutation({
     mutationFn: async () => {
@@ -208,6 +235,7 @@ export default function TimeClock() {
     setEmployeeNumber("");
     setPin("");
     setAuthError("");
+    setSelectedWageGroupId("");
   }
 
   useEffect(() => {
@@ -352,6 +380,23 @@ export default function TimeClock() {
               )}
             </div>
 
+            {!isClockedIn && !isOnBreak && assignedWageGroups.length > 0 && (
+              <div className="w-full">
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground mb-1 block">Select Role / Wage Group</Label>
+                <Select value={selectedWageGroupId} onValueChange={setSelectedWageGroupId}>
+                  <SelectTrigger data-testid="select-timeclock-wage-group">
+                    <SelectValue placeholder="Default rate" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">Default Rate (${Number(authenticatedWorker.payRate || 0).toFixed(2)}/hr)</SelectItem>
+                    {assignedWageGroups.map(wg => (
+                      <SelectItem key={wg.id} value={wg.id}>{wg.name} (${Number(wg.hourlyRate || 0).toFixed(2)}/hr)</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             <div className="flex gap-3">
               {!isClockedIn && !isOnBreak ? (
                 <PunchButton
@@ -361,6 +406,8 @@ export default function TimeClock() {
                   variant="default"
                   workerId={authenticatedWorker.id}
                   companyId={authenticatedWorker.companyId}
+                  wageGroupId={selectedWageGroupId && selectedWageGroupId !== "default" ? selectedWageGroupId : undefined}
+                  onSuccess={() => setSelectedWageGroupId("")}
                 />
               ) : (
                 <>

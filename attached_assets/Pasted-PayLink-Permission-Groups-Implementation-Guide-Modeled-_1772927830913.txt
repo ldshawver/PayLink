@@ -1,0 +1,199 @@
+PayLink Permission Groups
+Implementation Guide (Modeled After TimeTrex)
+You are implementing Permission Groups for the PayLink payroll and workforce management system.
+Permission Groups are used to control which users can access specific features and data in the system.
+The system must support Role-Based Access Control (RBAC).
+Each user is assigned to a Permission Group, and that group determines what the user can see or do.
+Concept Overview
+Permission Groups define access rights for different types of users.
+Example roles in a payroll system:
+System Administrator
+HR Manager
+Payroll Manager
+Department Manager
+Employee
+Each role should have different system privileges.
+Example Permission Model
+Example access levels:
+Role	Access Level
+Admin	Full system access
+HR	Employee + HR records
+Payroll	Payroll + tax configuration
+Manager	Department employees
+Employee	Self-service only
+Permission Categories
+Permissions should be organized by module.
+Modules include:
+Dashboard
+Employees
+Payroll
+Timesheets
+Reports
+HR Records
+Timeclock
+Settings
+System Administration
+Each permission group can have:
+view
+create
+edit
+delete
+export
+approve
+Example Permission Structure
+Example permission object:
+permissions = {
+  "employees": ["view","edit","create"],
+  "payroll": ["view","process"],
+  "reports": ["view","export"],
+  "settings": []
+}
+Database Schema
+Create a permission groups table.
+permission_groups
+-----------------
+id
+name
+description
+permissions_json
+created_at
+Example record:
+id: 1
+name: Payroll Manager
+permissions_json: {...}
+User Assignment
+Each user should be assigned a permission group.
+Create relationship:
+users
+-----
+id
+name
+email
+permission_group_id
+Backend Permission Logic
+Every request should check permissions.
+Example logic:
+if user.permission_group.can("payroll.process"):
+    allow_access()
+else:
+    deny_access()
+UI Requirements
+Admin interface:
+Admin → System → Permission Groups
+Features:
+Create permission group
+Edit permissions
+Assign users
+View role permissions
+Permission interface should show modules like:
+Employees
+Payroll
+Timesheets
+Reports
+HR
+Settings
+Each module should allow toggles for:
+View
+Create
+Edit
+Delete
+Export
+Approve
+Standard Permission Groups to Pre-Create
+Replit should automatically create these default roles.
+1. System Administrator
+Full access to everything.
+Permissions:
+ALL MODULES
+view
+create
+edit
+delete
+export
+approve
+system settings
+2. HR Manager
+Handles employee records and HR compliance.
+Permissions:
+employees: full access
+HR records: full access
+reports: view/export
+timesheets: view
+payroll: view
+settings: none
+3. Payroll Manager
+Handles payroll processing.
+Permissions:
+payroll: full access
+timesheets: view/edit
+reports: view/export
+employees: view
+HR records: view
+settings: limited
+4. Department Manager
+Manages employees in their department.
+Permissions:
+employees: view/edit (department only)
+timesheets: approve
+reports: department reports
+payroll: view only
+5. Employee
+Self-service access.
+Permissions:
+view personal profile
+view pay stubs
+clock in/out
+request time off
+view personal reports
+Employees cannot access other employees.
+Permission Scope Rules
+Managers should only see their department employees.
+Example:
+manager.department_id = employee.department_id
+This prevents access to other departments.
+Integration with Other Modules
+Permission groups must control access to:
+Employees
+Timesheets
+Payroll
+Reports
+HR records
+System settings
+Example restrictions:
+Employees cannot access payroll processing.
+Managers cannot change system settings.
+Security Requirements
+Implement:
+role-based access control
+API permission validation
+UI permission validation
+audit logging
+Audit log example:
+user_id
+action
+resource
+timestamp
+Example Permission Enforcement
+Pseudo logic:
+function checkPermission(user, module, action) {
+   if user.permission_group.permissions[module].includes(action):
+       return true
+   else:
+       return false
+}
+Implementation Deliverables
+Replit should generate:
+Database migration for permission_groups
+Backend permission middleware
+API endpoints for permission management
+Admin UI to manage roles
+Default permission groups with standard permissions
+Also seed the database with the five standard permission groups.
+Final Goal
+After implementation, PayLink must support:
+role-based access control
+department-based visibility
+secure payroll access
+HR data protection
+configurable permissions
+This ensures the system is secure and usable by different roles in a company.
