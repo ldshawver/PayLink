@@ -98,15 +98,19 @@ export interface IStorage {
   getWorkerByEmployeeNumber(employeeNumber: string): Promise<Worker | undefined>;
   createWorker(data: InsertWorker): Promise<Worker>;
   updateWorker(id: string, data: Partial<Worker>): Promise<Worker | undefined>;
+  deleteWorker(id: string): Promise<void>;
 
   getTimePunches(companyId?: string): Promise<TimePunch[]>;
   createTimePunch(data: InsertTimePunch): Promise<TimePunch>;
+  updateTimePunch(id: string, data: Partial<TimePunch>): Promise<TimePunch | undefined>;
+  deleteTimePunch(id: string): Promise<void>;
 
   getTimeEntries(companyId?: string): Promise<TimeEntry[]>;
   getTimeEntriesByDateRange(companyId: string, startDate: string, endDate: string): Promise<TimeEntry[]>;
   getTimeEntry(id: string): Promise<TimeEntry | undefined>;
   createTimeEntry(data: InsertTimeEntry): Promise<TimeEntry>;
   updateTimeEntry(id: string, data: Partial<TimeEntry>): Promise<TimeEntry | undefined>;
+  deleteTimeEntry(id: string): Promise<void>;
 
   getSchedules(companyId?: string): Promise<Schedule[]>;
   getSchedulesByDateRange(companyId: string, startDate: string, endDate: string): Promise<Schedule[]>;
@@ -469,6 +473,28 @@ export class DatabaseStorage implements IStorage {
     const [worker] = await db.update(workers).set(data).where(eq(workers.id, id)).returning();
     return worker;
   }
+  async deleteWorker(id: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      await tx.delete(timePunches).where(eq(timePunches.workerId, id));
+      await tx.delete(timeEntries).where(eq(timeEntries.workerId, id));
+      await tx.delete(schedules).where(eq(schedules.workerId, id));
+      await tx.delete(payStubTransactions).where(eq(payStubTransactions.workerId, id));
+      await tx.delete(payrollItems).where(eq(payrollItems.workerId, id));
+      await tx.delete(employeeContacts).where(eq(employeeContacts.workerId, id));
+      await tx.delete(payMethods).where(eq(payMethods.workerId, id));
+      await tx.delete(accrualBalances).where(eq(accrualBalances.workerId, id));
+      await tx.delete(qualifications).where(eq(qualifications.workerId, id));
+      await tx.delete(reviews).where(eq(reviews.workerId, id));
+      await tx.delete(recurringSchedules).where(eq(recurringSchedules.workerId, id));
+      await tx.delete(workerDocuments).where(eq(workerDocuments.workerId, id));
+      await tx.delete(payStubAmendments).where(eq(payStubAmendments.workerId, id));
+      await tx.delete(wageHistory).where(eq(wageHistory.workerId, id));
+      await tx.delete(workerLanguages).where(eq(workerLanguages.workerId, id));
+      await tx.delete(workerMemberships).where(eq(workerMemberships.workerId, id));
+      await tx.delete(employeeWageGroups).where(eq(employeeWageGroups.workerId, id));
+      await tx.delete(workers).where(eq(workers.id, id));
+    });
+  }
 
   async getTimePunches(companyId?: string): Promise<TimePunch[]> {
     if (companyId) {
@@ -479,6 +505,13 @@ export class DatabaseStorage implements IStorage {
   async createTimePunch(data: InsertTimePunch): Promise<TimePunch> {
     const [punch] = await db.insert(timePunches).values(data).returning();
     return punch;
+  }
+  async updateTimePunch(id: string, data: Partial<TimePunch>): Promise<TimePunch | undefined> {
+    const [punch] = await db.update(timePunches).set(data).where(eq(timePunches.id, id)).returning();
+    return punch;
+  }
+  async deleteTimePunch(id: string): Promise<void> {
+    await db.delete(timePunches).where(eq(timePunches.id, id));
   }
 
   async getTimeEntries(companyId?: string): Promise<TimeEntry[]> {
@@ -503,6 +536,9 @@ export class DatabaseStorage implements IStorage {
   async updateTimeEntry(id: string, data: Partial<TimeEntry>): Promise<TimeEntry | undefined> {
     const [entry] = await db.update(timeEntries).set(data).where(eq(timeEntries.id, id)).returning();
     return entry;
+  }
+  async deleteTimeEntry(id: string): Promise<void> {
+    await db.delete(timeEntries).where(eq(timeEntries.id, id));
   }
 
   async getSchedules(companyId?: string): Promise<Schedule[]> {

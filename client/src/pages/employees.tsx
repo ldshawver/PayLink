@@ -14,6 +14,8 @@ import {
   UserCheck,
   UserX,
   Pencil,
+  Trash2,
+  Building2,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -46,8 +48,19 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Worker, Company } from "@shared/schema";
@@ -392,8 +405,9 @@ function EditWorkerDialog({ worker, onClose }: { worker: Worker; onClose: () => 
   );
 }
 
-function WorkerCard({ worker, onEdit }: { worker: Worker; onEdit: (w: Worker) => void }) {
+function WorkerCard({ worker, onEdit, companies }: { worker: Worker; onEdit: (w: Worker) => void; companies?: Company[] }) {
   const { toast } = useToast();
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const toggleActive = useMutation({
     mutationFn: async () => {
@@ -409,82 +423,144 @@ function WorkerCard({ worker, onEdit }: { worker: Worker; onEdit: (w: Worker) =>
     },
   });
 
+  const deleteWorker = useMutation({
+    mutationFn: async () => {
+      await apiRequest("DELETE", `/api/workers/${worker.id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/workers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      toast({ title: "Worker deleted permanently" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
   return (
-    <Card className="hover-elevate" data-testid={`card-worker-${worker.id}`}>
-      <CardContent className="p-4">
-        <div className="flex items-start gap-3">
-          <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary shrink-0">
-            {worker.firstName[0]}{worker.lastName[0]}
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="text-sm font-semibold truncate">
-                {worker.firstName} {worker.lastName}
-              </h3>
-              <Badge variant={worker.workerType === "employee" ? "default" : "secondary"} className="text-xs">
-                {worker.workerType === "employee" ? "Employee" : "Contractor"}
-              </Badge>
-              {!worker.isActive && (
-                <Badge variant="destructive" className="text-xs">Inactive</Badge>
-              )}
+    <>
+      <Card className="hover-elevate" data-testid={`card-worker-${worker.id}`}>
+        <CardContent className="p-4">
+          <div className="flex items-start gap-3">
+            <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary shrink-0">
+              {worker.firstName[0]}{worker.lastName[0]}
             </div>
-            {worker.jobTitle && (
-              <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
-                <Briefcase className="h-3 w-3" />
-                {worker.jobTitle}
-                {worker.department && ` - ${worker.department}`}
-              </p>
-            )}
-            <div className="flex items-center gap-3 mt-2 flex-wrap">
-              {worker.email && (
-                <span className="text-xs text-muted-foreground flex items-center gap-1">
-                  <Mail className="h-3 w-3" /> {worker.email}
-                </span>
-              )}
-              {worker.phone && (
-                <span className="text-xs text-muted-foreground flex items-center gap-1">
-                  <Phone className="h-3 w-3" /> {worker.phone}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2 mt-2">
-              <span className="text-xs font-medium text-primary">
-                ${Number(worker.payRate).toFixed(2)}/{worker.payType === "salary" ? "yr" : "hr"}
-              </span>
-            </div>
-          </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="icon" variant="ghost" data-testid={`button-worker-menu-${worker.id}`}>
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onClick={() => onEdit(worker)}
-                data-testid={`button-edit-worker-${worker.id}`}
-              >
-                <Pencil className="h-4 w-4 mr-2" /> Edit
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => toggleActive.mutate()}
-                data-testid={`button-toggle-active-${worker.id}`}
-              >
-                {worker.isActive ? (
-                  <>
-                    <UserX className="h-4 w-4 mr-2" /> Deactivate
-                  </>
-                ) : (
-                  <>
-                    <UserCheck className="h-4 w-4 mr-2" /> Activate
-                  </>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-sm font-semibold truncate">
+                  {worker.firstName} {worker.lastName}
+                </h3>
+                <Badge variant={worker.workerType === "employee" ? "default" : "secondary"} className="text-xs">
+                  {worker.workerType === "employee" ? "Employee" : "Contractor"}
+                </Badge>
+                {!worker.isActive && (
+                  <Badge variant="destructive" className="text-xs">Inactive</Badge>
                 )}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </CardContent>
-    </Card>
+              </div>
+              {worker.jobTitle && (
+                <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
+                  <Briefcase className="h-3 w-3" />
+                  {worker.jobTitle}
+                  {worker.department && ` - ${worker.department}`}
+                </p>
+              )}
+              {(() => {
+                const company = companies?.find(c => c.id === worker.companyId);
+                if (!company) return null;
+                return (
+                  <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1" data-testid={`text-worker-company-${worker.id}`}>
+                    {company.iconUrl ? (
+                      <img src={company.iconUrl} alt="" className="h-3.5 w-3.5 rounded object-contain" />
+                    ) : company.logoUrl ? (
+                      <img src={company.logoUrl} alt="" className="h-3.5 w-3.5 rounded object-contain" />
+                    ) : (
+                      <Building2 className="h-3 w-3" />
+                    )}
+                    {company.name}
+                  </p>
+                );
+              })()}
+              <div className="flex items-center gap-3 mt-2 flex-wrap">
+                {worker.email && (
+                  <span className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Mail className="h-3 w-3" /> {worker.email}
+                  </span>
+                )}
+                {worker.phone && (
+                  <span className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Phone className="h-3 w-3" /> {worker.phone}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 mt-2">
+                <span className="text-xs font-medium text-primary">
+                  ${Number(worker.payRate).toFixed(2)}/{worker.payType === "salary" ? "yr" : "hr"}
+                </span>
+              </div>
+            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="icon" variant="ghost" data-testid={`button-worker-menu-${worker.id}`}>
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={() => onEdit(worker)}
+                  data-testid={`button-edit-worker-${worker.id}`}
+                >
+                  <Pencil className="h-4 w-4 mr-2" /> Edit
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => toggleActive.mutate()}
+                  data-testid={`button-toggle-active-${worker.id}`}
+                >
+                  {worker.isActive ? (
+                    <>
+                      <UserX className="h-4 w-4 mr-2" /> Deactivate
+                    </>
+                  ) : (
+                    <>
+                      <UserCheck className="h-4 w-4 mr-2" /> Activate
+                    </>
+                  )}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="text-destructive focus:text-destructive"
+                  data-testid={`button-delete-worker-${worker.id}`}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" /> Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </CardContent>
+      </Card>
+
+      <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle data-testid="text-delete-confirm-title">Delete Worker</AlertDialogTitle>
+            <AlertDialogDescription data-testid="text-delete-confirm-description">
+              Are you sure you want to permanently delete {worker.firstName} {worker.lastName}? This will remove all associated records including time entries, punches, schedules, payroll items, and documents. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteWorker.mutate()}
+              className="bg-destructive text-destructive-foreground"
+              disabled={deleteWorker.isPending}
+              data-testid="button-confirm-delete"
+            >
+              {deleteWorker.isPending ? "Deleting..." : "Delete Permanently"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
@@ -572,6 +648,10 @@ export default function Employees() {
     queryKey: ["/api/workers"],
   });
 
+  const { data: companies } = useQuery<Company[]>({
+    queryKey: ["/api/companies"],
+  });
+
   const filtered = (workers || []).filter((w) => {
     const matchesSearch =
       `${w.firstName} ${w.lastName} ${w.email} ${w.jobTitle} ${w.department}`
@@ -653,7 +733,7 @@ export default function Employees() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {filtered.map((worker) => (
-            <WorkerCard key={worker.id} worker={worker} onEdit={setEditingWorker} />
+            <WorkerCard key={worker.id} worker={worker} onEdit={setEditingWorker} companies={companies} />
           ))}
         </div>
       )}
