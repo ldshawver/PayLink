@@ -269,6 +269,20 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/workers/:id", requireRole("admin"), async (req, res) => {
+    try {
+      const worker = await storage.getWorker(req.params.id as string);
+      if (!worker) {
+        return res.status(404).json({ message: "Worker not found" });
+      }
+      await storage.deleteWorker(req.params.id as string);
+      res.json({ message: "Worker deleted successfully" });
+    } catch (error) {
+      console.error("Failed to delete worker:", error);
+      res.status(500).json({ message: "Failed to delete worker" });
+    }
+  });
+
   app.post("/api/time-clock/auth", async (req, res) => {
     try {
       const { employeeNumber, pin } = req.body;
@@ -571,6 +585,31 @@ export async function registerRoutes(
     }
   });
 
+  app.patch("/api/time-punches/:id", requireAuth, async (req, res) => {
+    try {
+      const data = { ...req.body };
+      if (data.punchTime) data.punchTime = new Date(data.punchTime);
+      const punch = await storage.updateTimePunch(req.params.id, data);
+      if (!punch) {
+        return res.status(404).json({ message: "Time punch not found" });
+      }
+      res.json(punch);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update time punch" });
+    }
+  });
+
+  app.delete("/api/time-punches/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteTimePunch(req.params.id);
+      res.json({ message: "Time punch deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete time punch" });
+    }
+  });
+
   app.get("/api/time-entries", async (_req, res) => {
     try {
       const entries = await storage.getTimeEntries();
@@ -581,9 +620,25 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/time-entries/:id", async (req, res) => {
+  app.post("/api/time-entries", requireAuth, async (req, res) => {
     try {
-      const entry = await storage.updateTimeEntry(req.params.id, req.body);
+      const data = { ...req.body };
+      if (data.clockIn) data.clockIn = new Date(data.clockIn);
+      if (data.clockOut) data.clockOut = new Date(data.clockOut);
+      const entry = await storage.createTimeEntry(data);
+      res.status(201).json(entry);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to create time entry" });
+    }
+  });
+
+  app.patch("/api/time-entries/:id", requireAuth, async (req, res) => {
+    try {
+      const data = { ...req.body };
+      if (data.clockIn) data.clockIn = new Date(data.clockIn);
+      if (data.clockOut) data.clockOut = new Date(data.clockOut);
+      const entry = await storage.updateTimeEntry(req.params.id, data);
       if (!entry) {
         return res.status(404).json({ message: "Time entry not found" });
       }
@@ -591,6 +646,16 @@ export async function registerRoutes(
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to update time entry" });
+    }
+  });
+
+  app.delete("/api/time-entries/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteTimeEntry(req.params.id);
+      res.json({ message: "Time entry deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete time entry" });
     }
   });
 
@@ -4208,20 +4273,33 @@ export async function registerRoutes(
   });
   app.post("/api/check-templates", requireAuth, async (req, res) => {
     try {
-      const parsed = insertCheckTemplateSchema.parse(req.body);
+      const data = { ...req.body };
+      if (!data.companyId || data.companyId === "") {
+        return res.status(400).json({ message: "Company is required" });
+      }
+      if (!data.name || data.name.trim() === "") {
+        return res.status(400).json({ message: "Template name is required" });
+      }
+      const parsed = insertCheckTemplateSchema.parse(data);
       const template = await storage.createCheckTemplate(parsed);
       res.status(201).json(template);
     } catch (error: any) {
-      res.status(400).json({ message: error.message || "Failed to create template" });
+      console.error("Failed to create check template:", error);
+      if (error.name === "ZodError") {
+        return res.status(400).json({ message: "Invalid template data: " + (error.issues?.[0]?.message || error.message) });
+      }
+      res.status(500).json({ message: "Failed to create check template" });
     }
   });
   app.patch("/api/check-templates/:id", requireAuth, async (req, res) => {
     try {
-      const template = await storage.updateCheckTemplate(req.params.id as string, req.body);
+      const data = { ...req.body };
+      if (data.companyId === "") data.companyId = null;
+      const template = await storage.updateCheckTemplate(req.params.id as string, data);
       if (!template) return res.status(404).json({ message: "Template not found" });
       res.json(template);
     } catch (error) {
-      console.error(error);
+      console.error("Failed to update check template:", error);
       res.status(500).json({ message: "Failed to update template" });
     }
   });

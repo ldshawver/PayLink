@@ -2808,7 +2808,7 @@ function CheckLayoutTab() {
                 <CheckPreview templateType={newType} config={layoutConfig} company={selectedCompanyObj} />
                 <Button
                   data-testid="button-create-template"
-                  disabled={!newName || createMutation.isPending}
+                  disabled={!newName || !effectiveCompanyId || createMutation.isPending}
                   onClick={() => effectiveCompanyId && createMutation.mutate({
                     name: newName,
                     templateType: newType,
