@@ -1,0 +1,30 @@
+Updating ee53fae..c5f84d3
+error: Your local changes to the following files would be overwritten by merge:
+        package-lock.json
+        package.json
+Please commit your changes or stash them before you merge.
+Aborting, ERROR:  must be owner of table time_entries.  Errors: Use --update-env to update environment variables
+[PM2] Applying action restartProcessId on app [paylink](ids: [ 0 ])
+[PM2] [paylink](0) ✓
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ 1.0.0   │ fork    │ 404176   │ 0s     │ 30   │ online    │ 0%       │ 17.9mb   │ root     │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[TAILING] Tailing last 20 lines for [paylink] process (change the value with --lines option)
+/root/.pm2/logs/paylink-error.log last 20 lines:
+/root/.pm2/logs/paylink-out.log last 20 lines:
+0|paylink  | 46a-2876e4832be1","status":"active","type":"nonprofit","classificationCode":"611430","legalName":"Refined Mind Inc.","tradeName":"Refined Mind","startDate":"2024-08-01","endDate":null,"address":"400 19th Street #3","city":"Sacramento","state":"CA","zip":"95811","country":"US","phone":"(916) 307-4621","createdAt":"2026-03-06T05:59:03.300Z"}]
+0|paylink  | 4:58:00 AM [express] GET /api/cost-centers 200 in 44ms :: [{"id":"846e912c-d1b1-4f9d-a392-16032b43848a","companyId":"15a20637-31ac-452c-aa28-529e84c49cde","name":"A Payroll","code":"A PAY","description":"","isActive":true,"createdAt":"2026-03-07T23:04:39.354Z"},{"id":"988af3b5-37a6-42a1-8a9b-4fcfe6c4dcb2","companyId":"7ab13b28-4994-4197-8cf2-16d8c9ac6f86","name":"AP Payroll","code":"AP PAY","description":"","isActive":true,"createdAt":"2026-03-07T23:05:09.748Z"},{"id":"4e65b8ea-3f84-41f3-8323-cc2f4f506c23","companyId":"a17e275b-c26e-4b86-8fe3-b7261ff30666","name":"LC Payroll","code":"LC PAY","description":"","isActive":true,"createdAt":"2026-03-07T23:04:25.034Z"},{"id":"5091af69-2946-47b8-8774-e4696088c367","companyId":"7218f3c4-5803-4e7d-946a-2876e4832be1","name":"RM Payroll","code":"RM PAY","description":"","isActive":true,"createdAt":"2026-03-07T23:04:52.904Z"}]
+0|paylink  | 4:58:01 AM [express] GET /api/jobs 200 in 8ms :: []
+0|paylink  | 4:58:52 AM [express] GET /api/enterprises 304 in 30ms :: [{"id":"c9449dee-91d2-4dd8-b41a-a3d894635c3e","name":"Alavont Holdings","description":"","website":"","logoUrl":null,"createdAt":"2026-03-06T09:50:48.325Z"}]
+0|paylink  | 4:58:52 AM [express] GET /api/divisions 304 in 34ms :: []
+0|paylink  | 4:58:52 AM [express] GET /api/branches 304 in 31ms :: [{"id":"141babce-ca7f-4943-b790-68786b72bd1a","companyId":"7ab13b28-4994-4197-8cf2-16d8c9ac6f86","divisionId":"","name":"AP Headquarters","code":"AP HQ","address":"400 19th Street #3","city":"Sacramento","state":"CA","zip":"95811","phone":"(916) 307-4621","isActive":true,"createdAt":"2026-03-06T06:03:18.904Z"},{"id":"a8ca5eb9-f97c-44fb-83d5-3ea88f2a83a3","companyId":"7ab13b28-4994-4197-8cf2-16d8c9ac6f86","divisionId":"","name":"AP Remote","code":"AP R","address":"400 19th Street #3","city":"Sacramento","state":"CA","zip":"95811","phone":"(916) 307-4621","isActive":true,"createdAt":"2026-03-06T06:14:33.122Z"},{"id":"3200232c-09dc-414e-8358-c3bfb7672f3d","companyId":"15a20637-31ac-452c-aa28-529e84c49cde","divisionId":"","name":"A Remote","code":"A R","address":"400 19th Street #3","city":"Sacramento","state":"CA","zip":"95811","phone":"(916) 307-4621","isActive":true,"createdAt":"2026-03-06T06:14:01.982Z"},{"id":"b4463b01-c93a-4dc0-b5e8-d3e21acefd54","companyId":"a17e275b-c26e-4b86-8fe3-b7261ff30666","divisionId":"","name":"LC Headquarters","code":"LC HQ","address":"400 19th Street #3","city":"Sacramento","state":"CA","zip":"95811","phone":"(916) 307-4621","isActive":true,"createdAt":"2026-03-06T06:07:00.771Z"},{"id":"48a67454-da76-418d-8d13-6330767eb207","companyId":"a17e275b-c26e-4b86-8fe3-b7261ff30666","divisionId":"","name":"LC Remote","code":"LC R","address":"400 19th Street #3","city":"Sacramento","state":"CA","zip":"95811","phone":"(845) 470-0120","isActive":true,"createdAt":"2026-03-06T06:15:14.240Z"},{"id":"81b8ae0f-96b3-4eea-8eb1-244103ac4c6a","companyId":"15a20637-31ac-452c-aa28-529e84c49cde","divisionId":"","name":"RM Headquarters","code":"RM HQ","address":"400 19th Street #3","city":"Sacramento","state":"CA","zip":"95811","phone":"(916) 307-4621","isActive":true,"createdAt":"2026-03-06T06:04:21.936Z"},{"id":"a1023f27-73fa-4230-b3a5-8ea34dce0cfb","companyId":"7218f3c4-5803-4e7d-946a-2876e4832be1","divisionId":"","name":"RM Headquarters","code":"RM HQ","address":"400 19th Street #3","city":"Sacramento","state":"CA","zip":"95811","phone":"(916) 307-4621","isActive":true,"createdAt":"2026-03-06T06:05:30.344Z"}]
+0|paylink  | 5:01:49 AM [express] POST /api/jobs 500 in 17ms :: {"message":"Failed to create job"}
+0|paylink  | Admin user password reset to default
+0|paylink  | 5:03:45 AM [express] serving on port 8080
+0|paylink  | Admin user password reset to default
+0|paylink  | 5:03:52 AM [express] serving on port 8080
+
+0|paylink  | Admin user password reset to default
+0|paylink  | 5:05:57 AM [express] serving on port 8080
