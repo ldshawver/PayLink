@@ -3985,6 +3985,83 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/permission-groups/quick-setup", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+
+      const RESOURCES = [
+        "dashboard", "companies", "workers", "schedules", "payroll", "timesheets",
+        "departments", "branches", "divisions", "positions",
+        "policies", "hr", "reports", "timeclock", "settings", "permissions", "system_admin"
+      ];
+
+      type PD = { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean; canExport: boolean; canApprove: boolean };
+      const full: PD = { canView: true, canCreate: true, canEdit: true, canDelete: true, canExport: true, canApprove: true };
+      const viewOnly: PD = { canView: true, canCreate: false, canEdit: false, canDelete: false, canExport: false, canApprove: false };
+      const viewExport: PD = { canView: true, canCreate: false, canEdit: false, canDelete: false, canExport: true, canApprove: false };
+      const none: PD = { canView: false, canCreate: false, canEdit: false, canDelete: false, canExport: false, canApprove: false };
+
+      const groupDefs = [
+        { name: "System Administrator", description: "Full access to everything across the entire system", level: 1, isSystem: true,
+          perms: Object.fromEntries(RESOURCES.map(r => [r, full])) },
+        { name: "HR Manager", description: "Handles employee records and HR compliance", level: 2, isSystem: true,
+          perms: { dashboard: viewOnly, companies: viewOnly, workers: full, schedules: viewOnly, payroll: viewOnly, timesheets: viewOnly,
+            departments: viewOnly, branches: viewOnly, divisions: viewOnly, positions: viewOnly, policies: viewOnly, hr: full,
+            reports: viewExport, timeclock: viewOnly, settings: none, permissions: none, system_admin: none } },
+        { name: "Payroll Manager", description: "Handles payroll processing and tax configuration", level: 2, isSystem: true,
+          perms: { dashboard: viewOnly, companies: viewOnly, workers: viewOnly, schedules: viewOnly, payroll: full,
+            timesheets: { canView: true, canCreate: false, canEdit: true, canDelete: false, canExport: true, canApprove: true },
+            departments: viewOnly, branches: viewOnly, divisions: viewOnly, positions: viewOnly, policies: viewOnly, hr: viewOnly,
+            reports: viewExport, timeclock: viewOnly,
+            settings: { canView: true, canCreate: false, canEdit: true, canDelete: false, canExport: false, canApprove: false },
+            permissions: none, system_admin: none } },
+        { name: "Department Manager", description: "Manages employees within their department", level: 3, isSystem: true,
+          perms: { dashboard: viewOnly, companies: viewOnly,
+            workers: { canView: true, canCreate: false, canEdit: true, canDelete: false, canExport: false, canApprove: false },
+            schedules: { canView: true, canCreate: true, canEdit: true, canDelete: false, canExport: false, canApprove: true },
+            payroll: viewOnly,
+            timesheets: { canView: true, canCreate: false, canEdit: false, canDelete: false, canExport: false, canApprove: true },
+            departments: viewOnly, branches: viewOnly, divisions: viewOnly, positions: viewOnly, policies: viewOnly, hr: viewOnly,
+            reports: { canView: true, canCreate: false, canEdit: false, canDelete: false, canExport: true, canApprove: false },
+            timeclock: viewOnly, settings: none, permissions: none, system_admin: none } },
+        { name: "Employee", description: "Self-service access to own data", level: 5, isSystem: true,
+          perms: { dashboard: viewOnly, companies: none, workers: none, schedules: viewOnly, payroll: viewOnly, timesheets: viewOnly,
+            departments: none, branches: none, divisions: none, positions: none, policies: viewOnly, hr: none, reports: viewOnly,
+            timeclock: { canView: true, canCreate: true, canEdit: false, canDelete: false, canExport: false, canApprove: false },
+            settings: none, permissions: none, system_admin: none } },
+      ];
+
+      const created: string[] = [];
+      const existing = await storage.getRoles();
+
+      for (const def of groupDefs) {
+        const existingRole = existing.find(r => r.name === def.name);
+        let roleId: string;
+
+        if (existingRole) {
+          roleId = existingRole.id;
+        } else {
+          const { perms, ...roleData } = def;
+          const role = await storage.createRole(roleData);
+          roleId = role.id;
+        }
+
+        await storage.deleteRolePermissionsByRole(roleId);
+        for (const resource of RESOURCES) {
+          const p = (def.perms as Record<string, PD>)[resource] || none;
+          await storage.createRolePermission({ roleId, resource, ...p });
+        }
+        created.push(def.name);
+      }
+
+      res.json({ message: `${created.length} permission groups configured`, groups: created });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to setup permission groups" });
+    }
+  });
+
   app.get("/api/role-permissions", async (req, res) => {
     try {
       const roleId = req.query.roleId as string | undefined;

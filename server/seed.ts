@@ -4,9 +4,9 @@ import { companies, workers, timeEntries, schedules, taxesDeductions, users, rol
 import bcrypt from "bcrypt";
 
 const PERMISSION_RESOURCES = [
-  "companies", "workers", "schedules", "payroll", "timesheets",
+  "dashboard", "companies", "workers", "schedules", "payroll", "timesheets",
   "departments", "branches", "divisions", "positions",
-  "policies", "hr", "reports", "settings", "permissions"
+  "policies", "hr", "reports", "timeclock", "settings", "permissions", "system_admin"
 ];
 
 async function ensureAdminUser() {
@@ -38,11 +38,11 @@ async function seedRolesAndPermissions() {
     }
 
     const roleDefinitions = [
-      { name: "Enterprise Admin", description: "Full access across all companies in the enterprise", level: 1, isSystem: true },
-      { name: "Company Admin", description: "Full access within assigned company", level: 2, isSystem: true },
-      { name: "Manager", description: "Manage employees, schedules, timesheets within scope", level: 3, isSystem: true },
-      { name: "Supervisor", description: "View and approve timesheets, manage schedules within scope", level: 4, isSystem: true },
-      { name: "Employee", description: "View own data, punch in/out, view schedule", level: 5, isSystem: true },
+      { name: "System Administrator", description: "Full access to everything across the entire system", level: 1, isSystem: true },
+      { name: "HR Manager", description: "Handles employee records and HR compliance", level: 2, isSystem: true },
+      { name: "Payroll Manager", description: "Handles payroll processing and tax configuration", level: 2, isSystem: true },
+      { name: "Department Manager", description: "Manages employees within their department", level: 3, isSystem: true },
+      { name: "Employee", description: "Self-service access to own data", level: 5, isSystem: true },
     ];
 
     const createdRoles: Record<string, string> = {};
@@ -51,45 +51,110 @@ async function seedRolesAndPermissions() {
       createdRoles[roleDef.name] = r.id;
     }
 
-    const permissionMatrix: Record<string, { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean }> = {
-      "Enterprise Admin": { canView: true, canCreate: true, canEdit: true, canDelete: true },
-      "Company Admin": { canView: true, canCreate: true, canEdit: true, canDelete: true },
-      "Manager": { canView: true, canCreate: true, canEdit: true, canDelete: false },
-      "Supervisor": { canView: true, canCreate: false, canEdit: true, canDelete: false },
-      "Employee": { canView: true, canCreate: false, canEdit: false, canDelete: false },
-    };
+    type PermDef = { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean; canExport: boolean; canApprove: boolean };
+    const full: PermDef = { canView: true, canCreate: true, canEdit: true, canDelete: true, canExport: true, canApprove: true };
+    const viewOnly: PermDef = { canView: true, canCreate: false, canEdit: false, canDelete: false, canExport: false, canApprove: false };
+    const viewExport: PermDef = { canView: true, canCreate: false, canEdit: false, canDelete: false, canExport: true, canApprove: false };
+    const none: PermDef = { canView: false, canCreate: false, canEdit: false, canDelete: false, canExport: false, canApprove: false };
 
-    const managerResources = ["workers", "schedules", "timesheets", "reports"];
-    const supervisorResources = ["schedules", "timesheets"];
-    const employeeResources = ["timesheets", "schedules"];
+    const permissionMatrix: Record<string, Record<string, PermDef>> = {
+      "System Administrator": Object.fromEntries(PERMISSION_RESOURCES.map(r => [r, full])),
+      "HR Manager": {
+        dashboard: viewOnly,
+        companies: viewOnly,
+        workers: full,
+        schedules: viewOnly,
+        payroll: viewOnly,
+        timesheets: viewOnly,
+        departments: viewOnly,
+        branches: viewOnly,
+        divisions: viewOnly,
+        positions: viewOnly,
+        policies: viewOnly,
+        hr: full,
+        reports: viewExport,
+        timeclock: viewOnly,
+        settings: none,
+        permissions: none,
+        system_admin: none,
+      },
+      "Payroll Manager": {
+        dashboard: viewOnly,
+        companies: viewOnly,
+        workers: viewOnly,
+        schedules: viewOnly,
+        payroll: full,
+        timesheets: { canView: true, canCreate: false, canEdit: true, canDelete: false, canExport: true, canApprove: true },
+        departments: viewOnly,
+        branches: viewOnly,
+        divisions: viewOnly,
+        positions: viewOnly,
+        policies: viewOnly,
+        hr: viewOnly,
+        reports: viewExport,
+        timeclock: viewOnly,
+        settings: { canView: true, canCreate: false, canEdit: true, canDelete: false, canExport: false, canApprove: false },
+        permissions: none,
+        system_admin: none,
+      },
+      "Department Manager": {
+        dashboard: viewOnly,
+        companies: viewOnly,
+        workers: { canView: true, canCreate: false, canEdit: true, canDelete: false, canExport: false, canApprove: false },
+        schedules: { canView: true, canCreate: true, canEdit: true, canDelete: false, canExport: false, canApprove: true },
+        payroll: viewOnly,
+        timesheets: { canView: true, canCreate: false, canEdit: false, canDelete: false, canExport: false, canApprove: true },
+        departments: viewOnly,
+        branches: viewOnly,
+        divisions: viewOnly,
+        positions: viewOnly,
+        policies: viewOnly,
+        hr: viewOnly,
+        reports: { canView: true, canCreate: false, canEdit: false, canDelete: false, canExport: true, canApprove: false },
+        timeclock: viewOnly,
+        settings: none,
+        permissions: none,
+        system_admin: none,
+      },
+      "Employee": {
+        dashboard: viewOnly,
+        companies: none,
+        workers: none,
+        schedules: viewOnly,
+        payroll: viewOnly,
+        timesheets: viewOnly,
+        departments: none,
+        branches: none,
+        divisions: none,
+        positions: none,
+        policies: viewOnly,
+        hr: none,
+        reports: viewOnly,
+        timeclock: { canView: true, canCreate: true, canEdit: false, canDelete: false, canExport: false, canApprove: false },
+        settings: none,
+        permissions: none,
+        system_admin: none,
+      },
+    };
 
     for (const roleName of Object.keys(createdRoles)) {
       const roleId = createdRoles[roleName];
-      const perms = permissionMatrix[roleName];
-      let resources = PERMISSION_RESOURCES;
-
-      if (roleName === "Manager") resources = managerResources;
-      else if (roleName === "Supervisor") resources = supervisorResources;
-      else if (roleName === "Employee") resources = employeeResources;
-
-      for (const resource of resources) {
-        let actualPerms = { ...perms };
-        if (roleName === "Employee") {
-          actualPerms = { canView: true, canCreate: false, canEdit: false, canDelete: false };
-        }
+      const rolePerms = permissionMatrix[roleName];
+      for (const resource of PERMISSION_RESOURCES) {
+        const perms = rolePerms[resource] || none;
         await db.insert(rolePermissions).values({
           roleId,
           resource,
-          ...actualPerms,
+          ...perms,
         });
       }
     }
 
     const adminUser = await db.select().from(users).where(eq(users.username, "admin"));
-    if (adminUser.length > 0 && createdRoles["Enterprise Admin"]) {
+    if (adminUser.length > 0 && createdRoles["System Administrator"]) {
       await db.insert(userRoles).values({
         userId: adminUser[0].id,
-        roleId: createdRoles["Enterprise Admin"],
+        roleId: createdRoles["System Administrator"],
         scopeType: "enterprise",
         scopeId: null,
       });
