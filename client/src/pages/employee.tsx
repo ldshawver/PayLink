@@ -64,6 +64,7 @@ function EmployeeTab() {
   const emptyForm = {
     firstName: "", middleName: "", lastName: "", email: "", phone: "",
     workerType: "employee" as "employee" | "contractor",
+    contractorType: "hourly",
     jobTitle: "", department: "", payRate: "", payType: "hourly",
     hireDate: "", companyId: "",
     status: "active", gender: "unspecified", birthDate: "", terminationDate: "",
@@ -133,6 +134,7 @@ function EmployeeTab() {
       email: worker.email || "",
       phone: worker.phone || "",
       workerType: worker.workerType,
+      contractorType: worker.contractorType || "hourly",
       jobTitle: worker.jobTitle || "",
       department: worker.department || "",
       payRate: worker.payRate || "0",
@@ -220,7 +222,7 @@ function EmployeeTab() {
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Worker Type</Label>
-              <Select value={form.workerType} onValueChange={v => setForm(f => ({ ...f, workerType: v as "employee" | "contractor" }))}>
+              <Select value={form.workerType} onValueChange={v => setForm(f => ({ ...f, workerType: v as "employee" | "contractor", ...(v === "employee" ? { contractorType: "hourly" } : {}) }))}>
                 <SelectTrigger data-testid="select-workerType"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="employee">Employee</SelectItem>
@@ -228,6 +230,18 @@ function EmployeeTab() {
                 </SelectContent>
               </Select>
             </div>
+            {form.workerType === "contractor" && (
+              <div className="space-y-2">
+                <Label>Contractor Type</Label>
+                <Select value={form.contractorType || "hourly"} onValueChange={v => setForm(f => ({ ...f, contractorType: v }))}>
+                  <SelectTrigger data-testid="select-contractorType"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="hourly">Hourly (Clocks In/Out)</SelectItem>
+                    <SelectItem value="invoice">Invoice-Based</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Employee Number</Label>
               <Input data-testid="input-employeeNumber" value={form.employeeNumber}
@@ -605,7 +619,8 @@ function EmployeeTab() {
                     </TableCell>
                     <TableCell>
                       <Badge variant="secondary" className="text-xs" data-testid={`badge-type-${w.id}`}>
-                        {w.workerType}
+                        {w.workerType === "employee" ? "Employee" :
+                         w.contractorType === "invoice" ? "Contractor (Invoice)" : "Contractor (Hourly)"}
                       </Badge>
                     </TableCell>
                     <TableCell>{w.jobTitle || "—"}</TableCell>
@@ -1014,6 +1029,7 @@ function DocumentsTab() {
 
   const documentTypeOptions = [
     "W-4 Tax Withholding",
+    "W-9 Taxpayer ID (Contractor)",
     "I-9 Employment Eligibility",
     "DE 4 (CA Withholding)",
     "Photo ID",

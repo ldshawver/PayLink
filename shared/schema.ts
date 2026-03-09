@@ -125,6 +125,7 @@ export const workers = pgTable("workers", {
   managerId: varchar("manager_id"),
   emergencyContactName: text("emergency_contact_name"),
   emergencyContactPhone: text("emergency_contact_phone"),
+  contractorType: text("contractor_type").default("hourly"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

@@ -7,6 +7,7 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { ClockInButton } from "@/components/clock-in-button";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
@@ -54,7 +55,10 @@ function AuthenticatedLayout() {
         <div className="flex flex-col flex-1 overflow-hidden">
           <header className="flex items-center justify-between gap-2 p-2 border-b sticky top-0 z-50 bg-background">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
-            <ThemeToggle />
+            <div className="flex items-center gap-3">
+              <ClockInButton />
+              <ThemeToggle />
+            </div>
           </header>
           <main className="flex-1 overflow-y-auto">
             <AuthenticatedRouter />
