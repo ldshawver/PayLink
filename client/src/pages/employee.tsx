@@ -250,6 +250,11 @@ function EmployeeTab() {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
+              <Label>PIN (Time Clock)</Label>
+              <Input data-testid="input-pin" type="password" placeholder="4-digit PIN" value={form.pin}
+                onChange={e => setForm(f => ({ ...f, pin: e.target.value }))} />
+            </div>
+            <div className="space-y-2">
               <Label>Hire Date</Label>
               <Input data-testid="input-hireDate" type="date" value={form.hireDate}
                 onChange={e => setForm(f => ({ ...f, hireDate: e.target.value }))} />
