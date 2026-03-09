@@ -248,6 +248,12 @@ export async function registerRoutes(
       if (!req.body.companyId) return res.status(400).json({ message: "Company is required" });
       if (!req.body.firstName) return res.status(400).json({ message: "First name is required" });
       if (!req.body.lastName) return res.status(400).json({ message: "Last name is required" });
+      if (req.body.contractorType && !["hourly", "invoice"].includes(req.body.contractorType)) {
+        return res.status(400).json({ message: "Contractor type must be 'hourly' or 'invoice'" });
+      }
+      if (req.body.workerType === "employee") {
+        req.body.contractorType = null;
+      }
       const worker = await storage.createWorker(req.body);
       res.status(201).json(worker);
     } catch (error) {
@@ -509,6 +515,10 @@ export async function registerRoutes(
 
   app.post("/api/time-punches", async (req, res) => {
     try {
+      const worker = await storage.getWorker(req.body.workerId);
+      if (worker && worker.workerType === "contractor" && worker.contractorType === "invoice") {
+        return res.status(400).json({ message: "Invoice-based contractors cannot clock in/out. They submit invoices instead." });
+      }
       const punch = await storage.createTimePunch({
         ...req.body,
         punchTime: new Date(),

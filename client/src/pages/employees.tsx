@@ -71,6 +71,7 @@ const workerFormSchema = z.object({
   email: z.string().email("Invalid email").or(z.literal("")).optional(),
   phone: z.string().optional(),
   workerType: z.enum(["employee", "contractor"]),
+  contractorType: z.string().optional(),
   jobTitle: z.string().optional(),
   department: z.string().optional(),
   payRate: z.string().min(1, "Pay rate is required"),
@@ -175,7 +176,7 @@ function WorkerFormFields({ form, companies }: { form: any; companies: Company[]
         render={({ field }) => (
           <FormItem>
             <FormLabel>Worker Type</FormLabel>
-            <Select onValueChange={field.onChange} value={field.value}>
+            <Select onValueChange={(v) => { field.onChange(v); if (v === "employee") form.setValue("contractorType", ""); }} value={field.value}>
               <FormControl>
                 <SelectTrigger data-testid="select-worker-type">
                   <SelectValue />
@@ -190,6 +191,29 @@ function WorkerFormFields({ form, companies }: { form: any; companies: Company[]
           </FormItem>
         )}
       />
+      {form.watch("workerType") === "contractor" && (
+        <FormField
+          control={form.control}
+          name="contractorType"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Contractor Type</FormLabel>
+              <Select onValueChange={field.onChange} value={field.value || "hourly"}>
+                <FormControl>
+                  <SelectTrigger data-testid="select-contractor-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="hourly">Hourly (Clocks In/Out)</SelectItem>
+                  <SelectItem value="invoice">Invoice-Based</SelectItem>
+                </SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      )}
       <div className="grid grid-cols-2 gap-3">
         <FormField
           control={form.control}
@@ -355,6 +379,7 @@ function EditWorkerDialog({ worker, onClose }: { worker: Worker; onClose: () => 
       email: worker.email || "",
       phone: worker.phone || "",
       workerType: worker.workerType as "employee" | "contractor",
+      contractorType: worker.contractorType || "hourly",
       jobTitle: worker.jobTitle || "",
       department: worker.department || "",
       payRate: String(worker.payRate),
@@ -451,7 +476,8 @@ function WorkerCard({ worker, onEdit, companies }: { worker: Worker; onEdit: (w:
                   {worker.firstName} {worker.lastName}
                 </h3>
                 <Badge variant={worker.workerType === "employee" ? "default" : "secondary"} className="text-xs">
-                  {worker.workerType === "employee" ? "Employee" : "Contractor"}
+                  {worker.workerType === "employee" ? "Employee" :
+                   worker.contractorType === "invoice" ? "Contractor (Invoice)" : "Contractor (Hourly)"}
                 </Badge>
                 {!worker.isActive && (
                   <Badge variant="destructive" className="text-xs">Inactive</Badge>
@@ -580,6 +606,7 @@ function AddWorkerDialog() {
       email: "",
       phone: "",
       workerType: "employee",
+      contractorType: "hourly",
       jobTitle: "",
       department: "",
       payRate: "",
