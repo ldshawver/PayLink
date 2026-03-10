@@ -36,7 +36,7 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 **Backend:**
 -   **Framework:** Express.js + TypeScript.
 -   **Authentication:** Session-based using `express-session` and `connect-pg-simple` (PostgreSQL session store), with `bcrypt` for password hashing. All API routes, except authentication endpoints and the time clock, are protected.
--   **RBAC:** Write operations on companies, workers, and payroll require `admin` or `manager` role via `requireRole()` middleware. Deleting payroll runs requires `admin` only.
+-   **RBAC:** Role-based access enforced at both frontend and backend levels. Frontend sidebar filters navigation sections by user role (employees see Dashboard, Attendance, Schedule only; managers see those plus Employee, Company, Payroll, HR, Reports; admins see everything including Policy). Route guards redirect unauthorized users to Dashboard. Backend enforces `requireRole()` middleware on write operations: companies/workers/payroll/HR/company-structure require `admin` or `manager`; policy management and user account CRUD require `admin` only; deleting payroll runs and workers requires `admin` only.
 -   **API Design:** Provides a comprehensive set of RESTful API endpoints for managing various entities like companies, workers, time punches, schedules, payroll, and HR components. Includes `/api/payroll-summary` for aggregated payroll data used by tax reports.
 
 **Database:**
