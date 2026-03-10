@@ -577,6 +577,20 @@ export async function registerRoutes(
       });
 
       if (punch.punchType === "clock_in") {
+        const allEntries = await storage.getTimeEntries();
+        const staleOpenEntries = allEntries.filter(
+          (e) => e.workerId === punch.workerId && e.clockIn && !e.clockOut
+        );
+        for (const stale of staleOpenEntries) {
+          const staleClockIn = new Date(stale.clockIn!);
+          const staleClockOut = new Date(staleClockIn.getTime() + 8 * 60 * 60 * 1000);
+          await storage.updateTimeEntry(stale.id, {
+            clockOut: staleClockOut,
+            totalHours: "8.00",
+            overtimeHours: "0.00",
+            doubleTimeHours: "0.00",
+          });
+        }
         const entryData: any = {
           workerId: punch.workerId,
           companyId: punch.companyId,
