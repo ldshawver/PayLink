@@ -26,7 +26,7 @@ import {
   Users, Plus, MoreHorizontal, Settings, DollarSign, CreditCard,
   Briefcase, UserPlus, Clock, Calendar, Building2,
   Pencil, Trash2, ChevronRight, Hash, Globe, Phone, Mail, MapPin, FileText,
-  Upload, Download, ExternalLink
+  Upload, Download, ExternalLink, Shield, Eye, EyeOff
 } from "lucide-react";
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -2574,6 +2574,239 @@ function WageGroupsTab() {
   );
 }
 
+interface UserAccount {
+  id: string;
+  username: string;
+  role: string;
+  companyId: string | null;
+  workerId: string | null;
+  isActive: boolean | null;
+  createdAt: string | null;
+}
+
+function UserAccountsTab() {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [editItem, setEditItem] = useState<UserAccount | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const defaultForm = { username: "", password: "", role: "employee", companyId: "", workerId: "", isActive: true };
+  const [form, setForm] = useState(defaultForm);
+
+  const { data: userAccounts, isLoading } = useQuery<UserAccount[]>({ queryKey: ["/api/users"] });
+  const { data: allWorkers } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
+  const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const mutation = useMutation({
+    mutationFn: async (data: typeof form) => {
+      const payload: any = { ...data };
+      if (!payload.companyId) delete payload.companyId;
+      if (!payload.workerId) delete payload.workerId;
+      if (editItem && !payload.password) delete payload.password;
+      if (editItem) {
+        await apiRequest("PATCH", `/api/users/${editItem.id}`, payload);
+      } else {
+        await apiRequest("POST", "/api/users", payload);
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      toast({ title: editItem ? "User account updated" : "User account created" });
+      setOpen(false);
+      setEditItem(null);
+      setForm(defaultForm);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/users/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      toast({ title: "User account deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleEdit = (item: UserAccount) => {
+    setEditItem(item);
+    setForm({
+      username: item.username,
+      password: "",
+      role: item.role || "employee",
+      companyId: item.companyId || "",
+      workerId: item.workerId || "",
+      isActive: item.isActive !== false,
+    });
+    setOpen(true);
+  };
+
+  const handleDialogChange = (isOpen: boolean) => {
+    setOpen(isOpen);
+    if (!isOpen) {
+      setEditItem(null);
+      setForm(defaultForm);
+      setShowPassword(false);
+    }
+  };
+
+  const getWorkerName = (workerId: string | null) => {
+    if (!workerId || !allWorkers) return "—";
+    const w = allWorkers.find(w => w.id === workerId);
+    return w ? `${w.firstName} ${w.lastName}` : "—";
+  };
+
+  const getCompanyName = (companyId: string | null) => {
+    if (!companyId || !companies) return "—";
+    const c = companies.find(c => c.id === companyId);
+    return c ? c.name : "—";
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <h3 className="text-lg font-semibold">User Accounts</h3>
+        <Dialog open={open} onOpenChange={handleDialogChange}>
+          <DialogTrigger asChild>
+            <Button data-testid="button-add-user-account"><Plus className="w-4 h-4 mr-1" /> Add User Account</Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{editItem ? "Edit User Account" : "Create User Account"}</DialogTitle>
+            </DialogHeader>
+            <div className="grid gap-4">
+              <div className="grid gap-2">
+                <Label>Username</Label>
+                <Input data-testid="input-user-username" value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} placeholder="e.g. john.smith" />
+              </div>
+              <div className="grid gap-2">
+                <Label>{editItem ? "New Password (leave blank to keep current)" : "Password"}</Label>
+                <div className="relative">
+                  <Input data-testid="input-user-password" type={showPassword ? "text" : "password"} value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} placeholder={editItem ? "Leave blank to keep current" : "Enter password"} />
+                  <Button type="button" variant="ghost" size="icon" className="absolute right-0 top-0 h-full" onClick={() => setShowPassword(!showPassword)}>
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label>Role</Label>
+                <Select value={form.role} onValueChange={v => setForm(f => ({ ...f, role: v }))}>
+                  <SelectTrigger data-testid="select-user-role"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="admin">Admin</SelectItem>
+                    <SelectItem value="manager">Manager</SelectItem>
+                    <SelectItem value="employee">Employee</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Company</Label>
+                <Select value={form.companyId} onValueChange={v => setForm(f => ({ ...f, companyId: v }))}>
+                  <SelectTrigger data-testid="select-user-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                  <SelectContent>
+                    {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Link to Employee/Worker</Label>
+                <Select value={form.workerId} onValueChange={v => setForm(f => ({ ...f, workerId: v }))}>
+                  <SelectTrigger data-testid="select-user-worker"><SelectValue placeholder="Select worker (optional)" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No linked worker</SelectItem>
+                    {allWorkers?.filter(w => w.isActive).map(w => (
+                      <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName} ({w.employeeNumber || "no #"})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {editItem && (
+                <div className="flex items-center gap-2">
+                  <Checkbox data-testid="checkbox-user-active" checked={form.isActive} onCheckedChange={v => setForm(f => ({ ...f, isActive: !!v }))} />
+                  <Label>Active</Label>
+                </div>
+              )}
+              <Button data-testid="button-save-user-account" disabled={mutation.isPending} onClick={() => {
+                if (!form.username) return toast({ title: "Username is required", variant: "destructive" });
+                if (!editItem && !form.password) return toast({ title: "Password is required", variant: "destructive" });
+                const submitData = { ...form };
+                if (submitData.workerId === "none") submitData.workerId = "";
+                mutation.mutate(submitData);
+              }}>
+                {mutation.isPending ? "Saving..." : editItem ? "Update Account" : "Create Account"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-12 w-full" />)}</div>
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Username</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Linked Worker</TableHead>
+                  <TableHead>Company</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="w-[80px]">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {!userAccounts?.length ? (
+                  <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No user accounts found</TableCell></TableRow>
+                ) : userAccounts.map(u => (
+                  <TableRow key={u.id} data-testid={`row-user-${u.id}`}>
+                    <TableCell className="font-medium">{u.username}</TableCell>
+                    <TableCell>
+                      <Badge variant={u.role === "admin" ? "default" : u.role === "manager" ? "secondary" : "outline"}>
+                        {u.role}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{getWorkerName(u.workerId)}</TableCell>
+                    <TableCell>{getCompanyName(u.companyId)}</TableCell>
+                    <TableCell>
+                      <Badge variant={u.isActive !== false ? "default" : "destructive"}>
+                        {u.isActive !== false ? "Active" : "Disabled"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" data-testid={`menu-user-${u.id}`}><MoreHorizontal className="h-4 w-4" /></Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem data-testid={`edit-user-${u.id}`} onClick={() => handleEdit(u)}>
+                            <Pencil className="mr-2 h-4 w-4" />Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem data-testid={`delete-user-${u.id}`} className="text-red-600" onClick={() => {
+                            if (confirm("Delete this user account? This cannot be undone.")) deleteMutation.mutate(u.id);
+                          }}>
+                            <Trash2 className="mr-2 h-4 w-4" />Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 export default function EmployeePage() {
   const [activeTab, handleTabChange] = useTabParam("employee");
 
@@ -2621,6 +2854,9 @@ export default function EmployeePage() {
           <TabsTrigger value="wage-groups" data-testid="tab-wage-groups">
             <DollarSign className="mr-2 h-4 w-4" />Wage Groups
           </TabsTrigger>
+          <TabsTrigger value="user-accounts" data-testid="tab-user-accounts">
+            <Shield className="mr-2 h-4 w-4" />User Accounts
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="employee"><EmployeeTab /></TabsContent>
@@ -2634,6 +2870,7 @@ export default function EmployeePage() {
         <TabsContent value="ethnic-groups"><EthnicGroupsTab /></TabsContent>
         <TabsContent value="new-hire-defaults"><NewHireDefaultsTab /></TabsContent>
         <TabsContent value="wage-groups"><WageGroupsTab /></TabsContent>
+        <TabsContent value="user-accounts"><UserAccountsTab /></TabsContent>
       </Tabs>
     </div>
   );

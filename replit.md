@@ -57,6 +57,7 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 -   **File Upload:** Supports secure document uploads for employee records (W-4, W-9, I-9, DE 4, Photo ID, tax forms, employment/contractor agreements; PDF/DOC/images up to 10MB).
 -   **Header Clock In/Out:** Persistent clock in/out button in the top header bar, visible on all pages. Admin/managers can select any clockable worker; linked workers see their own status. Shows live time, current clock status (Clocked In/On Break), and today's activity history.
 -   **Contractor Subtypes:** Workers of type "contractor" have an additional `contractorType` field: "hourly" (clocks in/out like employees) or "invoice" (submits invoices, excluded from time clock). Backend enforces that invoice-based contractors cannot punch in/out.
+-   **User Account Management:** Admins can create, edit, and delete user accounts from the Employee > User Accounts tab. Each account has a username, password, role (admin/manager/employee), optional company assignment, and optional link to a worker record. Accounts can be enabled/disabled. The `users` table includes `worker_id`, `is_active`, and `created_at` columns. User listing requires admin or manager role; create/update/delete require admin role.
 
 ## External Dependencies
 -   **PostgreSQL:** Primary database for all application data.

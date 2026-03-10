@@ -118,7 +118,9 @@ const navSections = [
       { title: "Titles", url: "/employee?tab=titles", icon: Tag },
       { title: "Employee Groups", url: "/employee?tab=groups", icon: UsersRound },
       { title: "Ethnic Groups", url: "/employee?tab=ethnic-groups", icon: Globe },
+      { title: "Documents", url: "/employee?tab=documents", icon: FileText },
       { title: "New Hire Defaults", url: "/employee?tab=new-hire", icon: UserCheck },
+      { title: "User Accounts", url: "/employee?tab=user-accounts", icon: Shield },
     ],
   },
   {

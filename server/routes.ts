@@ -4258,7 +4258,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/users", async (_req, res) => {
+  app.get("/api/users", requireRole("admin", "manager"), async (_req, res) => {
     try {
       const allUsers = await storage.getUsers();
       res.json(allUsers.map(u => ({ id: u.id, username: u.username, role: u.role, companyId: u.companyId, workerId: u.workerId, isActive: u.isActive, createdAt: u.createdAt })));
@@ -4296,8 +4296,19 @@ export async function registerRoutes(
 
   app.patch("/api/users/:id", requireRole("admin"), async (req, res) => {
     try {
-      const { password, ...rest } = req.body;
-      const updateData: any = { ...rest };
+      const { password, username, role, companyId, workerId, isActive } = req.body;
+      const updateData: any = {};
+      if (username !== undefined) {
+        const existing = await storage.getUserByUsername(username);
+        if (existing && existing.id !== req.params.id) {
+          return res.status(409).json({ message: "Username already exists" });
+        }
+        updateData.username = username;
+      }
+      if (role !== undefined) updateData.role = role;
+      if (companyId !== undefined) updateData.companyId = companyId || null;
+      if (workerId !== undefined) updateData.workerId = workerId || null;
+      if (isActive !== undefined) updateData.isActive = isActive;
       if (password) {
         updateData.password = await bcrypt.hash(password, 10);
       }
