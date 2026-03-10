@@ -207,6 +207,111 @@ function AdminLoginForm() {
   );
 }
 
+function EmployeePinLoginForm() {
+  const { pinLogin } = useAuth();
+  const [employeeNumber, setEmployeeNumber] = useState("");
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [activeField, setActiveField] = useState<"empNum" | "pin">("empNum");
+
+  function handleNumInput(digit: string) {
+    if (activeField === "empNum") {
+      setEmployeeNumber((prev) => prev + digit);
+    } else {
+      setPin((prev) => prev + digit);
+    }
+  }
+
+  function handleClear() {
+    if (activeField === "empNum") setEmployeeNumber("");
+    else setPin("");
+  }
+
+  function handleBackspace() {
+    if (activeField === "empNum") setEmployeeNumber((prev) => prev.slice(0, -1));
+    else setPin((prev) => prev.slice(0, -1));
+  }
+
+  async function handleSubmit(e?: React.FormEvent) {
+    e?.preventDefault();
+    setError("");
+    if (!employeeNumber || !pin) {
+      setError("Please enter both employee number and PIN");
+      return;
+    }
+    setLoading(true);
+    try {
+      await pinLogin(employeeNumber, pin);
+    } catch {
+      setError("Invalid employee number or PIN");
+      setPin("");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="space-y-2">
+        <Label htmlFor="empNumLogin" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+          <Hash className="h-3.5 w-3.5" /> Employee Number
+        </Label>
+        <Input
+          id="empNumLogin"
+          value={employeeNumber}
+          onChange={(e) => setEmployeeNumber(e.target.value)}
+          onFocus={() => setActiveField("empNum")}
+          placeholder="Enter employee number"
+          autoComplete="off"
+          data-testid="input-emp-number-login"
+          className={activeField === "empNum" ? "ring-2 ring-teal-accent/50 border-teal-accent" : ""}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="pinLogin" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+          <Lock className="h-3.5 w-3.5" /> PIN
+        </Label>
+        <Input
+          id="pinLogin"
+          type="password"
+          value={pin}
+          onChange={(e) => setPin(e.target.value)}
+          onFocus={() => setActiveField("pin")}
+          placeholder="Enter PIN"
+          autoComplete="off"
+          data-testid="input-pin-login"
+          className={activeField === "pin" ? "ring-2 ring-teal-accent/50 border-teal-accent" : ""}
+        />
+      </div>
+
+      <NumPad
+        onInput={handleNumInput}
+        onClear={handleClear}
+        onBackspace={handleBackspace}
+      />
+
+      {error && (
+        <p className="text-sm text-destructive text-center" data-testid="text-pin-login-error">
+          {error}
+        </p>
+      )}
+
+      <Button
+        type="submit"
+        size="lg"
+        className="w-full"
+        disabled={loading || !employeeNumber || !pin}
+        data-testid="button-pin-login"
+      >
+        <Fingerprint className="h-5 w-5 mr-2" />
+        {loading ? "Signing in..." : "Sign In"}
+      </Button>
+    </form>
+  );
+}
+
 function TimeClockPanel() {
   const { toast } = useToast();
   const [authenticatedWorker, setAuthenticatedWorker] = useState<Worker | null>(null);
@@ -513,11 +618,15 @@ export default function LoginPage() {
 
         <Card>
           <CardContent className="p-6">
-            <Tabs defaultValue="login" className="w-full">
-              <TabsList className="grid w-full grid-cols-2 mb-5" data-testid="tabs-login-mode">
-                <TabsTrigger value="login" data-testid="tab-admin-login">
+            <Tabs defaultValue="employee" className="w-full">
+              <TabsList className="grid w-full grid-cols-3 mb-5" data-testid="tabs-login-mode">
+                <TabsTrigger value="employee" data-testid="tab-employee-login">
+                  <Fingerprint className="h-4 w-4 mr-2" />
+                  Employee
+                </TabsTrigger>
+                <TabsTrigger value="admin" data-testid="tab-admin-login">
                   <User className="h-4 w-4 mr-2" />
-                  Admin Login
+                  Manager
                 </TabsTrigger>
                 <TabsTrigger value="timeclock" data-testid="tab-time-clock">
                   <Clock className="h-4 w-4 mr-2" />
@@ -525,7 +634,11 @@ export default function LoginPage() {
                 </TabsTrigger>
               </TabsList>
 
-              <TabsContent value="login">
+              <TabsContent value="employee">
+                <EmployeePinLoginForm />
+              </TabsContent>
+
+              <TabsContent value="admin">
                 <AdminLoginForm />
               </TabsContent>
 

@@ -115,8 +115,47 @@ export async function registerRoutes(
     res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
   });
 
+  app.post("/api/auth/pin-login", async (req, res) => {
+    try {
+      const { employeeNumber, pin } = req.body;
+      if (!employeeNumber || !pin) {
+        return res.status(400).json({ message: "Employee number and PIN are required" });
+      }
+      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
+      if (!worker || worker.pin !== pin) {
+        return res.status(401).json({ message: "Invalid employee number or PIN" });
+      }
+      if (!worker.isActive) {
+        return res.status(403).json({ message: "This employee account is inactive" });
+      }
+      const allUsers = await storage.getUsers();
+      let user = allUsers.find(u => u.workerId === worker.id);
+      if (!user) {
+        const hashedPassword = await bcrypt.hash(pin, 10);
+        user = await storage.createUser({
+          username: employeeNumber,
+          password: hashedPassword,
+          role: "employee",
+          companyId: worker.companyId,
+          workerId: worker.id,
+          isActive: true,
+        });
+      }
+      if (user.isActive === false) {
+        return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
+      }
+      req.session.userId = user.id;
+      req.session.username = user.username;
+      const workerInfo = { id: worker.id, firstName: worker.firstName, lastName: worker.lastName, companyId: worker.companyId };
+      res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Login failed" });
+    }
+  });
+
   app.use("/api", (req, res, next) => {
-    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/time-clock/auth") {
+    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/time-clock/auth") {
       return next();
     }
     requireAuth(req, res, next);
