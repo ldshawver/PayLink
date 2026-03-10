@@ -48,7 +48,7 @@ export function ClockInButton() {
   );
 
   const linkedWorker = workers.find(
-    (w) => w.email === user?.username || w.employeeNumber === user?.username
+    (w) => (user as any)?.workerId === w.id || w.email === user?.username || w.employeeNumber === user?.username
   );
 
   const activeWorker = selectedWorkerId
