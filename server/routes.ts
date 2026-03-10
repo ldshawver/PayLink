@@ -741,7 +741,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/schedules/:id", async (req, res) => {
+  app.patch("/api/schedules/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const schedule = await storage.updateSchedule(req.params.id, req.body);
       if (!schedule) {
@@ -754,7 +754,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/schedules/:id", async (req, res) => {
+  app.delete("/api/schedules/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteSchedule(req.params.id);
       res.json({ message: "Schedule deleted" });
@@ -970,7 +970,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/departments", async (req, res) => {
+  app.post("/api/departments", requireRole("admin", "manager"), async (req, res) => {
     try {
       const department = await storage.createDepartment(req.body);
       res.status(201).json(department);
@@ -980,7 +980,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/departments/:id", async (req, res) => {
+  app.patch("/api/departments/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const department = await storage.updateDepartment(req.params.id, req.body);
       if (!department) {
@@ -993,7 +993,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/departments/:id", async (req, res) => {
+  app.delete("/api/departments/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteDepartment(req.params.id);
       res.json({ message: "Department deleted" });
@@ -1015,7 +1015,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/branches", async (req, res) => {
+  app.post("/api/branches", requireRole("admin", "manager"), async (req, res) => {
     try {
       const parsed = insertBranchSchema.parse(req.body);
       const branch = await storage.createBranch(parsed);
@@ -1028,7 +1028,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/branches/:id", async (req, res) => {
+  app.patch("/api/branches/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const branch = await storage.updateBranch(req.params.id, req.body);
       if (!branch) {
@@ -1041,7 +1041,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/branches/:id", async (req, res) => {
+  app.delete("/api/branches/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteBranch(req.params.id);
       res.json({ message: "Branch deleted" });
@@ -1062,7 +1062,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/enterprises", async (req, res) => {
+  app.post("/api/enterprises", requireRole("admin", "manager"), async (req, res) => {
     try {
       const parsed = insertEnterpriseSchema.parse(req.body);
       const enterprise = await storage.createEnterprise(parsed);
@@ -1075,7 +1075,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/enterprises/:id", async (req, res) => {
+  app.patch("/api/enterprises/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const enterprise = await storage.updateEnterprise(req.params.id, req.body);
       if (!enterprise) {
@@ -1088,7 +1088,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/enterprises/:id", async (req, res) => {
+  app.delete("/api/enterprises/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteEnterprise(req.params.id);
       res.json({ message: "Enterprise deleted" });
@@ -1110,7 +1110,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/divisions", async (req, res) => {
+  app.post("/api/divisions", requireRole("admin", "manager"), async (req, res) => {
     try {
       const parsed = insertDivisionSchema.parse(req.body);
       const division = await storage.createDivision(parsed);
@@ -1123,7 +1123,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/divisions/:id", async (req, res) => {
+  app.patch("/api/divisions/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const division = await storage.updateDivision(req.params.id, req.body);
       if (!division) {
@@ -1136,7 +1136,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/divisions/:id", async (req, res) => {
+  app.delete("/api/divisions/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteDivision(req.params.id);
       res.json({ message: "Division deleted" });
@@ -1158,7 +1158,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/positions", async (req, res) => {
+  app.post("/api/positions", requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.departmentId === "") data.departmentId = null;
@@ -1177,7 +1177,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/positions/:id", async (req, res) => {
+  app.patch("/api/positions/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.departmentId === "") data.departmentId = null;
@@ -1196,7 +1196,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/positions/:id", async (req, res) => {
+  app.delete("/api/positions/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deletePosition(req.params.id);
       res.json({ message: "Position deleted" });
@@ -1218,7 +1218,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/cost-centers", async (req, res) => {
+  app.post("/api/cost-centers", requireRole("admin", "manager"), async (req, res) => {
     try {
       const parsed = insertCostCenterSchema.parse(req.body);
       const costCenter = await storage.createCostCenter(parsed);
@@ -1231,7 +1231,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/cost-centers/:id", async (req, res) => {
+  app.patch("/api/cost-centers/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const costCenter = await storage.updateCostCenter(req.params.id, req.body);
       if (!costCenter) {
@@ -1244,7 +1244,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/cost-centers/:id", async (req, res) => {
+  app.delete("/api/cost-centers/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteCostCenter(req.params.id);
       res.json({ message: "Cost center deleted" });
@@ -1266,7 +1266,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/jobs", async (req, res) => {
+  app.post("/api/jobs", requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.costCenterId === "") data.costCenterId = null;
@@ -1285,7 +1285,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/jobs/:id", async (req, res) => {
+  app.patch("/api/jobs/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.costCenterId === "") data.costCenterId = null;
@@ -1304,7 +1304,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/jobs/:id", async (req, res) => {
+  app.delete("/api/jobs/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteJob(req.params.id);
       res.json({ message: "Job deleted" });
@@ -1326,7 +1326,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/accrual-accounts", async (req, res) => {
+  app.post("/api/accrual-accounts", requireRole("admin"), async (req, res) => {
     try {
       const account = await storage.createAccrualAccount(req.body);
       res.status(201).json(account);
@@ -1336,7 +1336,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/accrual-accounts/:id", async (req, res) => {
+  app.patch("/api/accrual-accounts/:id", requireRole("admin"), async (req, res) => {
     try {
       const account = await storage.updateAccrualAccount(req.params.id, req.body);
       if (!account) {
@@ -1349,7 +1349,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/accrual-accounts/:id", async (req, res) => {
+  app.delete("/api/accrual-accounts/:id", requireRole("admin"), async (req, res) => {
     try {
       const deleted = await storage.deleteAccrualAccount(req.params.id);
       if (!deleted) {
@@ -1660,7 +1660,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/policy-groups", async (req, res) => {
+  app.post("/api/policy-groups", requireRole("admin"), async (req, res) => {
     try {
       const group = await storage.createPolicyGroup(req.body);
       res.status(201).json(group);
@@ -1670,7 +1670,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/policy-groups/:id", async (req, res) => {
+  app.patch("/api/policy-groups/:id", requireRole("admin"), async (req, res) => {
     try {
       const group = await storage.updatePolicyGroup(req.params.id, req.body);
       if (!group) {
@@ -1683,7 +1683,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/policy-groups/:id", async (req, res) => {
+  app.delete("/api/policy-groups/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deletePolicyGroup(req.params.id);
       res.json({ message: "Policy group deleted" });
@@ -1731,7 +1731,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/pay-codes", async (req, res) => {
+  app.post("/api/pay-codes", requireRole("admin"), async (req, res) => {
     try {
       const code = await storage.createPayCode(req.body);
       res.status(201).json(code);
@@ -1741,7 +1741,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/pay-codes/:id", async (req, res) => {
+  app.patch("/api/pay-codes/:id", requireRole("admin"), async (req, res) => {
     try {
       const code = await storage.updatePayCode(req.params.id, req.body);
       if (!code) {
@@ -1754,7 +1754,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/pay-codes/:id", async (req, res) => {
+  app.delete("/api/pay-codes/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deletePayCode(req.params.id);
       res.json({ message: "Pay code deleted" });
@@ -1815,7 +1815,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/holidays/:id", async (req, res) => {
+  app.patch("/api/holidays/:id", requireRole("admin"), async (req, res) => {
     try {
       const holiday = await storage.updateHoliday(req.params.id, req.body);
       if (!holiday) {
@@ -1828,7 +1828,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/holidays/:id", async (req, res) => {
+  app.delete("/api/holidays/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteHoliday(req.params.id);
       res.json({ message: "Holiday deleted" });
@@ -1883,7 +1883,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/qualifications", async (req, res) => {
+  app.post("/api/qualifications", requireRole("admin", "manager"), async (req, res) => {
     try {
       const qualification = await storage.createQualification(req.body);
       res.status(201).json(qualification);
@@ -1893,7 +1893,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/qualifications/:id", async (req, res) => {
+  app.patch("/api/qualifications/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const qualification = await storage.updateQualification(req.params.id, req.body);
       if (!qualification) {
@@ -1906,7 +1906,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/qualifications/:id", async (req, res) => {
+  app.delete("/api/qualifications/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteQualification(req.params.id);
       res.json({ message: "Qualification deleted" });
@@ -1929,7 +1929,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/reviews", async (req, res) => {
+  app.post("/api/reviews", requireRole("admin", "manager"), async (req, res) => {
     try {
       const review = await storage.createReview(req.body);
       res.status(201).json(review);
@@ -1939,7 +1939,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/reviews/:id", async (req, res) => {
+  app.patch("/api/reviews/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const review = await storage.updateReview(req.params.id, req.body);
       if (!review) {
@@ -1952,7 +1952,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/reviews/:id", async (req, res) => {
+  app.delete("/api/reviews/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteReview(req.params.id);
       res.json({ message: "Review deleted" });
@@ -1973,7 +1973,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/kpi-groups", async (req, res) => {
+  app.post("/api/kpi-groups", requireRole("admin", "manager"), async (req, res) => {
     try {
       const group = await storage.createKpiGroup(req.body);
       res.status(201).json(group);
@@ -1983,7 +1983,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/kpi-groups/:id", async (req, res) => {
+  app.patch("/api/kpi-groups/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const group = await storage.updateKpiGroup(req.params.id, req.body);
       if (!group) return res.status(404).json({ message: "KPI group not found" });
@@ -1994,7 +1994,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/kpi-groups/:id", async (req, res) => {
+  app.delete("/api/kpi-groups/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteKpiGroup(req.params.id);
       res.json({ message: "KPI group deleted" });
@@ -2015,7 +2015,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/qualification-groups", async (req, res) => {
+  app.post("/api/qualification-groups", requireRole("admin", "manager"), async (req, res) => {
     try {
       const group = await storage.createQualificationGroup(req.body);
       res.status(201).json(group);
@@ -2025,7 +2025,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/qualification-groups/:id", async (req, res) => {
+  app.patch("/api/qualification-groups/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const group = await storage.updateQualificationGroup(req.params.id, req.body);
       if (!group) return res.status(404).json({ message: "Qualification group not found" });
@@ -2036,7 +2036,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/qualification-groups/:id", async (req, res) => {
+  app.delete("/api/qualification-groups/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteQualificationGroup(req.params.id);
       res.json({ message: "Qualification group deleted" });
@@ -3038,7 +3038,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/pay-formulas", async (req, res) => {
+  app.post("/api/pay-formulas", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createPayFormula(req.body);
       res.status(201).json(item);
@@ -3048,7 +3048,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/pay-formulas/:id", async (req, res) => {
+  app.patch("/api/pay-formulas/:id", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updatePayFormula(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -3059,7 +3059,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/pay-formulas/:id", async (req, res) => {
+  app.delete("/api/pay-formulas/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deletePayFormula(req.params.id);
       res.json({ message: "Deleted" });
@@ -3254,7 +3254,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/regular-time-policies", async (req, res) => {
+  app.post("/api/regular-time-policies", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createRegularTimePolicy(req.body);
       res.status(201).json(item);
@@ -3264,7 +3264,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/regular-time-policies/:id", async (req, res) => {
+  app.patch("/api/regular-time-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updateRegularTimePolicy(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -3275,7 +3275,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/regular-time-policies/:id", async (req, res) => {
+  app.delete("/api/regular-time-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteRegularTimePolicy(req.params.id);
       res.json({ message: "Deleted" });
@@ -3320,7 +3320,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/overtime-policies", async (req, res) => {
+  app.post("/api/overtime-policies", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createOvertimePolicy(req.body);
       res.status(201).json(item);
@@ -3330,7 +3330,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/overtime-policies/:id", async (req, res) => {
+  app.patch("/api/overtime-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updateOvertimePolicy(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -3341,7 +3341,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/overtime-policies/:id", async (req, res) => {
+  app.delete("/api/overtime-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteOvertimePolicy(req.params.id);
       res.json({ message: "Deleted" });
@@ -3387,7 +3387,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/premium-policies", async (req, res) => {
+  app.post("/api/premium-policies", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createPremiumPolicy(req.body);
       res.status(201).json(item);
@@ -3397,7 +3397,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/premium-policies/:id", async (req, res) => {
+  app.patch("/api/premium-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updatePremiumPolicy(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -3408,7 +3408,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/premium-policies/:id", async (req, res) => {
+  app.delete("/api/premium-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deletePremiumPolicy(req.params.id);
       res.json({ message: "Deleted" });
@@ -3429,7 +3429,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/meal-policies", async (req, res) => {
+  app.post("/api/meal-policies", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createMealPolicy(req.body);
       res.status(201).json(item);
@@ -3439,7 +3439,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/meal-policies/:id", async (req, res) => {
+  app.patch("/api/meal-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updateMealPolicy(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -3450,7 +3450,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/meal-policies/:id", async (req, res) => {
+  app.delete("/api/meal-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteMealPolicy(req.params.id);
       res.json({ message: "Deleted" });
@@ -3495,7 +3495,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/break-policies", async (req, res) => {
+  app.post("/api/break-policies", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createBreakPolicy(req.body);
       res.status(201).json(item);
@@ -3505,7 +3505,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/break-policies/:id", async (req, res) => {
+  app.patch("/api/break-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updateBreakPolicy(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -3516,7 +3516,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/break-policies/:id", async (req, res) => {
+  app.delete("/api/break-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteBreakPolicy(req.params.id);
       res.json({ message: "Deleted" });
@@ -3561,7 +3561,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/schedule-policies", async (req, res) => {
+  app.post("/api/schedule-policies", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createSchedulePolicy(req.body);
       res.status(201).json(item);
@@ -3571,7 +3571,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/schedule-policies/:id", async (req, res) => {
+  app.patch("/api/schedule-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updateSchedulePolicy(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -3582,7 +3582,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/schedule-policies/:id", async (req, res) => {
+  app.delete("/api/schedule-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteSchedulePolicy(req.params.id);
       res.json({ message: "Deleted" });
@@ -3603,7 +3603,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/exception-policies", async (req, res) => {
+  app.post("/api/exception-policies", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createExceptionPolicy(req.body);
       res.status(201).json(item);
@@ -3613,7 +3613,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/exception-policies/:id", async (req, res) => {
+  app.patch("/api/exception-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updateExceptionPolicy(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -3624,7 +3624,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/exception-policies/:id", async (req, res) => {
+  app.delete("/api/exception-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteExceptionPolicy(req.params.id);
       res.json({ message: "Deleted" });
@@ -3645,7 +3645,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/accrual-policies", async (req, res) => {
+  app.post("/api/accrual-policies", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createAccrualPolicy(req.body);
       res.status(201).json(item);
@@ -3655,7 +3655,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/accrual-policies/:id", async (req, res) => {
+  app.patch("/api/accrual-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updateAccrualPolicy(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -3666,7 +3666,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/accrual-policies/:id", async (req, res) => {
+  app.delete("/api/accrual-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteAccrualPolicy(req.params.id);
       res.json({ message: "Deleted" });
@@ -3699,7 +3699,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/accrual-policy-milestones/:id", async (req, res) => {
+  app.delete("/api/accrual-policy-milestones/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteAccrualPolicyMilestone(req.params.id);
       res.json({ message: "Deleted" });
@@ -3720,7 +3720,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/absence-policies", async (req, res) => {
+  app.post("/api/absence-policies", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createAbsencePolicy(req.body);
       res.status(201).json(item);
@@ -3730,7 +3730,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/absence-policies/:id", async (req, res) => {
+  app.patch("/api/absence-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updateAbsencePolicy(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -3741,7 +3741,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/absence-policies/:id", async (req, res) => {
+  app.delete("/api/absence-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteAbsencePolicy(req.params.id);
       res.json({ message: "Deleted" });
@@ -3762,7 +3762,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/holiday-policies", async (req, res) => {
+  app.post("/api/holiday-policies", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createHolidayPolicy(req.body);
       res.status(201).json(item);
@@ -3772,7 +3772,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/holiday-policies/:id", async (req, res) => {
+  app.patch("/api/holiday-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updateHolidayPolicy(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -3783,7 +3783,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/holiday-policies/:id", async (req, res) => {
+  app.delete("/api/holiday-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteHolidayPolicy(req.params.id);
       res.json({ message: "Deleted" });
@@ -3804,7 +3804,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/rounding-policies", async (req, res) => {
+  app.post("/api/rounding-policies", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.createRoundingPolicy(req.body);
       res.status(201).json(item);
@@ -3814,7 +3814,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/rounding-policies/:id", async (req, res) => {
+  app.patch("/api/rounding-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       const item = await storage.updateRoundingPolicy(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -3825,7 +3825,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/rounding-policies/:id", async (req, res) => {
+  app.delete("/api/rounding-policies/:id", requireRole("admin"), async (req, res) => {
     try {
       await storage.deleteRoundingPolicy(req.params.id);
       res.json({ message: "Deleted" });
@@ -4018,7 +4018,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/legal-entities", async (req, res) => {
+  app.post("/api/legal-entities", requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.startDate === "") data.startDate = null;
@@ -4034,7 +4034,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/legal-entities/:id", async (req, res) => {
+  app.patch("/api/legal-entities/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.startDate === "") data.startDate = null;
@@ -4051,7 +4051,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/legal-entities/:id", async (req, res) => {
+  app.delete("/api/legal-entities/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteLegalEntity(req.params.id);
       res.json({ message: "Deleted" });
@@ -4071,7 +4071,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/roles", async (req, res) => {
+  app.post("/api/roles", requireRole("admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
@@ -4084,7 +4084,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/roles/:id", async (req, res) => {
+  app.patch("/api/roles/:id", requireRole("admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
@@ -4098,7 +4098,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/roles/:id", async (req, res) => {
+  app.delete("/api/roles/:id", requireRole("admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
@@ -4205,7 +4205,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/role-permissions", async (req, res) => {
+  app.post("/api/role-permissions", requireRole("admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
@@ -4217,7 +4217,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/role-permissions/:id", async (req, res) => {
+  app.patch("/api/role-permissions/:id", requireRole("admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
@@ -4230,7 +4230,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/role-permissions/:id", async (req, res) => {
+  app.delete("/api/role-permissions/:id", requireRole("admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
@@ -4285,7 +4285,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/user-roles/:id", async (req, res) => {
+  app.delete("/api/user-roles/:id", requireRole("admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });

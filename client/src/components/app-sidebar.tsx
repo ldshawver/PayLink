@@ -76,7 +76,22 @@ import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
 import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
 
-const navSections = [
+type NavItem = {
+  title: string;
+  url: string;
+  icon: any;
+  roles?: string[];
+};
+
+type NavSection = {
+  label: string;
+  icon: any;
+  url: string;
+  roles?: string[];
+  items: NavItem[];
+};
+
+const navSections: NavSection[] = [
   {
     label: "Dashboard",
     icon: LayoutDashboard,
@@ -91,7 +106,7 @@ const navSections = [
       { title: "Timesheet", url: "/attendance?tab=timesheet", icon: ClipboardList },
       { title: "Punches", url: "/attendance?tab=punches", icon: Clock },
       { title: "Accrual Balances", url: "/attendance?tab=accrual-balances", icon: CalendarCheck },
-      { title: "Accruals", url: "/attendance?tab=accruals", icon: CalendarClock },
+      { title: "Accruals", url: "/attendance?tab=accruals", icon: CalendarClock, roles: ["admin", "manager"] },
     ],
   },
   {
@@ -101,14 +116,15 @@ const navSections = [
     items: [
       { title: "Schedules", url: "/schedule?tab=schedules", icon: CalendarDays },
       { title: "Scheduled Shifts", url: "/schedule?tab=shifts", icon: CalendarRange },
-      { title: "Recurring Schedule", url: "/schedule?tab=recurring", icon: Repeat },
-      { title: "Recurring Templates", url: "/schedule?tab=templates", icon: FileText },
+      { title: "Recurring Schedule", url: "/schedule?tab=recurring", icon: Repeat, roles: ["admin", "manager"] },
+      { title: "Recurring Templates", url: "/schedule?tab=templates", icon: FileText, roles: ["admin", "manager"] },
     ],
   },
   {
     label: "Employee",
     icon: Users,
     url: "/employee",
+    roles: ["admin", "manager"],
     items: [
       { title: "Employee", url: "/employee?tab=employee", icon: Users },
       { title: "Employee Contacts", url: "/employee?tab=contacts", icon: Contact },
@@ -120,13 +136,14 @@ const navSections = [
       { title: "Ethnic Groups", url: "/employee?tab=ethnic-groups", icon: Globe },
       { title: "Documents", url: "/employee?tab=documents", icon: FileText },
       { title: "New Hire Defaults", url: "/employee?tab=new-hire", icon: UserCheck },
-      { title: "User Accounts", url: "/employee?tab=user-accounts", icon: Shield },
+      { title: "User Accounts", url: "/employee?tab=user-accounts", icon: Shield, roles: ["admin"] },
     ],
   },
   {
     label: "Company",
     icon: Building2,
     url: "/company",
+    roles: ["admin", "manager"],
     items: [
       { title: "Company Information", url: "/company?tab=info", icon: Building2 },
       { title: "Enterprise", url: "/company?tab=enterprise", icon: Globe },
@@ -140,16 +157,17 @@ const navSections = [
       { title: "Hierarchy", url: "/company?tab=hierarchy", icon: Network },
       { title: "Secondary Wage Groups", url: "/company?tab=wage-groups", icon: Layers },
       { title: "Stations", url: "/company?tab=stations", icon: Landmark },
-      { title: "Permission Groups", url: "/company?tab=permissions", icon: Shield },
+      { title: "Permission Groups", url: "/company?tab=permissions", icon: Shield, roles: ["admin"] },
       { title: "Currencies", url: "/company?tab=currencies", icon: Banknote },
-      { title: "Import", url: "/company?tab=import", icon: Import },
-      { title: "Quick Start", url: "/company?tab=quickstart", icon: Zap },
+      { title: "Import", url: "/company?tab=import", icon: Import, roles: ["admin"] },
+      { title: "Quick Start", url: "/company?tab=quickstart", icon: Zap, roles: ["admin"] },
     ],
   },
   {
     label: "Payroll",
     icon: DollarSign,
     url: "/payroll",
+    roles: ["admin", "manager"],
     items: [
       { title: "Process Payroll", url: "/payroll?tab=process", icon: DollarSign },
       { title: "Tax Wizard", url: "/payroll?tab=tax-wizard", icon: Calculator },
@@ -168,6 +186,7 @@ const navSections = [
     label: "Policy",
     icon: Shield,
     url: "/policy",
+    roles: ["admin"],
     items: [
       { title: "Policy Groups", url: "/policy?tab=groups", icon: Shield },
       { title: "Pay Codes", url: "/policy?tab=pay-codes", icon: Code },
@@ -193,6 +212,7 @@ const navSections = [
     label: "HR",
     icon: BadgeCheck,
     url: "/hr",
+    roles: ["admin", "manager"],
     items: [
       { title: "Reviews", url: "/hr?tab=reviews", icon: Star },
       { title: "KPI Groups", url: "/hr?tab=kpi-groups", icon: TrendingUp },
@@ -209,6 +229,7 @@ const navSections = [
     label: "Report",
     icon: BarChart3,
     url: "/reports",
+    roles: ["admin", "manager"],
     items: [
       { title: "Saved Reports", url: "/reports?tab=saved", icon: FolderOpen },
       { title: "Employee Reports", url: "/reports?tab=employee", icon: Users },
@@ -242,10 +263,25 @@ function LogoutButton() {
 
 export function AppSidebar() {
   const [location] = useLocation();
+  const { user } = useAuth();
 
   const search = useSearch();
   const locationPath = location;
   const locationTab = new URLSearchParams(search).get("tab");
+
+  const userRole = user?.role || "employee";
+
+  const hasAccess = (roles?: string[]) => {
+    if (!roles || roles.length === 0) return true;
+    return roles.includes(userRole);
+  };
+
+  const visibleSections = navSections
+    .filter((section) => hasAccess(section.roles))
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => hasAccess(item.roles)),
+    }));
 
   const isActive = (url: string) => {
     if (url === "/") return locationPath === "/";
@@ -279,7 +315,7 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navSections.map((section) => {
+              {visibleSections.map((section) => {
                 if (section.items.length === 0) {
                   return (
                     <SidebarMenuItem key={section.label}>

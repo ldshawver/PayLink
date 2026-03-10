@@ -24,19 +24,32 @@ import PrintCheckPage from "@/pages/print-check";
 import LoginPage from "@/pages/login";
 import { Loader2 } from "lucide-react";
 
+function RoleGuard({ roles, children }: { roles: string[]; children: React.ReactNode }) {
+  const { user } = useAuth();
+  const [, setLocation] = useLocation();
+  const userRole = user?.role || "employee";
+  const allowed = roles.includes(userRole);
+
+  if (!allowed) {
+    setTimeout(() => setLocation("/"), 0);
+    return null;
+  }
+  return <>{children}</>;
+}
+
 function AuthenticatedRouter() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
-      <Route path="/print-check/:runId" component={PrintCheckPage} />
+      <Route path="/print-check/:runId">{() => <RoleGuard roles={["admin", "manager"]}><PrintCheckPage /></RoleGuard>}</Route>
       <Route path="/attendance" component={AttendancePage} />
       <Route path="/schedule" component={SchedulePage} />
-      <Route path="/employee" component={EmployeePage} />
-      <Route path="/company" component={CompanyPage} />
-      <Route path="/payroll" component={PayrollPage} />
-      <Route path="/policy" component={PolicyPage} />
-      <Route path="/hr" component={HRPage} />
-      <Route path="/reports" component={ReportsPage} />
+      <Route path="/employee">{() => <RoleGuard roles={["admin", "manager"]}><EmployeePage /></RoleGuard>}</Route>
+      <Route path="/company">{() => <RoleGuard roles={["admin", "manager"]}><CompanyPage /></RoleGuard>}</Route>
+      <Route path="/payroll">{() => <RoleGuard roles={["admin", "manager"]}><PayrollPage /></RoleGuard>}</Route>
+      <Route path="/policy">{() => <RoleGuard roles={["admin"]}><PolicyPage /></RoleGuard>}</Route>
+      <Route path="/hr">{() => <RoleGuard roles={["admin", "manager"]}><HRPage /></RoleGuard>}</Route>
+      <Route path="/reports">{() => <RoleGuard roles={["admin", "manager"]}><ReportsPage /></RoleGuard>}</Route>
       <Route component={NotFound} />
     </Switch>
   );
