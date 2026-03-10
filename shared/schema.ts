@@ -212,6 +212,9 @@ export const users = pgTable("users", {
   password: text("password").notNull(),
   role: text("role").default("admin"),
   companyId: varchar("company_id"),
+  workerId: varchar("worker_id"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const divisions = pgTable("divisions", {
@@ -875,7 +878,7 @@ export const insertTimeEntrySchema = createInsertSchema(timeEntries).omit({ id: 
 export const insertScheduleSchema = createInsertSchema(schedules).omit({ id: true, createdAt: true });
 export const insertPayrollRunSchema = createInsertSchema(payrollRuns).omit({ id: true, createdAt: true });
 export const insertPayrollItemSchema = createInsertSchema(payrollItems).omit({ id: true, createdAt: true });
-export const insertUserSchema = createInsertSchema(users).pick({ username: true, password: true });
+export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertDepartmentSchema = createInsertSchema(departments).omit({ id: true, createdAt: true });
 export const insertBranchSchema = createInsertSchema(branches).omit({ id: true, createdAt: true });
 export const insertAccrualAccountSchema = createInsertSchema(accrualAccounts).omit({ id: true, createdAt: true });

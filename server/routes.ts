@@ -74,9 +74,17 @@ export async function registerRoutes(
       if (!valid) {
         return res.status(401).json({ message: "Invalid username or password" });
       }
+      if (user.isActive === false) {
+        return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
+      }
       req.session.userId = user.id;
       req.session.username = user.username;
-      res.json({ id: user.id, username: user.username, role: user.role });
+      let workerInfo = null;
+      if (user.workerId) {
+        const w = await storage.getWorker(user.workerId);
+        if (w) workerInfo = { id: w.id, firstName: w.firstName, lastName: w.lastName, companyId: w.companyId };
+      }
+      res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Login failed" });
@@ -99,7 +107,12 @@ export async function registerRoutes(
     if (!user) {
       return res.status(401).json({ message: "User not found" });
     }
-    res.json({ id: user.id, username: user.username, role: user.role });
+    let workerInfo = null;
+    if (user.workerId) {
+      const w = await storage.getWorker(user.workerId);
+      if (w) workerInfo = { id: w.id, firstName: w.firstName, lastName: w.lastName, companyId: w.companyId };
+    }
+    res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
   });
 
   app.use("/api", (req, res, next) => {
@@ -4248,10 +4261,66 @@ export async function registerRoutes(
   app.get("/api/users", async (_req, res) => {
     try {
       const allUsers = await storage.getUsers();
-      res.json(allUsers.map(u => ({ id: u.id, username: u.username, role: u.role, companyId: u.companyId })));
+      res.json(allUsers.map(u => ({ id: u.id, username: u.username, role: u.role, companyId: u.companyId, workerId: u.workerId, isActive: u.isActive, createdAt: u.createdAt })));
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to get users" });
+    }
+  });
+
+  app.post("/api/users", requireRole("admin"), async (req, res) => {
+    try {
+      const { username, password, role, companyId, workerId } = req.body;
+      if (!username || !password) {
+        return res.status(400).json({ message: "Username and password are required" });
+      }
+      const existing = await storage.getUserByUsername(username);
+      if (existing) {
+        return res.status(409).json({ message: "Username already exists" });
+      }
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const user = await storage.createUser({
+        username,
+        password: hashedPassword,
+        role: role || "employee",
+        companyId: companyId || null,
+        workerId: workerId || null,
+        isActive: true,
+      });
+      res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, isActive: user.isActive });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to create user account" });
+    }
+  });
+
+  app.patch("/api/users/:id", requireRole("admin"), async (req, res) => {
+    try {
+      const { password, ...rest } = req.body;
+      const updateData: any = { ...rest };
+      if (password) {
+        updateData.password = await bcrypt.hash(password, 10);
+      }
+      const user = await storage.updateUser(req.params.id, updateData);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, isActive: user.isActive });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update user account" });
+    }
+  });
+
+  app.delete("/api/users/:id", requireRole("admin"), async (req, res) => {
+    try {
+      const currentUser = await storage.getUser(req.session.userId!);
+      if (req.params.id === currentUser?.id) {
+        return res.status(400).json({ message: "Cannot delete your own account" });
+      }
+      await storage.deleteUser(req.params.id);
+      res.json({ message: "User deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete user account" });
     }
   });
 
