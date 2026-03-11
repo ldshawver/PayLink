@@ -567,6 +567,10 @@ export async function registerRoutes(
 
   app.post("/api/time-punches", async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      if (user && user.role === "employee" && user.workerId && user.workerId !== req.body.workerId) {
+        return res.status(403).json({ message: "You can only clock in/out for yourself" });
+      }
       const worker = await storage.getWorker(req.body.workerId);
       if (worker && worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in/out. They submit invoices instead." });
@@ -577,16 +581,20 @@ export async function registerRoutes(
       });
 
       if (punch.punchType === "clock_in") {
+        const today = new Date().toISOString().split("T")[0];
         const allEntries = await storage.getTimeEntries();
         const staleOpenEntries = allEntries.filter(
-          (e) => e.workerId === punch.workerId && e.clockIn && !e.clockOut
+          (e) => e.workerId === punch.workerId && e.clockIn && !e.clockOut && e.date !== today
         );
         for (const stale of staleOpenEntries) {
           const staleClockIn = new Date(stale.clockIn!);
-          const staleClockOut = new Date(staleClockIn.getTime() + 8 * 60 * 60 * 1000);
+          const now = new Date();
+          const elapsed = (now.getTime() - staleClockIn.getTime()) / (1000 * 60 * 60);
+          const cappedHours = Math.min(elapsed, 8).toFixed(2);
+          const staleClockOut = new Date(staleClockIn.getTime() + parseFloat(cappedHours) * 60 * 60 * 1000);
           await storage.updateTimeEntry(stale.id, {
             clockOut: staleClockOut,
-            totalHours: "8.00",
+            totalHours: cappedHours,
             overtimeHours: "0.00",
             doubleTimeHours: "0.00",
           });
