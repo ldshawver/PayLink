@@ -368,8 +368,8 @@ function CompanyInfoTab() {
                 ) : company.iconUrl ? (
                   <img src={company.iconUrl} alt="" className="h-10 w-10 rounded border object-contain bg-white shrink-0" />
                 ) : (
-                  <div className="h-10 w-10 rounded border bg-muted flex items-center justify-center shrink-0">
-                    <Building2 className="h-5 w-5 text-muted-foreground" />
+                  <div className="h-10 w-10 rounded-lg flex items-center justify-center shrink-0 bg-gradient-to-br from-teal-500 to-blue-600 text-white font-bold text-lg shadow-sm" data-testid={`icon-company-${company.id}`}>
+                    {company.name?.charAt(0)?.toUpperCase() || "C"}
                   </div>
                 )}
                 <div className="space-y-1">

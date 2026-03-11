@@ -66,6 +66,7 @@ function NumPad({ onInput, onClear, onBackspace }: {
       {digits.map((d) => (
         <Button
           key={d}
+          type="button"
           variant={d === "C" || d === "<" ? "secondary" : "outline"}
           className="text-base font-medium h-10"
           onClick={() => {
