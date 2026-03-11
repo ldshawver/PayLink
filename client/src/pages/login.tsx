@@ -66,6 +66,7 @@ function NumPad({ onInput, onClear, onBackspace }: {
       {digits.map((d) => (
         <Button
           key={d}
+          type="button"
           variant={d === "C" || d === "<" ? "secondary" : "outline"}
           className="text-base font-medium h-10"
           onClick={() => {
@@ -89,6 +90,8 @@ function PunchButton({
   variant,
   workerId,
   companyId,
+  employeeNumber,
+  pin,
 }: {
   type: string;
   icon: any;
@@ -96,19 +99,24 @@ function PunchButton({
   variant: "default" | "destructive" | "secondary";
   workerId: string;
   companyId: string;
+  employeeNumber?: string;
+  pin?: string;
 }) {
   const { toast } = useToast();
 
   const punchMutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("POST", "/api/time-punches", {
-        workerId,
-        companyId,
-        punchType: type,
-      });
+      const endpoint = employeeNumber && pin ? "/api/time-clock/punch" : "/api/time-punches";
+      const body: any = { workerId, companyId, punchType: type };
+      if (employeeNumber && pin) {
+        body.employeeNumber = employeeNumber;
+        body.pin = pin;
+      }
+      await apiRequest("POST", endpoint, body);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/time-punches"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/time-clock/punches"] });
       queryClient.invalidateQueries({ queryKey: ["/api/time-entries"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       toast({ title: `${label} recorded` });
@@ -318,12 +326,14 @@ function TimeClockPanel() {
   const [authenticatedCompany, setAuthenticatedCompany] = useState<Company | null>(null);
   const [employeeNumber, setEmployeeNumber] = useState("");
   const [pin, setPin] = useState("");
+  const [authedEmpNum, setAuthedEmpNum] = useState("");
+  const [authedPin, setAuthedPin] = useState("");
   const [activeField, setActiveField] = useState<"empNum" | "pin">("empNum");
   const [authError, setAuthError] = useState("");
 
   const { data: punches } = useQuery<TimePunch[]>({
-    queryKey: ["/api/time-punches"],
-    enabled: !!authenticatedWorker,
+    queryKey: ["/api/time-clock/punches", authenticatedWorker ? `?workerId=${authenticatedWorker.id}&employeeNumber=${authedEmpNum}&pin=${authedPin}` : ""],
+    enabled: !!authenticatedWorker && !!authedEmpNum && !!authedPin,
   });
 
   const authMutation = useMutation({
@@ -338,6 +348,8 @@ function TimeClockPanel() {
       setAuthenticatedWorker(data.worker);
       setAuthenticatedCompany(data.company);
       setAuthError("");
+      setAuthedEmpNum(employeeNumber);
+      setAuthedPin(pin);
       setEmployeeNumber("");
       setPin("");
     },
@@ -387,6 +399,8 @@ function TimeClockPanel() {
     setAuthenticatedCompany(null);
     setEmployeeNumber("");
     setPin("");
+    setAuthedEmpNum("");
+    setAuthedPin("");
     setAuthError("");
   }
 
@@ -459,6 +473,8 @@ function TimeClockPanel() {
               variant="default"
               workerId={authenticatedWorker.id}
               companyId={authenticatedWorker.companyId}
+              employeeNumber={authedEmpNum}
+              pin={authedPin}
             />
           ) : (
             <>
@@ -470,6 +486,8 @@ function TimeClockPanel() {
                   variant="secondary"
                   workerId={authenticatedWorker.id}
                   companyId={authenticatedWorker.companyId}
+                  employeeNumber={authedEmpNum}
+                  pin={authedPin}
                 />
               )}
               {isOnBreak && (
@@ -480,6 +498,8 @@ function TimeClockPanel() {
                   variant="secondary"
                   workerId={authenticatedWorker.id}
                   companyId={authenticatedWorker.companyId}
+                  employeeNumber={authedEmpNum}
+                  pin={authedPin}
                 />
               )}
               <PunchButton
@@ -489,6 +509,8 @@ function TimeClockPanel() {
                 variant="destructive"
                 workerId={authenticatedWorker.id}
                 companyId={authenticatedWorker.companyId}
+                employeeNumber={authedEmpNum}
+                pin={authedPin}
               />
             </>
           )}
