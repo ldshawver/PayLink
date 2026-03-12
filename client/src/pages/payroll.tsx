@@ -234,6 +234,8 @@ function PayrollRunCard({
     enabled: expanded,
   });
 
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
   const processMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/payroll-runs/${run.id}/process`, {});
@@ -246,6 +248,21 @@ function PayrollRunCard({
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("DELETE", `/api/payroll-runs/${run.id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      toast({ title: "Payroll run deleted" });
+      setConfirmDelete(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+      setConfirmDelete(false);
     },
   });
 
@@ -265,11 +282,45 @@ function PayrollRunCard({
           <span className="text-sm text-muted-foreground">{run.workerCount} workers</span>
           <span className="text-sm font-medium">${Number(run.totalGross || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
           <span className="text-sm text-muted-foreground">{Number(run.totalHours || 0).toFixed(1)} hrs</span>
+          <Button
+            size="icon" variant="ghost"
+            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+            data-testid={`button-delete-run-${run.id}`}
+            onClick={() => setConfirmDelete(true)}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
           <Button size="icon" variant="ghost" data-testid={`button-expand-${run.id}`} onClick={onToggle}>
             {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
           </Button>
         </div>
       </CardHeader>
+
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Payroll Run?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This will permanently delete the payroll run for <strong>{companyName}</strong> covering{" "}
+            <strong>{run.periodStart} — {run.periodEnd}</strong> and all its payroll items.
+            This cannot be undone.
+          </p>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="outline" onClick={() => setConfirmDelete(false)} data-testid="button-cancel-delete-run">
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+              data-testid="button-confirm-delete-run"
+            >
+              {deleteMutation.isPending ? "Deleting..." : "Delete Payroll Run"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {expanded && (
         <CardContent>
           {isLoading ? (
