@@ -692,7 +692,6 @@ export async function registerRoutes(
     try {
       const run = await storage.getPayrollRun(req.params.id as string);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
-      if (run.status === "processed") return res.status(400).json({ message: "Cannot delete a processed payroll run. Void it instead." });
       const items = await storage.getPayrollItems(run.id);
       for (const item of items) {
         await storage.deletePayrollItem(item.id);
