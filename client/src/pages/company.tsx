@@ -1768,16 +1768,18 @@ function PositionsTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<Position | null>(null);
-  const emptyForm = { companyId: "", departmentId: "", title: "", description: "", reportsToPositionId: "", salaryRangeMin: "", salaryRangeMax: "" };
+  const emptyForm = { companyId: "__universal__", departmentId: "", title: "", description: "", reportsToPositionId: "", salaryRangeMin: "", salaryRangeMax: "" };
   const [form, setForm] = useState(emptyForm);
 
   const { data: positionsList, isLoading } = useQuery<Position[]>({ queryKey: ["/api/positions"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: departments } = useQuery<Department[]>({ queryKey: ["/api/departments"] });
 
+  const toPayload = (data: typeof form) => ({ ...data, companyId: data.companyId === "__universal__" ? null : (data.companyId || null) });
+
   const addMutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      await apiRequest("POST", "/api/positions", data);
+      await apiRequest("POST", "/api/positions", toPayload(data));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/positions"] });
@@ -1790,7 +1792,7 @@ function PositionsTab() {
 
   const editMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof form }) => {
-      await apiRequest("PATCH", `/api/positions/${id}`, data);
+      await apiRequest("PATCH", `/api/positions/${id}`, toPayload(data));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/positions"] });
@@ -1816,7 +1818,7 @@ function PositionsTab() {
   const handleEdit = (item: Position) => {
     setEditItem(item);
     setForm({
-      companyId: item.companyId || "",
+      companyId: item.companyId || "__universal__",
       departmentId: item.departmentId || "",
       title: item.title || "",
       description: item.description || "",
@@ -1831,7 +1833,7 @@ function PositionsTab() {
     return <div data-testid="loading-positions"><Skeleton className="h-64 w-full" /></div>;
   }
 
-  const filteredDepts = form.companyId ? departments?.filter((d) => d.companyId === form.companyId) : departments;
+  const filteredDepts = (form.companyId && form.companyId !== "__universal__") ? departments?.filter((d) => d.companyId === form.companyId) : departments;
 
   const positionFormFields = (suffix: string) => (
     <div className="grid gap-4">
@@ -1842,6 +1844,7 @@ function PositionsTab() {
             <SelectValue placeholder="Select company" />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
             {companies?.map((c) => (
               <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
             ))}
@@ -2780,7 +2783,7 @@ function CompanyHierarchyNode({ company, divisions, branches, departments, posit
   const compDivisions = divisions.filter((d) => d.companyId === company.id);
   const compBranches = branches.filter((b) => b.companyId === company.id);
   const compDepts = departments.filter((d) => d.companyId === company.id);
-  const compPositions = positions.filter((p) => p.companyId === company.id);
+  const compPositions = positions.filter((p) => p.companyId === company.id || p.companyId === null);
 
   return (
     <div data-testid={`hierarchy-company-${company.id}`}>

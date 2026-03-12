@@ -1611,7 +1611,7 @@ function RegularTimePoliciesTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<RegularTimePolicy | null>(null);
-  const defaultForm = { companyId: "", name: "", calculationOrder: "", payCodeId: "", payFormulaId: "", maxTime: "" };
+  const defaultForm = { companyId: "__universal__", name: "", calculationOrder: "", payCodeId: "", payFormulaId: "", maxTime: "" };
   const [form, setForm] = useState(defaultForm);
     const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
@@ -1634,7 +1634,7 @@ function RegularTimePoliciesTab() {
 
     const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const payload = { ...data, calculationOrder: data.calculationOrder ? parseInt(data.calculationOrder) : undefined, maxTime: data.maxTime || undefined };
+      const payload = { ...data, companyId: data.companyId === "__universal__" ? null : data.companyId, calculationOrder: data.calculationOrder ? parseInt(data.calculationOrder) : undefined, maxTime: data.maxTime || undefined };
       if (editItem) {
         await apiRequest("PATCH", `/api/regular-time-policies/${editItem.id}`, payload);
       } else {
@@ -1668,7 +1668,7 @@ function RegularTimePoliciesTab() {
 
   const handleEdit = (item: RegularTimePolicy) => {
     setEditItem(item);
-    setForm({ companyId: item.companyId, name: item.name, calculationOrder: item.calculationOrder?.toString() || "", payCodeId: item.payCodeId || "", payFormulaId: item.payFormulaId || "", maxTime: item.maxTime || "" });
+    setForm({ companyId: item.companyId || "__universal__", name: item.name, calculationOrder: item.calculationOrder?.toString() || "", payCodeId: item.payCodeId || "", payFormulaId: item.payFormulaId || "", maxTime: item.maxTime || "" });
     setOpen(true);
   };
 
@@ -1725,6 +1725,7 @@ function RegularTimePoliciesTab() {
                     <SelectValue placeholder="Select company" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
                     {companies?.map((c) => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
@@ -1771,6 +1772,7 @@ function RegularTimePoliciesTab() {
                 <TableHead>Name</TableHead>
                 <TableHead>Order</TableHead>
                 <TableHead>Max Time</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -1781,6 +1783,7 @@ function RegularTimePoliciesTab() {
                   <TableCell className="font-medium">{item.name}</TableCell>
                   <TableCell>{item.calculationOrder ?? "—"}</TableCell>
                   <TableCell>{item.maxTime ? `${item.maxTime}h` : "—"}</TableCell>
+                  <TableCell>{item.companyId ? (companies?.find(c => c.id === item.companyId)?.name ?? "—") : <Badge variant="outline" className="text-xs">Universal</Badge>}</TableCell>
                   <TableCell>{item.isActive ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Inactive</Badge>}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
@@ -1791,7 +1794,7 @@ function RegularTimePoliciesTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">No regular time policies yet</TableCell>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No regular time policies yet</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -1806,7 +1809,7 @@ function OvertimePoliciesTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<OvertimePolicy | null>(null);
-  const defaultForm = { companyId: "", name: "", type: "daily", triggerTime: "8", rate: "1.5", payCodeId: "" };
+  const defaultForm = { companyId: "__universal__", name: "", type: "daily", triggerTime: "8", rate: "1.5", payCodeId: "" };
   const [form, setForm] = useState(defaultForm);
     const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
@@ -1829,7 +1832,7 @@ function OvertimePoliciesTab() {
 
     const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const payload = { ...data, triggerTime: data.triggerTime || undefined, rate: data.rate || undefined };
+      const payload = { ...data, companyId: data.companyId === "__universal__" ? null : data.companyId, triggerTime: data.triggerTime || undefined, rate: data.rate || undefined };
       if (editItem) {
         await apiRequest("PATCH", `/api/overtime-policies/${editItem.id}`, payload);
       } else {
@@ -1863,7 +1866,7 @@ function OvertimePoliciesTab() {
 
   const handleEdit = (item: OvertimePolicy) => {
     setEditItem(item);
-    setForm({ companyId: item.companyId, name: item.name, type: item.type || "daily", triggerTime: item.triggerTime || "8", rate: item.rate || "1.5", payCodeId: item.payCodeId || "" });
+    setForm({ companyId: item.companyId || "__universal__", name: item.name, type: item.type || "daily", triggerTime: item.triggerTime || "8", rate: item.rate || "1.5", payCodeId: item.payCodeId || "" });
     setOpen(true);
   };
 
@@ -1922,6 +1925,7 @@ function OvertimePoliciesTab() {
                     <SelectValue placeholder="Select company" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
                     {companies?.map((c) => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
@@ -1979,6 +1983,7 @@ function OvertimePoliciesTab() {
                 <TableHead>Type</TableHead>
                 <TableHead>Trigger Time</TableHead>
                 <TableHead>Rate</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -1990,6 +1995,7 @@ function OvertimePoliciesTab() {
                   <TableCell><Badge variant="secondary">{typeLabels[item.type || ""] || item.type}</Badge></TableCell>
                   <TableCell>{item.triggerTime ? `${item.triggerTime}h` : "—"}</TableCell>
                   <TableCell>{item.rate ? `${item.rate}x` : "—"}</TableCell>
+                  <TableCell>{item.companyId ? (companies?.find(c => c.id === item.companyId)?.name ?? "—") : <Badge variant="outline" className="text-xs">Universal</Badge>}</TableCell>
                   <TableCell>{item.isActive ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Inactive</Badge>}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
@@ -2000,7 +2006,7 @@ function OvertimePoliciesTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No overtime policies yet</TableCell>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">No overtime policies yet</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -2015,7 +2021,7 @@ function PremiumPoliciesTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<PremiumPolicy | null>(null);
-  const defaultForm = { companyId: "", name: "", type: "date_time", holidayHandling: "no_effect", dailyTriggerHours: "", weeklyTriggerHours: "", includePartialPunches: false };
+  const defaultForm = { companyId: "__universal__", name: "", type: "date_time", holidayHandling: "no_effect", dailyTriggerHours: "", weeklyTriggerHours: "", includePartialPunches: false };
   const [form, setForm] = useState(defaultForm);
     const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
@@ -2038,7 +2044,7 @@ function PremiumPoliciesTab() {
 
     const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const payload = { ...data, dailyTriggerHours: data.dailyTriggerHours || undefined, weeklyTriggerHours: data.weeklyTriggerHours || undefined };
+      const payload = { ...data, companyId: data.companyId === "__universal__" ? null : data.companyId, dailyTriggerHours: data.dailyTriggerHours || undefined, weeklyTriggerHours: data.weeklyTriggerHours || undefined };
       if (editItem) {
         await apiRequest("PATCH", `/api/premium-policies/${editItem.id}`, payload);
       } else {
@@ -2072,7 +2078,7 @@ function PremiumPoliciesTab() {
 
   const handleEdit = (item: PremiumPolicy) => {
     setEditItem(item);
-    setForm({ companyId: item.companyId, name: item.name, type: item.type || "date_time", holidayHandling: item.holidayHandling || "no_effect", dailyTriggerHours: item.dailyTriggerHours || "", weeklyTriggerHours: item.weeklyTriggerHours || "", includePartialPunches: item.includePartialPunches ?? false });
+    setForm({ companyId: item.companyId || "__universal__", name: item.name, type: item.type || "date_time", holidayHandling: item.holidayHandling || "no_effect", dailyTriggerHours: item.dailyTriggerHours || "", weeklyTriggerHours: item.weeklyTriggerHours || "", includePartialPunches: item.includePartialPunches ?? false });
     setOpen(true);
   };
 
@@ -2135,6 +2141,7 @@ function PremiumPoliciesTab() {
                     <SelectValue placeholder="Select company" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
                     {companies?.map((c) => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
@@ -2212,6 +2219,7 @@ function PremiumPoliciesTab() {
                 <TableHead>Name</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead>Holiday Handling</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -2222,6 +2230,7 @@ function PremiumPoliciesTab() {
                   <TableCell className="font-medium">{item.name}</TableCell>
                   <TableCell><Badge variant="secondary">{typeLabels[item.type || ""] || item.type}</Badge></TableCell>
                   <TableCell>{holidayLabels[item.holidayHandling || ""] || item.holidayHandling}</TableCell>
+                  <TableCell>{item.companyId ? (companies?.find(c => c.id === item.companyId)?.name ?? "—") : <Badge variant="outline" className="text-xs">Universal</Badge>}</TableCell>
                   <TableCell>{item.isActive ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Inactive</Badge>}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
@@ -2232,7 +2241,7 @@ function PremiumPoliciesTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">No premium policies yet</TableCell>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No premium policies yet</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -2247,7 +2256,7 @@ function MealPoliciesTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<MealPolicy | null>(null);
-  const defaultForm = { companyId: "", name: "", type: "normal", activeAfter: "5", mealTime: "0.5", autoDetectBy: "time_window" };
+  const defaultForm = { companyId: "__universal__", name: "", type: "normal", activeAfter: "5", mealTime: "0.5", autoDetectBy: "time_window" };
   const [form, setForm] = useState(defaultForm);
     const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
@@ -2270,7 +2279,7 @@ function MealPoliciesTab() {
 
     const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const payload = { ...data, activeAfter: data.activeAfter || undefined, mealTime: data.mealTime || undefined };
+      const payload = { ...data, companyId: data.companyId === "__universal__" ? null : data.companyId, activeAfter: data.activeAfter || undefined, mealTime: data.mealTime || undefined };
       if (editItem) {
         await apiRequest("PATCH", `/api/meal-policies/${editItem.id}`, payload);
       } else {
@@ -2304,7 +2313,7 @@ function MealPoliciesTab() {
 
   const handleEdit = (item: MealPolicy) => {
     setEditItem(item);
-    setForm({ companyId: item.companyId, name: item.name, type: item.type || "normal", activeAfter: item.activeAfter || "5", mealTime: item.mealTime || "0.5", autoDetectBy: item.autoDetectBy || "time_window" });
+    setForm({ companyId: item.companyId || "__universal__", name: item.name, type: item.type || "normal", activeAfter: item.activeAfter || "5", mealTime: item.mealTime || "0.5", autoDetectBy: item.autoDetectBy || "time_window" });
     setOpen(true);
   };
 
@@ -2364,6 +2373,7 @@ function MealPoliciesTab() {
                     <SelectValue placeholder="Select company" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
                     {companies?.map((c) => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
@@ -2429,6 +2439,7 @@ function MealPoliciesTab() {
                 <TableHead>Type</TableHead>
                 <TableHead>Active After</TableHead>
                 <TableHead>Meal Time</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -2440,6 +2451,7 @@ function MealPoliciesTab() {
                   <TableCell><Badge variant="secondary">{typeLabels[item.type || ""] || item.type}</Badge></TableCell>
                   <TableCell>{item.activeAfter ? `${item.activeAfter}h` : "—"}</TableCell>
                   <TableCell>{item.mealTime ? `${item.mealTime}h` : "—"}</TableCell>
+                  <TableCell>{item.companyId ? (companies?.find(c => c.id === item.companyId)?.name ?? "—") : <Badge variant="outline" className="text-xs">Universal</Badge>}</TableCell>
                   <TableCell>{item.isActive ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Inactive</Badge>}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
@@ -2450,7 +2462,7 @@ function MealPoliciesTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No meal policies yet</TableCell>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">No meal policies yet</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -2465,7 +2477,7 @@ function BreakPoliciesTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<BreakPolicy | null>(null);
-  const defaultForm = { companyId: "", name: "", type: "normal", activeAfter: "4", breakTime: "0.25", autoDetectBy: "time_window" };
+  const defaultForm = { companyId: "__universal__", name: "", type: "normal", activeAfter: "4", breakTime: "0.25", autoDetectBy: "time_window" };
   const [form, setForm] = useState(defaultForm);
     const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
@@ -2488,7 +2500,7 @@ function BreakPoliciesTab() {
 
     const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const payload = { ...data, activeAfter: data.activeAfter || undefined, breakTime: data.breakTime || undefined };
+      const payload = { ...data, companyId: data.companyId === "__universal__" ? null : data.companyId, activeAfter: data.activeAfter || undefined, breakTime: data.breakTime || undefined };
       if (editItem) {
         await apiRequest("PATCH", `/api/break-policies/${editItem.id}`, payload);
       } else {
@@ -2522,7 +2534,7 @@ function BreakPoliciesTab() {
 
   const handleEdit = (item: BreakPolicy) => {
     setEditItem(item);
-    setForm({ companyId: item.companyId, name: item.name, type: item.type || "normal", activeAfter: item.activeAfter || "4", breakTime: item.breakTime || "0.25", autoDetectBy: item.autoDetectBy || "time_window" });
+    setForm({ companyId: item.companyId || "__universal__", name: item.name, type: item.type || "normal", activeAfter: item.activeAfter || "4", breakTime: item.breakTime || "0.25", autoDetectBy: item.autoDetectBy || "time_window" });
     setOpen(true);
   };
 
@@ -2582,6 +2594,7 @@ function BreakPoliciesTab() {
                     <SelectValue placeholder="Select company" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
                     {companies?.map((c) => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
@@ -2647,6 +2660,7 @@ function BreakPoliciesTab() {
                 <TableHead>Type</TableHead>
                 <TableHead>Active After</TableHead>
                 <TableHead>Break Time</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -2658,6 +2672,7 @@ function BreakPoliciesTab() {
                   <TableCell><Badge variant="secondary">{typeLabels[item.type || ""] || item.type}</Badge></TableCell>
                   <TableCell>{item.activeAfter ? `${item.activeAfter}h` : "—"}</TableCell>
                   <TableCell>{item.breakTime ? `${item.breakTime}h` : "—"}</TableCell>
+                  <TableCell>{item.companyId ? (companies?.find(c => c.id === item.companyId)?.name ?? "—") : <Badge variant="outline" className="text-xs">Universal</Badge>}</TableCell>
                   <TableCell>{item.isActive ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Inactive</Badge>}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
@@ -2668,7 +2683,7 @@ function BreakPoliciesTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No break policies yet</TableCell>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">No break policies yet</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -2683,7 +2698,7 @@ function SchedulePoliciesTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<SchedulePolicy | null>(null);
-  const defaultForm = { companyId: "", name: "", regularTimePolicyAction: "include", overtimePolicyAction: "include", premiumPolicyAction: "include", startStopWindow: "1" };
+  const defaultForm = { companyId: "__universal__", name: "", regularTimePolicyAction: "include", overtimePolicyAction: "include", premiumPolicyAction: "include", startStopWindow: "1" };
   const [form, setForm] = useState(defaultForm);
     const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
@@ -2706,7 +2721,7 @@ function SchedulePoliciesTab() {
 
     const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const payload = { ...data, startStopWindow: data.startStopWindow || undefined };
+      const payload = { ...data, companyId: data.companyId === "__universal__" ? null : data.companyId, startStopWindow: data.startStopWindow || undefined };
       if (editItem) {
         await apiRequest("PATCH", `/api/schedule-policies/${editItem.id}`, payload);
       } else {
@@ -2740,7 +2755,7 @@ function SchedulePoliciesTab() {
 
   const handleEdit = (item: SchedulePolicy) => {
     setEditItem(item);
-    setForm({ companyId: item.companyId, name: item.name, regularTimePolicyAction: item.regularTimePolicyAction || "include", overtimePolicyAction: item.overtimePolicyAction || "include", premiumPolicyAction: item.premiumPolicyAction || "include", startStopWindow: item.startStopWindow || "1" });
+    setForm({ companyId: item.companyId || "__universal__", name: item.name, regularTimePolicyAction: item.regularTimePolicyAction || "include", overtimePolicyAction: item.overtimePolicyAction || "include", premiumPolicyAction: item.premiumPolicyAction || "include", startStopWindow: item.startStopWindow || "1" });
     setOpen(true);
   };
 
@@ -2799,6 +2814,7 @@ function SchedulePoliciesTab() {
                     <SelectValue placeholder="Select company" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
                     {companies?.map((c) => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
@@ -2871,6 +2887,7 @@ function SchedulePoliciesTab() {
                 <TableHead>Overtime</TableHead>
                 <TableHead>Premium</TableHead>
                 <TableHead>Window</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -2883,6 +2900,7 @@ function SchedulePoliciesTab() {
                   <TableCell><Badge variant="secondary">{actionLabels[item.overtimePolicyAction || ""] || item.overtimePolicyAction}</Badge></TableCell>
                   <TableCell><Badge variant="secondary">{actionLabels[item.premiumPolicyAction || ""] || item.premiumPolicyAction}</Badge></TableCell>
                   <TableCell>{item.startStopWindow ? `${item.startStopWindow}h` : "—"}</TableCell>
+                  <TableCell>{item.companyId ? (companies?.find(c => c.id === item.companyId)?.name ?? "—") : <Badge variant="outline" className="text-xs">Universal</Badge>}</TableCell>
                   <TableCell>{item.isActive ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Inactive</Badge>}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
@@ -2893,7 +2911,7 @@ function SchedulePoliciesTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">No schedule policies yet</TableCell>
+                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">No schedule policies yet</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -2908,7 +2926,7 @@ function ExceptionPoliciesTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<ExceptionPolicy | null>(null);
-  const defaultForm = { companyId: "", name: "", exceptionType: "missed_punch", severity: "medium", grace: "", watchWindow: "", emailNotification: false };
+  const defaultForm = { companyId: "__universal__", name: "", exceptionType: "missed_punch", severity: "medium", grace: "", watchWindow: "", emailNotification: false };
   const [form, setForm] = useState(defaultForm);
     const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
@@ -2931,7 +2949,7 @@ function ExceptionPoliciesTab() {
 
     const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const payload = { ...data, grace: data.grace || undefined, watchWindow: data.watchWindow || undefined };
+      const payload = { ...data, companyId: data.companyId === "__universal__" ? null : data.companyId, grace: data.grace || undefined, watchWindow: data.watchWindow || undefined };
       if (editItem) {
         await apiRequest("PATCH", `/api/exception-policies/${editItem.id}`, payload);
       } else {
@@ -2965,7 +2983,7 @@ function ExceptionPoliciesTab() {
 
   const handleEdit = (item: ExceptionPolicy) => {
     setEditItem(item);
-    setForm({ companyId: item.companyId, name: item.name, exceptionType: item.exceptionType || "missed_punch", severity: item.severity || "medium", grace: item.grace || "", watchWindow: item.watchWindow || "", emailNotification: item.emailNotification ?? false });
+    setForm({ companyId: item.companyId || "__universal__", name: item.name, exceptionType: item.exceptionType || "missed_punch", severity: item.severity || "medium", grace: item.grace || "", watchWindow: item.watchWindow || "", emailNotification: item.emailNotification ?? false });
     setOpen(true);
   };
 
@@ -3032,6 +3050,7 @@ function ExceptionPoliciesTab() {
                     <SelectValue placeholder="Select company" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
                     {companies?.map((c) => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
@@ -3114,6 +3133,7 @@ function ExceptionPoliciesTab() {
                 <TableHead>Type</TableHead>
                 <TableHead>Severity</TableHead>
                 <TableHead>Grace</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -3125,6 +3145,7 @@ function ExceptionPoliciesTab() {
                   <TableCell>{exceptionTypeLabels[item.exceptionType || ""] || item.exceptionType}</TableCell>
                   <TableCell><Badge variant={severityColors[item.severity || ""] || "secondary"}>{severityLabels[item.severity || ""] || item.severity}</Badge></TableCell>
                   <TableCell>{item.grace ? `${item.grace}m` : "—"}</TableCell>
+                  <TableCell>{item.companyId ? (companies?.find(c => c.id === item.companyId)?.name ?? "—") : <Badge variant="outline" className="text-xs">Universal</Badge>}</TableCell>
                   <TableCell>{item.isActive ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Inactive</Badge>}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
@@ -3135,7 +3156,7 @@ function ExceptionPoliciesTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No exception policies yet</TableCell>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">No exception policies yet</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -3150,7 +3171,7 @@ function AccrualPoliciesTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<AccrualPolicy | null>(null);
-  const defaultForm = { companyId: "", name: "", type: "standard", lengthOfServiceUnit: "years", applyFrequency: "per_pay_period", minimumEmployedDays: "" };
+  const defaultForm = { companyId: "__universal__", name: "", type: "standard", lengthOfServiceUnit: "years", applyFrequency: "per_pay_period", minimumEmployedDays: "" };
   const [form, setForm] = useState(defaultForm);
     const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
@@ -3173,7 +3194,7 @@ function AccrualPoliciesTab() {
 
     const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const payload = { ...data, minimumEmployedDays: data.minimumEmployedDays ? parseInt(data.minimumEmployedDays) : undefined };
+      const payload = { ...data, companyId: data.companyId === "__universal__" ? null : data.companyId, minimumEmployedDays: data.minimumEmployedDays ? parseInt(data.minimumEmployedDays) : undefined };
       if (editItem) {
         await apiRequest("PATCH", `/api/accrual-policies/${editItem.id}`, payload);
       } else {
@@ -3207,7 +3228,7 @@ function AccrualPoliciesTab() {
 
   const handleEdit = (item: AccrualPolicy) => {
     setEditItem(item);
-    setForm({ companyId: item.companyId, name: item.name, type: item.type || "standard", lengthOfServiceUnit: item.lengthOfServiceUnit || "years", applyFrequency: item.applyFrequency || "per_pay_period", minimumEmployedDays: item.minimumEmployedDays?.toString() || "" });
+    setForm({ companyId: item.companyId || "__universal__", name: item.name, type: item.type || "standard", lengthOfServiceUnit: item.lengthOfServiceUnit || "years", applyFrequency: item.applyFrequency || "per_pay_period", minimumEmployedDays: item.minimumEmployedDays?.toString() || "" });
     setOpen(true);
   };
 
@@ -3268,6 +3289,7 @@ function AccrualPoliciesTab() {
                     <SelectValue placeholder="Select company" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
                     {companies?.map((c) => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
@@ -3343,6 +3365,7 @@ function AccrualPoliciesTab() {
                 <TableHead>Type</TableHead>
                 <TableHead>Frequency</TableHead>
                 <TableHead>Service Unit</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -3354,6 +3377,7 @@ function AccrualPoliciesTab() {
                   <TableCell><Badge variant="secondary">{typeLabels[item.type || ""] || item.type}</Badge></TableCell>
                   <TableCell>{freqLabels[item.applyFrequency || ""] || item.applyFrequency}</TableCell>
                   <TableCell>{serviceLabels[item.lengthOfServiceUnit || ""] || item.lengthOfServiceUnit}</TableCell>
+                  <TableCell>{item.companyId ? (companies?.find(c => c.id === item.companyId)?.name ?? "—") : <Badge variant="outline" className="text-xs">Universal</Badge>}</TableCell>
                   <TableCell>{item.isActive ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Inactive</Badge>}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
@@ -3364,7 +3388,7 @@ function AccrualPoliciesTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No accrual policies yet</TableCell>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">No accrual policies yet</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -3379,7 +3403,7 @@ function AbsencePoliciesTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<AbsencePolicy | null>(null);
-  const defaultForm = { companyId: "", name: "", type: "accrual_based", rateType: "multiplied_by_factor", rateFactor: "1.0", payCodeId: "" };
+  const defaultForm = { companyId: "__universal__", name: "", type: "accrual_based", rateType: "multiplied_by_factor", rateFactor: "1.0", payCodeId: "" };
   const [form, setForm] = useState(defaultForm);
     const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
@@ -3402,7 +3426,7 @@ function AbsencePoliciesTab() {
 
     const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const payload = { ...data, rateFactor: data.rateFactor || undefined };
+      const payload = { ...data, companyId: data.companyId === "__universal__" ? null : data.companyId, rateFactor: data.rateFactor || undefined };
       if (editItem) {
         await apiRequest("PATCH", `/api/absence-policies/${editItem.id}`, payload);
       } else {
@@ -3436,7 +3460,7 @@ function AbsencePoliciesTab() {
 
   const handleEdit = (item: AbsencePolicy) => {
     setEditItem(item);
-    setForm({ companyId: item.companyId, name: item.name, type: item.type || "accrual_based", rateType: item.rateType || "multiplied_by_factor", rateFactor: item.rateFactor || "1.0", payCodeId: item.payCodeId || "" });
+    setForm({ companyId: item.companyId || "__universal__", name: item.name, type: item.type || "accrual_based", rateType: item.rateType || "multiplied_by_factor", rateFactor: item.rateFactor || "1.0", payCodeId: item.payCodeId || "" });
     setOpen(true);
   };
 
@@ -3496,6 +3520,7 @@ function AbsencePoliciesTab() {
                     <SelectValue placeholder="Select company" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
                     {companies?.map((c) => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
@@ -3559,6 +3584,7 @@ function AbsencePoliciesTab() {
                 <TableHead>Type</TableHead>
                 <TableHead>Rate Type</TableHead>
                 <TableHead>Rate Factor</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -3570,6 +3596,7 @@ function AbsencePoliciesTab() {
                   <TableCell><Badge variant="secondary">{typeLabels[item.type || ""] || item.type}</Badge></TableCell>
                   <TableCell>{rateTypeLabels[item.rateType || ""] || item.rateType}</TableCell>
                   <TableCell>{item.rateFactor || "—"}</TableCell>
+                  <TableCell>{item.companyId ? (companies?.find(c => c.id === item.companyId)?.name ?? "—") : <Badge variant="outline" className="text-xs">Universal</Badge>}</TableCell>
                   <TableCell>{item.isActive ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Inactive</Badge>}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
@@ -3580,7 +3607,7 @@ function AbsencePoliciesTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No absence policies yet</TableCell>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">No absence policies yet</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -3595,7 +3622,7 @@ function HolidayPoliciesTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<HolidayPolicy | null>(null);
-  const defaultForm = { companyId: "", name: "", defaultSchedule: "none", eligibleAfterDays: "", workedOnHolidayType: "paid", averageTimeMethod: "daily", forceOverTimePolicy: false };
+  const defaultForm = { companyId: "__universal__", name: "", defaultSchedule: "none", eligibleAfterDays: "", workedOnHolidayType: "paid", averageTimeMethod: "daily", forceOverTimePolicy: false };
   const [form, setForm] = useState(defaultForm);
   const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
@@ -3618,7 +3645,7 @@ function HolidayPoliciesTab() {
 
   const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const payload = { ...data, eligibleAfterDays: data.eligibleAfterDays ? parseInt(data.eligibleAfterDays) : undefined };
+      const payload = { ...data, companyId: data.companyId === "__universal__" ? null : data.companyId, eligibleAfterDays: data.eligibleAfterDays ? parseInt(data.eligibleAfterDays) : undefined };
       if (editItem) {
         await apiRequest("PATCH", `/api/holiday-policies/${editItem.id}`, payload);
       } else {
@@ -3652,7 +3679,7 @@ function HolidayPoliciesTab() {
 
   const handleEdit = (item: HolidayPolicy) => {
     setEditItem(item);
-    setForm({ companyId: item.companyId, name: item.name, defaultSchedule: item.defaultSchedule || "none", eligibleAfterDays: item.eligibleAfterDays?.toString() || "", workedOnHolidayType: item.workedOnHolidayType || "paid", averageTimeMethod: item.averageTimeMethod || "daily", forceOverTimePolicy: item.forceOverTimePolicy ?? false });
+    setForm({ companyId: item.companyId || "__universal__", name: item.name, defaultSchedule: item.defaultSchedule || "none", eligibleAfterDays: item.eligibleAfterDays?.toString() || "", workedOnHolidayType: item.workedOnHolidayType || "paid", averageTimeMethod: item.averageTimeMethod || "daily", forceOverTimePolicy: item.forceOverTimePolicy ?? false });
     setOpen(true);
   };
 
@@ -3713,6 +3740,7 @@ function HolidayPoliciesTab() {
                     <SelectValue placeholder="Select company" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
                     {companies?.map((c) => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
@@ -3796,6 +3824,7 @@ function HolidayPoliciesTab() {
                 <TableHead>Schedule</TableHead>
                 <TableHead>Worked on Holiday</TableHead>
                 <TableHead>Avg Method</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -3807,6 +3836,7 @@ function HolidayPoliciesTab() {
                   <TableCell><Badge variant="secondary">{scheduleLabels[item.defaultSchedule || ""] || item.defaultSchedule}</Badge></TableCell>
                   <TableCell>{workedLabels[item.workedOnHolidayType || ""] || item.workedOnHolidayType}</TableCell>
                   <TableCell>{avgLabels[item.averageTimeMethod || ""] || item.averageTimeMethod}</TableCell>
+                  <TableCell>{item.companyId ? (companies?.find(c => c.id === item.companyId)?.name ?? "—") : <Badge variant="outline" className="text-xs">Universal</Badge>}</TableCell>
                   <TableCell>{item.isActive ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Inactive</Badge>}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
@@ -3817,7 +3847,7 @@ function HolidayPoliciesTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No holiday policies yet</TableCell>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">No holiday policies yet</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -3832,7 +3862,7 @@ function RoundingPoliciesTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<RoundingPolicy | null>(null);
-  const defaultForm = { companyId: "", name: "", roundType: "day_total", punchType: "", interval: "15", grace: "3" };
+  const defaultForm = { companyId: "__universal__", name: "", roundType: "day_total", punchType: "", interval: "15", grace: "3" };
   const [form, setForm] = useState(defaultForm);
   const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
@@ -3857,6 +3887,7 @@ function RoundingPoliciesTab() {
     mutationFn: async (data: typeof form) => {
       const payload = {
         ...data,
+        companyId: data.companyId === "__universal__" ? null : data.companyId,
         interval: data.interval ? parseInt(data.interval) : 15,
         grace: data.grace ? parseInt(data.grace) : 3,
         punchType: data.roundType === "punch" ? data.punchType : undefined,
@@ -3894,7 +3925,7 @@ function RoundingPoliciesTab() {
 
   const handleEdit = (item: RoundingPolicy) => {
     setEditItem(item);
-    setForm({ companyId: item.companyId, name: item.name, roundType: item.roundType || "day_total", punchType: item.punchType || "", interval: item.interval?.toString() || "15", grace: item.grace?.toString() || "3" });
+    setForm({ companyId: item.companyId || "__universal__", name: item.name, roundType: item.roundType || "day_total", punchType: item.punchType || "", interval: item.interval?.toString() || "15", grace: item.grace?.toString() || "3" });
     setOpen(true);
   };
 
@@ -3954,6 +3985,7 @@ function RoundingPoliciesTab() {
                     <SelectValue placeholder="Select company" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
                     {companies?.map((c) => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
@@ -4022,6 +4054,7 @@ function RoundingPoliciesTab() {
                 <TableHead>Punch Type</TableHead>
                 <TableHead>Interval</TableHead>
                 <TableHead>Grace</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -4034,6 +4067,7 @@ function RoundingPoliciesTab() {
                   <TableCell>{item.punchType ? punchTypeLabels[item.punchType] || item.punchType : "—"}</TableCell>
                   <TableCell>{item.interval ? `${item.interval}m` : "—"}</TableCell>
                   <TableCell>{item.grace ? `${item.grace}m` : "—"}</TableCell>
+                  <TableCell>{item.companyId ? (companies?.find(c => c.id === item.companyId)?.name ?? "—") : <Badge variant="outline" className="text-xs">Universal</Badge>}</TableCell>
                   <TableCell>{item.isActive ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Inactive</Badge>}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
@@ -4044,7 +4078,7 @@ function RoundingPoliciesTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">No rounding policies yet</TableCell>
+                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">No rounding policies yet</TableCell>
                 </TableRow>
               )}
             </TableBody>

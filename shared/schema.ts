@@ -255,7 +255,7 @@ export const branches = pgTable("branches", {
 
 export const positions = pgTable("positions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   departmentId: varchar("department_id"),
   title: text("title").notNull(),
   description: text("description"),
@@ -674,7 +674,7 @@ export const contributingShifts = pgTable("contributing_shifts", {
 
 export const regularTimePolicies = pgTable("regular_time_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   calculationOrder: integer("calculation_order").default(9999),
   contributingShiftId: varchar("contributing_shift_id"),
@@ -687,7 +687,7 @@ export const regularTimePolicies = pgTable("regular_time_policies", {
 
 export const overtimePolicies = pgTable("overtime_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   type: text("type").default("daily"),
   triggerTime: numeric("trigger_time").default("8"),
@@ -701,7 +701,7 @@ export const overtimePolicies = pgTable("overtime_policies", {
 
 export const premiumPolicies = pgTable("premium_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   type: text("type").default("date_time"),
   payCodeId: varchar("pay_code_id"),
@@ -725,7 +725,7 @@ export const premiumPolicies = pgTable("premium_policies", {
 
 export const mealPolicies = pgTable("meal_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   type: text("type").default("normal"),
   activeAfter: numeric("active_after").default("5"),
@@ -745,7 +745,7 @@ export const mealPolicies = pgTable("meal_policies", {
 
 export const breakPolicies = pgTable("break_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   type: text("type").default("normal"),
   activeAfter: numeric("active_after").default("4"),
@@ -765,7 +765,7 @@ export const breakPolicies = pgTable("break_policies", {
 
 export const schedulePolicies = pgTable("schedule_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   mealPolicyId: varchar("meal_policy_id"),
   breakPolicyIds: text("break_policy_ids"),
@@ -784,7 +784,7 @@ export const schedulePolicies = pgTable("schedule_policies", {
 
 export const exceptionPolicies = pgTable("exception_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   exceptionType: text("exception_type").default("missed_punch"),
   severity: text("severity").default("medium"),
@@ -797,7 +797,7 @@ export const exceptionPolicies = pgTable("exception_policies", {
 
 export const accrualPolicies = pgTable("accrual_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   type: text("type").default("standard"),
   accrualAccountId: varchar("accrual_account_id"),
@@ -824,7 +824,7 @@ export const accrualPolicyMilestones = pgTable("accrual_policy_milestones", {
 
 export const absencePolicies = pgTable("absence_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   type: text("type").default("accrual_based"),
   payCodeId: varchar("pay_code_id"),
@@ -838,7 +838,7 @@ export const absencePolicies = pgTable("absence_policies", {
 
 export const holidayPolicies = pgTable("holiday_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   defaultSchedule: text("default_schedule").default("none"),
   eligibleAfterDays: integer("eligible_after_days").default(0),
@@ -856,7 +856,7 @@ export const holidayPolicies = pgTable("holiday_policies", {
 
 export const roundingPolicies = pgTable("rounding_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   roundType: text("round_type").default("day_total"),
   punchType: text("punch_type"),
