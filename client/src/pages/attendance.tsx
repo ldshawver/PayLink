@@ -1277,10 +1277,6 @@ function PendingApprovalsTab() {
 
   const { data: pendingPunches = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/time-punches/pending"],
-    queryFn: async () => {
-      const res = await fetch("/api/time-punches/pending", { credentials: "include" });
-      return res.json();
-    },
   });
 
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
@@ -1341,7 +1337,7 @@ function PendingApprovalsTab() {
                     <TableCell className="font-medium">
                       <div className="flex items-center gap-2">
                         <div className="h-7 w-7 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center text-xs font-medium text-amber-700 dark:text-amber-400">
-                          {worker ? `${worker.firstName[0]}${worker.lastName[0]}` : "??"}
+                          {worker ? `${(worker.firstName || "?")[0]}${(worker.lastName || "?")[0]}` : "??"}
                         </div>
                         <span className="text-sm">
                           {worker ? `${worker.firstName} ${worker.lastName}` : "Unknown"}
