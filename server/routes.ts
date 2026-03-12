@@ -423,9 +423,43 @@ export async function registerRoutes(
       if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in/out." });
       }
-      const punch = await storage.createTimePunch({ workerId, companyId, punchType, punchTime: new Date() });
+      const today = new Date().toISOString().split("T")[0];
+      // Check if worker has a schedule for today (for unscheduled punch detection)
+      let isUnscheduled = false;
+      let matchingSchedule: any = null;
+      let scheduledStart: Date | undefined;
+      let scheduledEnd: Date | undefined;
+      let scheduledHours: string | undefined;
       if (punchType === "clock_in") {
-        const today = new Date().toISOString().split("T")[0];
+        const todaySchedules = await storage.getSchedulesByDateRange(companyId, today, today);
+        const workerSchedule = todaySchedules.find(s => s.workerId === workerId);
+        if (!workerSchedule) {
+          isUnscheduled = true;
+        } else {
+          matchingSchedule = workerSchedule;
+          const now = new Date();
+          const [sh, sm] = workerSchedule.startTime.split(":").map(Number);
+          const [eh, em] = workerSchedule.endTime.split(":").map(Number);
+          scheduledStart = new Date(today + "T00:00:00");
+          scheduledStart.setHours(sh, sm, 0, 0);
+          scheduledEnd = new Date(today + "T00:00:00");
+          scheduledEnd.setHours(eh, em, 0, 0);
+          const hrs = ((eh * 60 + em) - (sh * 60 + sm)) / 60;
+          scheduledHours = Math.max(0, hrs).toFixed(2);
+          // Flag as unscheduled if clocking in more than 2 hours before or after scheduled start
+          const diffMin = Math.abs((now.getTime() - scheduledStart.getTime()) / 60000);
+          if (diffMin > 120) isUnscheduled = true;
+        }
+      }
+
+      const punchApprovalStatus = isUnscheduled ? "pending" : "approved";
+      const punch = await storage.createTimePunch({
+        workerId, companyId, punchType, punchTime: new Date(),
+        approvalStatus: punchApprovalStatus,
+        scheduleId: matchingSchedule?.id || undefined,
+      });
+
+      if (punchType === "clock_in") {
         const allEntries = await storage.getTimeEntries();
         const staleOpenEntries = allEntries.filter(
           (e) => e.workerId === workerId && e.clockIn && !e.clockOut && e.date !== today
@@ -439,8 +473,17 @@ export async function registerRoutes(
             clockOut: staleClockOut, totalHours: cappedHours, overtimeHours: "0.00", doubleTimeHours: "0.00",
           });
         }
+        const now = new Date();
+        const lateMinutes = scheduledStart ? Math.max(0, Math.round((now.getTime() - scheduledStart.getTime()) / 60000)) : 0;
         await storage.createTimeEntry({
-          workerId, companyId, date: today, clockIn: new Date(), status: "pending",
+          workerId, companyId, date: today, clockIn: now, status: "pending",
+          scheduleId: matchingSchedule?.id || undefined,
+          scheduledStart: scheduledStart || undefined,
+          scheduledEnd: scheduledEnd || undefined,
+          scheduledHours: scheduledHours || undefined,
+          lateMinutes, isUnscheduled,
+          source: "punches",
+          note: isUnscheduled ? "No matching schedule — unscheduled shift" : undefined,
         });
       } else if (punchType === "clock_out") {
         const entries = await storage.getTimeEntries();
@@ -459,7 +502,10 @@ export async function registerRoutes(
           });
         }
       }
-      res.status(201).json(punch);
+      res.status(201).json({
+        ...punch,
+        warning: isUnscheduled ? "No schedule found for today — this punch requires manager approval." : undefined,
+      });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Punch failed" });
@@ -797,6 +843,61 @@ export async function registerRoutes(
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to delete time punch" });
+    }
+  });
+
+  app.get("/api/time-punches/pending", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.query;
+      const punches = await storage.getPendingPunches(companyId as string | undefined);
+      res.json(punches);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch pending punches" });
+    }
+  });
+
+  app.patch("/api/time-punches/:id/approve", requireAuth, async (req, res) => {
+    try {
+      const { action } = req.body;
+      const approvalStatus = action === "reject" ? "rejected" : "approved";
+      const punch = await storage.updateTimePunch(req.params.id, {
+        approvalStatus,
+        approvedBy: req.session.userId || undefined,
+      });
+      if (!punch) return res.status(404).json({ message: "Punch not found" });
+      res.json(punch);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update punch approval" });
+    }
+  });
+
+  app.post("/api/time-entries/convert-from-punches", requireAuth, async (req, res) => {
+    try {
+      const { companyId, startDate, endDate } = req.body;
+      if (!companyId || !startDate || !endDate) {
+        return res.status(400).json({ message: "companyId, startDate, endDate required" });
+      }
+      const result = await storage.convertPunchesToTimeEntries(companyId, startDate, endDate);
+      res.json(result);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to convert punches to timesheet entries" });
+    }
+  });
+
+  app.get("/api/schedule/labor-summary", requireAuth, async (req, res) => {
+    try {
+      const { companyId, startDate, endDate } = req.query;
+      if (!companyId || !startDate || !endDate) {
+        return res.status(400).json({ message: "companyId, startDate, endDate required" });
+      }
+      const summary = await storage.getScheduleLaborSummary(companyId as string, startDate as string, endDate as string);
+      res.json(summary);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch labor summary" });
     }
   });
 

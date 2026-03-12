@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, gte, lte, isNull, or } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte, isNull, or, inArray } from "drizzle-orm";
 import { db } from "./db";
 import {
   companies, workers, timePunches, timeEntries, schedules, payrollRuns, payrollItems, users,
@@ -101,6 +101,9 @@ export interface IStorage {
   deleteWorker(id: string): Promise<void>;
 
   getTimePunches(companyId?: string): Promise<TimePunch[]>;
+  getPendingPunches(companyId?: string): Promise<TimePunch[]>;
+  convertPunchesToTimeEntries(companyId: string, startDate: string, endDate: string): Promise<{ created: number; skipped: number; entries: TimeEntry[] }>;
+  getScheduleLaborSummary(companyId: string, startDate: string, endDate: string): Promise<any[]>;
   createTimePunch(data: InsertTimePunch): Promise<TimePunch>;
   updateTimePunch(id: string, data: Partial<TimePunch>): Promise<TimePunch | undefined>;
   deleteTimePunch(id: string): Promise<void>;
@@ -514,6 +517,157 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteTimePunch(id: string): Promise<void> {
     await db.delete(timePunches).where(eq(timePunches.id, id));
+  }
+
+  async getPendingPunches(companyId?: string): Promise<TimePunch[]> {
+    if (companyId) {
+      return db.select().from(timePunches)
+        .where(and(eq(timePunches.companyId, companyId), eq(timePunches.approvalStatus, "pending")))
+        .orderBy(desc(timePunches.punchTime));
+    }
+    return db.select().from(timePunches)
+      .where(eq(timePunches.approvalStatus, "pending"))
+      .orderBy(desc(timePunches.punchTime));
+  }
+
+  async convertPunchesToTimeEntries(companyId: string, startDate: string, endDate: string): Promise<{ created: number; skipped: number; entries: TimeEntry[] }> {
+    const allPunches = await db.select().from(timePunches)
+      .where(and(
+        eq(timePunches.companyId, companyId),
+        gte(timePunches.punchTime, new Date(startDate + "T00:00:00")),
+        lte(timePunches.punchTime, new Date(endDate + "T23:59:59"))
+      ))
+      .orderBy(timePunches.workerId, timePunches.punchTime);
+
+    const scheds = await db.select().from(schedules)
+      .where(and(eq(schedules.companyId, companyId), gte(schedules.date, startDate), lte(schedules.date, endDate)));
+
+    const existingEntries = await db.select().from(timeEntries)
+      .where(and(eq(timeEntries.companyId, companyId), gte(timeEntries.date, startDate), lte(timeEntries.date, endDate)));
+
+    // Group punches by worker+date
+    const punchGroups: Record<string, typeof allPunches> = {};
+    for (const p of allPunches) {
+      const dateKey = new Date(p.punchTime).toISOString().split("T")[0];
+      const key = `${p.workerId}::${dateKey}`;
+      if (!punchGroups[key]) punchGroups[key] = [];
+      punchGroups[key].push(p);
+    }
+
+    const created: TimeEntry[] = [];
+    let skipped = 0;
+
+    for (const [key, punches] of Object.entries(punchGroups)) {
+      const [workerId, date] = key.split("::");
+      // Skip if time entry already exists (from punches source or otherwise has clockIn from punches)
+      const alreadyExists = existingEntries.find(e => e.workerId === workerId && e.date === date && e.source === "punches");
+      if (alreadyExists) { skipped++; continue; }
+
+      const clockInPunch = punches.find(p => p.punchType === "clock_in");
+      const clockOutPunch = [...punches].reverse().find(p => p.punchType === "clock_out");
+      if (!clockInPunch) { skipped++; continue; }
+
+      const clockIn = new Date(clockInPunch.punchTime);
+      const clockOut = clockOutPunch ? new Date(clockOutPunch.punchTime) : null;
+
+      // Calculate break minutes from break_start/break_end pairs
+      let breakMinutes = 0;
+      const breakStarts = punches.filter(p => p.punchType === "break_start");
+      const breakEnds = punches.filter(p => p.punchType === "break_end");
+      for (let i = 0; i < Math.min(breakStarts.length, breakEnds.length); i++) {
+        breakMinutes += (new Date(breakEnds[i].punchTime).getTime() - new Date(breakStarts[i].punchTime).getTime()) / 60000;
+      }
+
+      // Find matching schedule
+      const sched = scheds.find(s => s.workerId === workerId && s.date === date);
+      let scheduledStart: Date | undefined;
+      let scheduledEnd: Date | undefined;
+      let scheduledHours: number | undefined;
+      let lateMinutes = 0;
+      let earlyDepartureMinutes = 0;
+      let isUnscheduled = !sched;
+
+      if (sched) {
+        const [sh, sm] = sched.startTime.split(":").map(Number);
+        const [eh, em] = sched.endTime.split(":").map(Number);
+        scheduledStart = new Date(date + "T00:00:00");
+        scheduledStart.setHours(sh, sm, 0, 0);
+        scheduledEnd = new Date(date + "T00:00:00");
+        scheduledEnd.setHours(eh, em, 0, 0);
+        scheduledHours = (scheduledEnd.getTime() - scheduledStart.getTime()) / (1000 * 60 * 60);
+        lateMinutes = Math.max(0, Math.round((clockIn.getTime() - scheduledStart.getTime()) / 60000));
+        if (clockOut && scheduledEnd) {
+          earlyDepartureMinutes = Math.max(0, Math.round((scheduledEnd.getTime() - clockOut.getTime()) / 60000));
+        }
+      }
+
+      // Calculate total hours
+      let totalHours = 0;
+      let overtimeHours = 0;
+      let doubleTimeHours = 0;
+      if (clockOut) {
+        const workedMs = clockOut.getTime() - clockIn.getTime() - breakMinutes * 60000;
+        totalHours = Math.max(0, workedMs / (1000 * 60 * 60));
+        overtimeHours = Math.max(0, totalHours - 8);
+        doubleTimeHours = Math.max(0, totalHours - 12);
+      }
+
+      const entry = await db.insert(timeEntries).values({
+        workerId, companyId, date, clockIn, clockOut: clockOut || undefined,
+        breakMinutes: Math.round(breakMinutes),
+        totalHours: totalHours.toFixed(2),
+        overtimeHours: overtimeHours.toFixed(2),
+        doubleTimeHours: doubleTimeHours.toFixed(2),
+        status: "pending",
+        source: "punches",
+        scheduleId: sched?.id || undefined,
+        scheduledStart: scheduledStart || undefined,
+        scheduledEnd: scheduledEnd || undefined,
+        scheduledHours: scheduledHours?.toFixed(2) || undefined,
+        lateMinutes, earlyDepartureMinutes, isUnscheduled,
+        note: isUnscheduled ? "No schedule found — unscheduled shift" : undefined,
+      }).returning();
+      created.push(entry[0]);
+    }
+
+    return { created: created.length, skipped, entries: created };
+  }
+
+  async getScheduleLaborSummary(companyId: string, startDate: string, endDate: string): Promise<any[]> {
+    const scheds = await db.select().from(schedules)
+      .where(and(eq(schedules.companyId, companyId), gte(schedules.date, startDate), lte(schedules.date, endDate)));
+    const workerIds = [...new Set(scheds.map(s => s.workerId))];
+    const allWorkers = workerIds.length > 0 ? await db.select().from(workers).where(inArray(workers.id, workerIds)) : [];
+    const entries = await db.select().from(timeEntries)
+      .where(and(eq(timeEntries.companyId, companyId), gte(timeEntries.date, startDate), lte(timeEntries.date, endDate)));
+
+    const summary: Record<string, any> = {};
+    for (const sched of scheds) {
+      if (!summary[sched.workerId]) {
+        const w = allWorkers.find(w => w.id === sched.workerId);
+        summary[sched.workerId] = {
+          workerId: sched.workerId,
+          workerName: w ? `${w.firstName} ${w.lastName}` : "Unknown",
+          payRate: parseFloat(w?.payRate || "0"),
+          scheduledHours: 0, scheduledCost: 0,
+          actualHours: 0, actualCost: 0,
+          shifts: 0,
+        };
+      }
+      const [sh, sm] = sched.startTime.split(":").map(Number);
+      const [eh, em] = sched.endTime.split(":").map(Number);
+      const hrs = ((eh * 60 + em) - (sh * 60 + sm)) / 60;
+      summary[sched.workerId].scheduledHours += Math.max(0, hrs);
+      summary[sched.workerId].scheduledCost += Math.max(0, hrs) * summary[sched.workerId].payRate;
+      summary[sched.workerId].shifts++;
+    }
+    for (const entry of entries) {
+      if (!summary[entry.workerId]) continue;
+      const hrs = parseFloat(entry.totalHours || "0");
+      summary[entry.workerId].actualHours += hrs;
+      summary[entry.workerId].actualCost += hrs * summary[entry.workerId].payRate;
+    }
+    return Object.values(summary);
   }
 
   async getTimeEntries(companyId?: string): Promise<TimeEntry[]> {

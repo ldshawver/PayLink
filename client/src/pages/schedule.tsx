@@ -59,6 +59,7 @@ import {
   Trash2,
   Download,
   X,
+  TrendingUp,
 } from "lucide-react";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -179,6 +180,38 @@ export default function SchedulePage() {
     companyId: "",
     startDate: "",
     endDate: "",
+  });
+
+  const getLaborWeekRange = () => {
+    const now = new Date();
+    const day = now.getDay();
+    const start = new Date(now);
+    start.setDate(now.getDate() - day);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return {
+      start: formatDate(start),
+      end: formatDate(end),
+    };
+  };
+  const laborWeekDefault = getLaborWeekRange();
+  const [laborCompany, setLaborCompany] = useState<string>("all");
+  const [laborStart, setLaborStart] = useState(laborWeekDefault.start);
+  const [laborEnd, setLaborEnd] = useState(laborWeekDefault.end);
+
+  const { data: laborSummary = [], isLoading: laborLoading } = useQuery<any[]>({
+    queryKey: ["/api/schedule/labor-summary", laborCompany, laborStart, laborEnd],
+    queryFn: async () => {
+      if (!laborStart || !laborEnd) return [];
+      const targetCompany = laborCompany !== "all" ? laborCompany : "";
+      if (!targetCompany) return [];
+      const res = await fetch(
+        `/api/schedule/labor-summary?companyId=${targetCompany}&startDate=${laborStart}&endDate=${laborEnd}`,
+        { credentials: "include" }
+      );
+      return res.json();
+    },
+    enabled: laborCompany !== "all" && !!laborStart && !!laborEnd,
   });
 
   const baseDate = new Date();
@@ -416,6 +449,10 @@ export default function SchedulePage() {
           <TabsTrigger value="templates" data-testid="tab-templates">
             <FileText className="h-4 w-4 mr-1" />
             Recurring Templates
+          </TabsTrigger>
+          <TabsTrigger value="labor" data-testid="tab-labor">
+            <TrendingUp className="h-4 w-4 mr-1" />
+            Labor Projection
           </TabsTrigger>
         </TabsList>
 
@@ -1205,6 +1242,168 @@ export default function SchedulePage() {
                     );
                   })}
                 </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="labor" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <TrendingUp className="h-5 w-5" />
+                Labor Cost Projection
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-3 items-end">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Company</label>
+                  <Select value={laborCompany} onValueChange={setLaborCompany}>
+                    <SelectTrigger className="w-48" data-testid="select-labor-company">
+                      <SelectValue placeholder="Select company..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {companies.map(c => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Start Date</label>
+                  <input
+                    type="date"
+                    className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                    value={laborStart}
+                    onChange={e => setLaborStart(e.target.value)}
+                    data-testid="input-labor-start"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">End Date</label>
+                  <input
+                    type="date"
+                    className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                    value={laborEnd}
+                    onChange={e => setLaborEnd(e.target.value)}
+                    data-testid="input-labor-end"
+                  />
+                </div>
+              </div>
+
+              {laborCompany === "all" ? (
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                  <TrendingUp className="h-10 w-10 mb-3 opacity-30" />
+                  <p className="text-sm font-medium">Select a company to view labor projection</p>
+                </div>
+              ) : laborLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}
+                </div>
+              ) : laborSummary.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                  <Calendar className="h-10 w-10 mb-3 opacity-30" />
+                  <p className="text-sm font-medium">No scheduled shifts for this period</p>
+                  <p className="text-xs mt-1">Schedule workers to see projected labor costs.</p>
+                </div>
+              ) : (
+                <>
+                  {/* Summary cards */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <Card className="bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900">
+                      <CardContent className="p-3">
+                        <p className="text-xs text-muted-foreground">Scheduled Hours</p>
+                        <p className="text-xl font-bold text-blue-700 dark:text-blue-400">
+                          {laborSummary.reduce((s, r) => s + r.scheduledHours, 0).toFixed(1)}h
+                        </p>
+                      </CardContent>
+                    </Card>
+                    <Card className="bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900">
+                      <CardContent className="p-3">
+                        <p className="text-xs text-muted-foreground">Projected Labor Cost</p>
+                        <p className="text-xl font-bold text-blue-700 dark:text-blue-400">
+                          ${laborSummary.reduce((s, r) => s + r.scheduledCost, 0).toFixed(2)}
+                        </p>
+                      </CardContent>
+                    </Card>
+                    <Card className="bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900">
+                      <CardContent className="p-3">
+                        <p className="text-xs text-muted-foreground">Actual Hours</p>
+                        <p className="text-xl font-bold text-emerald-700 dark:text-emerald-400">
+                          {laborSummary.reduce((s, r) => s + r.actualHours, 0).toFixed(1)}h
+                        </p>
+                      </CardContent>
+                    </Card>
+                    <Card className="bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900">
+                      <CardContent className="p-3">
+                        <p className="text-xs text-muted-foreground">Actual Labor Cost</p>
+                        <p className="text-xl font-bold text-emerald-700 dark:text-emerald-400">
+                          ${laborSummary.reduce((s, r) => s + r.actualCost, 0).toFixed(2)}
+                        </p>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* Per-worker table */}
+                  <div className="overflow-x-auto rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Worker</TableHead>
+                          <TableHead className="text-right">Shifts</TableHead>
+                          <TableHead className="text-right">Sched. Hours</TableHead>
+                          <TableHead className="text-right">Sched. Cost</TableHead>
+                          <TableHead className="text-right">Actual Hours</TableHead>
+                          <TableHead className="text-right">Actual Cost</TableHead>
+                          <TableHead className="text-right">Variance</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {laborSummary.map((row: any) => {
+                          const variance = row.actualCost - row.scheduledCost;
+                          const pct = row.scheduledHours > 0
+                            ? ((row.actualHours / row.scheduledHours) * 100).toFixed(0)
+                            : null;
+                          return (
+                            <TableRow key={row.workerId} data-testid={`row-labor-${row.workerId}`}>
+                              <TableCell className="font-medium">
+                                <div className="flex items-center gap-2">
+                                  <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center text-xs font-medium text-primary">
+                                    {row.workerName.split(" ").map((n: string) => n[0]).join("").slice(0, 2)}
+                                  </div>
+                                  <div>
+                                    <div className="text-sm">{row.workerName}</div>
+                                    <div className="text-xs text-muted-foreground">${Number(row.payRate).toFixed(2)}/hr</div>
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right text-sm">{row.shifts}</TableCell>
+                              <TableCell className="text-right text-sm text-blue-700 dark:text-blue-400 font-medium">
+                                {row.scheduledHours.toFixed(1)}h
+                              </TableCell>
+                              <TableCell className="text-right text-sm text-blue-700 dark:text-blue-400">
+                                ${row.scheduledCost.toFixed(2)}
+                              </TableCell>
+                              <TableCell className="text-right text-sm text-emerald-700 dark:text-emerald-400 font-medium">
+                                {row.actualHours.toFixed(1)}h
+                                {pct && <span className="ml-1 text-xs text-muted-foreground">({pct}%)</span>}
+                              </TableCell>
+                              <TableCell className="text-right text-sm text-emerald-700 dark:text-emerald-400">
+                                ${row.actualCost.toFixed(2)}
+                              </TableCell>
+                              <TableCell className="text-right text-sm">
+                                <span className={variance > 0 ? "text-destructive font-medium" : variance < 0 ? "text-emerald-600 font-medium" : "text-muted-foreground"}>
+                                  {variance > 0 ? "+" : ""}{variance.toFixed(2)}
+                                </span>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>

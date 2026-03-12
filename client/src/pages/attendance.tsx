@@ -13,6 +13,8 @@ import {
   Pencil,
   Trash2,
   MoreHorizontal,
+  RefreshCw,
+  AlertTriangle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,6 +35,8 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogFooter,
+  DialogClose,
 } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -132,11 +136,70 @@ function LoadingSkeleton({ rows = 5 }: { rows?: number }) {
   );
 }
 
+function ExceptionBadges({ entry }: { entry: TimeEntry }) {
+  const e = entry as any;
+  const badges: JSX.Element[] = [];
+  if (e.isUnscheduled) {
+    badges.push(
+      <Badge key="unscheduled" variant="destructive" className="text-xs gap-1 whitespace-nowrap">
+        <AlertTriangle className="h-3 w-3" /> Unscheduled
+      </Badge>
+    );
+  } else if (e.scheduledStart) {
+    const late = Number(e.lateMinutes || 0);
+    const early = Number(e.earlyDepartureMinutes || 0);
+    if (late > 5) {
+      badges.push(
+        <Badge key="late" className="text-xs gap-1 whitespace-nowrap bg-amber-500 hover:bg-amber-600">
+          <Clock className="h-3 w-3" /> Late {late}m
+        </Badge>
+      );
+    }
+    if (early > 5) {
+      badges.push(
+        <Badge key="early" className="text-xs gap-1 whitespace-nowrap bg-orange-500 hover:bg-orange-600">
+          <Clock className="h-3 w-3" /> Left Early {early}m
+        </Badge>
+      );
+    }
+    if (late <= 5 && early <= 5) {
+      badges.push(
+        <Badge key="ontime" className="text-xs gap-1 whitespace-nowrap bg-emerald-600 hover:bg-emerald-700">
+          <Check className="h-3 w-3" /> On Time
+        </Badge>
+      );
+    }
+  }
+  return <div className="flex flex-wrap gap-1">{badges}</div>;
+}
+
+function fmtTimeOnly(ts: Date | string | null | undefined) {
+  if (!ts) return null;
+  return new Date(ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+function getWeekRange() {
+  const now = new Date();
+  const day = now.getDay();
+  const start = new Date(now);
+  start.setDate(now.getDate() - day);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return { start: fmt(start), end: fmt(end) };
+}
+
 function TimesheetTab() {
   const { toast } = useToast();
   const [editEntry, setEditEntry] = useState<TimeEntry | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [convertOpen, setConvertOpen] = useState(false);
+  const weekRange = getWeekRange();
+  const [convertCompany, setConvertCompany] = useState("");
+  const [convertStart, setConvertStart] = useState(weekRange.start);
+  const [convertEnd, setConvertEnd] = useState(weekRange.end);
   const [editForm, setEditForm] = useState({
     clockIn: "",
     clockOut: "",
@@ -225,6 +288,27 @@ function TimesheetTab() {
     },
   });
 
+  const convertMutation = useMutation({
+    mutationFn: async () => {
+      return apiRequest("POST", "/api/time-entries/convert-from-punches", {
+        companyId: convertCompany,
+        startDate: convertStart,
+        endDate: convertEnd,
+      });
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/time-entries"] });
+      setConvertOpen(false);
+      toast({
+        title: "Conversion complete",
+        description: `Created ${data.created} entries, skipped ${data.skipped} already existing.`,
+      });
+    },
+    onError: () => {
+      toast({ title: "Conversion failed", variant: "destructive" });
+    },
+  });
+
   const openEdit = (entry: TimeEntry) => {
     setEditEntry(entry);
     setEditForm({
@@ -264,9 +348,13 @@ function TimesheetTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between px-4 pt-4">
+      <div className="flex items-center justify-between px-4 pt-4 gap-2 flex-wrap">
         <p className="text-sm text-muted-foreground">{sortedEntries.length} entries</p>
-        <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => setConvertOpen(true)} data-testid="button-convert-punches">
+            <RefreshCw className="h-4 w-4 mr-2" />Convert Punches
+          </Button>
+          <Dialog open={addOpen} onOpenChange={setAddOpen}>
           <DialogTrigger asChild>
             <Button size="sm" data-testid="button-add-time-entry">
               <Plus className="h-4 w-4 mr-2" />Add Entry
@@ -356,6 +444,7 @@ function TimesheetTab() {
             </div>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       {sortedEntries.length === 0 ? (
@@ -370,11 +459,13 @@ function TimesheetTab() {
               <TableRow>
                 <TableHead>Employee</TableHead>
                 <TableHead>Date</TableHead>
+                <TableHead>Scheduled</TableHead>
                 <TableHead>Clock In</TableHead>
                 <TableHead>Clock Out</TableHead>
                 <TableHead>Break</TableHead>
                 <TableHead>Total Hours</TableHead>
                 <TableHead>OT Hours</TableHead>
+                <TableHead>Exceptions</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -382,12 +473,29 @@ function TimesheetTab() {
             <TableBody>
               {sortedEntries.map((entry) => {
                 const worker = workerMap.get(entry.workerId);
+                const e = entry as any;
                 return (
-                  <TableRow key={entry.id} data-testid={`row-timeentry-${entry.id}`}>
+                  <TableRow key={entry.id} data-testid={`row-timeentry-${entry.id}`}
+                    className={e.isUnscheduled ? "bg-destructive/5" : ""}>
                     <TableCell className="font-medium">
-                      {worker ? `${worker.firstName} ${worker.lastName}` : "Unknown"}
+                      <div>
+                        <div>{worker ? `${worker.firstName} ${worker.lastName}` : "Unknown"}</div>
+                        {e.source === "punches" && (
+                          <div className="text-xs text-muted-foreground">From punches</div>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-sm">{entry.date}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {e.scheduledStart ? (
+                        <div>
+                          <div>{fmtTimeOnly(e.scheduledStart)}</div>
+                          <div>{fmtTimeOnly(e.scheduledEnd)}</div>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground/40">—</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-sm">
                       {entry.clockIn ? formatTimestamp(entry.clockIn) : "-"}
                     </TableCell>
@@ -397,6 +505,9 @@ function TimesheetTab() {
                     <TableCell className="text-sm">{entry.breakMinutes || 0}m</TableCell>
                     <TableCell className="text-sm font-medium">
                       {Number(entry.totalHours || 0).toFixed(1)}
+                      {e.scheduledHours && (
+                        <div className="text-xs text-muted-foreground">/{Number(e.scheduledHours).toFixed(1)} sched</div>
+                      )}
                     </TableCell>
                     <TableCell className="text-sm">
                       {Number(entry.overtimeHours || 0) > 0 ? (
@@ -404,6 +515,9 @@ function TimesheetTab() {
                       ) : (
                         "-"
                       )}
+                    </TableCell>
+                    <TableCell>
+                      <ExceptionBadges entry={entry} />
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={entry.status || "pending"} />
@@ -452,6 +566,65 @@ function TimesheetTab() {
           </Table>
         </div>
       )}
+
+      {/* Convert Punches Dialog */}
+      <Dialog open={convertOpen} onOpenChange={setConvertOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Convert Punches to Timesheet</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Matches clock punch pairs for the selected period, compares against the schedule, and creates
+              timesheet entries with exception flags.
+            </p>
+            <div className="space-y-2">
+              <Label>Company</Label>
+              <Select value={convertCompany} onValueChange={setConvertCompany}>
+                <SelectTrigger data-testid="select-convert-company">
+                  <SelectValue placeholder="Select company..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {(companies || []).map(c => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Start Date</Label>
+                <Input type="date" value={convertStart}
+                  onChange={e => setConvertStart(e.target.value)}
+                  data-testid="input-convert-start" />
+              </div>
+              <div className="space-y-2">
+                <Label>End Date</Label>
+                <Input type="date" value={convertEnd}
+                  onChange={e => setConvertEnd(e.target.value)}
+                  data-testid="input-convert-end" />
+              </div>
+            </div>
+            <div className="bg-muted/50 rounded-md p-3 text-xs text-muted-foreground space-y-1">
+              <p>• Existing punch-converted entries will be skipped</p>
+              <p>• Workers with no schedule are flagged as "Unscheduled"</p>
+              <p>• Late arrivals and early departures are calculated automatically</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="ghost" data-testid="button-cancel-convert">Cancel</Button>
+            </DialogClose>
+            <Button
+              onClick={() => convertMutation.mutate()}
+              disabled={!convertCompany || !convertStart || !convertEnd || convertMutation.isPending}
+              data-testid="button-confirm-convert"
+            >
+              {convertMutation.isPending ? "Converting..." : "Convert"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!editEntry} onOpenChange={(open) => !open && setEditEntry(null)}>
         <DialogContent>
@@ -1099,6 +1272,123 @@ function AccrualsTab() {
   );
 }
 
+function PendingApprovalsTab() {
+  const { toast } = useToast();
+
+  const { data: pendingPunches = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/time-punches/pending"],
+    queryFn: async () => {
+      const res = await fetch("/api/time-punches/pending", { credentials: "include" });
+      return res.json();
+    },
+  });
+
+  const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+
+  const workerMap = new Map(workers.map(w => [w.id, w]));
+  const companyMap = new Map(companies.map(c => [c.id, c]));
+
+  const approvePunch = useMutation({
+    mutationFn: async ({ id, action }: { id: string; action: "approve" | "reject" }) => {
+      await apiRequest("PATCH", `/api/time-punches/${id}/approve`, { action });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/time-punches/pending"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/time-punches"] });
+      toast({ title: "Punch updated" });
+    },
+  });
+
+  if (isLoading) return <LoadingSkeleton rows={3} />;
+
+  return (
+    <div className="space-y-4">
+      {pendingPunches.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16">
+          <Check className="h-12 w-12 text-emerald-500/40 mb-3" />
+          <p className="text-sm font-medium text-muted-foreground">No pending punches</p>
+          <p className="text-xs text-muted-foreground/70 mt-1">
+            All clock-ins matched a schedule.
+          </p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <div className="px-4 pt-4 pb-2">
+            <p className="text-sm text-muted-foreground">
+              {pendingPunches.length} punch{pendingPunches.length !== 1 ? "es" : ""} awaiting approval.
+              These clock-ins had no matching schedule and require manager review before payroll processing.
+            </p>
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Worker</TableHead>
+                <TableHead>Company</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Time</TableHead>
+                <TableHead>Reason</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {pendingPunches.map((punch: any) => {
+                const worker = workerMap.get(punch.workerId);
+                const company = companyMap.get(punch.companyId);
+                return (
+                  <TableRow key={punch.id} data-testid={`row-pending-punch-${punch.id}`}
+                    className="bg-amber-50/50 dark:bg-amber-950/10">
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
+                        <div className="h-7 w-7 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center text-xs font-medium text-amber-700 dark:text-amber-400">
+                          {worker ? `${worker.firstName[0]}${worker.lastName[0]}` : "??"}
+                        </div>
+                        <span className="text-sm">
+                          {worker ? `${worker.firstName} ${worker.lastName}` : "Unknown"}
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-sm">{company?.name || "-"}</TableCell>
+                    <TableCell>
+                      <PunchTypeBadge type={punch.punchType} />
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {formatTimestamp(punch.punchTime)}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      <Badge variant="outline" className="gap-1 text-amber-700 border-amber-300">
+                        <AlertTriangle className="h-3 w-3" /> No matching schedule
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Button size="sm" variant="outline"
+                          className="h-7 text-xs border-emerald-500 text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                          onClick={() => approvePunch.mutate({ id: punch.id, action: "approve" })}
+                          disabled={approvePunch.isPending}
+                          data-testid={`button-approve-punch-${punch.id}`}>
+                          <Check className="h-3 w-3 mr-1" /> Approve
+                        </Button>
+                        <Button size="sm" variant="outline"
+                          className="h-7 text-xs border-destructive text-destructive hover:bg-destructive/10"
+                          onClick={() => approvePunch.mutate({ id: punch.id, action: "reject" })}
+                          disabled={approvePunch.isPending}
+                          data-testid={`button-reject-punch-${punch.id}`}>
+                          <X className="h-3 w-3 mr-1" /> Reject
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AttendancePage() {
   const currentTab = useTabParam("timesheet");
 
@@ -1147,6 +1437,14 @@ export default function AttendancePage() {
               </span>
             </TabsTrigger>
           </Link>
+          <Link href="/attendance?tab=pending-approvals">
+            <TabsTrigger value="pending-approvals" data-testid="tab-pending-approvals" asChild>
+              <span className="flex items-center gap-1.5">
+                <AlertTriangle className="h-4 w-4" />
+                Pending Approvals
+              </span>
+            </TabsTrigger>
+          </Link>
         </TabsList>
 
         <TabsContent value="timesheet">
@@ -1189,6 +1487,20 @@ export default function AttendancePage() {
             </CardHeader>
             <CardContent>
               <AccrualsTab />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="pending-approvals">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-amber-500" />
+                Pending Punch Approvals
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <PendingApprovalsTab />
             </CardContent>
           </Card>
         </TabsContent>
