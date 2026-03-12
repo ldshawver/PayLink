@@ -349,6 +349,12 @@ function EmployeeTab() {
               </Select>
             </div>
           </div>
+          <div className="space-y-2">
+            <Label>Job Title <span className="text-xs text-muted-foreground font-normal">(displayed on schedule)</span></Label>
+            <Input data-testid="input-jobTitle" value={form.jobTitle}
+              onChange={e => setForm(f => ({ ...f, jobTitle: e.target.value }))}
+              placeholder="e.g. Handyman, Senior Developer" />
+          </div>
         </div>
 
         <div className="space-y-4">
