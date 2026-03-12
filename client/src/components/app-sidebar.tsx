@@ -50,6 +50,7 @@ import {
   PieChart,
   FolderOpen,
   Banknote,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Sidebar,
@@ -107,6 +108,7 @@ const navSections: NavSection[] = [
       { title: "Punches", url: "/attendance?tab=punches", icon: Clock },
       { title: "Accrual Balances", url: "/attendance?tab=accrual-balances", icon: CalendarCheck },
       { title: "Accruals", url: "/attendance?tab=accruals", icon: CalendarClock, roles: ["admin", "manager"] },
+      { title: "Pending Approvals", url: "/attendance?tab=pending-approvals", icon: AlertTriangle, roles: ["admin", "manager"] },
     ],
   },
   {

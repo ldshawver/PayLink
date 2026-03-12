@@ -136,6 +136,9 @@ export const timePunches = pgTable("time_punches", {
   punchType: punchTypeEnum("punch_type").notNull(),
   punchTime: timestamp("punch_time").notNull().defaultNow(),
   note: text("note"),
+  approvalStatus: text("approval_status").default("approved"),
+  approvedBy: varchar("approved_by"),
+  scheduleId: varchar("schedule_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -153,6 +156,14 @@ export const timeEntries = pgTable("time_entries", {
   wageGroupId: varchar("wage_group_id"),
   status: timesheetStatusEnum("status").default("pending"),
   note: text("note"),
+  scheduleId: varchar("schedule_id"),
+  scheduledStart: timestamp("scheduled_start"),
+  scheduledEnd: timestamp("scheduled_end"),
+  scheduledHours: numeric("scheduled_hours"),
+  lateMinutes: integer("late_minutes").default(0),
+  earlyDepartureMinutes: integer("early_departure_minutes").default(0),
+  isUnscheduled: boolean("is_unscheduled").default(false),
+  source: text("source").default("manual"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
