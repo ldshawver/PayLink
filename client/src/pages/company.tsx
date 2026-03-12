@@ -3975,7 +3975,7 @@ function QuickStartTab() {
     { label: "Set Up Departments", done: (departments?.length || 0) > 0, link: "/company?tab=departments", icon: FolderKanban },
     { label: "Configure Jobs", done: (jobs?.length || 0) > 0, link: "/company?tab=jobs", icon: Briefcase },
     { label: "Add Employees", done: (workers?.length || 0) > 0, link: "/employees", icon: Users },
-    { label: "Set Pay Policies", done: (policyGroups?.length || 0) > 0, link: "/policies", icon: Shield },
+    { label: "Set Pay Policies", done: (policyGroups?.length || 0) > 0, link: "/policy", icon: Shield },
     { label: "Configure Pay Periods", done: (payPeriods?.length || 0) > 0, link: "/payroll", icon: DollarSign },
     { label: "Configure Permission Groups", done: (rolesData?.length || 0) >= 5, link: "/company?tab=permissions", icon: Lock },
   ];
