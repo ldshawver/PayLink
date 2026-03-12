@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte, isNull, or } from "drizzle-orm";
 import { db } from "./db";
 import {
   companies, workers, timePunches, timeEntries, schedules, payrollRuns, payrollItems, users,
@@ -1104,7 +1104,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getRegularTimePolicies(companyId?: string): Promise<RegularTimePolicy[]> {
-    if (companyId) return db.select().from(regularTimePolicies).where(eq(regularTimePolicies.companyId, companyId)).orderBy(regularTimePolicies.name);
+    if (companyId) return db.select().from(regularTimePolicies).where(or(eq(regularTimePolicies.companyId, companyId), isNull(regularTimePolicies.companyId))).orderBy(regularTimePolicies.name);
     return db.select().from(regularTimePolicies).orderBy(regularTimePolicies.name);
   }
   async createRegularTimePolicy(data: InsertRegularTimePolicy): Promise<RegularTimePolicy> {
@@ -1120,7 +1120,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getOvertimePolicies(companyId?: string): Promise<OvertimePolicy[]> {
-    if (companyId) return db.select().from(overtimePolicies).where(eq(overtimePolicies.companyId, companyId)).orderBy(overtimePolicies.name);
+    if (companyId) return db.select().from(overtimePolicies).where(or(eq(overtimePolicies.companyId, companyId), isNull(overtimePolicies.companyId))).orderBy(overtimePolicies.name);
     return db.select().from(overtimePolicies).orderBy(overtimePolicies.name);
   }
   async createOvertimePolicy(data: InsertOvertimePolicy): Promise<OvertimePolicy> {
@@ -1136,7 +1136,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getPremiumPolicies(companyId?: string): Promise<PremiumPolicy[]> {
-    if (companyId) return db.select().from(premiumPolicies).where(eq(premiumPolicies.companyId, companyId)).orderBy(premiumPolicies.name);
+    if (companyId) return db.select().from(premiumPolicies).where(or(eq(premiumPolicies.companyId, companyId), isNull(premiumPolicies.companyId))).orderBy(premiumPolicies.name);
     return db.select().from(premiumPolicies).orderBy(premiumPolicies.name);
   }
   async createPremiumPolicy(data: InsertPremiumPolicy): Promise<PremiumPolicy> {
@@ -1152,7 +1152,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getMealPolicies(companyId?: string): Promise<MealPolicy[]> {
-    if (companyId) return db.select().from(mealPolicies).where(eq(mealPolicies.companyId, companyId)).orderBy(mealPolicies.name);
+    if (companyId) return db.select().from(mealPolicies).where(or(eq(mealPolicies.companyId, companyId), isNull(mealPolicies.companyId))).orderBy(mealPolicies.name);
     return db.select().from(mealPolicies).orderBy(mealPolicies.name);
   }
   async createMealPolicy(data: InsertMealPolicy): Promise<MealPolicy> {
@@ -1168,7 +1168,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getBreakPolicies(companyId?: string): Promise<BreakPolicy[]> {
-    if (companyId) return db.select().from(breakPolicies).where(eq(breakPolicies.companyId, companyId)).orderBy(breakPolicies.name);
+    if (companyId) return db.select().from(breakPolicies).where(or(eq(breakPolicies.companyId, companyId), isNull(breakPolicies.companyId))).orderBy(breakPolicies.name);
     return db.select().from(breakPolicies).orderBy(breakPolicies.name);
   }
   async createBreakPolicy(data: InsertBreakPolicy): Promise<BreakPolicy> {
@@ -1184,7 +1184,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getSchedulePolicies(companyId?: string): Promise<SchedulePolicy[]> {
-    if (companyId) return db.select().from(schedulePolicies).where(eq(schedulePolicies.companyId, companyId)).orderBy(schedulePolicies.name);
+    if (companyId) return db.select().from(schedulePolicies).where(or(eq(schedulePolicies.companyId, companyId), isNull(schedulePolicies.companyId))).orderBy(schedulePolicies.name);
     return db.select().from(schedulePolicies).orderBy(schedulePolicies.name);
   }
   async createSchedulePolicy(data: InsertSchedulePolicy): Promise<SchedulePolicy> {
@@ -1200,7 +1200,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getExceptionPolicies(companyId?: string): Promise<ExceptionPolicy[]> {
-    if (companyId) return db.select().from(exceptionPolicies).where(eq(exceptionPolicies.companyId, companyId)).orderBy(exceptionPolicies.name);
+    if (companyId) return db.select().from(exceptionPolicies).where(or(eq(exceptionPolicies.companyId, companyId), isNull(exceptionPolicies.companyId))).orderBy(exceptionPolicies.name);
     return db.select().from(exceptionPolicies).orderBy(exceptionPolicies.name);
   }
   async createExceptionPolicy(data: InsertExceptionPolicy): Promise<ExceptionPolicy> {
@@ -1216,7 +1216,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAccrualPolicies(companyId?: string): Promise<AccrualPolicy[]> {
-    if (companyId) return db.select().from(accrualPolicies).where(eq(accrualPolicies.companyId, companyId)).orderBy(accrualPolicies.name);
+    if (companyId) return db.select().from(accrualPolicies).where(or(eq(accrualPolicies.companyId, companyId), isNull(accrualPolicies.companyId))).orderBy(accrualPolicies.name);
     return db.select().from(accrualPolicies).orderBy(accrualPolicies.name);
   }
   async createAccrualPolicy(data: InsertAccrualPolicy): Promise<AccrualPolicy> {
@@ -1243,7 +1243,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAbsencePolicies(companyId?: string): Promise<AbsencePolicy[]> {
-    if (companyId) return db.select().from(absencePolicies).where(eq(absencePolicies.companyId, companyId)).orderBy(absencePolicies.name);
+    if (companyId) return db.select().from(absencePolicies).where(or(eq(absencePolicies.companyId, companyId), isNull(absencePolicies.companyId))).orderBy(absencePolicies.name);
     return db.select().from(absencePolicies).orderBy(absencePolicies.name);
   }
   async createAbsencePolicy(data: InsertAbsencePolicy): Promise<AbsencePolicy> {
@@ -1259,7 +1259,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getHolidayPolicies(companyId?: string): Promise<HolidayPolicy[]> {
-    if (companyId) return db.select().from(holidayPolicies).where(eq(holidayPolicies.companyId, companyId)).orderBy(holidayPolicies.name);
+    if (companyId) return db.select().from(holidayPolicies).where(or(eq(holidayPolicies.companyId, companyId), isNull(holidayPolicies.companyId))).orderBy(holidayPolicies.name);
     return db.select().from(holidayPolicies).orderBy(holidayPolicies.name);
   }
   async createHolidayPolicy(data: InsertHolidayPolicy): Promise<HolidayPolicy> {
@@ -1275,7 +1275,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getRoundingPolicies(companyId?: string): Promise<RoundingPolicy[]> {
-    if (companyId) return db.select().from(roundingPolicies).where(eq(roundingPolicies.companyId, companyId)).orderBy(roundingPolicies.name);
+    if (companyId) return db.select().from(roundingPolicies).where(or(eq(roundingPolicies.companyId, companyId), isNull(roundingPolicies.companyId))).orderBy(roundingPolicies.name);
     return db.select().from(roundingPolicies).orderBy(roundingPolicies.name);
   }
   async createRoundingPolicy(data: InsertRoundingPolicy): Promise<RoundingPolicy> {
@@ -1338,7 +1338,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getPositions(companyId?: string): Promise<Position[]> {
-    if (companyId) return db.select().from(positions).where(eq(positions.companyId, companyId)).orderBy(positions.title);
+    if (companyId) return db.select().from(positions).where(or(eq(positions.companyId, companyId), isNull(positions.companyId))).orderBy(positions.title);
     return db.select().from(positions).orderBy(positions.title);
   }
   async createPosition(data: InsertPosition): Promise<Position> {
