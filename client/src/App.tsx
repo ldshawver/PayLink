@@ -42,7 +42,6 @@ function AuthenticatedRouter() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
-      <Route path="/print-check/:runId">{() => <RoleGuard roles={["admin", "manager"]}><PrintCheckPage /></RoleGuard>}</Route>
       <Route path="/attendance" component={AttendancePage} />
       <Route path="/schedule" component={SchedulePage} />
       <Route path="/employee">{() => <RoleGuard roles={["admin", "manager"]}><EmployeePage /></RoleGuard>}</Route>
@@ -90,6 +89,12 @@ function AppContent() {
 
   if (location === "/time-clock") {
     return <TimeClock />;
+  }
+
+  if (location.startsWith("/print-check/")) {
+    if (isLoading) return null;
+    if (!user) return <LoginPage />;
+    return <RoleGuard roles={["admin", "manager"]}><PrintCheckPage /></RoleGuard>;
   }
 
   if (isLoading) {
