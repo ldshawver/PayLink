@@ -185,7 +185,16 @@ export async function registerRoutes(
         });
       }
 
-      const workerTotals: Record<string, { workerId: string; grossPay: number; regularPay: number; overtimePay: number; doubleTimePay: number; deductions: number; netPay: number; regularHours: number; overtimeHours: number; doubleTimeHours: number }> = {};
+      const allWorkers = await storage.getWorkers(companyId && companyId !== "all" ? companyId as string : undefined);
+      const workerMap: Record<string, typeof allWorkers[0]> = {};
+      for (const w of allWorkers) workerMap[w.id] = w;
+
+      const companyDeductionsList = await storage.getTaxesDeductions(companyId && companyId !== "all" ? companyId as string : undefined);
+
+      const workerTotals: Record<string, {
+        workerId: string; grossPay: number; regularPay: number; overtimePay: number; doubleTimePay: number;
+        deductions: number; netPay: number; regularHours: number; overtimeHours: number; doubleTimeHours: number;
+      }> = {};
 
       for (const run of filteredRuns) {
         const items = await storage.getPayrollItems(run.id);
@@ -194,28 +203,90 @@ export async function registerRoutes(
             workerTotals[item.workerId] = { workerId: item.workerId, grossPay: 0, regularPay: 0, overtimePay: 0, doubleTimePay: 0, deductions: 0, netPay: 0, regularHours: 0, overtimeHours: 0, doubleTimeHours: 0 };
           }
           const t = workerTotals[item.workerId];
-          t.grossPay += parseFloat(item.grossPay || "0");
+          const gross = parseFloat(item.grossPay || "0");
+          const ded = parseFloat(item.deductions || "0");
+          t.grossPay += gross;
           t.regularPay += parseFloat(item.regularPay || "0");
           t.overtimePay += parseFloat(item.overtimePay || "0");
           t.doubleTimePay += parseFloat((item as any).doubleTimePay || "0");
-          t.deductions += parseFloat(item.deductions || "0");
-          t.netPay += parseFloat(item.netPay || "0");
+          t.deductions += ded;
+          t.netPay += Math.max(gross - ded, 0);
           t.regularHours += parseFloat(item.regularHours || "0");
           t.overtimeHours += parseFloat(item.overtimeHours || "0");
           t.doubleTimeHours += parseFloat((item as any).doubleTimeHours || "0");
         }
       }
 
-      const totals = Object.values(workerTotals);
+      const findDed = (nameIncludes: string, employerPaid: boolean, deds: typeof companyDeductionsList) =>
+        deds.find(d => d.name.toLowerCase().includes(nameIncludes) && d.isActive && !!d.isEmployerPaid === employerPaid && !d.isReferenceOnly);
+
+      const enhancedTotals = Object.values(workerTotals).map(wt => {
+        const worker = workerMap[wt.workerId];
+        const isContractor = worker?.workerType === "contractor";
+        const deds = companyDeductionsList.filter(d => {
+          const appliesTo = d.appliesTo || "all";
+          if (appliesTo === "employee" && isContractor) return false;
+          if (appliesTo === "contractor" && !isContractor) return false;
+          return true;
+        });
+
+        const fedDed = findDed("federal income", false, deds);
+        const stateDed = findDed("state income", false, deds);
+        const sdiDed = findDed("sdi", false, deds);
+        const suiDed = findDed("sui", true, deds) || findDed("state unemployment", true, deds);
+        const ettDed = findDed("ett", true, deds) || findDed("employment training", true, deds);
+
+        const gross = wt.grossPay;
+        const fedRate = fedDed ? Number(fedDed.rate || 0) / 100 : 0;
+        const stateRate = stateDed ? Number(stateDed.rate || 0) / 100 : 0;
+        const sdiRate = sdiDed ? Number(sdiDed.rate || 0) / 100 : 0.011;
+        const suiRate = suiDed ? Number(suiDed.rate || 0) / 100 : 0.034;
+        const ettRate = ettDed ? Number(ettDed.rate || 0) / 100 : 0.001;
+
+        const ssTaxableWages = Math.min(gross, 168600);
+        const futaTaxableWages = Math.min(gross, 7000);
+        const suiTaxableWages = Math.min(gross, 7000);
+
+        return {
+          ...wt,
+          fedWithholding: gross * fedRate,
+          stateWithholding: gross * stateRate,
+          sdiWithheld: gross * sdiRate,
+          ssTaxEmployee: !isContractor ? ssTaxableWages * 0.062 : 0,
+          ssTaxEmployer: !isContractor ? ssTaxableWages * 0.062 : 0,
+          medicareTaxEmployee: !isContractor ? gross * 0.0145 : 0,
+          medicareTaxEmployer: !isContractor ? gross * 0.0145 : 0,
+          futaTaxableWages: !isContractor ? futaTaxableWages : 0,
+          futaTax: !isContractor ? futaTaxableWages * 0.006 : 0,
+          suiTaxableWages: !isContractor ? suiTaxableWages : 0,
+          suiTax: !isContractor ? suiTaxableWages * suiRate : 0,
+          ettTax: !isContractor ? suiTaxableWages * ettRate : 0,
+          ssTaxableWages,
+        };
+      });
+
       const grandTotal = {
-        grossPay: totals.reduce((s, t) => s + t.grossPay, 0),
-        deductions: totals.reduce((s, t) => s + t.deductions, 0),
-        netPay: totals.reduce((s, t) => s + t.netPay, 0),
-        regularHours: totals.reduce((s, t) => s + t.regularHours, 0),
-        overtimeHours: totals.reduce((s, t) => s + t.overtimeHours, 0),
+        grossPay: enhancedTotals.reduce((s, t) => s + t.grossPay, 0),
+        deductions: enhancedTotals.reduce((s, t) => s + t.deductions, 0),
+        netPay: enhancedTotals.reduce((s, t) => s + t.netPay, 0),
+        regularHours: enhancedTotals.reduce((s, t) => s + t.regularHours, 0),
+        overtimeHours: enhancedTotals.reduce((s, t) => s + t.overtimeHours, 0),
+        fedWithholding: enhancedTotals.reduce((s, t) => s + t.fedWithholding, 0),
+        stateWithholding: enhancedTotals.reduce((s, t) => s + t.stateWithholding, 0),
+        sdiWithheld: enhancedTotals.reduce((s, t) => s + t.sdiWithheld, 0),
+        ssTaxEmployee: enhancedTotals.reduce((s, t) => s + t.ssTaxEmployee, 0),
+        ssTaxEmployer: enhancedTotals.reduce((s, t) => s + t.ssTaxEmployer, 0),
+        medicareTaxEmployee: enhancedTotals.reduce((s, t) => s + t.medicareTaxEmployee, 0),
+        medicareTaxEmployer: enhancedTotals.reduce((s, t) => s + t.medicareTaxEmployer, 0),
+        futaTaxableWages: enhancedTotals.reduce((s, t) => s + t.futaTaxableWages, 0),
+        futaTax: enhancedTotals.reduce((s, t) => s + t.futaTax, 0),
+        suiTaxableWages: enhancedTotals.reduce((s, t) => s + t.suiTaxableWages, 0),
+        suiTax: enhancedTotals.reduce((s, t) => s + t.suiTax, 0),
+        ettTax: enhancedTotals.reduce((s, t) => s + t.ettTax, 0),
+        ssTaxableWages: enhancedTotals.reduce((s, t) => s + t.ssTaxableWages, 0),
       };
 
-      res.json({ workerTotals: totals, grandTotal, runCount: filteredRuns.length });
+      res.json({ workerTotals: enhancedTotals, grandTotal, runCount: filteredRuns.length });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to get payroll summary" });
