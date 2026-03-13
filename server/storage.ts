@@ -75,6 +75,7 @@ import {
   workerDocuments, savedReports,
   kpiGroups, qualificationGroups, workerLanguages, workerMemberships,
   stations, secondaryWageGroups, currencies, employeeWageGroups,
+  receipts, shiftOffers,
   type WorkerDocument, type InsertWorkerDocument,
   type SavedReport, type InsertSavedReport,
   type Station, type InsertStation,
@@ -85,6 +86,8 @@ import {
   type QualificationGroup, type InsertQualificationGroup,
   type WorkerLanguage, type InsertWorkerLanguage,
   type WorkerMembership, type InsertWorkerMembership,
+  type Receipt, type InsertReceipt,
+  type ShiftOffer, type InsertShiftOffer,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -409,6 +412,20 @@ export interface IStorage {
   createStation(data: InsertStation): Promise<Station>;
   updateStation(id: string, data: Partial<Station>): Promise<Station | undefined>;
   deleteStation(id: string): Promise<void>;
+
+  getReceipts(companyId?: string, costCenterId?: string, jobId?: string): Promise<Receipt[]>;
+  getReceipt(id: string): Promise<Receipt | undefined>;
+  createReceipt(data: InsertReceipt): Promise<Receipt>;
+  updateReceipt(id: string, data: Partial<Receipt>): Promise<Receipt | undefined>;
+  deleteReceipt(id: string): Promise<void>;
+
+  getShiftOffers(companyId?: string): Promise<ShiftOffer[]>;
+  getShiftOffer(id: string): Promise<ShiftOffer | undefined>;
+  createShiftOffer(data: InsertShiftOffer): Promise<ShiftOffer>;
+  updateShiftOffer(id: string, data: Partial<ShiftOffer>): Promise<ShiftOffer | undefined>;
+  deleteShiftOffer(id: string): Promise<void>;
+
+  updatePayrollItem(id: string, data: Partial<PayrollItem>): Promise<PayrollItem | undefined>;
 
   getSecondaryWageGroups(companyId?: string): Promise<SecondaryWageGroup[]>;
   createSecondaryWageGroup(data: InsertSecondaryWageGroup): Promise<SecondaryWageGroup>;
@@ -1714,7 +1731,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getStations(companyId?: string): Promise<Station[]> {
-    if (companyId) return db.select().from(stations).where(eq(stations.companyId, companyId)).orderBy(stations.stationName);
+    if (companyId) {
+      return db.select().from(stations).where(
+        or(eq(stations.companyId, companyId), isNull(stations.companyId))
+      ).orderBy(stations.stationName);
+    }
     return db.select().from(stations).orderBy(stations.stationName);
   }
   async createStation(data: InsertStation): Promise<Station> {
@@ -1727,6 +1748,54 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteStation(id: string): Promise<void> {
     await db.delete(stations).where(eq(stations.id, id));
+  }
+
+  async getReceipts(companyId?: string, costCenterId?: string, jobId?: string): Promise<Receipt[]> {
+    const conditions: any[] = [];
+    if (companyId) conditions.push(eq(receipts.companyId, companyId));
+    if (costCenterId) conditions.push(eq(receipts.costCenterId, costCenterId));
+    if (jobId) conditions.push(eq(receipts.jobId, jobId));
+    if (conditions.length > 0) return db.select().from(receipts).where(and(...conditions)).orderBy(desc(receipts.createdAt));
+    return db.select().from(receipts).orderBy(desc(receipts.createdAt));
+  }
+  async getReceipt(id: string): Promise<Receipt | undefined> {
+    const [r] = await db.select().from(receipts).where(eq(receipts.id, id));
+    return r;
+  }
+  async createReceipt(data: InsertReceipt): Promise<Receipt> {
+    const [r] = await db.insert(receipts).values(data).returning();
+    return r;
+  }
+  async updateReceipt(id: string, data: Partial<Receipt>): Promise<Receipt | undefined> {
+    const [r] = await db.update(receipts).set(data).where(eq(receipts.id, id)).returning();
+    return r;
+  }
+  async deleteReceipt(id: string): Promise<void> {
+    await db.delete(receipts).where(eq(receipts.id, id));
+  }
+
+  async getShiftOffers(companyId?: string): Promise<ShiftOffer[]> {
+    return db.select().from(shiftOffers).orderBy(desc(shiftOffers.offeredAt));
+  }
+  async getShiftOffer(id: string): Promise<ShiftOffer | undefined> {
+    const [r] = await db.select().from(shiftOffers).where(eq(shiftOffers.id, id));
+    return r;
+  }
+  async createShiftOffer(data: InsertShiftOffer): Promise<ShiftOffer> {
+    const [r] = await db.insert(shiftOffers).values(data).returning();
+    return r;
+  }
+  async updateShiftOffer(id: string, data: Partial<ShiftOffer>): Promise<ShiftOffer | undefined> {
+    const [r] = await db.update(shiftOffers).set({ ...data, updatedAt: new Date() }).where(eq(shiftOffers.id, id)).returning();
+    return r;
+  }
+  async deleteShiftOffer(id: string): Promise<void> {
+    await db.delete(shiftOffers).where(eq(shiftOffers.id, id));
+  }
+
+  async updatePayrollItem(id: string, data: Partial<PayrollItem>): Promise<PayrollItem | undefined> {
+    const [r] = await db.update(payrollItems).set(data).where(eq(payrollItems.id, id)).returning();
+    return r;
   }
 
   async getSecondaryWageGroups(companyId?: string): Promise<SecondaryWageGroup[]> {

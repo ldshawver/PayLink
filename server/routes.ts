@@ -2528,6 +2528,112 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/receipts", requireAuth, async (req, res) => {
+    try {
+      const { companyId, costCenterId, jobId } = req.query as Record<string, string>;
+      const items = await storage.getReceipts(companyId, costCenterId, jobId);
+      res.json(items);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch receipts" });
+    }
+  });
+
+  app.post("/api/receipts", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.createReceipt(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to create receipt" });
+    }
+  });
+
+  app.patch("/api/receipts/:id", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.updateReceipt(req.params.id as string, req.body);
+      if (!item) return res.status(404).json({ message: "Receipt not found" });
+      res.json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update receipt" });
+    }
+  });
+
+  app.delete("/api/receipts/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteReceipt(req.params.id as string);
+      res.json({ message: "Receipt deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete receipt" });
+    }
+  });
+
+  app.post("/api/receipts/upload", requireAuth, upload.single("file"), async (req: any, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const url = `/uploads/${req.file.filename}`;
+      res.json({ url });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Upload failed" });
+    }
+  });
+
+  app.get("/api/shift-offers", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.query as Record<string, string>;
+      const items = await storage.getShiftOffers(companyId);
+      res.json(items);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch shift offers" });
+    }
+  });
+
+  app.post("/api/shift-offers", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.createShiftOffer(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to create shift offer" });
+    }
+  });
+
+  app.patch("/api/shift-offers/:id", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.updateShiftOffer(req.params.id as string, req.body);
+      if (!item) return res.status(404).json({ message: "Shift offer not found" });
+      res.json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update shift offer" });
+    }
+  });
+
+  app.delete("/api/shift-offers/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteShiftOffer(req.params.id as string);
+      res.json({ message: "Shift offer deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete shift offer" });
+    }
+  });
+
+  app.patch("/api/payroll-items/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const item = await storage.updatePayrollItem(req.params.id as string, req.body);
+      if (!item) return res.status(404).json({ message: "Payroll item not found" });
+      res.json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update payroll item" });
+    }
+  });
+
   app.get("/api/secondary-wage-groups", async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;

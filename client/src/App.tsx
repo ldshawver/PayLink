@@ -19,6 +19,7 @@ import PayrollPage from "@/pages/payroll";
 import PolicyPage from "@/pages/policy";
 import HRPage from "@/pages/hr";
 import ReportsPage from "@/pages/reports";
+import ExpensesPage from "@/pages/expenses";
 import TimeClock from "@/pages/time-clock";
 import PrintCheckPage from "@/pages/print-check";
 import LoginPage from "@/pages/login";
@@ -50,6 +51,7 @@ function AuthenticatedRouter() {
       <Route path="/policy">{() => <RoleGuard roles={["admin"]}><PolicyPage /></RoleGuard>}</Route>
       <Route path="/hr">{() => <RoleGuard roles={["admin", "manager"]}><HRPage /></RoleGuard>}</Route>
       <Route path="/reports">{() => <RoleGuard roles={["admin", "manager"]}><ReportsPage /></RoleGuard>}</Route>
+      <Route path="/expenses" component={ExpensesPage} />
       <Route component={NotFound} />
     </Switch>
   );

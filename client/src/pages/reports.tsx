@@ -6,7 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import type {
   Worker, TimeEntry, PayrollRun, PayrollItem, Schedule, TimePunch,
   AccrualBalance, AccrualAccount, Qualification, Review,
-  TaxDeduction, PayStubTransaction, Company, SavedReport, SecondaryWageGroup
+  TaxDeduction, PayStubTransaction, Company, SavedReport, SecondaryWageGroup, Receipt as ExpenseReceipt
 } from "@shared/schema";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
@@ -2344,6 +2344,163 @@ function Form1096Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
   );
 }
 
+function ExpenseReportSection() {
+  const { data: receipts = [], isLoading } = useQuery<ExpenseReceipt[]>({ queryKey: ["/api/receipts"] });
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: costCenters = [] } = useQuery<any[]>({ queryKey: ["/api/cost-centers"] });
+  const { data: jobs = [] } = useQuery<any[]>({ queryKey: ["/api/jobs"] });
+  const [groupBy, setGroupBy] = useState<"cost-center" | "job" | "category" | "company">("cost-center");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterCompany, setFilterCompany] = useState("all");
+
+  const filtered = receipts.filter(r => {
+    if (filterStatus !== "all" && r.status !== filterStatus) return false;
+    if (filterCompany !== "all" && r.companyId !== filterCompany) return false;
+    return true;
+  });
+
+  const groups = (() => {
+    const map: Record<string, { label: string; receipts: ExpenseReceipt[]; total: number }> = {};
+    filtered.forEach(r => {
+      let key = "none";
+      let label = "Unassigned";
+      if (groupBy === "cost-center") {
+        key = r.costCenterId || "none";
+        label = key !== "none" ? ((costCenters as any[]).find(c => c.id === key)?.name || key) : "No Cost Center";
+      } else if (groupBy === "job") {
+        key = r.jobId || "none";
+        label = key !== "none" ? ((jobs as any[]).find(j => j.id === key)?.title || key) : "No Job";
+      } else if (groupBy === "category") {
+        key = r.category || "general";
+        label = key.charAt(0).toUpperCase() + key.slice(1).replace(/-/g, " ");
+      } else if (groupBy === "company") {
+        key = r.companyId || "none";
+        label = key !== "none" ? (companies.find(c => c.id === key)?.name || key) : "No Company";
+      }
+      if (!map[key]) map[key] = { label, receipts: [], total: 0 };
+      map[key].receipts.push(r);
+      map[key].total += parseFloat(r.amount?.toString() || "0");
+    });
+    return Object.values(map).sort((a, b) => b.total - a.total);
+  })();
+
+  function exportCSV() {
+    const rows = [["Date", "Vendor", "Description", "Category", "Cost Center", "Job", "Company", "Amount", "Status"]];
+    filtered.forEach(r => {
+      const cc = (costCenters as any[]).find(c => c.id === r.costCenterId)?.name || "";
+      const job = (jobs as any[]).find(j => j.id === r.jobId)?.title || "";
+      const co = companies.find(c => c.id === r.companyId)?.name || "";
+      rows.push([r.receiptDate, r.vendor || "", r.description || "", r.category || "", cc, job, co, r.amount?.toString() || "0", r.status || ""]);
+    });
+    const csv = rows.map(r => r.map(v => `"${v}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `expense-report-${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-3 items-center justify-between">
+        <div className="flex flex-wrap gap-3 items-center">
+          <Select value={groupBy} onValueChange={(v: any) => setGroupBy(v)}>
+            <SelectTrigger className="w-44" data-testid="select-group-by"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="cost-center">Group by Cost Center</SelectItem>
+              <SelectItem value="job">Group by Job</SelectItem>
+              <SelectItem value="category">Group by Category</SelectItem>
+              <SelectItem value="company">Group by Company</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={filterCompany} onValueChange={setFilterCompany}>
+            <SelectTrigger className="w-40" data-testid="select-expense-company"><SelectValue placeholder="Company" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={filterStatus} onValueChange={setFilterStatus}>
+            <SelectTrigger className="w-36" data-testid="select-expense-status"><SelectValue placeholder="Status" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Statuses</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="approved">Approved</SelectItem>
+              <SelectItem value="rejected">Rejected</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <Button variant="outline" onClick={exportCSV} data-testid="button-export-expenses">
+          <Download className="h-4 w-4 mr-2" />
+          Export CSV
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}</div>
+      ) : groups.length === 0 ? (
+        <Card>
+          <CardContent className="py-16 text-center text-muted-foreground">
+            <Receipt className="h-10 w-10 mx-auto mb-3 opacity-30" />
+            <p className="font-medium">No expense receipts found</p>
+            <p className="text-sm mt-1">Add receipts in Expenses & Receipts to see them here.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {groups.map(group => (
+            <Card key={group.label} data-testid={`expense-group-${group.label}`}>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base">{group.label}</CardTitle>
+                  <div className="text-right">
+                    <p className="font-bold text-lg">${group.total.toFixed(2)}</p>
+                    <p className="text-xs text-muted-foreground">{group.receipts.length} receipt{group.receipts.length !== 1 ? "s" : ""}</p>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Vendor</TableHead>
+                      <TableHead>Category</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {group.receipts.map(r => (
+                      <TableRow key={r.id}>
+                        <TableCell className="text-sm">{r.receiptDate}</TableCell>
+                        <TableCell className="text-sm font-medium">{r.vendor || "—"}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="capitalize text-xs">
+                            {(r.category || "general").replace(/-/g, " ")}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={r.status === "approved" ? "default" : r.status === "rejected" ? "destructive" : "secondary"}>
+                            {r.status || "pending"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right font-medium">${parseFloat(r.amount?.toString() || "0").toFixed(2)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ReportsPage() {
   const [tab, setTab] = useTabParam();
   const [whosInOpen, setWhosInOpen] = useState(false);
@@ -2384,6 +2541,7 @@ export default function ReportsPage() {
           <TabsTrigger value="payroll" data-testid="tab-payroll">Payroll Reports</TabsTrigger>
           <TabsTrigger value="tax" data-testid="tab-tax">Tax Reports</TabsTrigger>
           <TabsTrigger value="hr" data-testid="tab-hr">HR Reports</TabsTrigger>
+          <TabsTrigger value="expense" data-testid="tab-expense">Expense Reports</TabsTrigger>
         </TabsList>
 
         <TabsContent value="saved" className="mt-6">
@@ -2545,6 +2703,10 @@ export default function ReportsPage() {
               onGenerate={() => setReviewSummaryOpen(true)}
             />
           </div>
+        </TabsContent>
+
+        <TabsContent value="expense" className="mt-6">
+          <ExpenseReportSection />
         </TabsContent>
       </Tabs>
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Clock, LogIn, LogOut, Coffee, CoffeeIcon, ChevronDown } from "lucide-react";
+import { Clock, LogIn, LogOut, Coffee, CoffeeIcon, ChevronDown, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -17,7 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
-import type { Worker, TimeEntry, TimePunch } from "@shared/schema";
+import type { Worker, TimeEntry, TimePunch, Station } from "@shared/schema";
 
 function LiveTime() {
   const [time, setTime] = useState(new Date());
@@ -36,12 +36,15 @@ export function ClockInButton() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
+  const [selectedStationId, setSelectedStationId] = useState<string | null>(null);
 
   const workersQuery = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
   const entriesQuery = useQuery<TimeEntry[]>({ queryKey: ["/api/time-entries"] });
   const punchesQuery = useQuery<TimePunch[]>({ queryKey: ["/api/time-punches"] });
+  const stationsQuery = useQuery<Station[]>({ queryKey: ["/api/stations"] });
 
   const workers = workersQuery.data || [];
+  const stations = (stationsQuery.data || []).filter(s => s.isActive);
 
   const clockableWorkers = workers.filter(
     (w) => w.isActive && !(w.workerType === "contractor" && w.contractorType === "invoice")
@@ -71,6 +74,12 @@ export function ClockInButton() {
   const isOnBreak = todayPunches.length > 0 && todayPunches[0].punchType === "break_start";
   const isClockedIn = !!openEntry;
 
+  const availableStations = activeWorker
+    ? stations.filter(s => !s.companyId || s.companyId === activeWorker.companyId)
+    : stations;
+
+  const selectedStation = stations.find(s => s.id === selectedStationId);
+
   const punchMutation = useMutation({
     mutationFn: async (punchType: string) => {
       if (!activeWorker) throw new Error("Select a worker first");
@@ -78,6 +87,7 @@ export function ClockInButton() {
         workerId: activeWorker.id,
         companyId: activeWorker.companyId,
         punchType,
+        stationId: selectedStationId || undefined,
       });
     },
     onSuccess: (_, punchType) => {
@@ -158,6 +168,37 @@ export function ClockInButton() {
             </>
           )}
 
+          {availableStations.length > 0 && (
+            <>
+              <DropdownMenuLabel className="text-xs flex items-center gap-1">
+                <MapPin className="h-3 w-3" />
+                {selectedStation ? selectedStation.name : "Select Station (optional)"}
+              </DropdownMenuLabel>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger data-testid="button-select-station">
+                  <MapPin className="mr-2 h-4 w-4 text-muted-foreground" />
+                  {selectedStation ? selectedStation.name : "Choose Station..."}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="max-h-64 overflow-y-auto">
+                  <DropdownMenuItem onClick={() => setSelectedStationId(null)} data-testid="button-station-none">
+                    No Station
+                  </DropdownMenuItem>
+                  {availableStations.map((s) => (
+                    <DropdownMenuItem
+                      key={s.id}
+                      onClick={() => setSelectedStationId(s.id)}
+                      data-testid={`button-station-${s.id}`}
+                    >
+                      {s.name}
+                      <span className="ml-auto text-xs text-muted-foreground">{s.location || ""}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSeparator />
+            </>
+          )}
+
           {!activeWorker ? (
             <DropdownMenuItem disabled className="text-muted-foreground text-xs">
               Select a worker to clock in
@@ -169,7 +210,7 @@ export function ClockInButton() {
               data-testid="button-clock-in"
             >
               <LogIn className="mr-2 h-4 w-4 text-green-600" />
-              Clock In
+              Clock In{selectedStation ? ` @ ${selectedStation.name}` : ""}
             </DropdownMenuItem>
           ) : (
             <>

@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Schedule, Worker, Company, RecurringSchedule } from "@shared/schema";
+import type { Schedule, Worker, Company, RecurringSchedule, ShiftOffer } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -256,6 +256,70 @@ export default function SchedulePage() {
     queryKey: ["/api/recurring-schedules"],
   });
 
+  const { data: shiftOffers = [] } = useQuery<ShiftOffer[]>({
+    queryKey: ["/api/shift-offers"],
+  });
+
+  const { data: currentUser } = useQuery<any>({
+    queryKey: ["/api/auth/me"],
+  });
+
+  const [offerShiftOpen, setOfferShiftOpen] = useState(false);
+  const [offeringSchedule, setOfferingSchedule] = useState<Schedule | null>(null);
+  const [offerNote, setOfferNote] = useState("");
+
+  const createOfferMutation = useMutation({
+    mutationFn: async (data: { scheduleId: string; offeredByWorkerId: string; notes: string }) => {
+      const res = await apiRequest("POST", "/api/shift-offers", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/shift-offers"] });
+      setOfferShiftOpen(false);
+      setOfferingSchedule(null);
+      setOfferNote("");
+      toast({ title: "Shift offered for pickup" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const claimOfferMutation = useMutation({
+    mutationFn: async ({ offerId, workerId }: { offerId: string; workerId: string }) => {
+      const res = await apiRequest("PATCH", `/api/shift-offers/${offerId}`, { status: "claimed", claimedByWorkerId: workerId });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/shift-offers"] });
+      toast({ title: "Shift claimed — pending manager approval" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const approveOfferMutation = useMutation({
+    mutationFn: async (offerId: string) => {
+      const res = await apiRequest("PATCH", `/api/shift-offers/${offerId}`, { status: "approved", approvedBy: currentUser?.id });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/shift-offers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
+      toast({ title: "Shift pickup approved" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const withdrawOfferMutation = useMutation({
+    mutationFn: async (offerId: string) => {
+      const res = await apiRequest("PATCH", `/api/shift-offers/${offerId}`, { status: "withdrawn" });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/shift-offers"] });
+      toast({ title: "Shift offer withdrawn" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
   const filteredWorkers = useMemo(() => {
     let w = workers.filter(w => w.isActive);
     if (selectedCompany !== "all") {
@@ -454,7 +518,42 @@ export default function SchedulePage() {
             <TrendingUp className="h-4 w-4 mr-1" />
             Labor Projection
           </TabsTrigger>
+          <TabsTrigger value="marketplace" data-testid="tab-marketplace">
+            <RefreshCw className="h-4 w-4 mr-1" />
+            Shift Marketplace
+            {shiftOffers.filter(o => o.status === "open" || o.status === "claimed").length > 0 && (
+              <Badge className="ml-1 h-4 px-1 text-xs" variant="destructive">
+                {shiftOffers.filter(o => o.status === "open" || o.status === "claimed").length}
+              </Badge>
+            )}
+          </TabsTrigger>
         </TabsList>
+
+        <Dialog open={offerShiftOpen} onOpenChange={setOfferShiftOpen}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Offer Shift for Pickup</DialogTitle></DialogHeader>
+            {offeringSchedule && (
+              <div className="space-y-3">
+                <div className="rounded-lg border p-3 bg-muted/50">
+                  <p className="font-medium">{getWorkerName(workers, offeringSchedule.workerId)}</p>
+                  <p className="text-sm text-muted-foreground">{offeringSchedule.date} · {offeringSchedule.startTime} – {offeringSchedule.endTime}</p>
+                </div>
+                <div className="grid gap-1">
+                  <Label>Notes (optional)</Label>
+                  <Input value={offerNote} onChange={e => setOfferNote(e.target.value)} placeholder="Reason for offering..." data-testid="input-offer-note" />
+                </div>
+                <Button
+                  className="w-full"
+                  disabled={createOfferMutation.isPending}
+                  onClick={() => offeringSchedule && createOfferMutation.mutate({ scheduleId: offeringSchedule.id, offeredByWorkerId: offeringSchedule.workerId, notes: offerNote })}
+                  data-testid="button-submit-offer"
+                >
+                  {createOfferMutation.isPending ? "Offering..." : "Offer Shift for Pickup"}
+                </Button>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
 
         <TabsContent value="schedules" className="space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -771,12 +870,27 @@ export default function SchedulePage() {
                                       {cellSchedules.map((s) => (
                                         <div
                                           key={s.id}
-                                          className="group relative rounded bg-primary/10 px-1 py-0.5 text-xs cursor-pointer hover-elevate"
+                                          className={`group relative rounded px-1 py-0.5 text-xs cursor-pointer hover-elevate ${shiftOffers.some(o => o.scheduleId === s.id && (o.status === "open" || o.status === "claimed")) ? "bg-amber-100 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700" : "bg-primary/10"}`}
                                           data-testid={`shift-${s.id}`}
                                         >
                                           <div className="font-medium">{s.startTime} - {s.endTime}</div>
                                           <div className="text-muted-foreground">{parseTimeToHours(s.startTime, s.endTime)}h</div>
+                                          {shiftOffers.some(o => o.scheduleId === s.id && o.status === "open") && (
+                                            <div className="text-amber-600 dark:text-amber-400 font-semibold text-[10px]">⚑ Open for pickup</div>
+                                          )}
+                                          {shiftOffers.some(o => o.scheduleId === s.id && o.status === "claimed") && (
+                                            <div className="text-blue-600 dark:text-blue-400 font-semibold text-[10px]">⚑ Claimed — needs approval</div>
+                                          )}
                                           <div className="invisible group-hover:visible absolute top-0 right-0 flex gap-0.5 z-20">
+                                            <Button
+                                              size="icon"
+                                              variant="ghost"
+                                              title="Offer shift for pickup"
+                                              onClick={(e) => { e.stopPropagation(); setOfferingSchedule(s); setOfferShiftOpen(true); }}
+                                              data-testid={`button-offer-shift-${s.id}`}
+                                            >
+                                              <RefreshCw className="h-3 w-3 text-amber-600" />
+                                            </Button>
                                             <Button
                                               size="icon"
                                               variant="ghost"
@@ -1404,6 +1518,84 @@ export default function SchedulePage() {
                     </Table>
                   </div>
                 </>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="marketplace" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <RefreshCw className="h-5 w-5" />
+                Shift Marketplace
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">Employees can offer shifts for others to pick up. Managers approve swap requests here.</p>
+            </CardHeader>
+            <CardContent>
+              {shiftOffers.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  <RefreshCw className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                  <p className="font-medium">No open shift offers</p>
+                  <p className="text-sm mt-1">Employees can offer their shifts for pickup from the schedule view.</p>
+                </div>
+              ) : (
+                <Table data-testid="table-shift-offers">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Offered By</TableHead>
+                      <TableHead>Shift Date</TableHead>
+                      <TableHead>Times</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Claimed By</TableHead>
+                      <TableHead>Notes</TableHead>
+                      <TableHead>Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {shiftOffers.map(offer => {
+                      const schedule = schedules.find(s => s.id === offer.scheduleId);
+                      return (
+                        <TableRow key={offer.id} data-testid={`row-offer-${offer.id}`}>
+                          <TableCell className="font-medium">{getWorkerName(workers, offer.offeredByWorkerId)}</TableCell>
+                          <TableCell>{schedule?.date || "—"}</TableCell>
+                          <TableCell>{schedule ? `${schedule.startTime} – ${schedule.endTime}` : "—"}</TableCell>
+                          <TableCell>
+                            <Badge variant={
+                              offer.status === "open" ? "outline" :
+                              offer.status === "claimed" ? "secondary" :
+                              offer.status === "approved" ? "default" :
+                              offer.status === "withdrawn" ? "secondary" : "outline"
+                            } data-testid={`badge-offer-${offer.id}`}>
+                              {offer.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{offer.claimedByWorkerId ? getWorkerName(workers, offer.claimedByWorkerId) : "—"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{offer.notes || "—"}</TableCell>
+                          <TableCell>
+                            <div className="flex gap-1">
+                              {offer.status === "open" && currentUser?.workerId !== offer.offeredByWorkerId && (
+                                <Button size="sm" variant="outline" onClick={() => currentUser?.workerId && claimOfferMutation.mutate({ offerId: offer.id, workerId: currentUser.workerId })} data-testid={`button-claim-${offer.id}`}>
+                                  Claim Shift
+                                </Button>
+                              )}
+                              {offer.status === "claimed" && (
+                                <Button size="sm" onClick={() => approveOfferMutation.mutate(offer.id)} data-testid={`button-approve-${offer.id}`}>
+                                  Approve
+                                </Button>
+                              )}
+                              {(offer.status === "open" || offer.status === "claimed") && (
+                                <Button size="sm" variant="ghost" className="text-destructive" onClick={() => withdrawOfferMutation.mutate(offer.id)} data-testid={`button-withdraw-${offer.id}`}>
+                                  Withdraw
+                                </Button>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
               )}
             </CardContent>
           </Card>

@@ -109,6 +109,7 @@ const navSections: NavSection[] = [
       { title: "Accrual Balances", url: "/attendance?tab=accrual-balances", icon: CalendarCheck },
       { title: "Accruals", url: "/attendance?tab=accruals", icon: CalendarClock, roles: ["admin", "manager"] },
       { title: "Pending Approvals", url: "/attendance?tab=pending-approvals", icon: AlertTriangle, roles: ["admin", "manager"] },
+      { title: "Expenses & Receipts", url: "/expenses", icon: Receipt },
     ],
   },
   {
@@ -120,6 +121,7 @@ const navSections: NavSection[] = [
       { title: "Scheduled Shifts", url: "/schedule?tab=shifts", icon: CalendarRange },
       { title: "Recurring Schedule", url: "/schedule?tab=recurring", icon: Repeat, roles: ["admin", "manager"] },
       { title: "Recurring Templates", url: "/schedule?tab=templates", icon: FileText, roles: ["admin", "manager"] },
+      { title: "Shift Marketplace", url: "/schedule?tab=marketplace", icon: Repeat },
     ],
   },
   {

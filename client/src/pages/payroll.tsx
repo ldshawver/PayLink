@@ -235,6 +235,55 @@ function PayrollRunCard({
   });
 
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editItem, setEditItem] = useState<PayrollItem | null>(null);
+  const [editForm, setEditForm] = useState({ regularHours: "", overtimeHours: "", doubleTimeHours: "", payRate: "", regularPay: "", overtimePay: "", doubleTimePay: "", grossPay: "", deductions: "", netPay: "", checkNumber: "" });
+
+  const editItemMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: typeof editForm }) => {
+      const res = await apiRequest("PATCH", `/api/payroll-items/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs", run.id, "items"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      toast({ title: "Payroll item updated" });
+      setEditItem(null);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const reopenMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PATCH", `/api/payroll-runs/${run.id}`, { status: "draft" });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      toast({ title: "Payroll run reopened for editing" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const openEdit = (item: PayrollItem) => {
+    setEditItem(item);
+    setEditForm({
+      regularHours: item.regularHours?.toString() || "0",
+      overtimeHours: item.overtimeHours?.toString() || "0",
+      doubleTimeHours: item.doubleTimeHours?.toString() || "0",
+      payRate: item.payRate?.toString() || "0",
+      regularPay: item.regularPay?.toString() || "0",
+      overtimePay: item.overtimePay?.toString() || "0",
+      doubleTimePay: item.doubleTimePay?.toString() || "0",
+      grossPay: item.grossPay?.toString() || "0",
+      deductions: item.deductions?.toString() || "0",
+      netPay: item.netPay?.toString() || "0",
+      checkNumber: item.checkNumber || "",
+    });
+  };
 
   const processMutation = useMutation({
     mutationFn: async () => {
@@ -321,6 +370,48 @@ function PayrollRunCard({
           </div>
         </DialogContent>
       </Dialog>
+      <Dialog open={!!editItem} onOpenChange={(o) => !o && setEditItem(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader><DialogTitle>Edit Payroll Item — {editItem ? getWorkerName(editItem.workerId) : ""}</DialogTitle></DialogHeader>
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { label: "Pay Rate", key: "payRate" },
+              { label: "Regular Hours", key: "regularHours" },
+              { label: "Overtime Hours", key: "overtimeHours" },
+              { label: "Double Time Hours", key: "doubleTimeHours" },
+              { label: "Regular Pay", key: "regularPay" },
+              { label: "Overtime Pay", key: "overtimePay" },
+              { label: "Double Time Pay", key: "doubleTimePay" },
+              { label: "Gross Pay", key: "grossPay" },
+              { label: "Deductions", key: "deductions" },
+              { label: "Net Pay", key: "netPay" },
+              { label: "Check Number", key: "checkNumber" },
+            ].map(({ label, key }) => (
+              <div key={key} className="grid gap-1">
+                <Label className="text-xs">{label}</Label>
+                <Input
+                  type={key === "checkNumber" ? "text" : "number"}
+                  step="0.01"
+                  value={(editForm as any)[key]}
+                  onChange={(e) => setEditForm(f => ({ ...f, [key]: e.target.value }))}
+                  data-testid={`input-edit-item-${key}`}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2 mt-2">
+            <Button variant="outline" onClick={() => setEditItem(null)}>Cancel</Button>
+            <Button
+              disabled={editItemMutation.isPending}
+              onClick={() => editItem && editItemMutation.mutate({ id: editItem.id, data: editForm })}
+              data-testid="button-save-payroll-item"
+            >
+              {editItemMutation.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {expanded && (
         <CardContent>
           {isLoading ? (
@@ -337,6 +428,17 @@ function PayrollRunCard({
                   >
                     <Zap className="mr-2 h-4 w-4" />
                     {processMutation.isPending ? "Processing..." : "Process Payroll"}
+                  </Button>
+                )}
+                {(run.status === "processed" || run.status === "paid") && (
+                  <Button
+                    variant="outline" size="sm"
+                    data-testid={`button-reopen-run-${run.id}`}
+                    disabled={reopenMutation.isPending}
+                    onClick={() => reopenMutation.mutate()}
+                  >
+                    <Pencil className="mr-2 h-4 w-4" />
+                    {reopenMutation.isPending ? "Reopening..." : "Reopen for Editing"}
                   </Button>
                 )}
                 {run.status === "processed" && (
@@ -365,6 +467,7 @@ function PayrollRunCard({
                       <TableHead>Deductions</TableHead>
                       <TableHead>Net Pay</TableHead>
                       <TableHead>Check #</TableHead>
+                      <TableHead className="w-10"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -381,10 +484,15 @@ function PayrollRunCard({
                         <TableCell>${Number(item.deductions || 0).toFixed(2)}</TableCell>
                         <TableCell className="font-medium">${Number(item.netPay || 0).toFixed(2)}</TableCell>
                         <TableCell>{item.checkNumber || "—"}</TableCell>
+                        <TableCell>
+                          <Button size="icon" variant="ghost" onClick={() => openEdit(item)} data-testid={`button-edit-payroll-item-${item.id}`}>
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     ))}
                     {items.length === 0 && (
-                      <TableRow><TableCell colSpan={11} className="text-center text-muted-foreground">No items</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={12} className="text-center text-muted-foreground">No items</TableCell></TableRow>
                     )}
                   </TableBody>
                 </Table>
