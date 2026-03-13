@@ -68,43 +68,50 @@ function CheckPortion({
 }) {
   const netPay = Number(item.netPay || 0);
   return (
-    <div style={{ padding: "0.3in 0.5in", display: "flex", flexDirection: "column", justifyContent: "space-between", height: "100%" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+    <div style={{ padding: "0.5in 0.6in 0.3in", display: "flex", flexDirection: "column", height: "100%", boxSizing: "border-box" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5in" }}>
         <CompanyHeader company={company} config={config} />
         <div style={{ textAlign: "right" }}>
-          {config.showCheckNumber && <div style={{ fontSize: "12px", fontWeight: "bold" }}>CHECK #{item.checkNumber || "—"}</div>}
-          <div style={{ fontSize: "11px" }}>Date: {run.processedAt ? new Date(run.processedAt).toLocaleDateString() : new Date().toLocaleDateString()}</div>
+          {config.showCheckNumber && <div style={{ fontSize: "14px", fontWeight: "bold" }}>CHECK #{item.checkNumber || "—"}</div>}
+          <div style={{ fontSize: "12px", marginTop: "4px" }}>Date: {run.processedAt ? new Date(run.processedAt).toLocaleDateString() : new Date().toLocaleDateString()}</div>
         </div>
       </div>
-      <div style={{ margin: "0.15in 0" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-          <div style={{ fontSize: "12px" }}>
+
+      <div style={{ marginBottom: "0.3in" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+          <div style={{ fontSize: "13px" }}>
             <span style={{ fontWeight: "bold" }}>PAY TO THE ORDER OF: </span>
-            {worker.firstName} {worker.lastName}
+            <span style={{ fontSize: "15px" }}>{worker.firstName} {worker.lastName}</span>
           </div>
-          <div style={{ border: "1px solid #000", padding: "4px 12px", fontSize: "14px", fontWeight: "bold" }}>
+          <div style={{ border: "2px solid #000", padding: "6px 16px", fontSize: "18px", fontWeight: "bold", minWidth: "1.5in", textAlign: "right" }}>
             ${fmt(netPay)}
           </div>
         </div>
-        <div style={{ borderBottom: "1px solid #000", paddingBottom: "4px", fontSize: "11px" }}>
+        <div style={{ borderBottom: "1px solid #000", paddingBottom: "6px", fontSize: "12px" }}>
           {numberToWords(netPay)} Dollars
         </div>
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
-        <div style={{ fontSize: "11px" }}>
+
+      <div style={{ flex: 1 }} />
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "0.25in" }}>
+        <div style={{ fontSize: "12px" }}>
           {config.showEmployeeAddress && worker.address && <div>{worker.address}</div>}
           {config.showEmployeeAddress && (worker.city || worker.state || worker.zip) && (
             <div>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
           )}
         </div>
-        <div style={{ borderBottom: "1px solid #000", width: "3in", height: "0.4in" }}>
-          <div style={{ fontSize: "9px", color: "#999" }}>Authorized Signature</div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ borderBottom: "1px solid #000", width: "3.5in", height: "0.45in", display: "flex", alignItems: "flex-end", justifyContent: "flex-end" }}>
+            <div style={{ fontSize: "9px", color: "#999", paddingBottom: "2px" }}>Authorized Signature</div>
+          </div>
         </div>
       </div>
+
       {config.showMicrLine && (
-        <div style={{ marginTop: "8px", textAlign: "center" }}>
-          <span style={{ fontSize: "12px", fontFamily: "'MICR', 'Courier New', monospace", letterSpacing: "2px", color: "#333" }}>
-            ⑈021000021⑈ ⑆{company.ein || "000000000"}⑆ {item.checkNumber || "0000"}
+        <div style={{ textAlign: "center", paddingBottom: "4px" }}>
+          <span style={{ fontSize: "13px", fontFamily: "'MICR', 'Courier New', monospace", letterSpacing: "3px", color: "#222" }}>
+            ⑈021000021⑈ ⑆{company.ein || "000000000"}⑆ {String(item.checkNumber || "0000").padStart(4, "0")}
           </span>
         </div>
       )}
@@ -406,10 +413,10 @@ interface CheckProps {
 function StandardCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances }: CheckProps) {
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Courier New', monospace" }}>
-      <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
+      <div style={{ height: "7.333in", borderBottom: "2px dashed #999" }}>
         <CheckPortion item={item} worker={worker} company={company} run={run} config={config} />
       </div>
-      <div style={{ height: "7.333in" }}>
+      <div style={{ height: "3.667in" }}>
         <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
       </div>
     </div>
@@ -573,10 +580,12 @@ export default function PrintCheckPage() {
 
       <style>{`
         @media print {
-          .print-hide { display: none !important; }
-          body { margin: 0; padding: 0; }
-          .check-page { page-break-after: always; }
           @page { size: 8.5in 11in; margin: 0; }
+          body * { visibility: hidden; }
+          .print-content { visibility: visible; position: fixed; top: 0; left: 0; width: 100%; }
+          .print-content * { visibility: visible; }
+          .print-hide { display: none !important; }
+          .check-page { page-break-after: always; }
         }
         @media screen {
           .print-content {

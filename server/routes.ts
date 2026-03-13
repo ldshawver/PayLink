@@ -185,7 +185,16 @@ export async function registerRoutes(
         });
       }
 
-      const workerTotals: Record<string, { workerId: string; grossPay: number; regularPay: number; overtimePay: number; doubleTimePay: number; deductions: number; netPay: number; regularHours: number; overtimeHours: number; doubleTimeHours: number }> = {};
+      const allWorkers = await storage.getWorkers(companyId && companyId !== "all" ? companyId as string : undefined);
+      const workerMap: Record<string, typeof allWorkers[0]> = {};
+      for (const w of allWorkers) workerMap[w.id] = w;
+
+      const companyDeductionsList = await storage.getTaxesDeductions(companyId && companyId !== "all" ? companyId as string : undefined);
+
+      const workerTotals: Record<string, {
+        workerId: string; grossPay: number; regularPay: number; overtimePay: number; doubleTimePay: number;
+        deductions: number; netPay: number; regularHours: number; overtimeHours: number; doubleTimeHours: number;
+      }> = {};
 
       for (const run of filteredRuns) {
         const items = await storage.getPayrollItems(run.id);
@@ -194,28 +203,90 @@ export async function registerRoutes(
             workerTotals[item.workerId] = { workerId: item.workerId, grossPay: 0, regularPay: 0, overtimePay: 0, doubleTimePay: 0, deductions: 0, netPay: 0, regularHours: 0, overtimeHours: 0, doubleTimeHours: 0 };
           }
           const t = workerTotals[item.workerId];
-          t.grossPay += parseFloat(item.grossPay || "0");
+          const gross = parseFloat(item.grossPay || "0");
+          const ded = parseFloat(item.deductions || "0");
+          t.grossPay += gross;
           t.regularPay += parseFloat(item.regularPay || "0");
           t.overtimePay += parseFloat(item.overtimePay || "0");
           t.doubleTimePay += parseFloat((item as any).doubleTimePay || "0");
-          t.deductions += parseFloat(item.deductions || "0");
-          t.netPay += parseFloat(item.netPay || "0");
+          t.deductions += ded;
+          t.netPay += Math.max(gross - ded, 0);
           t.regularHours += parseFloat(item.regularHours || "0");
           t.overtimeHours += parseFloat(item.overtimeHours || "0");
           t.doubleTimeHours += parseFloat((item as any).doubleTimeHours || "0");
         }
       }
 
-      const totals = Object.values(workerTotals);
+      const findDed = (nameIncludes: string, employerPaid: boolean, deds: typeof companyDeductionsList) =>
+        deds.find(d => d.name.toLowerCase().includes(nameIncludes) && d.isActive && !!d.isEmployerPaid === employerPaid && !d.isReferenceOnly);
+
+      const enhancedTotals = Object.values(workerTotals).map(wt => {
+        const worker = workerMap[wt.workerId];
+        const isContractor = worker?.workerType === "contractor";
+        const deds = companyDeductionsList.filter(d => {
+          const appliesTo = d.appliesTo || "all";
+          if (appliesTo === "employee" && isContractor) return false;
+          if (appliesTo === "contractor" && !isContractor) return false;
+          return true;
+        });
+
+        const fedDed = findDed("federal income", false, deds);
+        const stateDed = findDed("state income", false, deds);
+        const sdiDed = findDed("sdi", false, deds);
+        const suiDed = findDed("sui", true, deds) || findDed("state unemployment", true, deds);
+        const ettDed = findDed("ett", true, deds) || findDed("employment training", true, deds);
+
+        const gross = wt.grossPay;
+        const fedRate = fedDed ? Number(fedDed.rate || 0) / 100 : 0;
+        const stateRate = stateDed ? Number(stateDed.rate || 0) / 100 : 0;
+        const sdiRate = sdiDed ? Number(sdiDed.rate || 0) / 100 : 0.011;
+        const suiRate = suiDed ? Number(suiDed.rate || 0) / 100 : 0.034;
+        const ettRate = ettDed ? Number(ettDed.rate || 0) / 100 : 0.001;
+
+        const ssTaxableWages = Math.min(gross, 168600);
+        const futaTaxableWages = Math.min(gross, 7000);
+        const suiTaxableWages = Math.min(gross, 7000);
+
+        return {
+          ...wt,
+          fedWithholding: gross * fedRate,
+          stateWithholding: gross * stateRate,
+          sdiWithheld: gross * sdiRate,
+          ssTaxEmployee: !isContractor ? ssTaxableWages * 0.062 : 0,
+          ssTaxEmployer: !isContractor ? ssTaxableWages * 0.062 : 0,
+          medicareTaxEmployee: !isContractor ? gross * 0.0145 : 0,
+          medicareTaxEmployer: !isContractor ? gross * 0.0145 : 0,
+          futaTaxableWages: !isContractor ? futaTaxableWages : 0,
+          futaTax: !isContractor ? futaTaxableWages * 0.006 : 0,
+          suiTaxableWages: !isContractor ? suiTaxableWages : 0,
+          suiTax: !isContractor ? suiTaxableWages * suiRate : 0,
+          ettTax: !isContractor ? suiTaxableWages * ettRate : 0,
+          ssTaxableWages,
+        };
+      });
+
       const grandTotal = {
-        grossPay: totals.reduce((s, t) => s + t.grossPay, 0),
-        deductions: totals.reduce((s, t) => s + t.deductions, 0),
-        netPay: totals.reduce((s, t) => s + t.netPay, 0),
-        regularHours: totals.reduce((s, t) => s + t.regularHours, 0),
-        overtimeHours: totals.reduce((s, t) => s + t.overtimeHours, 0),
+        grossPay: enhancedTotals.reduce((s, t) => s + t.grossPay, 0),
+        deductions: enhancedTotals.reduce((s, t) => s + t.deductions, 0),
+        netPay: enhancedTotals.reduce((s, t) => s + t.netPay, 0),
+        regularHours: enhancedTotals.reduce((s, t) => s + t.regularHours, 0),
+        overtimeHours: enhancedTotals.reduce((s, t) => s + t.overtimeHours, 0),
+        fedWithholding: enhancedTotals.reduce((s, t) => s + t.fedWithholding, 0),
+        stateWithholding: enhancedTotals.reduce((s, t) => s + t.stateWithholding, 0),
+        sdiWithheld: enhancedTotals.reduce((s, t) => s + t.sdiWithheld, 0),
+        ssTaxEmployee: enhancedTotals.reduce((s, t) => s + t.ssTaxEmployee, 0),
+        ssTaxEmployer: enhancedTotals.reduce((s, t) => s + t.ssTaxEmployer, 0),
+        medicareTaxEmployee: enhancedTotals.reduce((s, t) => s + t.medicareTaxEmployee, 0),
+        medicareTaxEmployer: enhancedTotals.reduce((s, t) => s + t.medicareTaxEmployer, 0),
+        futaTaxableWages: enhancedTotals.reduce((s, t) => s + t.futaTaxableWages, 0),
+        futaTax: enhancedTotals.reduce((s, t) => s + t.futaTax, 0),
+        suiTaxableWages: enhancedTotals.reduce((s, t) => s + t.suiTaxableWages, 0),
+        suiTax: enhancedTotals.reduce((s, t) => s + t.suiTax, 0),
+        ettTax: enhancedTotals.reduce((s, t) => s + t.ettTax, 0),
+        ssTaxableWages: enhancedTotals.reduce((s, t) => s + t.ssTaxableWages, 0),
       };
 
-      res.json({ workerTotals: totals, grandTotal, runCount: filteredRuns.length });
+      res.json({ workerTotals: enhancedTotals, grandTotal, runCount: filteredRuns.length });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to get payroll summary" });
@@ -1067,76 +1138,138 @@ export async function registerRoutes(
       const { companyId, periodStart, periodEnd } = req.body;
 
       const company = await storage.getCompany(companyId);
-      if (!company) {
-        return res.status(404).json({ message: "Company not found" });
-      }
+      if (!company) return res.status(404).json({ message: "Company not found" });
 
       const entries = await storage.getTimeEntriesByDateRange(companyId, periodStart, periodEnd);
-      const companyWorkers = await storage.getWorkers(companyId);
-      const activeWorkers = companyWorkers.filter(w => w.isActive);
+      const allWorkers = await storage.getWorkers(companyId);
+      const activeWorkers = allWorkers.filter(w => w.isActive);
+      const companyDeductions = await storage.getTaxesDeductions(companyId);
 
-      const overtimeMultiplier = Number(company.overtimeMultiplier || 1.5);
+      const allSecondaryWageGroups = await storage.getSecondaryWageGroups(companyId);
+      const wageGroupMap: Record<string, { hourlyRate: number; overtimeRate: number }> = {};
+      for (const wg of allSecondaryWageGroups) {
+        wageGroupMap[wg.id] = {
+          hourlyRate: parseFloat(wg.hourlyRate || "0"),
+          overtimeRate: parseFloat(wg.overtimeRate || "0"),
+        };
+      }
 
-      const workerPayData: Array<{
-        workerId: string;
-        regularHours: number;
-        overtimeHours: number;
-        doubleTimeHours: number;
-        regularPay: number;
-        overtimePay: number;
-        doubleTimePay: number;
-        grossPay: number;
-        payRate: number;
-        payType: string;
-      }> = [];
+      const allRuns = await storage.getPayrollRuns(companyId);
+      const priorRuns = allRuns.filter(r => r.status !== "draft" && r.periodEnd < periodStart);
+      const existingYtdByWorker: Record<string, { gross: number; deductions: number; net: number }> = {};
+      for (const worker of activeWorkers) {
+        let ytdGross = 0, ytdDeductions = 0, ytdNet = 0;
+        for (const pr of priorRuns) {
+          const priorItems = await storage.getPayrollItems(pr.id);
+          const workerItem = priorItems.find(i => i.workerId === worker.id);
+          if (workerItem) {
+            ytdGross += parseFloat(workerItem.grossPay || "0");
+            ytdDeductions += parseFloat(workerItem.deductions || "0");
+            ytdNet += parseFloat(workerItem.netPay || "0");
+          }
+        }
+        existingYtdByWorker[worker.id] = { gross: ytdGross, deductions: ytdDeductions, net: ytdNet };
+      }
+
+      const otMultiplier = Number(company.overtimeMultiplier || 1.5);
+      const dtMultiplier = 2.0;
+      const items: any[] = [];
+      let totalGross = 0, totalNet = 0, totalHoursSum = 0, totalOT = 0;
+      let checkNum = 1001;
 
       for (const worker of activeWorkers) {
         const workerEntries = entries.filter(e => e.workerId === worker.id);
-        const totalHours = workerEntries.reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
-        const overtimeHours = workerEntries.reduce((sum, e) => sum + Number(e.overtimeHours || 0), 0);
-        const doubleTimeHours = workerEntries.reduce((sum, e) => sum + Number((e as any).doubleTimeHours || 0), 0);
-        const regularHours = totalHours - overtimeHours - doubleTimeHours;
+        const regHrs = workerEntries.reduce((s, e) => {
+          const tot = parseFloat(e.totalHours || "0");
+          const ot = parseFloat(e.overtimeHours || "0");
+          const dt = parseFloat((e as any).doubleTimeHours || "0");
+          return s + (tot - ot - dt);
+        }, 0);
+        const otHrs = workerEntries.reduce((s, e) => s + parseFloat(e.overtimeHours || "0"), 0);
+        const dtHrs = workerEntries.reduce((s, e) => s + parseFloat((e as any).doubleTimeHours || "0"), 0);
+        const totalHrs = regHrs + otHrs + dtHrs;
+        const defaultRate = parseFloat(worker.payRate || "0");
 
-        let regularPay = 0;
-        let overtimePay = 0;
-        let doubleTimePay = 0;
-        let grossPay = 0;
+        let regPay = 0, otPay = 0, dtPay = 0, grossPay = 0;
 
         if (worker.payType === "salary") {
           const payFreq = company.payFrequency || "biweekly";
-          let divisor = 26;
-          if (payFreq === "weekly") divisor = 52;
-          else if (payFreq === "semimonthly") divisor = 24;
-          else if (payFreq === "monthly") divisor = 12;
-          grossPay = Number(worker.payRate) / divisor;
-          regularPay = grossPay;
+          let periodsPerYear = 26;
+          if (payFreq === "weekly") periodsPerYear = 52;
+          else if (payFreq === "semimonthly") periodsPerYear = 24;
+          else if (payFreq === "monthly") periodsPerYear = 12;
+          const hourlyEquiv = defaultRate / 2080;
+          regPay = defaultRate / periodsPerYear;
+          otPay = otHrs * hourlyEquiv * otMultiplier;
+          dtPay = dtHrs * hourlyEquiv * dtMultiplier;
+          grossPay = regPay + otPay + dtPay;
         } else {
-          const rate = Number(worker.payRate);
-          regularPay = regularHours * rate;
-          overtimePay = overtimeHours * rate * overtimeMultiplier;
-          doubleTimePay = doubleTimeHours * rate * 2;
-          grossPay = regularPay + overtimePay + doubleTimePay;
+          for (const e of workerEntries) {
+            const entryTotal = parseFloat(e.totalHours || "0");
+            const entryOt = parseFloat(e.overtimeHours || "0");
+            const entryDt = parseFloat((e as any).doubleTimeHours || "0");
+            const entryReg = entryTotal - entryOt - entryDt;
+            const wgId = (e as any).wageGroupId;
+            const wg = wgId ? wageGroupMap[wgId] : null;
+            const rate = wg ? wg.hourlyRate : defaultRate;
+            const otRate = wg && wg.overtimeRate > 0 ? wg.overtimeRate : rate * otMultiplier;
+            regPay += entryReg * rate;
+            otPay += entryOt * otRate;
+            dtPay += entryDt * rate * dtMultiplier;
+          }
+          grossPay = regPay + otPay + dtPay;
         }
 
-        if (totalHours > 0 || worker.payType === "salary") {
-          workerPayData.push({
-            workerId: worker.id,
-            regularHours,
-            overtimeHours,
-            doubleTimeHours,
-            regularPay,
-            overtimePay,
-            doubleTimePay,
-            grossPay,
-            payRate: Number(worker.payRate),
-            payType: worker.payType || "hourly",
-          });
+        if (totalHrs === 0 && worker.payType !== "salary") continue;
+
+        const isContractor = worker.workerType === "contractor";
+        const workerDeds = companyDeductions.filter(d => {
+          if (!d.isActive || d.isEmployerPaid || d.isReferenceOnly) return false;
+          const appliesTo = d.appliesTo || "all";
+          if (appliesTo === "employee" && isContractor) return false;
+          if (appliesTo === "contractor" && !isContractor) return false;
+          const nl = d.name.toLowerCase();
+          if (!isContractor && (nl.includes("se tax") || nl.includes("self-employment") || nl.includes("self employment"))) return false;
+          return true;
+        });
+
+        let totalDeductions = 0;
+        for (const ded of workerDeds) {
+          if (ded.calculationType === "percentage") {
+            const base = ded.maxAmount ? Math.min(grossPay, parseFloat(ded.maxAmount)) : grossPay;
+            totalDeductions += base * (parseFloat(ded.rate || "0") / 100);
+          } else {
+            totalDeductions += parseFloat(ded.rate || "0");
+          }
         }
+
+        const netPay = grossPay - totalDeductions;
+        const ytd = existingYtdByWorker[worker.id] || { gross: 0, deductions: 0, net: 0 };
+
+        totalGross += grossPay;
+        totalNet += netPay;
+        totalHoursSum += totalHrs;
+        totalOT += otHrs;
+
+        items.push({
+          workerId: worker.id,
+          regularHours: regHrs.toFixed(2),
+          overtimeHours: otHrs.toFixed(2),
+          doubleTimeHours: dtHrs.toFixed(2),
+          regularPay: regPay.toFixed(2),
+          overtimePay: otPay.toFixed(2),
+          doubleTimePay: dtPay.toFixed(2),
+          grossPay: grossPay.toFixed(2),
+          deductions: totalDeductions.toFixed(2),
+          netPay: netPay.toFixed(2),
+          payRate: defaultRate.toFixed(2),
+          payType: worker.payType || "hourly",
+          checkNumber: String(checkNum++),
+          ytdGross: (ytd.gross + grossPay).toFixed(2),
+          ytdDeductions: (ytd.deductions + totalDeductions).toFixed(2),
+          ytdNet: (ytd.net + netPay).toFixed(2),
+        });
       }
-
-      const totalGross = workerPayData.reduce((sum, w) => sum + w.grossPay, 0);
-      const totalHours = workerPayData.reduce((sum, w) => sum + w.regularHours + w.overtimeHours + w.doubleTimeHours, 0);
-      const totalOT = workerPayData.reduce((sum, w) => sum + w.overtimeHours, 0);
 
       const payrollRun = await storage.createPayrollRun({
         companyId,
@@ -1144,27 +1277,15 @@ export async function registerRoutes(
         periodEnd,
         status: "processed",
         totalGross: totalGross.toFixed(2),
-        totalNet: totalGross.toFixed(2),
-        totalHours: totalHours.toFixed(2),
+        totalNet: totalNet.toFixed(2),
+        totalHours: totalHoursSum.toFixed(2),
         totalOvertimeHours: totalOT.toFixed(2),
-        workerCount: workerPayData.length,
+        workerCount: items.length,
         processedAt: new Date(),
       });
 
-      for (const wp of workerPayData) {
-        await storage.createPayrollItem({
-          payrollRunId: payrollRun.id,
-          workerId: wp.workerId,
-          regularHours: wp.regularHours.toFixed(2),
-          overtimeHours: wp.overtimeHours.toFixed(2),
-          doubleTimeHours: wp.doubleTimeHours.toFixed(2),
-          regularPay: wp.regularPay.toFixed(2),
-          overtimePay: wp.overtimePay.toFixed(2),
-          doubleTimePay: wp.doubleTimePay.toFixed(2),
-          grossPay: wp.grossPay.toFixed(2),
-          payRate: wp.payRate.toFixed(2),
-          payType: wp.payType,
-        });
+      for (const item of items) {
+        await storage.createPayrollItem({ payrollRunId: payrollRun.id, ...item });
       }
 
       res.status(201).json(payrollRun);
@@ -2404,6 +2525,112 @@ export async function registerRoutes(
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to delete station" });
+    }
+  });
+
+  app.get("/api/receipts", requireAuth, async (req, res) => {
+    try {
+      const { companyId, costCenterId, jobId } = req.query as Record<string, string>;
+      const items = await storage.getReceipts(companyId, costCenterId, jobId);
+      res.json(items);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch receipts" });
+    }
+  });
+
+  app.post("/api/receipts", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.createReceipt(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to create receipt" });
+    }
+  });
+
+  app.patch("/api/receipts/:id", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.updateReceipt(req.params.id as string, req.body);
+      if (!item) return res.status(404).json({ message: "Receipt not found" });
+      res.json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update receipt" });
+    }
+  });
+
+  app.delete("/api/receipts/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteReceipt(req.params.id as string);
+      res.json({ message: "Receipt deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete receipt" });
+    }
+  });
+
+  app.post("/api/receipts/upload", requireAuth, upload.single("file"), async (req: any, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const url = `/uploads/${req.file.filename}`;
+      res.json({ url });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Upload failed" });
+    }
+  });
+
+  app.get("/api/shift-offers", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.query as Record<string, string>;
+      const items = await storage.getShiftOffers(companyId);
+      res.json(items);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch shift offers" });
+    }
+  });
+
+  app.post("/api/shift-offers", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.createShiftOffer(req.body);
+      res.status(201).json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to create shift offer" });
+    }
+  });
+
+  app.patch("/api/shift-offers/:id", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.updateShiftOffer(req.params.id as string, req.body);
+      if (!item) return res.status(404).json({ message: "Shift offer not found" });
+      res.json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update shift offer" });
+    }
+  });
+
+  app.delete("/api/shift-offers/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteShiftOffer(req.params.id as string);
+      res.json({ message: "Shift offer deleted" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to delete shift offer" });
+    }
+  });
+
+  app.patch("/api/payroll-items/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const item = await storage.updatePayrollItem(req.params.id as string, req.body);
+      if (!item) return res.status(404).json({ message: "Payroll item not found" });
+      res.json(item);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to update payroll item" });
     }
   });
 

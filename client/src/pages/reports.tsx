@@ -6,7 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import type {
   Worker, TimeEntry, PayrollRun, PayrollItem, Schedule, TimePunch,
   AccrualBalance, AccrualAccount, Qualification, Review,
-  TaxDeduction, PayStubTransaction, Company, SavedReport, SecondaryWageGroup
+  TaxDeduction, PayStubTransaction, Company, SavedReport, SecondaryWageGroup, Receipt as ExpenseReceipt
 } from "@shared/schema";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
@@ -1751,8 +1751,22 @@ function TaxReportFilters({ year, setYear, quarter, setQuarter, companyId, setCo
   );
 }
 
-type PayrollSummaryWorker = { workerId: string; grossPay: number; regularPay: number; overtimePay: number; doubleTimePay: number; deductions: number; netPay: number; regularHours: number; overtimeHours: number; doubleTimeHours: number };
-type PayrollSummary = { workerTotals: PayrollSummaryWorker[]; grandTotal: { grossPay: number; deductions: number; netPay: number; regularHours: number; overtimeHours: number }; runCount: number };
+type PayrollSummaryWorker = {
+  workerId: string; grossPay: number; regularPay: number; overtimePay: number; doubleTimePay: number;
+  deductions: number; netPay: number; regularHours: number; overtimeHours: number; doubleTimeHours: number;
+  fedWithholding: number; stateWithholding: number; sdiWithheld: number;
+  ssTaxEmployee: number; ssTaxEmployer: number; medicareTaxEmployee: number; medicareTaxEmployer: number;
+  ssTaxableWages: number; futaTaxableWages: number; futaTax: number;
+  suiTaxableWages: number; suiTax: number; ettTax: number;
+};
+type PayrollSummaryGrandTotal = {
+  grossPay: number; deductions: number; netPay: number; regularHours: number; overtimeHours: number;
+  fedWithholding: number; stateWithholding: number; sdiWithheld: number;
+  ssTaxEmployee: number; ssTaxEmployer: number; medicareTaxEmployee: number; medicareTaxEmployer: number;
+  ssTaxableWages: number; futaTaxableWages: number; futaTax: number;
+  suiTaxableWages: number; suiTax: number; ettTax: number;
+};
+type PayrollSummary = { workerTotals: PayrollSummaryWorker[]; grandTotal: PayrollSummaryGrandTotal; runCount: number };
 
 function usePayrollData(open: boolean) {
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"], enabled: open });
@@ -1767,7 +1781,8 @@ function usePayrollSummary(open: boolean, year: string, quarter: string, company
   if (quarter) params.set("quarter", quarter);
   if (companyId && companyId !== "all") params.set("companyId", companyId);
   const { data } = useQuery<PayrollSummary>({ queryKey: ["/api/payroll-summary?" + params.toString()], enabled: open });
-  return data || { workerTotals: [], grandTotal: { grossPay: 0, deductions: 0, netPay: 0, regularHours: 0, overtimeHours: 0 }, runCount: 0 };
+  const emptyGrand: PayrollSummaryGrandTotal = { grossPay: 0, deductions: 0, netPay: 0, regularHours: 0, overtimeHours: 0, fedWithholding: 0, stateWithholding: 0, sdiWithheld: 0, ssTaxEmployee: 0, ssTaxEmployer: 0, medicareTaxEmployee: 0, medicareTaxEmployer: 0, ssTaxableWages: 0, futaTaxableWages: 0, futaTax: 0, suiTaxableWages: 0, suiTax: 0, ettTax: 0 };
+  return data || { workerTotals: [], grandTotal: emptyGrand, runCount: 0 };
 }
 
 function filterRunsByPeriod(runs: PayrollRun[], year: string, quarter?: string) {
@@ -1786,7 +1801,7 @@ function filterRunsByPeriod(runs: PayrollRun[], year: string, quarter?: string) 
 function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [companyId, setCompanyId] = useState("all");
-  const { workers, companies, deductions } = usePayrollData(open);
+  const { workers, companies } = usePayrollData(open);
   const summary = usePayrollSummary(open, year, "", companyId);
 
   const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
@@ -1794,27 +1809,30 @@ function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
 
   const getWorkerTotals = (worker: typeof employees[0]) => {
     const wt = summary.workerTotals.find(t => t.workerId === worker.id);
-    const grossPay = wt ? wt.grossPay : 0;
-    const fedWithholding = deductions.filter(d => d.name.toLowerCase().includes("federal income") && d.isActive && !d.isEmployerPaid && !d.isReferenceOnly);
-    const fedRate = fedWithholding.length > 0 ? Number(fedWithholding[0].rate || 0) / 100 : 0.22;
-    const fedTax = grossPay * fedRate;
-    const ssTax = Math.min(grossPay, 168600) * 0.062;
-    const medicareTax = grossPay * 0.0145;
-    const stateWithholding = deductions.filter(d => d.name.toLowerCase().includes("state income") && d.isActive && !d.isEmployerPaid && !d.isReferenceOnly);
-    const stateRate = stateWithholding.length > 0 ? Number(stateWithholding[0].rate || 0) / 100 : 0.05;
-    const stateTax = grossPay * stateRate;
-    return { grossPay, fedTax, ssTax, medicareTax, stateTax, ssWages: Math.min(grossPay, 168600), medicareWages: grossPay };
+    if (!wt) return { grossPay: 0, netPay: 0, deductions: 0, fedTax: 0, ssTax: 0, medicareTax: 0, stateTax: 0, ssWages: 0, medicareWages: 0 };
+    return {
+      grossPay: wt.grossPay,
+      netPay: wt.netPay,
+      deductions: wt.deductions,
+      fedTax: wt.fedWithholding,
+      ssTax: wt.ssTaxEmployee,
+      medicareTax: wt.medicareTaxEmployee,
+      stateTax: wt.stateWithholding,
+      ssWages: wt.ssTaxableWages,
+      medicareWages: wt.grossPay,
+    };
   };
 
   const handlePrint = () => window.print();
   const handleExportCSV = () => {
-    const headers = ["Employee", "SSN", "Gross Wages", "Federal Tax", "SS Tax", "Medicare Tax", "State Tax", "SS Wages", "Medicare Wages"];
+    const headers = ["Employee", "SSN", "Gross Wages", "Federal Withheld", "SS Tax", "Medicare Tax", "State Withheld", "SS Wages", "Medicare Wages", "Total Deductions", "Net Pay"];
     const rows = companyEmployees.map(w => {
       const t = getWorkerTotals(w);
       return [
         `${w.firstName} ${w.lastName}`, w.ssn || "N/A",
         t.grossPay.toFixed(2), t.fedTax.toFixed(2), t.ssTax.toFixed(2),
         t.medicareTax.toFixed(2), t.stateTax.toFixed(2), t.ssWages.toFixed(2), t.medicareWages.toFixed(2),
+        t.deductions.toFixed(2), t.netPay.toFixed(2),
       ];
     });
     downloadCSV(headers, rows, `w2_report_${year}.csv`);
@@ -1833,7 +1851,7 @@ function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={handlePrint} data-testid="button-print-w2"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-w2"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
-          <SaveReportButton reportType="w2-annual" category="tax" defaultName="W-2 Annual Report" headers={["Employee", "SSN", "Gross Pay", "Federal Tax", "SS Tax", "Medicare Tax", "State Tax"]} rows={companyEmployees.map(w => { const t = getWorkerTotals(w); return [w.firstName + " " + w.lastName, w.ssn || "", "$" + t.grossPay.toFixed(2), "$" + t.fedTax.toFixed(2), "$" + t.ssTax.toFixed(2), "$" + t.medicareTax.toFixed(2), "$" + t.stateTax.toFixed(2)]; })} />
+          <SaveReportButton reportType="w2-annual" category="tax" defaultName="W-2 Annual Report" headers={["Employee", "SSN", "Gross Pay", "Fed Withheld", "SS Tax", "Medicare Tax", "State Withheld", "Deductions", "Net Pay"]} rows={companyEmployees.map(w => { const t = getWorkerTotals(w); return [w.firstName + " " + w.lastName, w.ssn || "", "$" + t.grossPay.toFixed(2), "$" + t.fedTax.toFixed(2), "$" + t.ssTax.toFixed(2), "$" + t.medicareTax.toFixed(2), "$" + t.stateTax.toFixed(2), "$" + t.deductions.toFixed(2), "$" + t.netPay.toFixed(2)]; })} />
         </div>
         {companyEmployees.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-w2">No W-2 eligible employees found for {year}.</p>
@@ -1842,9 +1860,12 @@ function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
             <TableHeader>
               <TableRow>
                 <TableHead>Employee</TableHead><TableHead>SSN</TableHead>
-                <TableHead className="text-right">Gross Wages</TableHead><TableHead className="text-right">Federal Tax</TableHead>
-                <TableHead className="text-right">SS Tax</TableHead><TableHead className="text-right">Medicare Tax</TableHead>
-                <TableHead className="text-right">State Tax</TableHead>
+                <TableHead className="text-right">Gross Wages</TableHead>
+                <TableHead className="text-right">Fed Withheld</TableHead>
+                <TableHead className="text-right">SS Tax (6.2%)</TableHead>
+                <TableHead className="text-right">Medicare (1.45%)</TableHead>
+                <TableHead className="text-right">State Withheld</TableHead>
+                <TableHead className="text-right">Net Pay</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1859,6 +1880,7 @@ function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
                     <TableCell className="text-right">${t.ssTax.toFixed(2)}</TableCell>
                     <TableCell className="text-right">${t.medicareTax.toFixed(2)}</TableCell>
                     <TableCell className="text-right">${t.stateTax.toFixed(2)}</TableCell>
+                    <TableCell className="text-right font-medium">${t.netPay.toFixed(2)}</TableCell>
                   </TableRow>
                 );
               })}
@@ -1869,6 +1891,7 @@ function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
                 <TableCell className="text-right">${companyEmployees.reduce((s, w) => s + getWorkerTotals(w).ssTax, 0).toFixed(2)}</TableCell>
                 <TableCell className="text-right">${companyEmployees.reduce((s, w) => s + getWorkerTotals(w).medicareTax, 0).toFixed(2)}</TableCell>
                 <TableCell className="text-right">${companyEmployees.reduce((s, w) => s + getWorkerTotals(w).stateTax, 0).toFixed(2)}</TableCell>
+                <TableCell className="text-right">${companyEmployees.reduce((s, w) => s + getWorkerTotals(w).netPay, 0).toFixed(2)}</TableCell>
               </TableRow>
             </TableBody>
           </Table>
@@ -1971,20 +1994,20 @@ function Form941Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [quarter, setQuarter] = useState("Q1");
   const [companyId, setCompanyId] = useState("all");
-  const { workers, companies, deductions } = usePayrollData(open);
+  const { workers, companies } = usePayrollData(open);
   const summary = usePayrollSummary(open, year, quarter, companyId);
 
   const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
   const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
 
-  const totalWages = summary.grandTotal.grossPay;
-  const fedDed = deductions.find(d => d.name.toLowerCase().includes("federal income") && d.isActive && !d.isEmployerPaid && !d.isReferenceOnly);
-  const fedRate = fedDed ? Number(fedDed.rate || 0) / 100 : 0.22;
-  const fedWithholding = totalWages * fedRate;
-  const ssEmployee = Math.min(totalWages, 168600 * Math.max(1, filtered.length)) * 0.062;
-  const ssEmployer = ssEmployee;
-  const medicareEmployee = totalWages * 0.0145;
-  const medicareEmployer = medicareEmployee;
+  const g = summary.grandTotal;
+  const totalWages = g.grossPay;
+  const fedWithholding = g.fedWithholding;
+  const ssEmployee = g.ssTaxEmployee;
+  const ssEmployer = g.ssTaxEmployer;
+  const medicareEmployee = g.medicareTaxEmployee;
+  const medicareEmployer = g.medicareTaxEmployer;
+  const ssTaxableWages = g.ssTaxableWages;
   const totalTaxDeposits = fedWithholding + ssEmployee + ssEmployer + medicareEmployee + medicareEmployer;
 
   const handleExportCSV = () => {
@@ -1993,10 +2016,12 @@ function Form941Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
       ["Number of employees", String(filtered.length)],
       ["Total wages, tips, compensation", totalWages.toFixed(2)],
       ["Federal income tax withheld", fedWithholding.toFixed(2)],
-      ["Social Security (employee)", ssEmployee.toFixed(2)],
-      ["Social Security (employer)", ssEmployer.toFixed(2)],
-      ["Medicare (employee)", medicareEmployee.toFixed(2)],
-      ["Medicare (employer)", medicareEmployer.toFixed(2)],
+      ["SS taxable wages (capped at $168,600/employee)", ssTaxableWages.toFixed(2)],
+      ["Social Security tax — employee (6.2%)", ssEmployee.toFixed(2)],
+      ["Social Security tax — employer (6.2%)", ssEmployer.toFixed(2)],
+      ["Medicare wages", totalWages.toFixed(2)],
+      ["Medicare tax — employee (1.45%)", medicareEmployee.toFixed(2)],
+      ["Medicare tax — employer (1.45%)", medicareEmployer.toFixed(2)],
       ["Total tax deposits", totalTaxDeposits.toFixed(2)],
     ];
     downloadCSV(headers, rows, `form_941_${year}_${quarter}.csv`);
@@ -2015,7 +2040,7 @@ function Form941Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-941"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-941"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
-          <SaveReportButton reportType="form-941" category="tax" defaultName="Form 941" headers={["Line", "Description", "Amount"]} rows={[["1", "Employees", String(filtered.length)], ["2", "Wages", "$" + totalWages.toFixed(2)], ["3", "Federal Income Tax", "$" + fedWithholding.toFixed(2)], ["5a", "Social Security", "$" + ssEmployee.toFixed(2)], ["5c", "Medicare", "$" + medicareEmployee.toFixed(2)]]} />
+          <SaveReportButton reportType="form-941" category="tax" defaultName="Form 941" headers={["Line", "Description", "Amount"]} rows={[["1", "Employees", String(filtered.length)], ["2", "Wages", "$" + totalWages.toFixed(2)], ["3", "Federal Income Tax Withheld", "$" + fedWithholding.toFixed(2)], ["5a wages", "SS Taxable Wages", "$" + ssTaxableWages.toFixed(2)], ["5a tax", "SS Tax (both halves)", "$" + (ssEmployee + ssEmployer).toFixed(2)], ["5c wages", "Medicare Wages", "$" + totalWages.toFixed(2)], ["5c tax", "Medicare Tax (both halves)", "$" + (medicareEmployee + medicareEmployer).toFixed(2)], ["10", "Total Taxes", "$" + totalTaxDeposits.toFixed(2)]]} />
         </div>
         <div className="border rounded-lg p-4 space-y-3 mt-2">
           <h3 className="font-semibold text-sm">Form 941 — {quarter} {year}</h3>
@@ -2024,10 +2049,14 @@ function Form941Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
               <TableRow><TableCell>1. Number of employees who received wages</TableCell><TableCell className="text-right font-medium">{filtered.length}</TableCell></TableRow>
               <TableRow><TableCell>2. Wages, tips, and other compensation</TableCell><TableCell className="text-right font-medium">${totalWages.toFixed(2)}</TableCell></TableRow>
               <TableRow><TableCell>3. Federal income tax withheld</TableCell><TableCell className="text-right font-medium">${fedWithholding.toFixed(2)}</TableCell></TableRow>
-              <TableRow><TableCell>5a. Taxable Social Security wages (${(ssEmployee + ssEmployer).toFixed(2)})</TableCell><TableCell className="text-right font-medium">${Math.min(totalWages, 168600 * filtered.length).toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>5a. Taxable Social Security wages (capped at $168,600/employee)</TableCell><TableCell className="text-right font-medium">${ssTaxableWages.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell className="pl-6 text-muted-foreground">SS tax — employee (6.2%)</TableCell><TableCell className="text-right">${ssEmployee.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell className="pl-6 text-muted-foreground">SS tax — employer (6.2%)</TableCell><TableCell className="text-right">${ssEmployer.toFixed(2)}</TableCell></TableRow>
               <TableRow><TableCell>5c. Taxable Medicare wages & tips</TableCell><TableCell className="text-right font-medium">${totalWages.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell className="pl-6 text-muted-foreground">Medicare tax — employee (1.45%)</TableCell><TableCell className="text-right">${medicareEmployee.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell className="pl-6 text-muted-foreground">Medicare tax — employer (1.45%)</TableCell><TableCell className="text-right">${medicareEmployer.toFixed(2)}</TableCell></TableRow>
               <TableRow><TableCell>5d. Total SS and Medicare taxes</TableCell><TableCell className="text-right font-medium">${(ssEmployee + ssEmployer + medicareEmployee + medicareEmployer).toFixed(2)}</TableCell></TableRow>
-              <TableRow><TableCell>6. Total taxes before adjustments</TableCell><TableCell className="text-right font-medium">${totalTaxDeposits.toFixed(2)}</TableCell></TableRow>
+              <TableRow><TableCell>6. Total taxes before adjustments (line 3 + line 5d)</TableCell><TableCell className="text-right font-medium">${totalTaxDeposits.toFixed(2)}</TableCell></TableRow>
               <TableRow className="font-bold"><TableCell>10. Total taxes after adjustments</TableCell><TableCell className="text-right">${totalTaxDeposits.toFixed(2)}</TableCell></TableRow>
             </TableBody>
           </Table>
@@ -2046,12 +2075,10 @@ function Form940Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
   const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
   const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
 
-  const totalWages = summary.grandTotal.grossPay;
-  const futaWages = summary.workerTotals.reduce((s, wt) => {
-    const w = filtered.find(e => e.id === wt.workerId);
-    return w ? s + Math.min(wt.grossPay, 7000) : s;
-  }, 0);
-  const futaTax = futaWages * 0.006;
+  const g940 = summary.grandTotal;
+  const totalWages = g940.grossPay;
+  const futaWages = g940.futaTaxableWages;
+  const futaTax = g940.futaTax;
   const stateCredit = futaWages * 0.054;
 
   const handleExportCSV = () => {
@@ -2060,8 +2087,8 @@ function Form940Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
       ["Total payments to employees", totalWages.toFixed(2)],
       ["FUTA taxable wages (first $7,000/employee)", futaWages.toFixed(2)],
       ["FUTA tax before adjustments (0.6%)", futaTax.toFixed(2)],
-      ["State unemployment credit (5.4%)", stateCredit.toFixed(2)],
-      ["Total FUTA tax", futaTax.toFixed(2)],
+      ["State unemployment tax credit (5.4%)", stateCredit.toFixed(2)],
+      ["Total FUTA tax (net after credit)", futaTax.toFixed(2)],
     ];
     downloadCSV(headers, rows, `form_940_${year}.csv`);
   };
@@ -2103,25 +2130,19 @@ function DE9Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: bo
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [quarter, setQuarter] = useState("Q1");
   const [companyId, setCompanyId] = useState("all");
-  const { workers, companies, deductions } = usePayrollData(open);
+  const { workers, companies } = usePayrollData(open);
   const summary = usePayrollSummary(open, year, quarter, companyId);
 
   const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
   const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
 
-  const totalWages = summary.grandTotal.grossPay;
-  const pitDed = deductions.find(d => d.name.toLowerCase().includes("state income") && d.isActive && !d.isEmployerPaid && !d.isReferenceOnly);
-  const pitRate = pitDed ? Number(pitDed.rate || 0) / 100 : 0.05;
-  const pitWithheld = totalWages * pitRate;
-  const sdiDed = deductions.find(d => d.name.toLowerCase().includes("sdi") && d.isActive && !d.isEmployerPaid);
-  const sdiRate = sdiDed ? Number(sdiDed.rate || 0) / 100 : 0.011;
-  const sdiWithheld = totalWages * sdiRate;
-  const suiWages = summary.workerTotals.reduce((s, wt) => {
-    const w = filtered.find(e => e.id === wt.workerId);
-    return w ? s + Math.min(wt.grossPay, 7000) : s;
-  }, 0);
-  const suiContrib = suiWages * 0.034;
-  const ettContrib = suiWages * 0.001;
+  const gde9 = summary.grandTotal;
+  const totalWages = gde9.grossPay;
+  const pitWithheld = gde9.stateWithholding;
+  const sdiWithheld = gde9.sdiWithheld;
+  const suiWages = gde9.suiTaxableWages;
+  const suiContrib = gde9.suiTax;
+  const ettContrib = gde9.ettTax;
 
   const handleExportCSV = () => {
     const headers = ["Line Item", "Amount"];
@@ -2179,30 +2200,25 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [quarter, setQuarter] = useState("Q1");
   const [companyId, setCompanyId] = useState("all");
-  const { workers, companies, deductions } = usePayrollData(open);
+  const { workers, companies } = usePayrollData(open);
   const summary = usePayrollSummary(open, year, quarter, companyId);
 
   const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
   const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
 
-  const pitDed = deductions.find(d => d.name.toLowerCase().includes("state income") && d.isActive && !d.isEmployerPaid && !d.isReferenceOnly);
-  const pitRate = pitDed ? Number(pitDed.rate || 0) / 100 : 0.05;
-  const sdiDed = deductions.find(d => d.name.toLowerCase().includes("sdi") && d.isActive && !d.isEmployerPaid);
-  const sdiRate = sdiDed ? Number(sdiDed.rate || 0) / 100 : 0.011;
-
-  const getWorkerWages = (w: typeof employees[0]) => {
+  const getWorkerData = (w: typeof employees[0]) => {
     const wt = summary.workerTotals.find(t => t.workerId === w.id);
-    return wt ? wt.grossPay : 0;
+    return { wages: wt?.grossPay ?? 0, pitWithheld: wt?.stateWithholding ?? 0, sdiWithheld: wt?.sdiWithheld ?? 0 };
   };
 
   const handleExportCSV = () => {
     const headers = ["SSN", "Last Name", "First Name", "PIT Wages", "PIT Withheld", "SDI Wages", "SDI Withheld"];
     const rows = filtered.map(w => {
-      const wages = getWorkerWages(w);
+      const d = getWorkerData(w);
       return [
         w.ssn || "N/A", w.lastName, w.firstName,
-        wages.toFixed(2), (wages * pitRate).toFixed(2),
-        wages.toFixed(2), (wages * sdiRate).toFixed(2),
+        d.wages.toFixed(2), d.pitWithheld.toFixed(2),
+        d.wages.toFixed(2), d.sdiWithheld.toFixed(2),
       ];
     });
     downloadCSV(headers, rows, `de9c_${year}_${quarter}.csv`);
@@ -2221,7 +2237,7 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-de9c"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-de9c"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
-          <SaveReportButton reportType="de9c" category="tax" defaultName="DE 9C" headers={["Employee", "SSN", "PIT Wages", "PIT Withheld", "SDI Wages", "SDI Withheld"]} rows={filtered.map(e => { const w = getWorkerWages(e); return [e.firstName + " " + e.lastName, e.ssn || "", "$" + w.toFixed(2), "$" + (w * pitRate).toFixed(2), "$" + w.toFixed(2), "$" + (w * sdiRate).toFixed(2)]; })} />
+          <SaveReportButton reportType="de9c" category="tax" defaultName="DE 9C" headers={["Employee", "SSN", "PIT Wages", "PIT Withheld", "SDI Wages", "SDI Withheld"]} rows={filtered.map(e => { const d = getWorkerData(e); return [e.firstName + " " + e.lastName, e.ssn || "", "$" + d.wages.toFixed(2), "$" + d.pitWithheld.toFixed(2), "$" + d.wages.toFixed(2), "$" + d.sdiWithheld.toFixed(2)]; })} />
         </div>
         {filtered.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-de9c">No employees found for the selected period.</p>
@@ -2236,25 +2252,25 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
             </TableHeader>
             <TableBody>
               {filtered.map(w => {
-                const wages = getWorkerWages(w);
+                const d = getWorkerData(w);
                 return (
                   <TableRow key={w.id} data-testid={`row-de9c-${w.id}`}>
                     <TableCell>{w.ssn ? `***-**-${w.ssn.slice(-4)}` : "N/A"}</TableCell>
                     <TableCell>{w.lastName}</TableCell>
                     <TableCell>{w.firstName}</TableCell>
-                    <TableCell className="text-right">${wages.toFixed(2)}</TableCell>
-                    <TableCell className="text-right">${(wages * pitRate).toFixed(2)}</TableCell>
-                    <TableCell className="text-right">${wages.toFixed(2)}</TableCell>
-                    <TableCell className="text-right">${(wages * sdiRate).toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${d.wages.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${d.pitWithheld.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${d.wages.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${d.sdiWithheld.toFixed(2)}</TableCell>
                   </TableRow>
                 );
               })}
               <TableRow className="font-bold border-t-2">
                 <TableCell colSpan={3}>Totals</TableCell>
                 <TableCell className="text-right">${summary.grandTotal.grossPay.toFixed(2)}</TableCell>
-                <TableCell className="text-right">${(summary.grandTotal.grossPay * pitRate).toFixed(2)}</TableCell>
+                <TableCell className="text-right">${summary.grandTotal.stateWithholding.toFixed(2)}</TableCell>
                 <TableCell className="text-right">${summary.grandTotal.grossPay.toFixed(2)}</TableCell>
-                <TableCell className="text-right">${(summary.grandTotal.grossPay * sdiRate).toFixed(2)}</TableCell>
+                <TableCell className="text-right">${summary.grandTotal.sdiWithheld.toFixed(2)}</TableCell>
               </TableRow>
             </TableBody>
           </Table>
@@ -2328,6 +2344,163 @@ function Form1096Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
   );
 }
 
+function ExpenseReportSection() {
+  const { data: receipts = [], isLoading } = useQuery<ExpenseReceipt[]>({ queryKey: ["/api/receipts"] });
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: costCenters = [] } = useQuery<any[]>({ queryKey: ["/api/cost-centers"] });
+  const { data: jobs = [] } = useQuery<any[]>({ queryKey: ["/api/jobs"] });
+  const [groupBy, setGroupBy] = useState<"cost-center" | "job" | "category" | "company">("cost-center");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterCompany, setFilterCompany] = useState("all");
+
+  const filtered = receipts.filter(r => {
+    if (filterStatus !== "all" && r.status !== filterStatus) return false;
+    if (filterCompany !== "all" && r.companyId !== filterCompany) return false;
+    return true;
+  });
+
+  const groups = (() => {
+    const map: Record<string, { label: string; receipts: ExpenseReceipt[]; total: number }> = {};
+    filtered.forEach(r => {
+      let key = "none";
+      let label = "Unassigned";
+      if (groupBy === "cost-center") {
+        key = r.costCenterId || "none";
+        label = key !== "none" ? ((costCenters as any[]).find(c => c.id === key)?.name || key) : "No Cost Center";
+      } else if (groupBy === "job") {
+        key = r.jobId || "none";
+        label = key !== "none" ? ((jobs as any[]).find(j => j.id === key)?.title || key) : "No Job";
+      } else if (groupBy === "category") {
+        key = r.category || "general";
+        label = key.charAt(0).toUpperCase() + key.slice(1).replace(/-/g, " ");
+      } else if (groupBy === "company") {
+        key = r.companyId || "none";
+        label = key !== "none" ? (companies.find(c => c.id === key)?.name || key) : "No Company";
+      }
+      if (!map[key]) map[key] = { label, receipts: [], total: 0 };
+      map[key].receipts.push(r);
+      map[key].total += parseFloat(r.amount?.toString() || "0");
+    });
+    return Object.values(map).sort((a, b) => b.total - a.total);
+  })();
+
+  function exportCSV() {
+    const rows = [["Date", "Vendor", "Description", "Category", "Cost Center", "Job", "Company", "Amount", "Status"]];
+    filtered.forEach(r => {
+      const cc = (costCenters as any[]).find(c => c.id === r.costCenterId)?.name || "";
+      const job = (jobs as any[]).find(j => j.id === r.jobId)?.title || "";
+      const co = companies.find(c => c.id === r.companyId)?.name || "";
+      rows.push([r.receiptDate, r.vendor || "", r.description || "", r.category || "", cc, job, co, r.amount?.toString() || "0", r.status || ""]);
+    });
+    const csv = rows.map(r => r.map(v => `"${v}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `expense-report-${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-3 items-center justify-between">
+        <div className="flex flex-wrap gap-3 items-center">
+          <Select value={groupBy} onValueChange={(v: any) => setGroupBy(v)}>
+            <SelectTrigger className="w-44" data-testid="select-group-by"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="cost-center">Group by Cost Center</SelectItem>
+              <SelectItem value="job">Group by Job</SelectItem>
+              <SelectItem value="category">Group by Category</SelectItem>
+              <SelectItem value="company">Group by Company</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={filterCompany} onValueChange={setFilterCompany}>
+            <SelectTrigger className="w-40" data-testid="select-expense-company"><SelectValue placeholder="Company" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={filterStatus} onValueChange={setFilterStatus}>
+            <SelectTrigger className="w-36" data-testid="select-expense-status"><SelectValue placeholder="Status" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Statuses</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="approved">Approved</SelectItem>
+              <SelectItem value="rejected">Rejected</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <Button variant="outline" onClick={exportCSV} data-testid="button-export-expenses">
+          <Download className="h-4 w-4 mr-2" />
+          Export CSV
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}</div>
+      ) : groups.length === 0 ? (
+        <Card>
+          <CardContent className="py-16 text-center text-muted-foreground">
+            <Receipt className="h-10 w-10 mx-auto mb-3 opacity-30" />
+            <p className="font-medium">No expense receipts found</p>
+            <p className="text-sm mt-1">Add receipts in Expenses & Receipts to see them here.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {groups.map(group => (
+            <Card key={group.label} data-testid={`expense-group-${group.label}`}>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base">{group.label}</CardTitle>
+                  <div className="text-right">
+                    <p className="font-bold text-lg">${group.total.toFixed(2)}</p>
+                    <p className="text-xs text-muted-foreground">{group.receipts.length} receipt{group.receipts.length !== 1 ? "s" : ""}</p>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Vendor</TableHead>
+                      <TableHead>Category</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {group.receipts.map(r => (
+                      <TableRow key={r.id}>
+                        <TableCell className="text-sm">{r.receiptDate}</TableCell>
+                        <TableCell className="text-sm font-medium">{r.vendor || "—"}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="capitalize text-xs">
+                            {(r.category || "general").replace(/-/g, " ")}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={r.status === "approved" ? "default" : r.status === "rejected" ? "destructive" : "secondary"}>
+                            {r.status || "pending"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right font-medium">${parseFloat(r.amount?.toString() || "0").toFixed(2)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ReportsPage() {
   const [tab, setTab] = useTabParam();
   const [whosInOpen, setWhosInOpen] = useState(false);
@@ -2368,6 +2541,7 @@ export default function ReportsPage() {
           <TabsTrigger value="payroll" data-testid="tab-payroll">Payroll Reports</TabsTrigger>
           <TabsTrigger value="tax" data-testid="tab-tax">Tax Reports</TabsTrigger>
           <TabsTrigger value="hr" data-testid="tab-hr">HR Reports</TabsTrigger>
+          <TabsTrigger value="expense" data-testid="tab-expense">Expense Reports</TabsTrigger>
         </TabsList>
 
         <TabsContent value="saved" className="mt-6">
@@ -2529,6 +2703,10 @@ export default function ReportsPage() {
               onGenerate={() => setReviewSummaryOpen(true)}
             />
           </div>
+        </TabsContent>
+
+        <TabsContent value="expense" className="mt-6">
+          <ExpenseReportSection />
         </TabsContent>
       </Tabs>
 

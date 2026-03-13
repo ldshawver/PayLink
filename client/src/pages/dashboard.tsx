@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "@/hooks/use-auth";
 import type { Worker, TimeEntry, Schedule } from "@shared/schema";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -34,17 +35,18 @@ const DASHLET_STORAGE_KEY = "paylink-dashlets";
 interface DashletConfig {
   id: string;
   label: string;
+  roles?: string[];
 }
 
 const ALL_DASHLETS: DashletConfig[] = [
   { id: "news", label: "News" },
-  { id: "exception-summary", label: "Exception Summary" },
+  { id: "exception-summary", label: "Exception Summary", roles: ["admin", "manager"] },
   { id: "messages", label: "Messages" },
   { id: "requests", label: "Requests" },
-  { id: "request-authorizations", label: "Request Authorizations" },
-  { id: "exceptions", label: "Exceptions" },
-  { id: "exceptions-subordinates", label: "Exceptions (Subordinates)" },
-  { id: "schedule-summary-subordinates", label: "Schedule Summary (Subordinates)" },
+  { id: "request-authorizations", label: "Request Authorizations", roles: ["admin", "manager"] },
+  { id: "exceptions", label: "Exceptions", roles: ["admin", "manager"] },
+  { id: "exceptions-subordinates", label: "Exceptions (Subordinates)", roles: ["admin", "manager"] },
+  { id: "schedule-summary-subordinates", label: "Schedule Summary (Subordinates)", roles: ["admin", "manager"] },
   { id: "schedule-summary", label: "Schedule Summary" },
   { id: "whos-in-out", label: "Who's In/Out" },
   { id: "timesheet-summary", label: "Timesheet Summary" },
@@ -479,6 +481,8 @@ function TimesheetSummaryDashlet() {
 }
 
 export default function Dashboard() {
+  const { user } = useAuth();
+  const userRole = (user as any)?.role || "employee";
   const [visibility, setVisibility] = useState<Record<string, boolean>>(loadVisibility);
 
   useEffect(() => {
@@ -488,6 +492,10 @@ export default function Dashboard() {
   function toggleDashlet(id: string) {
     setVisibility((prev) => ({ ...prev, [id]: !prev[id] }));
   }
+
+  const allowedDashlets = useMemo(() => {
+    return ALL_DASHLETS.filter(d => !d.roles || d.roles.includes(userRole));
+  }, [userRole]);
 
   const dashletComponents: Record<string, JSX.Element> = {
     "news": <NewsDashlet />,
@@ -524,7 +532,7 @@ export default function Dashboard() {
               <DialogTitle>Configure Dashboard</DialogTitle>
             </DialogHeader>
             <div className="space-y-3 max-h-80 overflow-y-auto py-2">
-              {ALL_DASHLETS.map((dashlet) => (
+              {allowedDashlets.map((dashlet) => (
                 <div key={dashlet.id} className="flex items-center gap-3">
                   <Checkbox
                     id={`toggle-${dashlet.id}`}
@@ -543,7 +551,7 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {ALL_DASHLETS.filter((d) => visibility[d.id] !== false).map((d) => (
+        {allowedDashlets.filter((d) => visibility[d.id] !== false).map((d) => (
           <div key={d.id}>{dashletComponents[d.id]}</div>
         ))}
       </div>

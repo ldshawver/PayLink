@@ -5,6 +5,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Company, Department, Branch, LegalEntity, Enterprise, Division, Position, CostCenter, Job, Role, RolePermission, UserRole, Station, SecondaryWageGroup, Currency } from "@shared/schema";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
@@ -3362,19 +3363,24 @@ function StationsTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<Station | null>(null);
-  const emptyForm = { companyId: "", stationName: "", location: "", ipRestriction: "", description: "", status: "active" };
+  const emptyForm = { companyId: "__all__", stationName: "", location: "", ipRestriction: "", description: "", status: "active", requiresSchedule: false };
   const [form, setForm] = useState(emptyForm);
 
   const { data: stationsList, isLoading } = useQuery<Station[]>({ queryKey: ["/api/stations"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
+  const prepareData = (data: typeof form) => ({
+    ...data,
+    companyId: data.companyId === "__all__" ? null : data.companyId || null,
+  });
+
   const addMutation = useMutation({
-    mutationFn: async (data: typeof form) => { await apiRequest("POST", "/api/stations", data); },
+    mutationFn: async (data: typeof form) => { await apiRequest("POST", "/api/stations", prepareData(data)); },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/stations"] }); setAddOpen(false); setForm(emptyForm); toast({ title: "Station added" }); },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
   const editMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: typeof form }) => { await apiRequest("PATCH", `/api/stations/${id}`, data); },
+    mutationFn: async ({ id, data }: { id: string; data: typeof form }) => { await apiRequest("PATCH", `/api/stations/${id}`, prepareData(data)); },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/stations"] }); setEditOpen(false); setEditItem(null); setForm(emptyForm); toast({ title: "Station updated" }); },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
@@ -3386,7 +3392,7 @@ function StationsTab() {
 
   const handleEdit = (item: Station) => {
     setEditItem(item);
-    setForm({ companyId: item.companyId || "", stationName: item.stationName || "", location: item.location || "", ipRestriction: item.ipRestriction || "", description: item.description || "", status: item.status || "active" });
+    setForm({ companyId: item.companyId || "__all__", stationName: item.stationName || "", location: item.location || "", ipRestriction: item.ipRestriction || "", description: item.description || "", status: item.status || "active", requiresSchedule: item.requiresSchedule || false });
     setEditOpen(true);
   };
 
@@ -3395,11 +3401,15 @@ function StationsTab() {
   const stationFormFields = (suffix: string) => (
     <div className="grid gap-4">
       <div className="grid gap-2">
-        <Label>Company *</Label>
+        <Label>Company</Label>
         <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
           <SelectTrigger data-testid={`select-station-company${suffix}`}><SelectValue placeholder="Select company" /></SelectTrigger>
-          <SelectContent>{companies?.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}</SelectContent>
+          <SelectContent>
+            <SelectItem value="__all__">All Companies (Enterprise-wide)</SelectItem>
+            {companies?.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
+          </SelectContent>
         </Select>
+        <p className="text-xs text-muted-foreground">Select "All Companies" to make this station available to every company.</p>
       </div>
       <div className="grid gap-2">
         <Label>Station Name *</Label>
@@ -3431,6 +3441,14 @@ function StationsTab() {
           </Select>
         </div>
       </div>
+      <div className="flex items-center gap-2 pt-1">
+        <Switch
+          checked={form.requiresSchedule}
+          onCheckedChange={(v) => setForm({ ...form, requiresSchedule: v })}
+          data-testid={`switch-station-requires-schedule${suffix}`}
+        />
+        <Label>Restrict clock-in to scheduled employees only</Label>
+      </div>
     </div>
   );
 
@@ -3442,7 +3460,7 @@ function StationsTab() {
           <DialogTrigger asChild><Button data-testid="button-add-station"><Plus className="mr-2 h-4 w-4" />Add Station</Button></DialogTrigger>
           <DialogContent><DialogHeader><DialogTitle>Add Station</DialogTitle></DialogHeader>
             {stationFormFields("")}
-            <Button data-testid="button-submit-station" className="w-full mt-2" disabled={!form.stationName || !form.companyId || addMutation.isPending} onClick={() => addMutation.mutate(form)}>
+            <Button data-testid="button-submit-station" className="w-full mt-2" disabled={!form.stationName || addMutation.isPending} onClick={() => addMutation.mutate(form)}>
               {addMutation.isPending ? "Adding..." : "Add Station"}
             </Button>
           </DialogContent>
@@ -3459,16 +3477,18 @@ function StationsTab() {
       <Card>
         <Table>
           <TableHeader><TableRow>
-            <TableHead>Station Name</TableHead><TableHead>Location</TableHead><TableHead>IP Restriction</TableHead><TableHead>Status</TableHead><TableHead className="w-12"></TableHead>
+            <TableHead>Station Name</TableHead><TableHead>Company</TableHead><TableHead>Location</TableHead><TableHead>IP Restriction</TableHead><TableHead>Sched. Only</TableHead><TableHead>Status</TableHead><TableHead className="w-12"></TableHead>
           </TableRow></TableHeader>
           <TableBody>
             {(!stationsList || stationsList.length === 0) ? (
-              <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-8">No stations configured</TableCell></TableRow>
+              <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No stations configured</TableCell></TableRow>
             ) : stationsList.map((s) => (
               <TableRow key={s.id} data-testid={`row-station-${s.id}`}>
                 <TableCell className="font-medium">{s.stationName}</TableCell>
+                <TableCell className="text-sm">{s.companyId ? (companies?.find(c => c.id === s.companyId)?.name || "—") : <Badge variant="outline">All Companies</Badge>}</TableCell>
                 <TableCell>{s.location || "—"}</TableCell>
                 <TableCell className="font-mono text-sm">{s.ipRestriction || "—"}</TableCell>
+                <TableCell>{s.requiresSchedule ? <Badge variant="secondary">Yes</Badge> : "—"}</TableCell>
                 <TableCell><Badge variant={s.status === "active" ? "default" : "secondary"}>{s.status}</Badge></TableCell>
                 <TableCell>
                   <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" data-testid={`menu-station-${s.id}`}><MoreVertical className="h-4 w-4" /></Button></DropdownMenuTrigger>
@@ -3979,7 +3999,7 @@ function QuickStartTab() {
     { label: "Configure Jobs", done: (jobs?.length || 0) > 0, link: "/company?tab=jobs", icon: Briefcase },
     { label: "Add Employees", done: (workers?.length || 0) > 0, link: "/employees", icon: Users },
     { label: "Set Pay Policies", done: (policyGroups?.length || 0) > 0, link: "/policy", icon: Shield },
-    { label: "Configure Pay Periods", done: (payPeriods?.length || 0) > 0, link: "/payroll", icon: DollarSign },
+    { label: "Configure Pay Periods", done: (payPeriods?.length || 0) > 0, link: "/payroll?tab=pay-periods", icon: DollarSign },
     { label: "Configure Permission Groups", done: (rolesData?.length || 0) >= 5, link: "/company?tab=permissions", icon: Lock },
   ];
 

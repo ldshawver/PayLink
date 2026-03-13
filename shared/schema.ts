@@ -1169,12 +1169,13 @@ export type InsertWorkerMembership = z.infer<typeof insertWorkerMembershipSchema
 
 export const stations = pgTable("stations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   stationName: text("station_name").notNull(),
   location: text("location"),
   ipRestriction: text("ip_restriction"),
   description: text("description"),
   status: text("status").default("active"),
+  requiresSchedule: boolean("requires_schedule").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -1209,10 +1210,42 @@ export const employeeWageGroups = pgTable("employee_wage_groups", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const receipts = pgTable("receipts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  workerId: varchar("worker_id").references(() => workers.id),
+  costCenterId: varchar("cost_center_id"),
+  jobId: varchar("job_id"),
+  vendor: text("vendor"),
+  description: text("description"),
+  amount: numeric("amount").notNull().default("0"),
+  receiptDate: text("receipt_date").notNull(),
+  category: text("category").default("general"),
+  receiptImagePath: text("receipt_image_path"),
+  status: text("status").default("pending"),
+  approvedBy: varchar("approved_by"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const shiftOffers = pgTable("shift_offers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  scheduleId: varchar("schedule_id").notNull().references(() => schedules.id),
+  offeredByWorkerId: varchar("offered_by_worker_id").notNull().references(() => workers.id),
+  status: text("status").default("open"),
+  claimedByWorkerId: varchar("claimed_by_worker_id").references(() => workers.id),
+  approvedBy: varchar("approved_by"),
+  notes: text("notes"),
+  offeredAt: timestamp("offered_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 export const insertStationSchema = createInsertSchema(stations).omit({ id: true, createdAt: true });
 export const insertSecondaryWageGroupSchema = createInsertSchema(secondaryWageGroups).omit({ id: true, createdAt: true });
 export const insertCurrencySchema = createInsertSchema(currencies).omit({ id: true, createdAt: true });
 export const insertEmployeeWageGroupSchema = createInsertSchema(employeeWageGroups).omit({ id: true, createdAt: true });
+export const insertReceiptSchema = createInsertSchema(receipts).omit({ id: true, createdAt: true });
+export const insertShiftOfferSchema = createInsertSchema(shiftOffers).omit({ id: true, offeredAt: true, updatedAt: true });
 
 export type Station = typeof stations.$inferSelect;
 export type InsertStation = z.infer<typeof insertStationSchema>;
@@ -1222,6 +1255,10 @@ export type Currency = typeof currencies.$inferSelect;
 export type InsertCurrency = z.infer<typeof insertCurrencySchema>;
 export type EmployeeWageGroup = typeof employeeWageGroups.$inferSelect;
 export type InsertEmployeeWageGroup = z.infer<typeof insertEmployeeWageGroupSchema>;
+export type Receipt = typeof receipts.$inferSelect;
+export type InsertReceipt = z.infer<typeof insertReceiptSchema>;
+export type ShiftOffer = typeof shiftOffers.$inferSelect;
+export type InsertShiftOffer = z.infer<typeof insertShiftOfferSchema>;
 
 export const savedReports = pgTable("saved_reports", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
