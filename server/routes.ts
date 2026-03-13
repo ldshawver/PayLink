@@ -1067,76 +1067,138 @@ export async function registerRoutes(
       const { companyId, periodStart, periodEnd } = req.body;
 
       const company = await storage.getCompany(companyId);
-      if (!company) {
-        return res.status(404).json({ message: "Company not found" });
-      }
+      if (!company) return res.status(404).json({ message: "Company not found" });
 
       const entries = await storage.getTimeEntriesByDateRange(companyId, periodStart, periodEnd);
-      const companyWorkers = await storage.getWorkers(companyId);
-      const activeWorkers = companyWorkers.filter(w => w.isActive);
+      const allWorkers = await storage.getWorkers(companyId);
+      const activeWorkers = allWorkers.filter(w => w.isActive);
+      const companyDeductions = await storage.getTaxesDeductions(companyId);
 
-      const overtimeMultiplier = Number(company.overtimeMultiplier || 1.5);
+      const allSecondaryWageGroups = await storage.getSecondaryWageGroups(companyId);
+      const wageGroupMap: Record<string, { hourlyRate: number; overtimeRate: number }> = {};
+      for (const wg of allSecondaryWageGroups) {
+        wageGroupMap[wg.id] = {
+          hourlyRate: parseFloat(wg.hourlyRate || "0"),
+          overtimeRate: parseFloat(wg.overtimeRate || "0"),
+        };
+      }
 
-      const workerPayData: Array<{
-        workerId: string;
-        regularHours: number;
-        overtimeHours: number;
-        doubleTimeHours: number;
-        regularPay: number;
-        overtimePay: number;
-        doubleTimePay: number;
-        grossPay: number;
-        payRate: number;
-        payType: string;
-      }> = [];
+      const allRuns = await storage.getPayrollRuns(companyId);
+      const priorRuns = allRuns.filter(r => r.status !== "draft" && r.periodEnd < periodStart);
+      const existingYtdByWorker: Record<string, { gross: number; deductions: number; net: number }> = {};
+      for (const worker of activeWorkers) {
+        let ytdGross = 0, ytdDeductions = 0, ytdNet = 0;
+        for (const pr of priorRuns) {
+          const priorItems = await storage.getPayrollItems(pr.id);
+          const workerItem = priorItems.find(i => i.workerId === worker.id);
+          if (workerItem) {
+            ytdGross += parseFloat(workerItem.grossPay || "0");
+            ytdDeductions += parseFloat(workerItem.deductions || "0");
+            ytdNet += parseFloat(workerItem.netPay || "0");
+          }
+        }
+        existingYtdByWorker[worker.id] = { gross: ytdGross, deductions: ytdDeductions, net: ytdNet };
+      }
+
+      const otMultiplier = Number(company.overtimeMultiplier || 1.5);
+      const dtMultiplier = 2.0;
+      const items: any[] = [];
+      let totalGross = 0, totalNet = 0, totalHoursSum = 0, totalOT = 0;
+      let checkNum = 1001;
 
       for (const worker of activeWorkers) {
         const workerEntries = entries.filter(e => e.workerId === worker.id);
-        const totalHours = workerEntries.reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
-        const overtimeHours = workerEntries.reduce((sum, e) => sum + Number(e.overtimeHours || 0), 0);
-        const doubleTimeHours = workerEntries.reduce((sum, e) => sum + Number((e as any).doubleTimeHours || 0), 0);
-        const regularHours = totalHours - overtimeHours - doubleTimeHours;
+        const regHrs = workerEntries.reduce((s, e) => {
+          const tot = parseFloat(e.totalHours || "0");
+          const ot = parseFloat(e.overtimeHours || "0");
+          const dt = parseFloat((e as any).doubleTimeHours || "0");
+          return s + (tot - ot - dt);
+        }, 0);
+        const otHrs = workerEntries.reduce((s, e) => s + parseFloat(e.overtimeHours || "0"), 0);
+        const dtHrs = workerEntries.reduce((s, e) => s + parseFloat((e as any).doubleTimeHours || "0"), 0);
+        const totalHrs = regHrs + otHrs + dtHrs;
+        const defaultRate = parseFloat(worker.payRate || "0");
 
-        let regularPay = 0;
-        let overtimePay = 0;
-        let doubleTimePay = 0;
-        let grossPay = 0;
+        let regPay = 0, otPay = 0, dtPay = 0, grossPay = 0;
 
         if (worker.payType === "salary") {
           const payFreq = company.payFrequency || "biweekly";
-          let divisor = 26;
-          if (payFreq === "weekly") divisor = 52;
-          else if (payFreq === "semimonthly") divisor = 24;
-          else if (payFreq === "monthly") divisor = 12;
-          grossPay = Number(worker.payRate) / divisor;
-          regularPay = grossPay;
+          let periodsPerYear = 26;
+          if (payFreq === "weekly") periodsPerYear = 52;
+          else if (payFreq === "semimonthly") periodsPerYear = 24;
+          else if (payFreq === "monthly") periodsPerYear = 12;
+          const hourlyEquiv = defaultRate / 2080;
+          regPay = defaultRate / periodsPerYear;
+          otPay = otHrs * hourlyEquiv * otMultiplier;
+          dtPay = dtHrs * hourlyEquiv * dtMultiplier;
+          grossPay = regPay + otPay + dtPay;
         } else {
-          const rate = Number(worker.payRate);
-          regularPay = regularHours * rate;
-          overtimePay = overtimeHours * rate * overtimeMultiplier;
-          doubleTimePay = doubleTimeHours * rate * 2;
-          grossPay = regularPay + overtimePay + doubleTimePay;
+          for (const e of workerEntries) {
+            const entryTotal = parseFloat(e.totalHours || "0");
+            const entryOt = parseFloat(e.overtimeHours || "0");
+            const entryDt = parseFloat((e as any).doubleTimeHours || "0");
+            const entryReg = entryTotal - entryOt - entryDt;
+            const wgId = (e as any).wageGroupId;
+            const wg = wgId ? wageGroupMap[wgId] : null;
+            const rate = wg ? wg.hourlyRate : defaultRate;
+            const otRate = wg && wg.overtimeRate > 0 ? wg.overtimeRate : rate * otMultiplier;
+            regPay += entryReg * rate;
+            otPay += entryOt * otRate;
+            dtPay += entryDt * rate * dtMultiplier;
+          }
+          grossPay = regPay + otPay + dtPay;
         }
 
-        if (totalHours > 0 || worker.payType === "salary") {
-          workerPayData.push({
-            workerId: worker.id,
-            regularHours,
-            overtimeHours,
-            doubleTimeHours,
-            regularPay,
-            overtimePay,
-            doubleTimePay,
-            grossPay,
-            payRate: Number(worker.payRate),
-            payType: worker.payType || "hourly",
-          });
+        if (totalHrs === 0 && worker.payType !== "salary") continue;
+
+        const isContractor = worker.workerType === "contractor";
+        const workerDeds = companyDeductions.filter(d => {
+          if (!d.isActive || d.isEmployerPaid || d.isReferenceOnly) return false;
+          const appliesTo = d.appliesTo || "all";
+          if (appliesTo === "employee" && isContractor) return false;
+          if (appliesTo === "contractor" && !isContractor) return false;
+          const nl = d.name.toLowerCase();
+          if (!isContractor && (nl.includes("se tax") || nl.includes("self-employment") || nl.includes("self employment"))) return false;
+          return true;
+        });
+
+        let totalDeductions = 0;
+        for (const ded of workerDeds) {
+          if (ded.calculationType === "percentage") {
+            const base = ded.maxAmount ? Math.min(grossPay, parseFloat(ded.maxAmount)) : grossPay;
+            totalDeductions += base * (parseFloat(ded.rate || "0") / 100);
+          } else {
+            totalDeductions += parseFloat(ded.rate || "0");
+          }
         }
+
+        const netPay = grossPay - totalDeductions;
+        const ytd = existingYtdByWorker[worker.id] || { gross: 0, deductions: 0, net: 0 };
+
+        totalGross += grossPay;
+        totalNet += netPay;
+        totalHoursSum += totalHrs;
+        totalOT += otHrs;
+
+        items.push({
+          workerId: worker.id,
+          regularHours: regHrs.toFixed(2),
+          overtimeHours: otHrs.toFixed(2),
+          doubleTimeHours: dtHrs.toFixed(2),
+          regularPay: regPay.toFixed(2),
+          overtimePay: otPay.toFixed(2),
+          doubleTimePay: dtPay.toFixed(2),
+          grossPay: grossPay.toFixed(2),
+          deductions: totalDeductions.toFixed(2),
+          netPay: netPay.toFixed(2),
+          payRate: defaultRate.toFixed(2),
+          payType: worker.payType || "hourly",
+          checkNumber: String(checkNum++),
+          ytdGross: (ytd.gross + grossPay).toFixed(2),
+          ytdDeductions: (ytd.deductions + totalDeductions).toFixed(2),
+          ytdNet: (ytd.net + netPay).toFixed(2),
+        });
       }
-
-      const totalGross = workerPayData.reduce((sum, w) => sum + w.grossPay, 0);
-      const totalHours = workerPayData.reduce((sum, w) => sum + w.regularHours + w.overtimeHours + w.doubleTimeHours, 0);
-      const totalOT = workerPayData.reduce((sum, w) => sum + w.overtimeHours, 0);
 
       const payrollRun = await storage.createPayrollRun({
         companyId,
@@ -1144,27 +1206,15 @@ export async function registerRoutes(
         periodEnd,
         status: "processed",
         totalGross: totalGross.toFixed(2),
-        totalNet: totalGross.toFixed(2),
-        totalHours: totalHours.toFixed(2),
+        totalNet: totalNet.toFixed(2),
+        totalHours: totalHoursSum.toFixed(2),
         totalOvertimeHours: totalOT.toFixed(2),
-        workerCount: workerPayData.length,
+        workerCount: items.length,
         processedAt: new Date(),
       });
 
-      for (const wp of workerPayData) {
-        await storage.createPayrollItem({
-          payrollRunId: payrollRun.id,
-          workerId: wp.workerId,
-          regularHours: wp.regularHours.toFixed(2),
-          overtimeHours: wp.overtimeHours.toFixed(2),
-          doubleTimeHours: wp.doubleTimeHours.toFixed(2),
-          regularPay: wp.regularPay.toFixed(2),
-          overtimePay: wp.overtimePay.toFixed(2),
-          doubleTimePay: wp.doubleTimePay.toFixed(2),
-          grossPay: wp.grossPay.toFixed(2),
-          payRate: wp.payRate.toFixed(2),
-          payType: wp.payType,
-        });
+      for (const item of items) {
+        await storage.createPayrollItem({ payrollRunId: payrollRun.id, ...item });
       }
 
       res.status(201).json(payrollRun);
