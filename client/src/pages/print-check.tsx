@@ -119,6 +119,341 @@ function CheckPortion({
   );
 }
 
+// ── Middle third for StandardCheck: employee/pay summary + leave balances ──
+function StubSummarySection({
+  item, worker, company, run, config, accrualAccounts = [], accrualBalances = [],
+}: {
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; config: Record<string, boolean>; accrualAccounts?: AccrualAccount[]; accrualBalances?: AccrualBalance[];
+}) {
+  const netPay = Number(item.netPay || 0);
+  const grossPay = Number(item.grossPay || 0);
+  const totalDeductions = Number(item.deductions || 0);
+  const regularHours = Number(item.regularHours || 0);
+  const overtimeHours = Number(item.overtimeHours || 0);
+  const doubleTimeHours = Number(item.doubleTimeHours || 0);
+  const totalHours = regularHours + overtimeHours + doubleTimeHours;
+  const isContractor = worker.workerType === "contractor";
+
+  const workerAccrualBalances = accrualBalances.filter(b => b.workerId === worker.id);
+  const sickAccounts = accrualAccounts.filter(a => a.type === "sick" && a.isActive);
+  const workerLeaveBalances = workerAccrualBalances
+    .map(b => {
+      const account = accrualAccounts.find(a => a.id === b.accrualAccountId);
+      if (!account || !account.isActive) return null;
+      return { name: account.name, type: account.type, balance: Number(b.balance || 0), used: Number(b.usedHours || 0) };
+    })
+    .filter((b): b is NonNullable<typeof b> => b !== null);
+
+  return (
+    <div style={{ padding: "0.2in 0.4in", fontSize: "10px", height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
+      {/* Header: company + employee */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "8px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          {config.showCompanyLogo && company.logoUrl && (
+            <img src={company.logoUrl} alt="" style={{ height: "28px", width: "28px", objectFit: "contain" }} />
+          )}
+          <div>
+            {config.showCompanyName && <div style={{ fontSize: "12px", fontWeight: "bold" }}>PAY STUB — {company.name}</div>}
+            {!config.showCompanyName && <div style={{ fontSize: "12px", fontWeight: "bold" }}>PAY STUB</div>}
+            {company.ein && <div>EIN: {company.ein}</div>}
+            {config.showCompanyAddress && company.address && <div>{company.address}</div>}
+            {config.showCompanyAddress && (company.city || company.state || company.zip) && (
+              <div>{[company.city, company.state].filter(Boolean).join(", ")} {company.zip}</div>
+            )}
+            {config.showCompanyAddress && company.phone && <div>{company.phone}</div>}
+          </div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div><strong>{isContractor ? "Contractor" : "Employee"}:</strong> {worker.firstName} {worker.lastName}</div>
+          <div><strong>{isContractor ? "Contractor" : "Employee"} #:</strong> {worker.employeeNumber || "—"}</div>
+          <div><strong>SSN:</strong> {worker.ssn ? "XXX-XX-" + worker.ssn.slice(-4) : "XXX-XX-XXXX"}</div>
+        </div>
+      </div>
+
+      {/* Pay period row */}
+      {config.showPayPeriod && (
+        <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "2px solid #000", paddingBottom: "4px", marginBottom: "10px" }}>
+          <div><strong>Pay Period:</strong> {run.periodStart} to {run.periodEnd}</div>
+          {config.showCheckNumber && <div><strong>Check #:</strong> {item.checkNumber || "—"}</div>}
+          <div><strong>Pay Date:</strong> {run.processedAt ? new Date(run.processedAt).toLocaleDateString() : "—"}</div>
+        </div>
+      )}
+
+      {/* Hours summary */}
+      <div style={{ display: "flex", gap: "8px", marginBottom: "10px" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: "9px" }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid #000" }}>
+              <th style={{ textAlign: "left", padding: "2px 6px 2px 2px" }}>HOURS</th>
+              <th style={{ textAlign: "right", padding: "2px" }}>REG</th>
+              {overtimeHours > 0 && <th style={{ textAlign: "right", padding: "2px" }}>OT</th>}
+              {doubleTimeHours > 0 && <th style={{ textAlign: "right", padding: "2px" }}>DT</th>}
+              <th style={{ textAlign: "right", padding: "2px" }}>TOTAL</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style={{ padding: "2px 6px 2px 2px" }}></td>
+              <td style={{ textAlign: "right", padding: "2px" }}>{fmt(regularHours)}</td>
+              {overtimeHours > 0 && <td style={{ textAlign: "right", padding: "2px" }}>{fmt(overtimeHours)}</td>}
+              {doubleTimeHours > 0 && <td style={{ textAlign: "right", padding: "2px" }}>{fmt(doubleTimeHours)}</td>}
+              <td style={{ textAlign: "right", padding: "2px", fontWeight: "bold" }}>{fmt(totalHours)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pay totals boxes */}
+      <div style={{ display: "flex", gap: "12px", marginBottom: "10px" }}>
+        {[
+          { label: "GROSS PAY", value: `$${fmt(grossPay)}` },
+          { label: "TOTAL DEDUCTIONS", value: `$${fmt(totalDeductions)}` },
+          { label: "NET PAY", value: `$${fmt(netPay)}` },
+        ].map(({ label, value }) => (
+          <div key={label} style={{ flex: 1, border: "1px solid #999", padding: "6px 8px", textAlign: "center" }}>
+            <div style={{ fontSize: "8px", color: "#555", marginBottom: "2px" }}>{label}</div>
+            <div style={{ fontSize: label === "NET PAY" ? "15px" : "13px", fontWeight: "bold" }}>{value}</div>
+          </div>
+        ))}
+        {config.showYtdTotals && (
+          <>
+            <div style={{ flex: 1, border: "1px solid #ccc", padding: "6px 8px", textAlign: "center", background: "#f9f9f9" }}>
+              <div style={{ fontSize: "8px", color: "#555", marginBottom: "2px" }}>YTD GROSS</div>
+              <div style={{ fontSize: "13px", fontWeight: "bold" }}>${fmt(item.ytdGross)}</div>
+            </div>
+            <div style={{ flex: 1, border: "1px solid #ccc", padding: "6px 8px", textAlign: "center", background: "#f9f9f9" }}>
+              <div style={{ fontSize: "8px", color: "#555", marginBottom: "2px" }}>YTD NET</div>
+              <div style={{ fontSize: "13px", fontWeight: "bold" }}>${fmt(item.ytdNet)}</div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Leave balances */}
+      {!isContractor && workerLeaveBalances.length > 0 && (
+        <div style={{ border: "1px solid #999", padding: "6px 8px" }}>
+          <div style={{ fontWeight: "bold", fontSize: "9px", marginBottom: "4px" }}>LEAVE BALANCES</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #999" }}>
+                <th style={{ textAlign: "left", padding: "2px", fontSize: "9px" }}>TYPE</th>
+                <th style={{ textAlign: "right", padding: "2px", fontSize: "9px" }}>AVAILABLE (HRS)</th>
+                <th style={{ textAlign: "right", padding: "2px", fontSize: "9px" }}>USED (HRS)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {workerLeaveBalances.map((lb, i) => (
+                <tr key={i}>
+                  <td style={{ padding: "2px" }}>{lb.name}</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(lb.balance)}</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(lb.used)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {!isContractor && workerLeaveBalances.length === 0 && sickAccounts.length > 0 && (
+        <div style={{ border: "1px solid #999", padding: "6px 8px" }}>
+          <div style={{ fontWeight: "bold", fontSize: "9px", marginBottom: "2px" }}>LEAVE BALANCES</div>
+          <div style={{ fontSize: "9px", color: "#666" }}>Sick Leave: 0.00 hrs available</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Bottom third for StandardCheck: earnings & deductions detail ──
+function StubDetailSection({
+  item, worker, company, run, deductions, config,
+}: {
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>;
+}) {
+  const netPay = Number(item.netPay || 0);
+  const grossPay = Number(item.grossPay || 0);
+  const totalDeductions = Number(item.deductions || 0);
+  const regularHours = Number(item.regularHours || 0);
+  const overtimeHours = Number(item.overtimeHours || 0);
+  const doubleTimeHours = Number(item.doubleTimeHours || 0);
+  const totalHours = regularHours + overtimeHours + doubleTimeHours;
+  const isContractor = worker.workerType === "contractor";
+  const ytdGross = Number(item.ytdGross || 0);
+
+  const SS_WAGE_BASE = 168600;
+  const ssTaxCurrent = isContractor ? Math.min(grossPay, SS_WAGE_BASE) * 0.124 : 0;
+  const medicareTaxCurrent = isContractor ? grossPay * 0.029 : 0;
+  const totalSeTaxCurrent = ssTaxCurrent + medicareTaxCurrent;
+  const ssTaxYtd = isContractor ? Math.min(ytdGross, SS_WAGE_BASE) * 0.124 : 0;
+  const medicareTaxYtd = isContractor ? ytdGross * 0.029 : 0;
+  const totalSeTaxYtd = ssTaxYtd + medicareTaxYtd;
+
+  const deductionBreakdown = deductions
+    .filter(d => d.isActive && !d.isEmployerPaid && !d.isReferenceOnly)
+    .filter(d => {
+      const appliesTo = d.appliesTo || "all";
+      if (appliesTo === "employee" && isContractor) return false;
+      if (appliesTo === "contractor" && !isContractor) return false;
+      return true;
+    })
+    .map(d => {
+      let amount = 0;
+      if (d.calculationType === "percentage") {
+        const base = d.maxAmount ? Math.min(grossPay, Number(d.maxAmount)) : grossPay;
+        amount = base * (Number(d.rate || 0) / 100);
+      } else {
+        amount = Number(d.rate || 0);
+      }
+      return { name: d.name, amount };
+    })
+    .filter(d => d.amount > 0);
+
+  return (
+    <div style={{ padding: "0.15in 0.4in 0.2in", fontSize: "10px", height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", gap: "16px", flex: 1 }}>
+        {/* Earnings table */}
+        {config.showEarningsDetail && (
+          <div style={{ flex: 1 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #000" }}>
+                  <th style={{ textAlign: "left", padding: "3px 2px", fontWeight: "bold" }}>EARNINGS</th>
+                  <th style={{ textAlign: "right", padding: "3px 2px", fontWeight: "bold" }}>HOURS</th>
+                  <th style={{ textAlign: "right", padding: "3px 2px", fontWeight: "bold" }}>RATE</th>
+                  <th style={{ textAlign: "right", padding: "3px 2px", fontWeight: "bold" }}>CURRENT</th>
+                  {config.showYtdTotals && <th style={{ textAlign: "right", padding: "3px 2px", fontWeight: "bold" }}>YTD</th>}
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ padding: "2px" }}>Regular</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.regularHours)}</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.payRate)}</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.regularPay)}</td>
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdGross)}</td>}
+                </tr>
+                {overtimeHours > 0 && (
+                  <tr>
+                    <td style={{ padding: "2px" }}>Overtime (1.5×)</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.overtimeHours)}</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(Number(item.payRate || 0) * 1.5)}</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.overtimePay)}</td>
+                    {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
+                  </tr>
+                )}
+                {doubleTimeHours > 0 && (
+                  <tr>
+                    <td style={{ padding: "2px" }}>Double Time (2×)</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.doubleTimeHours)}</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(Number(item.payRate || 0) * 2)}</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.doubleTimePay)}</td>
+                    {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
+                  </tr>
+                )}
+                <tr style={{ borderTop: "1px solid #666" }}>
+                  <td style={{ padding: "2px", fontWeight: "bold" }}>TOTAL HOURS</td>
+                  <td style={{ textAlign: "right", padding: "2px", fontWeight: "bold" }}>{fmt(totalHours)}</td>
+                  <td colSpan={config.showYtdTotals ? 3 : 2}></td>
+                </tr>
+                <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
+                  <td style={{ padding: "2px" }}>GROSS PAY</td>
+                  <td style={{ padding: "2px" }}></td>
+                  <td style={{ padding: "2px" }}></td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.grossPay)}</td>
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdGross)}</td>}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Deductions table */}
+        {config.showDeductionsDetail && (
+          <div style={{ flex: 1 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #000" }}>
+                  <th style={{ textAlign: "left", padding: "3px 2px", fontWeight: "bold" }}>DEDUCTIONS</th>
+                  <th style={{ textAlign: "right", padding: "3px 2px", fontWeight: "bold" }}>CURRENT</th>
+                  {config.showYtdTotals && <th style={{ textAlign: "right", padding: "3px 2px", fontWeight: "bold" }}>YTD</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {deductionBreakdown.map((d, i) => (
+                  <tr key={i}>
+                    <td style={{ padding: "2px" }}>{d.name}</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(d.amount)}</td>
+                    {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
+                  </tr>
+                ))}
+                {deductionBreakdown.length === 0 && (
+                  <tr><td style={{ padding: "2px", color: "#999" }} colSpan={config.showYtdTotals ? 3 : 2}>No deductions</td></tr>
+                )}
+                <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
+                  <td style={{ padding: "2px" }}>TOTAL DEDUCTIONS</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(totalDeductions)}</td>
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdDeductions)}</td>}
+                </tr>
+                <tr style={{ borderTop: "2px solid #000", fontWeight: "bold" }}>
+                  <td style={{ padding: "2px" }}>NET PAY</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(netPay)}</td>
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdNet)}</td>}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* SE Tax reference for contractors */}
+      {isContractor && (
+        <div style={{ marginTop: "8px", border: "1px solid #4a90d9", padding: "6px 8px", background: "#f0f5ff" }}>
+          <div style={{ fontWeight: "bold", fontSize: "9px", color: "#2b5ea7", marginBottom: "4px" }}>
+            SELF-EMPLOYMENT TAX REFERENCE — NOT DEDUCTED FROM PAY
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #4a90d9" }}>
+                <th style={{ textAlign: "left", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>DESCRIPTION</th>
+                <th style={{ textAlign: "right", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>RATE</th>
+                <th style={{ textAlign: "right", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>CURRENT</th>
+                {config.showYtdTotals && <th style={{ textAlign: "right", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>YTD</th>}
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ padding: "1px 2px", color: "#2b5ea7" }}>Social Security (SSI)</td>
+                <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>12.4%</td>
+                <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>${fmt(ssTaxCurrent)}</td>
+                {config.showYtdTotals && <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>${fmt(ssTaxYtd)}</td>}
+              </tr>
+              <tr>
+                <td style={{ padding: "1px 2px", color: "#2b5ea7" }}>Medicare</td>
+                <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>2.9%</td>
+                <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>${fmt(medicareTaxCurrent)}</td>
+                {config.showYtdTotals && <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>${fmt(medicareTaxYtd)}</td>}
+              </tr>
+              <tr style={{ borderTop: "1px solid #4a90d9", fontWeight: "bold" }}>
+                <td style={{ padding: "2px", color: "#2b5ea7" }}>Total SE Tax</td>
+                <td style={{ textAlign: "right", padding: "2px", color: "#2b5ea7" }}>15.3%</td>
+                <td style={{ textAlign: "right", padding: "2px", color: "#2b5ea7" }}>${fmt(totalSeTaxCurrent)}</td>
+                {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px", color: "#2b5ea7" }}>${fmt(totalSeTaxYtd)}</td>}
+              </tr>
+            </tbody>
+          </table>
+          <div style={{ fontSize: "7px", color: "#555", marginTop: "3px" }}>
+            As an independent contractor, you are responsible for paying self-employment tax (SSI 12.4% + Medicare 2.9% = 15.3%) directly to the IRS. SS applies to first ${SS_WAGE_BASE.toLocaleString()} of earnings.
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginTop: "6px", textAlign: "center", fontSize: "8px", color: "#999", borderTop: "1px solid #ccc", paddingTop: "4px" }}>
+        This is a computer-generated document. {company.name} {company.ein ? `- EIN: ${company.ein}` : ""}
+      </div>
+    </div>
+  );
+}
+
+// ── Original single-section stub (used by VoucherCheck + ThreePartCheck) ──
 function StubPortion({
   item, worker, company, run, deductions, config, payStubAccounts = [], accrualAccounts = [], accrualBalances = [],
 }: {
@@ -405,11 +740,17 @@ interface CheckProps {
 function StandardCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances }: CheckProps) {
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
-      <div style={{ height: "7.333in", borderBottom: "2px dashed #999" }}>
+      {/* Top third: the actual check */}
+      <div style={{ height: "3.667in", borderBottom: "2px dashed #999" }}>
         <CheckPortion item={item} worker={worker} company={company} run={run} config={config} />
       </div>
-      <div style={{ height: "3.667in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
+      {/* Middle third: pay stub summary */}
+      <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
+        <StubSummarySection item={item} worker={worker} company={company} run={run} config={config} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
+      </div>
+      {/* Bottom third: earnings & deductions detail */}
+      <div style={{ height: "3.666in" }}>
+        <StubDetailSection item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
       </div>
     </div>
   );
