@@ -44,7 +44,7 @@ export function ClockInButton() {
   const stationsQuery = useQuery<Station[]>({ queryKey: ["/api/stations"] });
 
   const workers = workersQuery.data || [];
-  const stations = (stationsQuery.data || []).filter(s => s.isActive);
+  const stations = (stationsQuery.data || []).filter(s => s.status === "active");
 
   const clockableWorkers = workers.filter(
     (w) => w.isActive && !(w.workerType === "contractor" && w.contractorType === "invoice")
@@ -172,24 +172,23 @@ export function ClockInButton() {
             <>
               <DropdownMenuLabel className="text-xs flex items-center gap-1">
                 <MapPin className="h-3 w-3" />
-                {selectedStation ? selectedStation.name : "Select Station (optional)"}
+                {selectedStation
+                  ? selectedStation.stationName
+                  : <span className="text-amber-600 font-medium">Station required — select one</span>}
               </DropdownMenuLabel>
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger data-testid="button-select-station">
                   <MapPin className="mr-2 h-4 w-4 text-muted-foreground" />
-                  {selectedStation ? selectedStation.name : "Choose Station..."}
+                  {selectedStation ? selectedStation.stationName : "Choose Station..."}
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent className="max-h-64 overflow-y-auto">
-                  <DropdownMenuItem onClick={() => setSelectedStationId(null)} data-testid="button-station-none">
-                    No Station
-                  </DropdownMenuItem>
                   {availableStations.map((s) => (
                     <DropdownMenuItem
                       key={s.id}
                       onClick={() => setSelectedStationId(s.id)}
                       data-testid={`button-station-${s.id}`}
                     >
-                      {s.name}
+                      {s.stationName}
                       <span className="ml-auto text-xs text-muted-foreground">{s.location || ""}</span>
                     </DropdownMenuItem>
                   ))}
@@ -206,11 +205,11 @@ export function ClockInButton() {
           ) : !isClockedIn ? (
             <DropdownMenuItem
               onClick={() => punchMutation.mutate("clock_in")}
-              disabled={punchMutation.isPending}
+              disabled={punchMutation.isPending || (availableStations.length > 0 && !selectedStationId)}
               data-testid="button-clock-in"
             >
               <LogIn className="mr-2 h-4 w-4 text-green-600" />
-              Clock In{selectedStation ? ` @ ${selectedStation.name}` : ""}
+              Clock In{selectedStation ? ` @ ${selectedStation.stationName}` : ""}
             </DropdownMenuItem>
           ) : (
             <>
