@@ -143,6 +143,7 @@ function StubPortion({
     .filter((b): b is NonNullable<typeof b> => b !== null);
 
   const isContractor = worker.workerType === "contractor";
+  const ytdGross = Number(item.ytdGross || 0);
 
   const deductionBreakdown = deductions
     .filter(d => d.isActive && !d.isEmployerPaid && !d.isReferenceOnly)
@@ -164,40 +165,15 @@ function StubPortion({
     })
     .filter(d => d.amount > 0);
 
-  const employeeContribAccounts = isContractor ? payStubAccounts
-    .filter(a => a.type === "employee_contribution" && a.status === "enabled")
-    .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0)) : [];
-
-  const seRefFromDeductions = isContractor ? deductions
-    .filter(d => d.isActive && d.isReferenceOnly)
-    .filter(d => {
-      const appliesTo = d.appliesTo || "all";
-      return appliesTo === "contractor" || appliesTo === "all";
-    })
-    .map(d => {
-      let amount = 0;
-      if (d.calculationType === "percentage") {
-        const base = d.maxAmount ? Math.min(grossPay, Number(d.maxAmount)) : grossPay;
-        amount = base * (Number(d.rate || 0) / 100);
-      } else {
-        amount = Number(d.rate || 0);
-      }
-      return { name: d.name.replace(" (Reference)", ""), amount };
-    })
-    .filter(d => d.amount > 0) : [];
-
-  const employeeContribItems = employeeContribAccounts.length > 0
-    ? employeeContribAccounts.map(a => {
-        const rateMatch = a.name.match(/(\d+\.?\d*)%/);
-        const rate = rateMatch ? parseFloat(rateMatch[1]) : 0;
-        const isSS = a.name.toLowerCase().includes("social security");
-        const base = isSS ? Math.min(grossPay, 168600) : grossPay;
-        const amount = base * (rate / 100);
-        return { name: a.name, amount };
-      }).filter(d => d.amount > 0)
-    : seRefFromDeductions;
-
-  const totalSeTax = employeeContribItems.reduce((sum, d) => sum + d.amount, 0);
+  // SE Tax reference (always computed for contractors — not deducted, for reference only)
+  const SS_WAGE_BASE = 168600;
+  const ssTaxCurrent = isContractor ? Math.min(grossPay, SS_WAGE_BASE) * 0.124 : 0;
+  const medicareTaxCurrent = isContractor ? grossPay * 0.029 : 0;
+  const totalSeTaxCurrent = ssTaxCurrent + medicareTaxCurrent;
+  // YTD SE tax — computed from ytdGross (SS capped at wage base)
+  const ssTaxYtd = isContractor ? Math.min(ytdGross, SS_WAGE_BASE) * 0.124 : 0;
+  const medicareTaxYtd = isContractor ? ytdGross * 0.029 : 0;
+  const totalSeTaxYtd = ssTaxYtd + medicareTaxYtd;
 
   return (
     <div style={{ padding: "0.2in 0.4in", fontSize: "10px", height: "100%", display: "flex", flexDirection: "column" }}>
@@ -339,27 +315,43 @@ function StubPortion({
         </div>
       )}
 
-      {isContractor && employeeContribItems.length > 0 && (
+      {isContractor && (
         <div style={{ marginTop: "8px", border: "1px solid #4a90d9", padding: "6px 8px", background: "#f0f5ff" }}>
           <div style={{ fontWeight: "bold", fontSize: "9px", color: "#2b5ea7", marginBottom: "4px" }}>
-            EMPLOYEE CONTRIBUTIONS (Reference Only — Not Deducted)
+            SELF-EMPLOYMENT TAX REFERENCE — NOT DEDUCTED FROM PAY
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #4a90d9" }}>
+                <th style={{ textAlign: "left", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>DESCRIPTION</th>
+                <th style={{ textAlign: "right", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>RATE</th>
+                <th style={{ textAlign: "right", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>CURRENT</th>
+                {config.showYtdTotals && <th style={{ textAlign: "right", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>YTD</th>}
+              </tr>
+            </thead>
             <tbody>
-              {employeeContribItems.map((d, i) => (
-                <tr key={i}>
-                  <td style={{ padding: "1px 2px", color: "#2b5ea7" }}>{d.name}</td>
-                  <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>${fmt(d.amount)}</td>
-                </tr>
-              ))}
+              <tr>
+                <td style={{ padding: "1px 2px", color: "#2b5ea7" }}>Social Security (SSI)</td>
+                <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>12.4%</td>
+                <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>${fmt(ssTaxCurrent)}</td>
+                {config.showYtdTotals && <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>${fmt(ssTaxYtd)}</td>}
+              </tr>
+              <tr>
+                <td style={{ padding: "1px 2px", color: "#2b5ea7" }}>Medicare</td>
+                <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>2.9%</td>
+                <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>${fmt(medicareTaxCurrent)}</td>
+                {config.showYtdTotals && <td style={{ textAlign: "right", padding: "1px 2px", color: "#2b5ea7" }}>${fmt(medicareTaxYtd)}</td>}
+              </tr>
               <tr style={{ borderTop: "1px solid #4a90d9", fontWeight: "bold" }}>
-                <td style={{ padding: "2px", color: "#2b5ea7" }}>TOTAL (15.3%)</td>
-                <td style={{ textAlign: "right", padding: "2px", color: "#2b5ea7" }}>${fmt(totalSeTax)}</td>
+                <td style={{ padding: "2px", color: "#2b5ea7" }}>Total SE Tax</td>
+                <td style={{ textAlign: "right", padding: "2px", color: "#2b5ea7" }}>15.3%</td>
+                <td style={{ textAlign: "right", padding: "2px", color: "#2b5ea7" }}>${fmt(totalSeTaxCurrent)}</td>
+                {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px", color: "#2b5ea7" }}>${fmt(totalSeTaxYtd)}</td>}
               </tr>
             </tbody>
           </table>
-          <div style={{ fontSize: "7px", color: "#666", marginTop: "2px" }}>
-            As an independent contractor, you are responsible for paying self-employment tax (Social Security 12.4% + Medicare 2.9% = 15.3%) directly to the IRS.
+          <div style={{ fontSize: "7px", color: "#555", marginTop: "3px" }}>
+            As an independent contractor, you are responsible for paying self-employment tax (SSI 12.4% + Medicare 2.9% = 15.3%) directly to the IRS. SS applies to first ${SS_WAGE_BASE.toLocaleString()} of earnings. These amounts are for reference only and are NOT deducted from your pay.
           </div>
         </div>
       )}
