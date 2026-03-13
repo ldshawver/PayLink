@@ -218,7 +218,7 @@ function TimesheetTab() {
     breakMinutes: "0",
     totalHours: "0",
     overtimeHours: "0",
-    status: "pending",
+    status: "approved",
   });
 
   const { data: entries, isLoading } = useQuery<TimeEntry[]>({
@@ -266,7 +266,7 @@ function TimesheetTab() {
         breakMinutes: "0",
         totalHours: "0",
         overtimeHours: "0",
-        status: "pending",
+        status: "approved",
       });
     },
     onError: (error: Error) => {
@@ -392,11 +392,35 @@ function TimesheetTab() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="grid gap-1.5">
                   <Label>Clock In</Label>
-                  <Input type="datetime-local" value={addForm.clockIn} onChange={e => setAddForm(f => ({ ...f, clockIn: e.target.value }))} data-testid="input-add-entry-clockin" />
+                  <Input type="datetime-local" value={addForm.clockIn} onChange={e => {
+                    const clockIn = e.target.value;
+                    setAddForm(f => {
+                      const update: typeof f = { ...f, clockIn };
+                      if (clockIn && f.clockOut) {
+                        const diffMs = new Date(f.clockOut).getTime() - new Date(clockIn).getTime();
+                        const breakMs = (parseInt(f.breakMinutes) || 0) * 60000;
+                        const total = Math.max(0, (diffMs - breakMs) / 3600000);
+                        update.totalHours = total.toFixed(2);
+                      }
+                      return update;
+                    });
+                  }} data-testid="input-add-entry-clockin" />
                 </div>
                 <div className="grid gap-1.5">
                   <Label>Clock Out</Label>
-                  <Input type="datetime-local" value={addForm.clockOut} onChange={e => setAddForm(f => ({ ...f, clockOut: e.target.value }))} data-testid="input-add-entry-clockout" />
+                  <Input type="datetime-local" value={addForm.clockOut} onChange={e => {
+                    const clockOut = e.target.value;
+                    setAddForm(f => {
+                      const update: typeof f = { ...f, clockOut };
+                      if (f.clockIn && clockOut) {
+                        const diffMs = new Date(clockOut).getTime() - new Date(f.clockIn).getTime();
+                        const breakMs = (parseInt(f.breakMinutes) || 0) * 60000;
+                        const total = Math.max(0, (diffMs - breakMs) / 3600000);
+                        update.totalHours = total.toFixed(2);
+                      }
+                      return update;
+                    });
+                  }} data-testid="input-add-entry-clockout" />
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-3">
