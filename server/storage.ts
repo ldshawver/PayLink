@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, gte, lte, isNull, or, inArray } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte, isNull, or, inArray, ne } from "drizzle-orm";
 import { db } from "./db";
 import {
   companies, workers, timePunches, timeEntries, schedules, payrollRuns, payrollItems, users,
@@ -678,7 +678,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getTimeEntriesByDateRange(companyId: string, startDate: string, endDate: string): Promise<TimeEntry[]> {
     return db.select().from(timeEntries)
-      .where(and(eq(timeEntries.companyId, companyId), gte(timeEntries.date, startDate), lte(timeEntries.date, endDate), eq(timeEntries.status, "approved")))
+      .where(and(eq(timeEntries.companyId, companyId), gte(timeEntries.date, startDate), lte(timeEntries.date, endDate), ne(timeEntries.status, "rejected")))
       .orderBy(desc(timeEntries.date));
   }
   async getTimeEntry(id: string): Promise<TimeEntry | undefined> {
