@@ -573,20 +573,18 @@ export default function PrintCheckPage() {
       <style>{`
         @media print {
           @page { size: 8.5in 11in; margin: 0; }
-          body * { visibility: hidden; }
-          .print-content { visibility: visible; position: fixed; top: 0; left: 0; width: 100%; }
-          .print-content * { visibility: visible; }
           .print-hide { display: none !important; }
           .check-page { page-break-after: always; }
+          .print-content { display: block; }
         }
         @media screen {
+          body { background: #e5e7eb; margin: 0; }
           .print-content {
             display: flex;
             flex-direction: column;
             align-items: center;
             gap: 20px;
             padding: 20px;
-            background: #f0f0f0;
           }
           .check-page {
             background: white;
