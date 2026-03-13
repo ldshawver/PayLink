@@ -68,8 +68,9 @@ function CheckPortion({
 }) {
   const netPay = Number(item.netPay || 0);
   return (
-    <div style={{ padding: "0.5in 0.6in 0.3in", display: "flex", flexDirection: "column", height: "100%", boxSizing: "border-box" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5in" }}>
+    <div style={{ position: "relative", height: "100%", boxSizing: "border-box", padding: "0.4in 0.6in 0in", display: "flex", flexDirection: "column" }}>
+      {/* Company header + check number / date */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.35in" }}>
         <CompanyHeader company={company} config={config} />
         <div style={{ textAlign: "right" }}>
           {config.showCheckNumber && <div style={{ fontSize: "14px", fontWeight: "bold" }}>CHECK #{item.checkNumber || "—"}</div>}
@@ -77,7 +78,8 @@ function CheckPortion({
         </div>
       </div>
 
-      <div style={{ marginBottom: "0.3in" }}>
+      {/* Pay-to / amount */}
+      <div style={{ marginBottom: "0.2in" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
           <div style={{ fontSize: "13px" }}>
             <span style={{ fontWeight: "bold" }}>PAY TO THE ORDER OF: </span>
@@ -92,9 +94,11 @@ function CheckPortion({
         </div>
       </div>
 
+      {/* Spacer pushes signature toward middle of check */}
       <div style={{ flex: 1 }} />
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "0.25in" }}>
+      {/* Employee address + signature line — pinned above MICR band */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "0.65in" }}>
         <div style={{ fontSize: "12px" }}>
           {config.showEmployeeAddress && worker.address && <div>{worker.address}</div>}
           {config.showEmployeeAddress && (worker.city || worker.state || worker.zip) && (
@@ -108,8 +112,15 @@ function CheckPortion({
         </div>
       </div>
 
+      {/* MICR band — absolutely positioned so it never rides the perforation */}
       {config.showMicrLine && (
-        <div style={{ textAlign: "center", paddingBottom: "4px" }}>
+        <div style={{
+          position: "absolute",
+          bottom: "0.35in",
+          left: 0,
+          right: 0,
+          textAlign: "center",
+        }}>
           <span style={{ fontSize: "13px", fontFamily: "'MICR', 'Courier New', monospace", letterSpacing: "3px", color: "#222" }}>
             ⑈021000021⑈ ⑆{company.ein || "000000000"}⑆ {String(item.checkNumber || "0000").padStart(4, "0")}
           </span>
