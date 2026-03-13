@@ -239,7 +239,7 @@ export const divisions = pgTable("divisions", {
 
 export const departments = pgTable("departments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   divisionId: varchar("division_id"),
   name: text("name").notNull(),
   code: text("code"),
@@ -251,7 +251,7 @@ export const departments = pgTable("departments", {
 
 export const branches = pgTable("branches", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   divisionId: varchar("division_id"),
   name: text("name").notNull(),
   code: text("code"),
@@ -289,7 +289,7 @@ export const costCenters = pgTable("cost_centers", {
 
 export const jobs = pgTable("jobs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   costCenterId: varchar("cost_center_id"),
   departmentId: varchar("department_id"),
   name: text("name").notNull(),
@@ -589,7 +589,7 @@ export const payPeriodSchedules = pgTable("pay_period_schedules", {
 
 export const employeeTitles = pgTable("employee_titles", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });

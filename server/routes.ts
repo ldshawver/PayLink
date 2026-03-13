@@ -494,6 +494,14 @@ export async function registerRoutes(
       if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in/out." });
       }
+      // Station enforcement: if company has active stations, require stationId for clock_in
+      if (punchType === "clock_in" && worker.companyId) {
+        const allStations = await storage.getStations(worker.companyId);
+        const activeStations = allStations.filter(s => s.status === "active");
+        if (activeStations.length > 0 && !req.body.stationId) {
+          return res.status(400).json({ message: "A station must be selected to clock in. Please select an active station." });
+        }
+      }
       const today = new Date().toISOString().split("T")[0];
       // Check if worker has a schedule for today (for unscheduled punch detection)
       let isUnscheduled = false;
@@ -796,6 +804,14 @@ export async function registerRoutes(
       const worker = await storage.getWorker(req.body.workerId);
       if (worker && worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in/out. They submit invoices instead." });
+      }
+      // Station enforcement: if company has active stations, require stationId for clock_in
+      if (req.body.punchType === "clock_in" && worker?.companyId) {
+        const allStations = await storage.getStations(worker.companyId);
+        const activeStations = allStations.filter(s => s.status === "active");
+        if (activeStations.length > 0 && !req.body.stationId) {
+          return res.status(400).json({ message: "A station must be selected to clock in. Please select an active station." });
+        }
       }
       const punch = await storage.createTimePunch({
         ...req.body,
@@ -1321,7 +1337,9 @@ export async function registerRoutes(
 
   app.post("/api/departments", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const department = await storage.createDepartment(req.body);
+      const data = { ...req.body };
+      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
+      const department = await storage.createDepartment(data);
       res.status(201).json(department);
     } catch (error) {
       console.error(error);
@@ -1331,7 +1349,9 @@ export async function registerRoutes(
 
   app.patch("/api/departments/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const department = await storage.updateDepartment(req.params.id, req.body);
+      const data = { ...req.body };
+      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
+      const department = await storage.updateDepartment(req.params.id, data);
       if (!department) {
         return res.status(404).json({ message: "Department not found" });
       }
@@ -1366,20 +1386,24 @@ export async function registerRoutes(
 
   app.post("/api/branches", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const parsed = insertBranchSchema.parse(req.body);
-      const branch = await storage.createBranch(parsed);
+      const data = { ...req.body };
+      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
+      const branch = await storage.createBranch(data);
       res.status(201).json(branch);
     } catch (error: any) {
       if (error.name === "ZodError") {
         return res.status(400).json({ message: "Validation failed", errors: error.errors });
       }
+      console.error(error);
       res.status(500).json({ message: "Failed to create branch" });
     }
   });
 
   app.patch("/api/branches/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const branch = await storage.updateBranch(req.params.id, req.body);
+      const data = { ...req.body };
+      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
+      const branch = await storage.updateBranch(req.params.id, data);
       if (!branch) {
         return res.status(404).json({ message: "Branch not found" });
       }
@@ -1510,6 +1534,7 @@ export async function registerRoutes(
   app.post("/api/positions", requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
+      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
       if (data.departmentId === "") data.departmentId = null;
       if (data.reportsToPositionId === "") data.reportsToPositionId = null;
       if (data.salaryRangeMin === "") data.salaryRangeMin = null;
@@ -1618,18 +1643,19 @@ export async function registerRoutes(
   app.post("/api/jobs", requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
+      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
       if (data.costCenterId === "") data.costCenterId = null;
       if (data.departmentId === "") data.departmentId = null;
       if (data.defaultWage === "") data.defaultWage = null;
       if (data.startDate === "") data.startDate = null;
       if (data.endDate === "") data.endDate = null;
-      const parsed = insertJobSchema.parse(data);
-      const job = await storage.createJob(parsed);
+      const job = await storage.createJob(data);
       res.status(201).json(job);
     } catch (error: any) {
       if (error.name === "ZodError") {
         return res.status(400).json({ message: "Validation failed", errors: error.errors });
       }
+      console.error(error);
       res.status(500).json({ message: "Failed to create job" });
     }
   });
@@ -1637,6 +1663,7 @@ export async function registerRoutes(
   app.patch("/api/jobs/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
       const data = { ...req.body };
+      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
       if (data.costCenterId === "") data.costCenterId = null;
       if (data.departmentId === "") data.departmentId = null;
       if (data.defaultWage === "") data.defaultWage = null;
@@ -3324,7 +3351,9 @@ export async function registerRoutes(
 
   app.post("/api/employee-titles", async (req, res) => {
     try {
-      const title = await storage.createEmployeeTitle(req.body);
+      const data = { ...req.body };
+      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
+      const title = await storage.createEmployeeTitle(data);
       res.status(201).json(title);
     } catch (error) {
       console.error(error);
@@ -3334,7 +3363,9 @@ export async function registerRoutes(
 
   app.patch("/api/employee-titles/:id", async (req, res) => {
     try {
-      const title = await storage.updateEmployeeTitle(req.params.id, req.body);
+      const data = { ...req.body };
+      if (!data.companyId || data.companyId === "__universal__") data.companyId = null;
+      const title = await storage.updateEmployeeTitle(req.params.id, data);
       if (!title) return res.status(404).json({ message: "Not found" });
       res.json(title);
     } catch (error) {

@@ -949,16 +949,18 @@ function BranchesTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<Branch | null>(null);
-  const emptyForm = { companyId: "", divisionId: "", name: "", code: "", address: "", city: "", state: "", zip: "", phone: "" };
+  const emptyForm = { companyId: "__universal__", divisionId: "", name: "", code: "", address: "", city: "", state: "", zip: "", phone: "" };
   const [form, setForm] = useState(emptyForm);
 
   const { data: branches, isLoading } = useQuery<Branch[]>({ queryKey: ["/api/branches"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: divisionsList } = useQuery<Division[]>({ queryKey: ["/api/divisions"] });
 
+  const toPayload = (data: typeof form) => ({ ...data, companyId: data.companyId === "__universal__" ? null : (data.companyId || null) });
+
   const addMutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      await apiRequest("POST", "/api/branches", data);
+      await apiRequest("POST", "/api/branches", toPayload(data));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/branches"] });
@@ -971,7 +973,7 @@ function BranchesTab() {
 
   const editMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof form }) => {
-      await apiRequest("PATCH", `/api/branches/${id}`, data);
+      await apiRequest("PATCH", `/api/branches/${id}`, toPayload(data));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/branches"] });
@@ -997,7 +999,7 @@ function BranchesTab() {
   const handleEdit = (item: Branch) => {
     setEditItem(item);
     setForm({
-      companyId: item.companyId || "",
+      companyId: item.companyId || "__universal__",
       divisionId: item.divisionId || "",
       name: item.name || "",
       code: item.code || "",
@@ -1014,7 +1016,7 @@ function BranchesTab() {
     return <div data-testid="loading-branches"><Skeleton className="h-64 w-full" /></div>;
   }
 
-  const filteredDivisions = form.companyId ? divisionsList?.filter((d) => d.companyId === form.companyId) : divisionsList;
+  const filteredDivisions = (form.companyId && form.companyId !== "__universal__") ? divisionsList?.filter((d) => d.companyId === form.companyId) : divisionsList;
 
   const branchFormFields = (suffix: string) => {
     const set = (key: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -1022,12 +1024,13 @@ function BranchesTab() {
     return (
       <div className="grid gap-4">
         <div className="grid gap-2">
-          <Label>Company *</Label>
+          <Label>Company</Label>
           <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v, divisionId: "" })}>
             <SelectTrigger data-testid={`select-branch-company${suffix}`}>
               <SelectValue placeholder="Select company" />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
               {companies?.map((c) => (
                 <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
               ))}
@@ -1190,16 +1193,18 @@ function DepartmentsTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<Department | null>(null);
-  const emptyForm = { companyId: "", divisionId: "", name: "", code: "" };
+  const emptyForm = { companyId: "__universal__", divisionId: "", name: "", code: "" };
   const [form, setForm] = useState(emptyForm);
 
   const { data: departments, isLoading } = useQuery<Department[]>({ queryKey: ["/api/departments"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: divisionsList } = useQuery<Division[]>({ queryKey: ["/api/divisions"] });
 
+  const toPayload = (data: typeof form) => ({ ...data, companyId: data.companyId === "__universal__" ? null : (data.companyId || null) });
+
   const addMutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      await apiRequest("POST", "/api/departments", data);
+      await apiRequest("POST", "/api/departments", toPayload(data));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/departments"] });
@@ -1212,7 +1217,7 @@ function DepartmentsTab() {
 
   const editMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof form }) => {
-      await apiRequest("PATCH", `/api/departments/${id}`, data);
+      await apiRequest("PATCH", `/api/departments/${id}`, toPayload(data));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/departments"] });
@@ -1238,7 +1243,7 @@ function DepartmentsTab() {
   const handleEdit = (item: Department) => {
     setEditItem(item);
     setForm({
-      companyId: item.companyId || "",
+      companyId: item.companyId || "__universal__",
       divisionId: item.divisionId || "",
       name: item.name || "",
       code: item.code || "",
@@ -1250,17 +1255,18 @@ function DepartmentsTab() {
     return <div data-testid="loading-departments"><Skeleton className="h-64 w-full" /></div>;
   }
 
-  const filteredDivisions = form.companyId ? divisionsList?.filter((d) => d.companyId === form.companyId) : divisionsList;
+  const filteredDivisions = (form.companyId && form.companyId !== "__universal__") ? divisionsList?.filter((d) => d.companyId === form.companyId) : divisionsList;
 
   const departmentFormFields = (suffix: string) => (
     <div className="grid gap-4">
       <div className="grid gap-2">
-        <Label>Company *</Label>
+        <Label>Company</Label>
         <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v, divisionId: "" })}>
           <SelectTrigger data-testid={`select-department-company${suffix}`}>
             <SelectValue placeholder="Select company" />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
             {companies?.map((c) => (
               <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
             ))}
@@ -2192,7 +2198,7 @@ function JobsTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<Job | null>(null);
-  const emptyForm = { companyId: "", costCenterId: "", departmentId: "", name: "", description: "", payType: "hourly", defaultWage: "", startDate: "", endDate: "", status: "active" };
+  const emptyForm = { companyId: "__universal__", costCenterId: "", departmentId: "", name: "", description: "", payType: "hourly", defaultWage: "", startDate: "", endDate: "", status: "active" };
   const [form, setForm] = useState(emptyForm);
 
   const { data: jobsList, isLoading } = useQuery<Job[]>({ queryKey: ["/api/jobs"] });
@@ -2200,9 +2206,11 @@ function JobsTab() {
   const { data: costCentersList } = useQuery<CostCenter[]>({ queryKey: ["/api/cost-centers"] });
   const { data: departmentsList } = useQuery<Department[]>({ queryKey: ["/api/departments"] });
 
+  const toPayload = (data: typeof form) => ({ ...data, companyId: data.companyId === "__universal__" ? null : (data.companyId || null) });
+
   const addMutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      await apiRequest("POST", "/api/jobs", data);
+      await apiRequest("POST", "/api/jobs", toPayload(data));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/jobs"] });
@@ -2215,7 +2223,7 @@ function JobsTab() {
 
   const editMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof form }) => {
-      await apiRequest("PATCH", `/api/jobs/${id}`, data);
+      await apiRequest("PATCH", `/api/jobs/${id}`, toPayload(data));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/jobs"] });
@@ -2241,7 +2249,7 @@ function JobsTab() {
   const handleEdit = (item: Job) => {
     setEditItem(item);
     setForm({
-      companyId: item.companyId || "",
+      companyId: item.companyId || "__universal__",
       costCenterId: item.costCenterId || "",
       departmentId: (item as any).departmentId || "",
       name: item.name || "",
@@ -2259,18 +2267,19 @@ function JobsTab() {
     return <div data-testid="loading-jobs"><Skeleton className="h-64 w-full" /></div>;
   }
 
-  const filteredCostCenters = form.companyId ? costCentersList?.filter((cc) => cc.companyId === form.companyId) : costCentersList;
-  const filteredDepartments = form.companyId ? departmentsList?.filter((d) => d.companyId === form.companyId) : departmentsList;
+  const filteredCostCenters = (form.companyId && form.companyId !== "__universal__") ? costCentersList?.filter((cc) => cc.companyId === form.companyId) : costCentersList;
+  const filteredDepartments = (form.companyId && form.companyId !== "__universal__") ? departmentsList?.filter((d) => d.companyId === form.companyId) : departmentsList;
 
   const jobFormFields = (suffix: string) => (
     <div className="grid gap-4">
       <div className="grid gap-2">
-        <Label>Company *</Label>
+        <Label>Company</Label>
         <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v, costCenterId: "", departmentId: "" })}>
           <SelectTrigger data-testid={`select-job-company${suffix}`}>
             <SelectValue placeholder="Select company" />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
             {companies?.map((c) => (
               <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
             ))}
