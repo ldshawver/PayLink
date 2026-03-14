@@ -752,11 +752,11 @@ function StandardCheck({ item, worker, company, run, deductions, config, payStub
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
       {/* Top third: the actual check */}
-      <div style={{ height: "3.667in", borderBottom: "2px dashed #999" }}>
+      <div style={{ height: "3.667in" }}>
         <CheckPortion item={item} worker={worker} company={company} run={run} config={config} />
       </div>
       {/* Middle third: pay stub summary */}
-      <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
+      <div style={{ height: "3.667in" }}>
         <StubSummarySection item={item} worker={worker} company={company} run={run} config={config} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
       </div>
       {/* Bottom third: earnings & deductions detail */}
@@ -770,10 +770,10 @@ function StandardCheck({ item, worker, company, run, deductions, config, payStub
 function VoucherCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances }: CheckProps) {
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
-      <div style={{ height: "3.333in", borderBottom: "1px dashed #999" }}>
+      <div style={{ height: "3.333in" }}>
         <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
       </div>
-      <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
+      <div style={{ height: "3.667in" }}>
         <CheckPortion item={item} worker={worker} company={company} run={run} config={config} />
       </div>
       <div style={{ height: "4in" }}>
@@ -786,10 +786,10 @@ function VoucherCheck({ item, worker, company, run, deductions, config, payStubA
 function ThreePartCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances }: CheckProps) {
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
-      <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
+      <div style={{ height: "3.667in" }}>
         <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
       </div>
-      <div style={{ height: "3.667in", borderBottom: "1px dashed #999" }}>
+      <div style={{ height: "3.667in" }}>
         <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
       </div>
       <div style={{ height: "3.666in" }}>
