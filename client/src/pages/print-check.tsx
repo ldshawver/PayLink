@@ -67,14 +67,20 @@ function CheckPortion({
   item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; config: Record<string, boolean>;
 }) {
   const netPay = Number(item.netPay || 0);
+  const checkDate = run.processedAt ? new Date(run.processedAt).toLocaleDateString() : new Date().toLocaleDateString();
+  const memoText = (run.periodStart && run.periodEnd)
+    ? `Payroll ${new Date(run.periodStart + "T00:00:00").toLocaleDateString()} to ${new Date(run.periodEnd + "T00:00:00").toLocaleDateString()}`
+    : "";
+
   return (
     <div style={{ position: "relative", height: "100%", boxSizing: "border-box", padding: "0.4in 0.6in 0in", display: "flex", flexDirection: "column" }}>
-      {/* Company header + check number / date */}
+      {/* Company header + check number / date / void notice */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.35in" }}>
         <CompanyHeader company={company} config={config} />
         <div style={{ textAlign: "right" }}>
           {config.showCheckNumber && <div style={{ fontSize: "14px", fontWeight: "bold" }}>CHECK #{item.checkNumber || "—"}</div>}
-          <div style={{ fontSize: "12px", marginTop: "4px" }}>Date: {run.processedAt ? new Date(run.processedAt).toLocaleDateString() : new Date().toLocaleDateString()}</div>
+          <div style={{ fontSize: "12px", marginTop: "4px" }}>Date: {checkDate}</div>
+          <div style={{ fontSize: "9px", color: "#666", marginTop: "2px", fontStyle: "italic" }}>Void after 90 days</div>
         </div>
       </div>
 
@@ -94,17 +100,25 @@ function CheckPortion({
         </div>
       </div>
 
-      {/* Spacer pushes signature toward middle of check */}
+      {/* Spacer */}
       <div style={{ flex: 1 }} />
 
-      {/* Employee address + signature line — pinned above MICR band */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "0.65in" }}>
-        <div style={{ fontSize: "12px" }}>
+      {/* Memo (bottom-left) + signature line (bottom-right) */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "0.9in" }}>
+        {/* Left: employee address + memo line */}
+        <div style={{ fontSize: "11px", display: "flex", flexDirection: "column", gap: "6px" }}>
           {config.showEmployeeAddress && worker.address && <div>{worker.address}</div>}
           {config.showEmployeeAddress && (worker.city || worker.state || worker.zip) && (
             <div>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
           )}
+          <div style={{ marginTop: "4px" }}>
+            <div style={{ fontSize: "9px", color: "#666", marginBottom: "1px" }}>MEMO</div>
+            <div style={{ borderBottom: "1px solid #000", minWidth: "2.5in", paddingBottom: "2px", fontSize: "11px" }}>
+              {memoText}
+            </div>
+          </div>
         </div>
+        {/* Right: signature line */}
         <div style={{ textAlign: "right" }}>
           <div style={{ borderBottom: "1px solid #000", width: "3.5in", height: "0.45in", display: "flex", alignItems: "flex-end", justifyContent: "flex-end" }}>
             <div style={{ fontSize: "9px", color: "#999", paddingBottom: "2px" }}>Authorized Signature</div>
@@ -112,16 +126,10 @@ function CheckPortion({
         </div>
       </div>
 
-      {/* MICR band — absolutely positioned so it never rides the perforation */}
+      {/* MICR band — absolutely positioned so it never rides the section boundary */}
       {config.showMicrLine && (
-        <div style={{
-          position: "absolute",
-          bottom: "0.35in",
-          left: 0,
-          right: 0,
-          textAlign: "center",
-        }}>
-          <span style={{ fontSize: "13px", fontFamily: "'MICR', 'Courier New', monospace", letterSpacing: "3px", color: "#222" }}>
+        <div style={{ position: "absolute", bottom: "0.35in", left: 0, right: 0, textAlign: "center" }}>
+          <span style={{ fontSize: "15px", fontWeight: "bold", fontFamily: "'MICR', 'Courier New', monospace", letterSpacing: "3px", color: "#000" }}>
             ⑈021000021⑈ ⑆{company.ein || "000000000"}⑆ {String(item.checkNumber || "0000").padStart(4, "0")}
           </span>
         </div>
