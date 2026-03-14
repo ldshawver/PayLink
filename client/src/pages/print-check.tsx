@@ -73,9 +73,9 @@ function CheckPortion({
     : "";
 
   return (
-    <div style={{ position: "relative", height: "100%", boxSizing: "border-box", padding: "0.4in 0.6in 0in", display: "flex", flexDirection: "column" }}>
+    <div style={{ height: "3.667in", boxSizing: "border-box", padding: "0.4in 0.6in 0.25in", display: "flex", flexDirection: "column" }}>
       {/* Company header + check number / date / void notice */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.35in" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.3in" }}>
         <CompanyHeader company={company} config={config} />
         <div style={{ textAlign: "right" }}>
           {config.showCheckNumber && <div style={{ fontSize: "14px", fontWeight: "bold" }}>CHECK #{item.checkNumber || "—"}</div>}
@@ -85,7 +85,7 @@ function CheckPortion({
       </div>
 
       {/* Pay-to / amount */}
-      <div style={{ marginBottom: "0.2in" }}>
+      <div style={{ marginBottom: "0.15in" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
           <div style={{ fontSize: "13px" }}>
             <span style={{ fontWeight: "bold" }}>PAY TO THE ORDER OF: </span>
@@ -104,18 +104,12 @@ function CheckPortion({
       <div style={{ flex: 1 }} />
 
       {/* Memo (bottom-left) + signature line (bottom-right) */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "0.9in" }}>
-        {/* Left: employee address + memo line */}
-        <div style={{ fontSize: "11px", display: "flex", flexDirection: "column", gap: "6px" }}>
-          {config.showEmployeeAddress && worker.address && <div>{worker.address}</div>}
-          {config.showEmployeeAddress && (worker.city || worker.state || worker.zip) && (
-            <div>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
-          )}
-          <div style={{ marginTop: "4px" }}>
-            <div style={{ fontSize: "9px", color: "#666", marginBottom: "1px" }}>MEMO</div>
-            <div style={{ borderBottom: "1px solid #000", minWidth: "2.5in", paddingBottom: "2px", fontSize: "11px" }}>
-              {memoText}
-            </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "0.2in" }}>
+        {/* Left: memo line */}
+        <div>
+          <div style={{ fontSize: "9px", color: "#666", marginBottom: "1px" }}>MEMO</div>
+          <div style={{ borderBottom: "1px solid #000", minWidth: "2.5in", paddingBottom: "2px", fontSize: "11px" }}>
+            {memoText}
           </div>
         </div>
         {/* Right: signature line */}
@@ -126,9 +120,9 @@ function CheckPortion({
         </div>
       </div>
 
-      {/* MICR band — absolutely positioned so it never rides the section boundary */}
+      {/* MICR band — last flex item, sits at the bottom */}
       {config.showMicrLine && (
-        <div style={{ position: "absolute", bottom: "0.35in", left: 0, right: 0, textAlign: "center" }}>
+        <div style={{ textAlign: "center" }}>
           <span style={{ fontSize: "15px", fontWeight: "bold", fontFamily: "'MICR', 'Courier New', monospace", letterSpacing: "3px", color: "#000" }}>
             ⑈021000021⑈ ⑆{company.ein || "000000000"}⑆ {String(item.checkNumber || "0000").padStart(4, "0")}
           </span>
