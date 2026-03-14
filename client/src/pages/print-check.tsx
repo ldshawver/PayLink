@@ -132,7 +132,9 @@ function CheckPortion({
   );
 }
 
-// ── Middle third for StandardCheck: employee/pay summary + leave balances ──
+// ── Middle third for StandardCheck: mailing stub ──
+// Left column: company return address (top) + employee mailing address (center window zone)
+// Right column: all pay stub data — clear of address areas
 function StubSummarySection({
   item, worker, company, run, config, accrualAccounts = [], accrualBalances = [],
 }: {
@@ -158,120 +160,148 @@ function StubSummarySection({
     .filter((b): b is NonNullable<typeof b> => b !== null);
 
   return (
-    <div style={{ padding: "0.2in 0.4in", fontSize: "10px", height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
-      {/* Header: company + employee */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "8px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          {config.showCompanyLogo && company.logoUrl && (
-            <img src={company.logoUrl} alt="" style={{ height: "28px", width: "28px", objectFit: "contain" }} />
-          )}
-          <div>
-            {config.showCompanyName && <div style={{ fontSize: "12px", fontWeight: "bold" }}>PAY STUB — {company.name}</div>}
-            {!config.showCompanyName && <div style={{ fontSize: "12px", fontWeight: "bold" }}>PAY STUB</div>}
-            {company.ein && <div>EIN: {company.ein}</div>}
-            {config.showCompanyAddress && company.address && <div>{company.address}</div>}
-            {config.showCompanyAddress && (company.city || company.state || company.zip) && (
-              <div>{[company.city, company.state].filter(Boolean).join(", ")} {company.zip}</div>
+    <div style={{ height: "3.667in", boxSizing: "border-box", display: "flex", flexDirection: "row" }}>
+
+      {/* ── LEFT ADDRESS PANEL (2.8in) ── */}
+      <div style={{ width: "2.8in", flexShrink: 0, boxSizing: "border-box", padding: "0.2in 0.15in 0.2in 0.35in", display: "flex", flexDirection: "column", fontSize: "10px" }}>
+
+        {/* FROM — company return address, top-left */}
+        <div style={{ marginBottom: "auto" }}>
+          <div style={{ fontSize: "8px", color: "#888", marginBottom: "2px", textTransform: "uppercase", letterSpacing: "0.5px" }}>From</div>
+          <div style={{ display: "flex", alignItems: "center", gap: "5px", marginBottom: "2px" }}>
+            {config.showCompanyLogo && company.logoUrl && (
+              <img src={company.logoUrl} alt="" style={{ height: "20px", width: "20px", objectFit: "contain" }} />
             )}
-            {config.showCompanyAddress && company.phone && <div>{company.phone}</div>}
+            <div style={{ fontWeight: "bold", fontSize: "11px" }}>{company.name}</div>
           </div>
+          {company.address && <div style={{ fontSize: "10px" }}>{company.address}</div>}
+          {(company.city || company.state || company.zip) && (
+            <div style={{ fontSize: "10px" }}>{[company.city, company.state].filter(Boolean).join(", ")} {company.zip}</div>
+          )}
         </div>
-        <div style={{ textAlign: "right" }}>
-          <div><strong>{isContractor ? "Contractor" : "Employee"}:</strong> {worker.firstName} {worker.lastName}</div>
-          <div><strong>{isContractor ? "Contractor" : "Employee"} #:</strong> {worker.employeeNumber || "—"}</div>
-          <div><strong>SSN:</strong> {worker.ssn ? "XXX-XX-" + worker.ssn.slice(-4) : "XXX-XX-XXXX"}</div>
+
+        {/* TO — employee mailing address, center window zone */}
+        <div style={{ marginTop: "0.5in" }}>
+          <div style={{ fontSize: "8px", color: "#888", marginBottom: "4px", textTransform: "uppercase", letterSpacing: "0.5px" }}>To</div>
+          <div style={{ fontSize: "12px", fontWeight: "bold" }}>{worker.firstName} {worker.lastName}</div>
+          {worker.address && <div style={{ fontSize: "11px", marginTop: "2px" }}>{worker.address}</div>}
+          {(worker.city || worker.state || worker.zip) && (
+            <div style={{ fontSize: "11px" }}>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
+          )}
         </div>
+
+        {/* Spacer pushes content away from bottom */}
+        <div style={{ flex: 1 }} />
       </div>
 
-      {/* Pay period row */}
-      {config.showPayPeriod && (
-        <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "2px solid #000", paddingBottom: "4px", marginBottom: "10px" }}>
-          <div><strong>Pay Period:</strong> {run.periodStart} to {run.periodEnd}</div>
-          {config.showCheckNumber && <div><strong>Check #:</strong> {item.checkNumber || "—"}</div>}
-          <div><strong>Pay Date:</strong> {run.processedAt ? new Date(run.processedAt).toLocaleDateString() : "—"}</div>
-        </div>
-      )}
+      {/* Vertical divider */}
+      <div style={{ width: "1px", background: "#ccc", margin: "0.15in 0" }} />
 
-      {/* Hours summary */}
-      <div style={{ display: "flex", gap: "8px", marginBottom: "10px" }}>
-        <table style={{ borderCollapse: "collapse", fontSize: "9px" }}>
-          <thead>
-            <tr style={{ borderBottom: "1px solid #000" }}>
-              <th style={{ textAlign: "left", padding: "2px 6px 2px 2px" }}>HOURS</th>
-              <th style={{ textAlign: "right", padding: "2px" }}>REG</th>
-              {overtimeHours > 0 && <th style={{ textAlign: "right", padding: "2px" }}>OT</th>}
-              {doubleTimeHours > 0 && <th style={{ textAlign: "right", padding: "2px" }}>DT</th>}
-              <th style={{ textAlign: "right", padding: "2px" }}>TOTAL</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td style={{ padding: "2px 6px 2px 2px" }}></td>
-              <td style={{ textAlign: "right", padding: "2px" }}>{fmt(regularHours)}</td>
-              {overtimeHours > 0 && <td style={{ textAlign: "right", padding: "2px" }}>{fmt(overtimeHours)}</td>}
-              {doubleTimeHours > 0 && <td style={{ textAlign: "right", padding: "2px" }}>{fmt(doubleTimeHours)}</td>}
-              <td style={{ textAlign: "right", padding: "2px", fontWeight: "bold" }}>{fmt(totalHours)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      {/* ── RIGHT STUB DATA PANEL ── */}
+      <div style={{ flex: 1, boxSizing: "border-box", padding: "0.2in 0.35in 0.2in 0.25in", display: "flex", flexDirection: "column", fontSize: "10px" }}>
 
-      {/* Pay totals boxes */}
-      <div style={{ display: "flex", gap: "12px", marginBottom: "10px" }}>
-        {[
-          { label: "GROSS PAY", value: `$${fmt(grossPay)}` },
-          { label: "TOTAL DEDUCTIONS", value: `$${fmt(totalDeductions)}` },
-          { label: "NET PAY", value: `$${fmt(netPay)}` },
-        ].map(({ label, value }) => (
-          <div key={label} style={{ flex: 1, border: "1px solid #999", padding: "6px 8px", textAlign: "center" }}>
-            <div style={{ fontSize: "8px", color: "#555", marginBottom: "2px" }}>{label}</div>
-            <div style={{ fontSize: label === "NET PAY" ? "15px" : "13px", fontWeight: "bold" }}>{value}</div>
+        {/* Stub header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "6px", borderBottom: "2px solid #000", paddingBottom: "4px" }}>
+          <div>
+            <div style={{ fontSize: "12px", fontWeight: "bold" }}>PAY STUB</div>
+            {company.ein && <div style={{ fontSize: "9px" }}>EIN: {company.ein}</div>}
           </div>
-        ))}
-        {config.showYtdTotals && (
-          <>
-            <div style={{ flex: 1, border: "1px solid #ccc", padding: "6px 8px", textAlign: "center", background: "#f9f9f9" }}>
-              <div style={{ fontSize: "8px", color: "#555", marginBottom: "2px" }}>YTD GROSS</div>
-              <div style={{ fontSize: "13px", fontWeight: "bold" }}>${fmt(item.ytdGross)}</div>
-            </div>
-            <div style={{ flex: 1, border: "1px solid #ccc", padding: "6px 8px", textAlign: "center", background: "#f9f9f9" }}>
-              <div style={{ fontSize: "8px", color: "#555", marginBottom: "2px" }}>YTD NET</div>
-              <div style={{ fontSize: "13px", fontWeight: "bold" }}>${fmt(item.ytdNet)}</div>
-            </div>
-          </>
+          <div style={{ textAlign: "right", fontSize: "9px" }}>
+            <div><strong>{isContractor ? "Contractor" : "Employee"}:</strong> {worker.firstName} {worker.lastName}</div>
+            <div><strong>#{worker.employeeNumber || "—"}</strong> &nbsp;|&nbsp; SSN: {worker.ssn ? "XXX-XX-" + worker.ssn.slice(-4) : "XXX-XX-XXXX"}</div>
+            {config.showCheckNumber && <div><strong>Check #:</strong> {item.checkNumber || "—"}</div>}
+          </div>
+        </div>
+
+        {/* Pay period */}
+        {config.showPayPeriod && (
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px", fontSize: "9px" }}>
+            <div><strong>Pay Period:</strong> {run.periodStart} to {run.periodEnd}</div>
+            <div><strong>Pay Date:</strong> {run.processedAt ? new Date(run.processedAt).toLocaleDateString() : "—"}</div>
+          </div>
         )}
-      </div>
 
-      {/* Leave balances */}
-      {!isContractor && workerLeaveBalances.length > 0 && (
-        <div style={{ border: "1px solid #999", padding: "6px 8px" }}>
-          <div style={{ fontWeight: "bold", fontSize: "9px", marginBottom: "4px" }}>LEAVE BALANCES</div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        {/* Hours summary */}
+        <div style={{ marginBottom: "8px" }}>
+          <table style={{ borderCollapse: "collapse", fontSize: "9px", width: "100%" }}>
             <thead>
-              <tr style={{ borderBottom: "1px solid #999" }}>
-                <th style={{ textAlign: "left", padding: "2px", fontSize: "9px" }}>TYPE</th>
-                <th style={{ textAlign: "right", padding: "2px", fontSize: "9px" }}>AVAILABLE (HRS)</th>
-                <th style={{ textAlign: "right", padding: "2px", fontSize: "9px" }}>USED (HRS)</th>
+              <tr style={{ borderBottom: "1px solid #000" }}>
+                <th style={{ textAlign: "left", padding: "2px 4px 2px 0" }}>HOURS</th>
+                <th style={{ textAlign: "right", padding: "2px 4px" }}>REG</th>
+                {overtimeHours > 0 && <th style={{ textAlign: "right", padding: "2px 4px" }}>OT</th>}
+                {doubleTimeHours > 0 && <th style={{ textAlign: "right", padding: "2px 4px" }}>DT</th>}
+                <th style={{ textAlign: "right", padding: "2px 0 2px 4px" }}>TOTAL</th>
               </tr>
             </thead>
             <tbody>
-              {workerLeaveBalances.map((lb, i) => (
-                <tr key={i}>
-                  <td style={{ padding: "2px" }}>{lb.name}</td>
-                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(lb.balance)}</td>
-                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(lb.used)}</td>
-                </tr>
-              ))}
+              <tr>
+                <td style={{ padding: "2px 0" }}></td>
+                <td style={{ textAlign: "right", padding: "2px 4px" }}>{fmt(regularHours)}</td>
+                {overtimeHours > 0 && <td style={{ textAlign: "right", padding: "2px 4px" }}>{fmt(overtimeHours)}</td>}
+                {doubleTimeHours > 0 && <td style={{ textAlign: "right", padding: "2px 4px" }}>{fmt(doubleTimeHours)}</td>}
+                <td style={{ textAlign: "right", padding: "2px 0 2px 4px", fontWeight: "bold" }}>{fmt(totalHours)}</td>
+              </tr>
             </tbody>
           </table>
         </div>
-      )}
-      {!isContractor && workerLeaveBalances.length === 0 && sickAccounts.length > 0 && (
-        <div style={{ border: "1px solid #999", padding: "6px 8px" }}>
-          <div style={{ fontWeight: "bold", fontSize: "9px", marginBottom: "2px" }}>LEAVE BALANCES</div>
-          <div style={{ fontSize: "9px", color: "#666" }}>Sick Leave: 0.00 hrs available</div>
+
+        {/* Pay totals boxes */}
+        <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
+          {[
+            { label: "GROSS PAY", value: `$${fmt(grossPay)}` },
+            { label: "TOTAL DEDUCTIONS", value: `$${fmt(totalDeductions)}` },
+            { label: "NET PAY", value: `$${fmt(netPay)}`, bold: true },
+          ].map(({ label, value, bold }) => (
+            <div key={label} style={{ flex: 1, border: "1px solid #999", padding: "5px 6px", textAlign: "center" }}>
+              <div style={{ fontSize: "7px", color: "#555", marginBottom: "2px" }}>{label}</div>
+              <div style={{ fontSize: bold ? "14px" : "12px", fontWeight: "bold" }}>{value}</div>
+            </div>
+          ))}
+          {config.showYtdTotals && (
+            <>
+              <div style={{ flex: 1, border: "1px solid #ccc", padding: "5px 6px", textAlign: "center", background: "#f9f9f9" }}>
+                <div style={{ fontSize: "7px", color: "#555", marginBottom: "2px" }}>YTD GROSS</div>
+                <div style={{ fontSize: "12px", fontWeight: "bold" }}>${fmt(item.ytdGross)}</div>
+              </div>
+              <div style={{ flex: 1, border: "1px solid #ccc", padding: "5px 6px", textAlign: "center", background: "#f9f9f9" }}>
+                <div style={{ fontSize: "7px", color: "#555", marginBottom: "2px" }}>YTD NET</div>
+                <div style={{ fontSize: "12px", fontWeight: "bold" }}>${fmt(item.ytdNet)}</div>
+              </div>
+            </>
+          )}
         </div>
-      )}
+
+        {/* Leave balances */}
+        {!isContractor && workerLeaveBalances.length > 0 && (
+          <div style={{ border: "1px solid #999", padding: "4px 6px" }}>
+            <div style={{ fontWeight: "bold", fontSize: "8px", marginBottom: "3px" }}>LEAVE BALANCES</div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #999" }}>
+                  <th style={{ textAlign: "left", padding: "1px 2px", fontSize: "8px" }}>TYPE</th>
+                  <th style={{ textAlign: "right", padding: "1px 2px", fontSize: "8px" }}>AVAILABLE (HRS)</th>
+                  <th style={{ textAlign: "right", padding: "1px 2px", fontSize: "8px" }}>USED (HRS)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {workerLeaveBalances.map((lb, i) => (
+                  <tr key={i}>
+                    <td style={{ padding: "1px 2px", fontSize: "9px" }}>{lb.name}</td>
+                    <td style={{ textAlign: "right", padding: "1px 2px", fontSize: "9px" }}>{fmt(lb.balance)}</td>
+                    <td style={{ textAlign: "right", padding: "1px 2px", fontSize: "9px" }}>{fmt(lb.used)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {!isContractor && workerLeaveBalances.length === 0 && sickAccounts.length > 0 && (
+          <div style={{ border: "1px solid #999", padding: "4px 6px" }}>
+            <div style={{ fontWeight: "bold", fontSize: "8px", marginBottom: "2px" }}>LEAVE BALANCES</div>
+            <div style={{ fontSize: "8px", color: "#666" }}>Sick Leave: 0.00 hrs available</div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
