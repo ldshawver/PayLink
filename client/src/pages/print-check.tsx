@@ -148,6 +148,15 @@ function StubSummarySection({
   const doubleTimeHours = Number(item.doubleTimeHours || 0);
   const totalHours = regularHours + overtimeHours + doubleTimeHours;
   const isContractor = worker.workerType === "contractor";
+  const ytdGross = Number(item.ytdGross || 0);
+
+  const SS_WAGE_BASE = 168600;
+  const ssTaxCurrent = isContractor ? Math.min(grossPay, SS_WAGE_BASE) * 0.124 : 0;
+  const medicareTaxCurrent = isContractor ? grossPay * 0.029 : 0;
+  const totalSeTaxCurrent = ssTaxCurrent + medicareTaxCurrent;
+  const ssTaxYtd = isContractor ? Math.min(ytdGross, SS_WAGE_BASE) * 0.124 : 0;
+  const medicareTaxYtd = isContractor ? ytdGross * 0.029 : 0;
+  const totalSeTaxYtd = ssTaxYtd + medicareTaxYtd;
 
   const workerAccrualBalances = accrualBalances.filter(b => b.workerId === worker.id);
   const sickAccounts = accrualAccounts.filter(a => a.type === "sick" && a.isActive);
@@ -166,7 +175,7 @@ function StubSummarySection({
       <div style={{ width: "2.8in", flexShrink: 0, boxSizing: "border-box", padding: "0.2in 0.15in 0.2in 0.35in", display: "flex", flexDirection: "column", fontSize: "10px" }}>
 
         {/* FROM — company return address, top-left */}
-        <div style={{ marginBottom: "auto" }}>
+        <div>
           <div style={{ fontSize: "8px", color: "#888", marginBottom: "2px", textTransform: "uppercase", letterSpacing: "0.5px" }}>From</div>
           <div style={{ display: "flex", alignItems: "center", gap: "5px", marginBottom: "2px" }}>
             {config.showCompanyLogo && company.logoUrl && (
@@ -180,18 +189,17 @@ function StubSummarySection({
           )}
         </div>
 
-        {/* TO — employee mailing address, center window zone */}
-        <div style={{ marginTop: "0.5in" }}>
-          <div style={{ fontSize: "8px", color: "#888", marginBottom: "4px", textTransform: "uppercase", letterSpacing: "0.5px" }}>To</div>
-          <div style={{ fontSize: "12px", fontWeight: "bold" }}>{worker.firstName} {worker.lastName}</div>
-          {worker.address && <div style={{ fontSize: "11px", marginTop: "2px" }}>{worker.address}</div>}
+        {/* Spacer — pushes employee address into envelope window zone */}
+        <div style={{ flex: 1 }} />
+
+        {/* TO — employee mailing address only, no label, sized for envelope window */}
+        <div style={{ marginBottom: "0.6in" }}>
+          <div style={{ fontSize: "13px", fontWeight: "bold" }}>{worker.firstName} {worker.lastName}</div>
+          {worker.address && <div style={{ fontSize: "12px", marginTop: "3px" }}>{worker.address}</div>}
           {(worker.city || worker.state || worker.zip) && (
-            <div style={{ fontSize: "11px" }}>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
+            <div style={{ fontSize: "12px" }}>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
           )}
         </div>
-
-        {/* Spacer pushes content away from bottom */}
-        <div style={{ flex: 1 }} />
       </div>
 
       {/* Vertical divider */}
@@ -299,6 +307,48 @@ function StubSummarySection({
           <div style={{ border: "1px solid #999", padding: "4px 6px" }}>
             <div style={{ fontWeight: "bold", fontSize: "8px", marginBottom: "2px" }}>LEAVE BALANCES</div>
             <div style={{ fontSize: "8px", color: "#666" }}>Sick Leave: 0.00 hrs available</div>
+          </div>
+        )}
+
+        {/* SE Tax reminder — contractors only */}
+        {isContractor && (
+          <div style={{ border: "1px solid #4a90d9", padding: "5px 7px", background: "#f0f5ff", marginTop: "6px" }}>
+            <div style={{ fontWeight: "bold", fontSize: "8px", color: "#2b5ea7", marginBottom: "4px" }}>
+              SELF-EMPLOYMENT TAX REMINDER — NOT DEDUCTED FROM PAY
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #4a90d9" }}>
+                  <th style={{ textAlign: "left", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>DESCRIPTION</th>
+                  <th style={{ textAlign: "right", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>RATE</th>
+                  <th style={{ textAlign: "right", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>THIS PAY</th>
+                  {config.showYtdTotals && <th style={{ textAlign: "right", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>YTD</th>}
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ padding: "1px 2px", fontSize: "8px", color: "#2b5ea7" }}>Social Security (SSI)</td>
+                  <td style={{ textAlign: "right", padding: "1px 2px", fontSize: "8px", color: "#2b5ea7" }}>12.4%</td>
+                  <td style={{ textAlign: "right", padding: "1px 2px", fontSize: "8px", color: "#2b5ea7" }}>${fmt(ssTaxCurrent)}</td>
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "1px 2px", fontSize: "8px", color: "#2b5ea7" }}>${fmt(ssTaxYtd)}</td>}
+                </tr>
+                <tr>
+                  <td style={{ padding: "1px 2px", fontSize: "8px", color: "#2b5ea7" }}>Medicare</td>
+                  <td style={{ textAlign: "right", padding: "1px 2px", fontSize: "8px", color: "#2b5ea7" }}>2.9%</td>
+                  <td style={{ textAlign: "right", padding: "1px 2px", fontSize: "8px", color: "#2b5ea7" }}>${fmt(medicareTaxCurrent)}</td>
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "1px 2px", fontSize: "8px", color: "#2b5ea7" }}>${fmt(medicareTaxYtd)}</td>}
+                </tr>
+                <tr style={{ borderTop: "1px solid #4a90d9", fontWeight: "bold" }}>
+                  <td style={{ padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>Total SE Tax</td>
+                  <td style={{ textAlign: "right", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>15.3%</td>
+                  <td style={{ textAlign: "right", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>${fmt(totalSeTaxCurrent)}</td>
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px", fontSize: "8px", color: "#2b5ea7" }}>${fmt(totalSeTaxYtd)}</td>}
+                </tr>
+              </tbody>
+            </table>
+            <div style={{ fontSize: "7px", color: "#555", marginTop: "3px" }}>
+              As an independent contractor you are responsible for paying self-employment tax. These amounts are informational only and have not been deducted from your pay. Consider setting aside approximately 15.3% of each payment for quarterly estimated tax payments.
+            </div>
           </div>
         )}
       </div>
