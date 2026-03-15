@@ -611,8 +611,10 @@ export async function registerRoutes(
       const existingYtdByWorker: Record<string, { gross: number; deductions: number; net: number }> = {};
 
       const allRuns = await storage.getPayrollRuns(run.companyId);
+      const currentYear = new Date(run.periodStart).getFullYear();
       const priorRuns = allRuns.filter(r =>
-        r.status !== "draft" && r.id !== run.id && r.periodEnd < run.periodStart
+        r.status !== "draft" && r.id !== run.id && r.periodEnd < run.periodStart &&
+        new Date(r.periodEnd).getFullYear() === currentYear
       );
 
       for (const worker of activeWorkers) {
@@ -780,6 +782,52 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Failed to delete payroll run:", error);
       res.status(500).json({ message: "Failed to delete payroll run" });
+    }
+  });
+
+  // Recalculate YTD for all payroll items of a company — fixes ytd_gross/ytd_net stored values
+  app.post("/api/payroll/recalculate-ytd", requireRole("admin"), async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const allRuns = (await storage.getPayrollRuns(companyId))
+        .filter(r => r.status === "processed")
+        .sort((a, b) => a.periodStart.localeCompare(b.periodStart));
+
+      // Build year-scoped cumulative ytd per worker
+      const ytdByWorkerYear: Record<string, number> = {};
+      const ytdNetByWorkerYear: Record<string, number> = {};
+      let updatedCount = 0;
+
+      for (const run of allRuns) {
+        const year = new Date(run.periodStart).getFullYear();
+        const items = await storage.getPayrollItems(run.id);
+        for (const item of items) {
+          const key = `${item.workerId}:${year}`;
+          const priorYtd = ytdByWorkerYear[key] || 0;
+          const priorYtdNet = ytdNetByWorkerYear[key] || 0;
+          const grossPay = parseFloat(item.grossPay || "0");
+          const netPay = parseFloat(item.netPay || "0");
+          const correctYtdGross = priorYtd + grossPay;
+          const correctYtdNet = priorYtdNet + netPay;
+          if (
+            Math.abs(parseFloat(item.ytdGross || "0") - correctYtdGross) > 0.01 ||
+            Math.abs(parseFloat(item.ytdNet || "0") - correctYtdNet) > 0.01
+          ) {
+            await storage.updatePayrollItem(item.id, {
+              ytdGross: correctYtdGross.toFixed(2),
+              ytdNet: correctYtdNet.toFixed(2),
+            });
+            updatedCount++;
+          }
+          ytdByWorkerYear[key] = correctYtdGross;
+          ytdNetByWorkerYear[key] = correctYtdNet;
+        }
+      }
+      res.json({ message: `YTD recalculated. ${updatedCount} payroll item(s) updated.`, updatedCount });
+    } catch (error) {
+      console.error("Failed to recalculate YTD:", error);
+      res.status(500).json({ message: "Failed to recalculate YTD" });
     }
   });
 
@@ -1171,7 +1219,11 @@ export async function registerRoutes(
       }
 
       const allRuns = await storage.getPayrollRuns(companyId);
-      const priorRuns = allRuns.filter(r => r.status !== "draft" && r.periodEnd < periodStart);
+      const runYear = new Date(periodStart).getFullYear();
+      const priorRuns = allRuns.filter(r =>
+        r.status !== "draft" && r.periodEnd < periodStart &&
+        new Date(r.periodEnd).getFullYear() === runYear
+      );
       const existingYtdByWorker: Record<string, { gross: number; deductions: number; net: number }> = {};
       for (const worker of activeWorkers) {
         let ytdGross = 0, ytdDeductions = 0, ytdNet = 0;

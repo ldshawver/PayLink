@@ -21,7 +21,7 @@ import {
   DollarSign, Clock, Calendar, ChevronDown, ChevronUp, Plus, Download, Printer,
   Calculator, FileText, CreditCard, CalendarDays, Settings, Building, Receipt, Zap,
   ChevronLeft, ChevronRight, Check, AlertCircle, ArrowRight, Pencil, Trash2,
-  Layout, Eye, EyeOff, Image, Save, Copy, ExternalLink
+  Layout, Eye, EyeOff, Image, Save, Copy, ExternalLink, RefreshCw
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
@@ -506,6 +506,9 @@ function PayrollRunCard({
 }
 
 function PayStubsTab() {
+  const { toast } = useToast();
+  const [ytdCompanyId, setYtdCompanyId] = useState("");
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: payrollRuns = [], isLoading: runsLoading } = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"] });
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
 
@@ -527,6 +530,17 @@ function PayStubsTab() {
     enabled: payrollRuns.length > 0,
   });
 
+  const recalcYtdMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/payroll/recalculate-ytd", { companyId: ytdCompanyId }),
+    onSuccess: async (res) => {
+      const data = await res.json();
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      queryClient.invalidateQueries({ predicate: q => (q.queryKey[0] as string)?.startsWith?.("/api/all-payroll-items") });
+      toast({ title: "YTD Recalculated", description: data.message });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
   const items = allItemsQuery.data || [];
   const getWorkerName = (id: string) => {
     const w = workers.find(w => w.id === id);
@@ -538,6 +552,40 @@ function PayStubsTab() {
   }
 
   return (
+    <div className="space-y-4">
+      {/* Recalculate YTD tool */}
+      <Card className="border-amber-200 dark:border-amber-800">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <RefreshCw className="h-4 w-4 text-amber-600" />
+            Recalculate Year-to-Date Totals
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Fixes ytd_gross and ytd_net on all stored payroll items so they reflect only the current calendar year. Run this if pay stubs or Q1 reports show incorrect YTD figures.
+          </p>
+        </CardHeader>
+        <CardContent className="flex items-center gap-3">
+          <Select value={ytdCompanyId} onValueChange={setYtdCompanyId}>
+            <SelectTrigger className="w-[220px]" data-testid="select-ytd-company">
+              <SelectValue placeholder="Select company" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button
+            data-testid="button-recalculate-ytd"
+            variant="outline"
+            className="border-amber-400 text-amber-700 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950"
+            disabled={!ytdCompanyId || recalcYtdMutation.isPending}
+            onClick={() => recalcYtdMutation.mutate()}
+          >
+            <RefreshCw className={`h-4 w-4 mr-2 ${recalcYtdMutation.isPending ? "animate-spin" : ""}`} />
+            {recalcYtdMutation.isPending ? "Recalculating…" : "Recalculate YTD"}
+          </Button>
+        </CardContent>
+      </Card>
+
     <Card>
       <CardHeader>
         <CardTitle>Pay Stubs</CardTitle>
@@ -570,6 +618,7 @@ function PayStubsTab() {
         </div>
       </CardContent>
     </Card>
+    </div>
   );
 }
 
@@ -2686,114 +2735,179 @@ function CheckPreview({ templateType, config, company }: {
   config: Record<string, boolean>;
   company?: Company;
 }) {
-  const stub = (key: string) => (
-    <div key={key} className="border border-dashed border-muted-foreground/30 rounded p-3 bg-muted/30 space-y-2">
+  const coName = company?.name || "Company Name";
+  const coAddr = company?.address ? `${company.address}, ${company.city || "City"}, ${company.state || "ST"} ${company.zip || ""}` : "123 Main St, City, ST 00000";
+
+  const checkPortion = (
+    <div className="border border-primary/40 rounded p-3 bg-background space-y-2">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           {config.showCompanyLogo && (
-            company?.logoUrl ? (
-              <img src={company.logoUrl} alt="" className="h-6 w-6 object-contain" />
-            ) : (
-              <div className="h-6 w-6 bg-muted rounded flex items-center justify-center"><Image className="h-3 w-3 text-muted-foreground" /></div>
-            )
+            company?.logoUrl
+              ? <img src={company.logoUrl} alt="" className="h-7 w-7 object-contain" />
+              : <div className="h-7 w-7 bg-primary/10 rounded flex items-center justify-center text-[10px] font-bold text-primary">{coName[0]}</div>
           )}
-          {config.showCompanyName && <span className="text-xs font-semibold">{company?.name || "Company Name"}</span>}
+          <div>
+            {config.showCompanyName && <p className="text-[11px] font-bold">{coName}</p>}
+            {config.showCompanyAddress && <p className="text-[9px] text-muted-foreground">{coAddr}</p>}
+          </div>
         </div>
-        {config.showPayPeriod && <span className="text-[10px] text-muted-foreground">Pay Period: 01/01 - 01/15</span>}
+        <div className="text-right">
+          {config.showCheckNumber && <p className="text-[9px] font-mono text-muted-foreground">Check #1001</p>}
+          <p className="text-[9px] text-muted-foreground">Mar 15, 2026</p>
+          <p className="text-[8px] text-muted-foreground/60">Void after 90 days</p>
+        </div>
       </div>
-      {config.showCompanyAddress && <p className="text-[10px] text-muted-foreground">{company?.address || "123 Main St"}, {company?.city || "City"}, {company?.state || "ST"} {company?.zip || "00000"}</p>}
-      <div className="grid grid-cols-2 gap-2">
-        {config.showEarningsDetail && (
-          <div className="space-y-1">
-            <p className="text-[10px] font-semibold">Earnings</p>
-            <div className="text-[9px] text-muted-foreground space-y-0.5">
-              <div className="flex justify-between"><span>Regular</span><span>$2,400.00</span></div>
-              <div className="flex justify-between"><span>Overtime</span><span>$180.00</span></div>
-            </div>
-          </div>
-        )}
-        {config.showDeductionsDetail && (
-          <div className="space-y-1">
-            <p className="text-[10px] font-semibold">Deductions</p>
-            <div className="text-[9px] text-muted-foreground space-y-0.5">
-              <div className="flex justify-between"><span>Federal Tax</span><span>-$312.00</span></div>
-              <div className="flex justify-between"><span>State Tax</span><span>-$96.00</span></div>
-            </div>
-          </div>
-        )}
+      <div className="flex justify-between items-end pt-1">
+        <div>
+          <p className="text-[9px] text-muted-foreground">Pay to the order of:</p>
+          <p className="text-[11px] font-bold">John Doe</p>
+          <p className="text-[9px] text-muted-foreground italic">Payroll Mar 1 to Mar 15</p>
+        </div>
+        <p className="text-sm font-bold">$2,172.00</p>
       </div>
-      {config.showYtdTotals && (
-        <div className="flex justify-between text-[9px] border-t pt-1">
-          <span className="font-semibold">YTD Gross: $12,000.00</span>
-          <span className="font-semibold">YTD Net: $9,180.00</span>
+      {config.showMicrLine && (
+        <div className="border-t pt-1">
+          <p className="text-[8px] font-mono text-muted-foreground tracking-wider font-bold">⑈021000021⑈ ⑆123456789⑆ 1001</p>
         </div>
       )}
     </div>
   );
 
-  const checkPortion = (
-    <div className="border-2 border-primary/40 rounded p-3 bg-background space-y-2">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {config.showCompanyLogo && (
-            company?.logoUrl ? (
-              <img src={company.logoUrl} alt="" className="h-8 w-8 object-contain" />
-            ) : (
-              <div className="h-8 w-8 bg-muted rounded flex items-center justify-center"><Image className="h-4 w-4 text-muted-foreground" /></div>
-            )
-          )}
+  const mailingStub = (
+    <div className="border border-dashed border-muted-foreground/30 rounded overflow-hidden">
+      <div className="flex h-20">
+        <div className="w-2/5 border-r border-dashed border-muted-foreground/30 p-2 flex flex-col justify-between bg-muted/10">
           <div>
-            {config.showCompanyName && <p className="text-xs font-bold">{company?.name || "Company Name"}</p>}
-            {config.showCompanyAddress && <p className="text-[9px] text-muted-foreground">{company?.address || "123 Main St"}</p>}
+            <p className="text-[8px] text-muted-foreground uppercase tracking-wide mb-0.5">From</p>
+            <p className="text-[9px] font-semibold">{coName}</p>
+            <p className="text-[8px] text-muted-foreground leading-tight">{coAddr}</p>
+          </div>
+          <div className="border border-muted-foreground/20 rounded p-1 bg-white/50">
+            <p className="text-[9px] font-bold">John Doe</p>
+            <p className="text-[8px] text-muted-foreground">456 Employee St</p>
+            <p className="text-[8px] text-muted-foreground">City, ST 11111</p>
           </div>
         </div>
-        {config.showCheckNumber && <span className="text-xs font-mono text-muted-foreground">Check #1001</span>}
-      </div>
-      <div className="flex justify-between items-end">
-        <div>
-          <p className="text-[10px] text-muted-foreground">Pay to the order of:</p>
-          <p className="text-xs font-semibold">John Doe</p>
-          {config.showEmployeeAddress && <p className="text-[9px] text-muted-foreground">456 Employee St, Town, ST 11111</p>}
+        <div className="flex-1 p-2 space-y-1">
+          <div className="flex justify-between">
+            <p className="text-[9px] font-bold">PAY STUB</p>
+            <p className="text-[8px] text-muted-foreground">Emp #1001</p>
+          </div>
+          {config.showPayPeriod && <p className="text-[8px] text-muted-foreground">Period: Mar 1 – Mar 15, 2026</p>}
+          <div className="grid grid-cols-3 gap-1 pt-1">
+            <div className="text-center border rounded p-0.5">
+              <p className="text-[7px] text-muted-foreground">GROSS</p>
+              <p className="text-[9px] font-bold">$2,580</p>
+            </div>
+            <div className="text-center border rounded p-0.5">
+              <p className="text-[7px] text-muted-foreground">DED</p>
+              <p className="text-[9px] font-bold">$408</p>
+            </div>
+            <div className="text-center border border-primary/40 rounded p-0.5 bg-primary/5">
+              <p className="text-[7px] text-muted-foreground">NET</p>
+              <p className="text-[9px] font-bold">$2,172</p>
+            </div>
+          </div>
+          {config.showYtdTotals && (
+            <div className="flex gap-2 text-[8px] text-muted-foreground pt-0.5">
+              <span>YTD Gross: $12,000</span>
+              <span>YTD Net: $9,180</span>
+            </div>
+          )}
         </div>
-        <div className="text-right">
-          <p className="text-[10px] text-muted-foreground">Date: 01/15/2026</p>
-          <p className="text-sm font-bold">$2,172.00</p>
-        </div>
       </div>
-      {config.showMicrLine && (
-        <div className="border-t pt-1">
-          <p className="text-[9px] font-mono text-muted-foreground tracking-wider">⑈021000021⑈ ⑆123456789⑆ 1001</p>
+    </div>
+  );
+
+  const earningsStub = (
+    <div className="border border-dashed border-muted-foreground/30 rounded p-2 bg-muted/20 space-y-1">
+      <div className="flex gap-3">
+        {config.showEarningsDetail && (
+          <div className="flex-1 space-y-0.5">
+            <p className="text-[9px] font-semibold">Earnings</p>
+            <div className="text-[8px] text-muted-foreground space-y-0.5">
+              <div className="flex justify-between"><span>Regular 80h @ $30</span><span>$2,400</span></div>
+              <div className="flex justify-between"><span>Overtime 3h @ $45</span><span>$135</span></div>
+              <div className="flex justify-between font-semibold border-t pt-0.5"><span>Gross Pay</span><span>$2,535</span></div>
+            </div>
+          </div>
+        )}
+        {config.showDeductionsDetail && (
+          <div className="flex-1 space-y-0.5">
+            <p className="text-[9px] font-semibold">Deductions</p>
+            <div className="text-[8px] text-muted-foreground space-y-0.5">
+              <div className="flex justify-between"><span>Federal Tax</span><span>$312</span></div>
+              <div className="flex justify-between"><span>CA State Tax</span><span>$96</span></div>
+              <div className="flex justify-between font-semibold border-t pt-0.5"><span>Net Pay</span><span>$2,172</span></div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const genericStub = (
+    <div className="border border-dashed border-muted-foreground/30 rounded p-2 bg-muted/20 space-y-1">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          {config.showCompanyName && <span className="text-[9px] font-semibold">{coName}</span>}
+        </div>
+        {config.showPayPeriod && <span className="text-[8px] text-muted-foreground">Mar 1–15, 2026</span>}
+      </div>
+      <div className="flex gap-2">
+        {config.showEarningsDetail && (
+          <div className="flex-1 text-[8px] text-muted-foreground">
+            <p className="font-semibold text-foreground">Earnings</p>
+            <div className="flex justify-between"><span>Regular</span><span>$2,400</span></div>
+            <div className="flex justify-between"><span>Overtime</span><span>$180</span></div>
+          </div>
+        )}
+        {config.showDeductionsDetail && (
+          <div className="flex-1 text-[8px] text-muted-foreground">
+            <p className="font-semibold text-foreground">Deductions</p>
+            <div className="flex justify-between"><span>Federal</span><span>$312</span></div>
+            <div className="flex justify-between"><span>State</span><span>$96</span></div>
+          </div>
+        )}
+      </div>
+      {config.showYtdTotals && (
+        <div className="flex justify-between text-[8px] border-t pt-1">
+          <span className="font-semibold">YTD Gross: $12,000</span>
+          <span className="font-semibold">YTD Net: $9,180</span>
         </div>
       )}
     </div>
   );
 
   return (
-    <div className="space-y-2 p-4 border rounded-lg bg-background max-w-md">
-      <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Preview</p>
+    <div className="space-y-1 p-3 border rounded-lg bg-muted/10 max-w-md">
+      <p className="text-[10px] font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Preview</p>
       {templateType === "standard" && (
-        <div className="space-y-2">
+        <div className="space-y-1">
           {checkPortion}
-          <div className="border-t border-dashed" />
-          {stub("stub-1")}
+          <div className="border-t border-dashed border-muted-foreground/40 my-0.5" />
+          {mailingStub}
+          <div className="border-t border-dashed border-muted-foreground/40 my-0.5" />
+          {earningsStub}
         </div>
       )}
       {templateType === "voucher" && (
-        <div className="space-y-2">
-          {stub("stub-1")}
-          <div className="border-t border-dashed" />
+        <div className="space-y-1">
+          {genericStub}
+          <div className="border-t border-dashed border-muted-foreground/40 my-0.5" />
           {checkPortion}
-          <div className="border-t border-dashed" />
-          {stub("stub-2")}
+          <div className="border-t border-dashed border-muted-foreground/40 my-0.5" />
+          {genericStub}
         </div>
       )}
       {templateType === "three-part" && (
-        <div className="space-y-2">
-          {stub("stub-1")}
-          <div className="border-t border-dashed" />
-          {stub("stub-2")}
-          <div className="border-t border-dashed" />
-          {stub("stub-3")}
+        <div className="space-y-1">
+          {checkPortion}
+          <div className="border-t border-dashed border-muted-foreground/40 my-0.5" />
+          {genericStub}
+          <div className="border-t border-dashed border-muted-foreground/40 my-0.5" />
+          {genericStub}
         </div>
       )}
     </div>
