@@ -1259,6 +1259,30 @@ export default function SchedulePage() {
                         />
                       </div>
                     </div>
+                    
+                    {generateForm.companyId && (
+                      <div className="bg-accent/50 border border-primary/20 rounded p-3 space-y-2">
+                        <p className="text-sm font-semibold">Recurring Schedules for Selected Company:</p>
+                        {recurringSchedules.filter(r => r.companyId === generateForm.companyId && r.isActive).length === 0 ? (
+                          <p className="text-sm text-muted-foreground">⚠ No active recurring schedules found for this company.</p>
+                        ) : (
+                          <div className="space-y-1">
+                            {recurringSchedules
+                              .filter(r => r.companyId === generateForm.companyId && r.isActive)
+                              .map((r, i) => {
+                                const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                                const worker = workers.find(w => w.id === r.workerId);
+                                return (
+                                  <div key={i} className="text-sm text-foreground">
+                                    • {worker?.firstName} {worker?.lastName} - {dayNames[r.dayOfWeek]} {r.startTime}-{r.endTime}
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
                     <Button
                       className="w-full"
                       onClick={() => generateMutation.mutate(generateForm)}
