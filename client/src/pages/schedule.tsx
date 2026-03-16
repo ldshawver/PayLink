@@ -162,6 +162,7 @@ export default function SchedulePage() {
     startTime: "",
     endTime: "",
     department: "",
+    jobId: "",
     note: "",
   });
 
@@ -169,6 +170,7 @@ export default function SchedulePage() {
     startTime: "",
     endTime: "",
     department: "",
+    jobId: "",
     note: "",
     status: "draft" as string,
   });
@@ -277,6 +279,9 @@ export default function SchedulePage() {
   const { data: departments = [] } = useQuery<Department[]>({
     queryKey: ["/api/departments"],
   });
+  const { data: jobs = [] } = useQuery<any[]>({
+    queryKey: ["/api/jobs"],
+  });
 
   const { data: shiftOffers = [] } = useQuery<ShiftOffer[]>({
     queryKey: ["/api/shift-offers"],
@@ -379,12 +384,12 @@ export default function SchedulePage() {
 
   const addScheduleMutation = useMutation({
     mutationFn: async (data: typeof scheduleForm) => {
-      await apiRequest("POST", "/api/schedules", data);
+      await apiRequest("POST", "/api/schedules", { ...data, jobId: data.jobId || null });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
       setAddScheduleOpen(false);
-      setScheduleForm({ workerId: "", companyId: "", date: "", startTime: "", endTime: "", department: "", note: "" });
+      setScheduleForm({ workerId: "", companyId: "", date: "", startTime: "", endTime: "", department: "", jobId: "", note: "" });
       toast({ title: "Schedule added" });
     },
     onError: (error: Error) => {
@@ -394,7 +399,7 @@ export default function SchedulePage() {
 
   const updateScheduleMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof editForm }) => {
-      await apiRequest("PATCH", `/api/schedules/${id}`, data);
+      await apiRequest("PATCH", `/api/schedules/${id}`, { ...data, jobId: data.jobId || null });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
@@ -505,6 +510,7 @@ export default function SchedulePage() {
       startTime: s.startTime,
       endTime: s.endTime,
       department: s.department || "",
+      jobId: (s as any).jobId || "",
       note: s.note || "",
       status: s.status || "draft",
     });
@@ -861,6 +867,27 @@ export default function SchedulePage() {
                       </Select>
                     </div>
                     <div>
+                      <Label>Job</Label>
+                      <Select
+                        value={scheduleForm.jobId || "__none__"}
+                        onValueChange={(v) => setScheduleForm((f) => ({ ...f, jobId: v === "__none__" ? "" : v }))}
+                      >
+                        <SelectTrigger data-testid="select-schedule-job">
+                          <SelectValue placeholder="Select job (optional)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">None</SelectItem>
+                          {jobs
+                            .filter((j: any) => !j.companyId || j.companyId === scheduleForm.companyId)
+                            .map((j: any) => (
+                              <SelectItem key={j.id} value={j.id}>
+                                {j.name}{!j.companyId ? " (All Companies)" : ""}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
                       <Label>Note</Label>
                       <Input
                         value={scheduleForm.note}
@@ -977,6 +1004,10 @@ export default function SchedulePage() {
                                               return rate > 0 ? <span className="ml-1 text-emerald-600 dark:text-emerald-400">${cost.toFixed(2)}</span> : null;
                                             })()}
                                           </div>
+                                          {(s as any).jobId && (() => {
+                                            const job = jobs.find(j => j.id === (s as any).jobId);
+                                            return job ? <div className="text-[10px] text-blue-600 dark:text-blue-400 font-medium leading-tight truncate">{job.name}</div> : null;
+                                          })()}
                                           {showNotes && s.note && (
                                             <div className="text-muted-foreground text-[10px] italic leading-tight mt-0.5 break-words">{s.note}</div>
                                           )}
@@ -1879,6 +1910,27 @@ export default function SchedulePage() {
                       .map(d => (
                         <SelectItem key={d.id} value={d.name}>
                           {d.name}{!d.companyId ? " (All Companies)" : ""}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Job</Label>
+                <Select
+                  value={editForm.jobId || "__none__"}
+                  onValueChange={(v) => setEditForm((f) => ({ ...f, jobId: v === "__none__" ? "" : v }))}
+                >
+                  <SelectTrigger data-testid="select-edit-job">
+                    <SelectValue placeholder="Select job (optional)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None</SelectItem>
+                    {jobs
+                      .filter((j: any) => !j.companyId || j.companyId === editingSchedule?.companyId)
+                      .map((j: any) => (
+                        <SelectItem key={j.id} value={j.id}>
+                          {j.name}{!j.companyId ? " (All Companies)" : ""}
                         </SelectItem>
                       ))}
                   </SelectContent>

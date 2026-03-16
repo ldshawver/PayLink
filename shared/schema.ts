@@ -175,6 +175,7 @@ export const schedules = pgTable("schedules", {
   startTime: text("start_time").notNull(),
   endTime: text("end_time").notNull(),
   department: text("department"),
+  jobId: varchar("job_id").references(() => jobs.id),
   status: scheduleStatusEnum("status").default("draft"),
   note: text("note"),
   createdAt: timestamp("created_at").defaultNow(),

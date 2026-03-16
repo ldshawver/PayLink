@@ -22,7 +22,7 @@ import {
   FolderOpen, Users, ClipboardList, DollarSign, FileText, UserCheck,
   Clock, CalendarDays, AlertTriangle, Download, Printer, BarChart3,
   Shield, Star, Award, Receipt, Building, Calculator, ExternalLink,
-  Save, Trash2, Eye, Search
+  Save, Trash2, Eye, Search, Briefcase, ChevronDown, ChevronRight
 } from "lucide-react";
 
 const OFFICIAL_FORM_URLS: Record<string, { url: string; source: string }> = {
@@ -2344,6 +2344,238 @@ function Form1096Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
   );
 }
 
+function parseShiftHours(start: string, end: string): number {
+  if (!start || !end) return 0;
+  const [sh, sm] = start.split(":").map(Number);
+  const [eh, em] = end.split(":").map(Number);
+  let mins = (eh * 60 + em) - (sh * 60 + sm);
+  if (mins < 0) mins += 24 * 60;
+  return Math.round(mins / 60 * 100) / 100;
+}
+
+function JobCostReportSection() {
+  const { data: schedules = [], isLoading: schedulesLoading } = useQuery<any[]>({ queryKey: ["/api/schedules"] });
+  const { data: workers = [] } = useQuery<any[]>({ queryKey: ["/api/workers"] });
+  const { data: jobs = [] } = useQuery<any[]>({ queryKey: ["/api/jobs"] });
+  const { data: companies = [] } = useQuery<any[]>({ queryKey: ["/api/companies"] });
+  const { data: receipts = [] } = useQuery<any[]>({ queryKey: ["/api/receipts"] });
+
+  const today = new Date();
+  const firstOfMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+  const todayStr = today.toISOString().split("T")[0];
+
+  const [startDate, setStartDate] = useState(firstOfMonth);
+  const [endDate, setEndDate] = useState(todayStr);
+  const [filterCompany, setFilterCompany] = useState("all");
+  const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set());
+
+  const toggleExpand = (jobId: string) => {
+    setExpandedJobs(prev => {
+      const next = new Set(prev);
+      next.has(jobId) ? next.delete(jobId) : next.add(jobId);
+      return next;
+    });
+  };
+
+  const filteredSchedules = schedules.filter(s => {
+    if (filterCompany !== "all" && s.companyId !== filterCompany) return false;
+    if (startDate && s.date < startDate) return false;
+    if (endDate && s.date > endDate) return false;
+    return true;
+  });
+
+  const filteredReceipts = receipts.filter(r => {
+    if (!r.includeInJobCost) return false;
+    if (filterCompany !== "all" && r.companyId !== filterCompany) return false;
+    if (startDate && r.receiptDate < startDate) return false;
+    if (endDate && r.receiptDate > endDate) return false;
+    return true;
+  });
+
+  const jobGroups = (() => {
+    const map: Record<string, {
+      job: any;
+      shifts: any[];
+      totalHours: number;
+      laborCost: number;
+      expenseCost: number;
+    }> = {};
+
+    filteredSchedules.forEach(s => {
+      const key = s.jobId || "__none__";
+      if (!map[key]) map[key] = { job: jobs.find(j => j.id === s.jobId) || null, shifts: [], totalHours: 0, laborCost: 0, expenseCost: 0 };
+      const worker = workers.find((w: any) => w.id === s.workerId);
+      const hours = parseShiftHours(s.startTime, s.endTime);
+      const rate = Number(worker?.payRate || 0);
+      map[key].shifts.push({ ...s, worker, hours, cost: hours * rate });
+      map[key].totalHours += hours;
+      map[key].laborCost += hours * rate;
+    });
+
+    filteredReceipts.forEach(r => {
+      const key = r.jobId || "__none__";
+      if (!map[key]) map[key] = { job: jobs.find(j => j.id === r.jobId) || null, shifts: [], totalHours: 0, laborCost: 0, expenseCost: 0 };
+      map[key].expenseCost += Number(r.amount || 0);
+    });
+
+    return Object.entries(map)
+      .map(([key, val]) => ({ key, ...val, totalCost: val.laborCost + val.expenseCost }))
+      .sort((a, b) => b.totalCost - a.totalCost);
+  })();
+
+  const grandTotalHours = jobGroups.reduce((s, g) => s + g.totalHours, 0);
+  const grandLaborCost = jobGroups.reduce((s, g) => s + g.laborCost, 0);
+  const grandExpenseCost = jobGroups.reduce((s, g) => s + g.expenseCost, 0);
+  const grandTotal = grandLaborCost + grandExpenseCost;
+
+  function exportCSV() {
+    const rows = [["Job", "Company", "Date", "Employee", "Hours", "Pay Rate", "Labor Cost", "Expense Cost", "Total Cost"]];
+    jobGroups.forEach(g => {
+      const jobName = g.job?.name || "No Job";
+      g.shifts.forEach(s => {
+        const co = companies.find((c: any) => c.id === s.companyId)?.name || "";
+        const emp = s.worker ? `${s.worker.firstName} ${s.worker.lastName}` : "";
+        rows.push([jobName, co, s.date, emp, s.hours.toFixed(2), Number(s.worker?.payRate || 0).toFixed(2), s.cost.toFixed(2), "", ""]);
+      });
+      if (g.expenseCost > 0) {
+        rows.push([jobName, "", "", "Expenses", "", "", "", g.expenseCost.toFixed(2), ""]);
+      }
+      rows.push([jobName, "", "", "SUBTOTAL", g.totalHours.toFixed(2), "", g.laborCost.toFixed(2), g.expenseCost.toFixed(2), g.totalCost.toFixed(2)]);
+    });
+    rows.push(["TOTAL", "", "", "", grandTotalHours.toFixed(2), "", grandLaborCost.toFixed(2), grandExpenseCost.toFixed(2), grandTotal.toFixed(2)]);
+    const csv = rows.map(r => r.map(v => `"${v}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `job-cost-report-${startDate}-to-${endDate}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-3 items-center justify-between">
+        <div className="flex flex-wrap gap-3 items-center">
+          <Select value={filterCompany} onValueChange={setFilterCompany}>
+            <SelectTrigger className="w-44" data-testid="select-jobcost-company"><SelectValue placeholder="All Companies" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <div className="flex items-center gap-2">
+            <Label className="text-sm">From</Label>
+            <Input type="date" className="w-36" value={startDate} onChange={e => setStartDate(e.target.value)} data-testid="input-jobcost-start" />
+            <Label className="text-sm">To</Label>
+            <Input type="date" className="w-36" value={endDate} onChange={e => setEndDate(e.target.value)} data-testid="input-jobcost-end" />
+          </div>
+        </div>
+        <Button variant="outline" onClick={exportCSV} data-testid="button-jobcost-export">
+          <Download className="h-4 w-4 mr-2" />Export CSV
+        </Button>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Card><CardContent className="p-4">
+          <p className="text-xs text-muted-foreground">Jobs with Activity</p>
+          <p className="text-2xl font-bold">{jobGroups.filter(g => g.key !== "__none__").length}</p>
+        </CardContent></Card>
+        <Card><CardContent className="p-4">
+          <p className="text-xs text-muted-foreground">Total Scheduled Hours</p>
+          <p className="text-2xl font-bold">{grandTotalHours.toFixed(1)}</p>
+        </CardContent></Card>
+        <Card><CardContent className="p-4">
+          <p className="text-xs text-muted-foreground">Total Labor Cost</p>
+          <p className="text-2xl font-bold text-emerald-600">${grandLaborCost.toFixed(2)}</p>
+        </CardContent></Card>
+        <Card><CardContent className="p-4">
+          <p className="text-xs text-muted-foreground">Total Job Cost</p>
+          <p className="text-2xl font-bold text-primary">${grandTotal.toFixed(2)}</p>
+        </CardContent></Card>
+      </div>
+
+      {schedulesLoading ? <Skeleton className="h-64 w-full" /> : jobGroups.length === 0 ? (
+        <Card><CardContent className="p-8 text-center">
+          <Briefcase className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+          <p className="text-muted-foreground">No shifts with job assignments found for this period.</p>
+          <p className="text-sm text-muted-foreground mt-1">Assign jobs to shifts in the Schedule page to track job costs.</p>
+        </CardContent></Card>
+      ) : (
+        <Card><CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-8"></TableHead>
+                <TableHead>Job</TableHead>
+                <TableHead className="text-right">Shifts</TableHead>
+                <TableHead className="text-right">Sched. Hours</TableHead>
+                <TableHead className="text-right">Labor Cost</TableHead>
+                <TableHead className="text-right">Expenses</TableHead>
+                <TableHead className="text-right font-bold">Total Cost</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {jobGroups.flatMap(g => [
+                <TableRow
+                  key={`main-${g.key}`}
+                  className="cursor-pointer hover:bg-muted/50"
+                  onClick={() => toggleExpand(g.key)}
+                  data-testid={`row-jobcost-${g.key}`}
+                >
+                  <TableCell className="w-8">
+                    {expandedJobs.has(g.key)
+                      ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                  </TableCell>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      <Briefcase className="h-4 w-4 text-muted-foreground" />
+                      {g.key === "__none__" ? <span className="italic text-muted-foreground">No Job Assigned</span> : g.job?.name || g.key}
+                    </div>
+                    {g.job?.companyId && <div className="text-xs text-muted-foreground mt-0.5">{companies.find((c: any) => c.id === g.job.companyId)?.name || ""}</div>}
+                  </TableCell>
+                  <TableCell className="text-right">{g.shifts.length}</TableCell>
+                  <TableCell className="text-right">{g.totalHours.toFixed(2)}h</TableCell>
+                  <TableCell className="text-right text-emerald-600">${g.laborCost.toFixed(2)}</TableCell>
+                  <TableCell className="text-right text-orange-600">${g.expenseCost.toFixed(2)}</TableCell>
+                  <TableCell className="text-right font-bold">${g.totalCost.toFixed(2)}</TableCell>
+                </TableRow>,
+                ...(expandedJobs.has(g.key) ? g.shifts.map(s => (
+                  <TableRow key={`shift-${s.id}`} className="bg-muted/30 text-sm">
+                    <TableCell />
+                    <TableCell className="pl-8 text-muted-foreground">
+                      <div>{s.date}</div>
+                      <div className="text-xs">{s.startTime} – {s.endTime}</div>
+                    </TableCell>
+                    <TableCell className="text-right text-muted-foreground">
+                      {s.worker ? `${s.worker.firstName} ${s.worker.lastName}` : "—"}
+                    </TableCell>
+                    <TableCell className="text-right">{s.hours.toFixed(2)}h</TableCell>
+                    <TableCell className="text-right text-emerald-600">${s.cost.toFixed(2)}</TableCell>
+                    <TableCell />
+                    <TableCell />
+                  </TableRow>
+                )) : []),
+              ])}
+              <TableRow className="border-t-2 font-bold bg-muted/20">
+                <TableCell />
+                <TableCell>Grand Total</TableCell>
+                <TableCell className="text-right">{jobGroups.reduce((s, g) => s + g.shifts.length, 0)}</TableCell>
+                <TableCell className="text-right">{grandTotalHours.toFixed(2)}h</TableCell>
+                <TableCell className="text-right text-emerald-600">${grandLaborCost.toFixed(2)}</TableCell>
+                <TableCell className="text-right text-orange-600">${grandExpenseCost.toFixed(2)}</TableCell>
+                <TableCell className="text-right">${grandTotal.toFixed(2)}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </CardContent></Card>
+      )}
+    </div>
+  );
+}
+
 function ExpenseReportSection() {
   const { data: receipts = [], isLoading } = useQuery<ExpenseReceipt[]>({ queryKey: ["/api/receipts"] });
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
@@ -2542,6 +2774,7 @@ export default function ReportsPage() {
           <TabsTrigger value="tax" data-testid="tab-tax">Tax Reports</TabsTrigger>
           <TabsTrigger value="hr" data-testid="tab-hr">HR Reports</TabsTrigger>
           <TabsTrigger value="expense" data-testid="tab-expense">Expense Reports</TabsTrigger>
+          <TabsTrigger value="job-cost" data-testid="tab-job-cost">Job Cost</TabsTrigger>
         </TabsList>
 
         <TabsContent value="saved" className="mt-6">
@@ -2707,6 +2940,10 @@ export default function ReportsPage() {
 
         <TabsContent value="expense" className="mt-6">
           <ExpenseReportSection />
+        </TabsContent>
+
+        <TabsContent value="job-cost" className="mt-6">
+          <JobCostReportSection />
         </TabsContent>
       </Tabs>
 
