@@ -36,7 +36,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Receipt as ReceiptIcon, Plus, Pencil, Trash2, MoreHorizontal, Upload, FileText, DollarSign, Filter } from "lucide-react";
+import { Receipt as ReceiptIcon, Plus, Pencil, Trash2, MoreHorizontal, Upload, FileText, DollarSign, Filter, Printer } from "lucide-react";
+import { Link } from "wouter";
+import { Checkbox } from "@/components/ui/checkbox";
 
 const CATEGORIES = [
   "general", "meals", "travel", "supplies", "equipment", "software",
@@ -60,6 +62,7 @@ type ReceiptForm = {
   receiptDate: string;
   category: string;
   notes: string;
+  includeInJobCost: boolean;
 };
 
 const EMPTY_FORM: ReceiptForm = {
@@ -73,6 +76,7 @@ const EMPTY_FORM: ReceiptForm = {
   receiptDate: new Date().toISOString().split("T")[0],
   category: "general",
   notes: "",
+  includeInJobCost: false,
 };
 
 export default function ExpensesPage() {
@@ -80,6 +84,7 @@ export default function ExpensesPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [editingReceipt, setEditingReceipt] = useState<Receipt | null>(null);
   const [form, setForm] = useState<ReceiptForm>(EMPTY_FORM);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [filterCompany, setFilterCompany] = useState("all");
   const [filterCategory, setFilterCategory] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
@@ -180,7 +185,24 @@ export default function ExpensesPage() {
       receiptDate: r.receiptDate || new Date().toISOString().split("T")[0],
       category: r.category || "general",
       notes: r.notes || "",
+      includeInJobCost: (r as any).includeInJobCost || false,
     });
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map(r => r.id)));
+    }
   }
 
   function handleSubmit() {
@@ -312,6 +334,15 @@ export default function ExpensesPage() {
         <Label>Notes</Label>
         <Input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Additional notes" data-testid="input-notes" />
       </div>
+      <div className="flex items-center gap-2">
+        <Checkbox
+          id="includeInJobCost"
+          checked={form.includeInJobCost}
+          onCheckedChange={v => setForm(f => ({ ...f, includeInJobCost: !!v }))}
+          data-testid="checkbox-includeInJobCost"
+        />
+        <Label htmlFor="includeInJobCost" className="cursor-pointer">Include in Job Costs</Label>
+      </div>
       <Button
         className="w-full"
         onClick={handleSubmit}
@@ -330,10 +361,20 @@ export default function ExpensesPage() {
           <ReceiptIcon className="h-6 w-6 text-teal-accent" />
           Expenses & Receipts
         </h1>
-        <Button onClick={() => { setEditingReceipt(null); setForm(EMPTY_FORM); setAddOpen(true); }} data-testid="button-add-receipt">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Receipt
-        </Button>
+        <div className="flex items-center gap-2">
+          {selectedIds.size > 0 && (
+            <Link href={`/print-expense-check?ids=${Array.from(selectedIds).join(",")}`}>
+              <Button variant="outline" data-testid="button-print-selected">
+                <Printer className="h-4 w-4 mr-2" />
+                Print {selectedIds.size} Check{selectedIds.size !== 1 ? "s" : ""}
+              </Button>
+            </Link>
+          )}
+          <Button onClick={() => { setEditingReceipt(null); setForm(EMPTY_FORM); setAddOpen(true); }} data-testid="button-add-receipt">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Receipt
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -424,9 +465,17 @@ export default function ExpensesPage() {
               <Table data-testid="table-receipts">
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={filtered.length > 0 && selectedIds.size === filtered.length}
+                        onCheckedChange={toggleSelectAll}
+                        data-testid="checkbox-select-all"
+                      />
+                    </TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Vendor</TableHead>
                     <TableHead>Category</TableHead>
+                    <TableHead>Job Cost</TableHead>
                     <TableHead>Cost Center</TableHead>
                     <TableHead>Job</TableHead>
                     <TableHead>Employee</TableHead>
@@ -438,7 +487,14 @@ export default function ExpensesPage() {
                 </TableHeader>
                 <TableBody>
                   {filtered.map(r => (
-                    <TableRow key={r.id} data-testid={`row-receipt-${r.id}`}>
+                    <TableRow key={r.id} data-testid={`row-receipt-${r.id}`} className={selectedIds.has(r.id) ? "bg-muted/50" : ""}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedIds.has(r.id)}
+                          onCheckedChange={() => toggleSelect(r.id)}
+                          data-testid={`checkbox-select-${r.id}`}
+                        />
+                      </TableCell>
                       <TableCell className="text-sm">{r.receiptDate}</TableCell>
                       <TableCell>
                         <div className="font-medium text-sm">{r.vendor || "—"}</div>
@@ -448,6 +504,11 @@ export default function ExpensesPage() {
                         <Badge variant="outline" className="capitalize text-xs">
                           {r.category?.replace(/-/g, " ") || "general"}
                         </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {(r as any).includeInJobCost
+                          ? <Badge className="text-xs bg-emerald-600">Yes</Badge>
+                          : <span className="text-xs text-muted-foreground">No</span>}
                       </TableCell>
                       <TableCell className="text-sm">{r.costCenterId ? getCostCenterName(r.costCenterId) : "—"}</TableCell>
                       <TableCell className="text-sm">{r.jobId ? getJobName(r.jobId) : "—"}</TableCell>
@@ -495,6 +556,11 @@ export default function ExpensesPage() {
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => openEdit(r)} data-testid={`button-edit-${r.id}`}>
                               <Pencil className="mr-2 h-4 w-4" />Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem asChild data-testid={`button-print-check-${r.id}`}>
+                              <Link href={`/print-expense-check?ids=${r.id}`}>
+                                <Printer className="mr-2 h-4 w-4" />Print Check
+                              </Link>
                             </DropdownMenuItem>
                             {r.status === "pending" && (
                               <DropdownMenuItem onClick={() => approveMutation.mutate({ id: r.id, status: "approved" })} data-testid={`button-approve-${r.id}`}>

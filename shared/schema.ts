@@ -1230,6 +1230,8 @@ export const receipts = pgTable("receipts", {
   status: text("status").default("pending"),
   approvedBy: varchar("approved_by"),
   notes: text("notes"),
+  includeInJobCost: boolean("include_in_job_cost").default(false),
+  checkNumber: text("check_number"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

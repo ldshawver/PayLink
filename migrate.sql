@@ -45,3 +45,7 @@ ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS pay_method_id VARCHAR;
 -- Platform + handle fields for digital direct deposit on pay methods
 ALTER TABLE pay_methods ADD COLUMN IF NOT EXISTS platform TEXT;
 ALTER TABLE pay_methods ADD COLUMN IF NOT EXISTS handle TEXT;
+
+-- Expense check printing support
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS include_in_job_cost BOOLEAN DEFAULT FALSE;
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS check_number TEXT;
