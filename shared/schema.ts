@@ -214,6 +214,9 @@ export const payrollItems = pgTable("payroll_items", {
   ytdGross: numeric("ytd_gross").default("0"),
   ytdDeductions: numeric("ytd_deductions").default("0"),
   ytdNet: numeric("ytd_net").default("0"),
+  paymentMethod: text("payment_method"),
+  paymentPlatform: text("payment_platform"),
+  payMethodId: varchar("pay_method_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -350,6 +353,8 @@ export const payMethods = pgTable("pay_methods", {
   priority: integer("priority").default(1),
   amountType: text("amount_type").default("remainder"),
   amountValue: numeric("amount_value"),
+  platform: text("platform"),
+  handle: text("handle"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

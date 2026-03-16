@@ -236,7 +236,7 @@ function PayrollRunCard({
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editItem, setEditItem] = useState<PayrollItem | null>(null);
-  const [editForm, setEditForm] = useState({ regularHours: "", overtimeHours: "", doubleTimeHours: "", payRate: "", regularPay: "", overtimePay: "", doubleTimePay: "", grossPay: "", deductions: "", netPay: "", checkNumber: "" });
+  const [editForm, setEditForm] = useState({ regularHours: "", overtimeHours: "", doubleTimeHours: "", payRate: "", regularPay: "", overtimePay: "", doubleTimePay: "", grossPay: "", deductions: "", netPay: "", checkNumber: "", paymentMethod: "", paymentPlatform: "" });
 
   const editItemMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof editForm }) => {
@@ -282,6 +282,8 @@ function PayrollRunCard({
       deductions: item.deductions?.toString() || "0",
       netPay: item.netPay?.toString() || "0",
       checkNumber: item.checkNumber || "",
+      paymentMethod: item.paymentMethod || "",
+      paymentPlatform: item.paymentPlatform || "",
     });
   };
 
@@ -398,6 +400,36 @@ function PayrollRunCard({
                 />
               </div>
             ))}
+          </div>
+          <div className="grid grid-cols-2 gap-3 mt-2 border-t pt-3">
+            <div className="grid gap-1">
+              <Label className="text-xs">Payment Method</Label>
+              <Select value={editForm.paymentMethod} onValueChange={v => setEditForm(f => ({ ...f, paymentMethod: v === "none" ? "" : v }))}>
+                <SelectTrigger data-testid="select-edit-paymentMethod"><SelectValue placeholder="Select method" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Not specified</SelectItem>
+                  <SelectItem value="check">Check</SelectItem>
+                  <SelectItem value="cash">Cash</SelectItem>
+                  <SelectItem value="direct_deposit">Direct Deposit</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {editForm.paymentMethod === "direct_deposit" && (
+              <div className="grid gap-1">
+                <Label className="text-xs">Platform (if digital)</Label>
+                <Select value={editForm.paymentPlatform} onValueChange={v => setEditForm(f => ({ ...f, paymentPlatform: v === "none" ? "" : v }))}>
+                  <SelectTrigger data-testid="select-edit-paymentPlatform"><SelectValue placeholder="Select platform" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Bank / ACH</SelectItem>
+                    <SelectItem value="apple_pay">Apple Pay</SelectItem>
+                    <SelectItem value="cash_app">Cash App</SelectItem>
+                    <SelectItem value="paypal">PayPal</SelectItem>
+                    <SelectItem value="venmo">Venmo</SelectItem>
+                    <SelectItem value="zelle">Zelle</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
           <div className="flex justify-end gap-2 mt-2">
             <Button variant="outline" onClick={() => setEditItem(null)}>Cancel</Button>

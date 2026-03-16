@@ -36,3 +36,12 @@ WHERE applies_to = 'all'
     'CA Employment Training Tax (ETT)',
     'FUTA (Federal Unemployment)'
   );
+
+-- Payment method tracking on payroll items
+ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS payment_method TEXT;
+ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS payment_platform TEXT;
+ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS pay_method_id VARCHAR;
+
+-- Platform + handle fields for digital direct deposit on pay methods
+ALTER TABLE pay_methods ADD COLUMN IF NOT EXISTS platform TEXT;
+ALTER TABLE pay_methods ADD COLUMN IF NOT EXISTS handle TEXT;
