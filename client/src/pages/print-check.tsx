@@ -222,75 +222,118 @@ function StubSummarySection({
           </div>
         </div>
 
-        {/* RIGHT: PAYSTUB DETAIL (readable, not in windows) */}
-        <div style={{ minWidth: "2.35in", flexShrink: 0, fontSize: "9px", display: "flex", flexDirection: "column", justifyContent: "flex-start" }}>
-          {/* Header */}
-          <div style={{ fontWeight: "bold", fontSize: "11px", marginBottom: "3px", paddingBottom: "2px", borderBottom: "2px solid #000" }}>
-            PAY STUB
-          </div>
-
-          {/* Employee info line */}
-          <div style={{ fontSize: "8px", marginBottom: "2px", color: "#333" }}>
-            {isContractor ? "Contractor" : "Employee"}: {worker.firstName} {worker.lastName}
-          </div>
-
-          {/* Pay period */}
-          {config.showPayPeriod && (
-            <div style={{ fontSize: "8px", marginBottom: "2px", color: "#555" }}>
-              Period: {run.periodStart.slice(0, 10)}
+        {/* RIGHT: PAYSTUB DETAIL — tabular layout */}
+        <div style={{ minWidth: "2.8in", flexShrink: 0, fontSize: "7px", display: "flex", flexDirection: "column", justifyContent: "flex-start" }}>
+          {/* Header and pay period info */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "2px" }}>
+            <div style={{ fontWeight: "bold", fontSize: "10px" }}>PAYSTUB</div>
+            <div style={{ textAlign: "right", fontSize: "6px" }}>
+              {config.showPayPeriod && <div>Pay Period: {run.periodStart.slice(0, 10)} – {run.periodEnd.slice(0, 10)}</div>}
+              {run.processedAt && <div>Pay Date: {new Date(run.processedAt).toLocaleDateString()}</div>}
             </div>
-          )}
+          </div>
 
-          {/* Hours box */}
-          <div style={{ border: "1px solid #999", padding: "3px", marginBottom: "2px", fontSize: "8px", background: "#f9f9f9" }}>
-            <div style={{ fontWeight: "bold", marginBottom: "1px", fontSize: "9px" }}>HOURS</div>
-            <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
-              <div>
-                <div style={{ color: "#666", fontSize: "7px" }}>Regular</div>
-                <div style={{ fontWeight: "bold", fontSize: "9px" }}>{fmt(regularHours)}</div>
-              </div>
+          {/* Earnings table */}
+          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "2px", fontSize: "7px" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #000" }}>
+                <th style={{ textAlign: "left", padding: "1px 2px", fontSize: "6px", fontWeight: "bold" }}>EARNINGS</th>
+                <th style={{ textAlign: "right", padding: "1px 2px", fontSize: "6px", fontWeight: "bold" }}>HOURS</th>
+                <th style={{ textAlign: "right", padding: "1px 2px", fontSize: "6px", fontWeight: "bold" }}>RATE</th>
+                <th style={{ textAlign: "right", padding: "1px 2px", fontSize: "6px", fontWeight: "bold" }}>CURRENT</th>
+                <th style={{ textAlign: "right", padding: "1px 2px", fontSize: "6px", fontWeight: "bold" }}>YTD</th>
+              </tr>
+            </thead>
+            <tbody>
+              {regularHours > 0 && (
+                <tr>
+                  <td style={{ padding: "1px 2px", textAlign: "left" }}>Regular</td>
+                  <td style={{ padding: "1px 2px", textAlign: "right" }}>{fmt(regularHours)}</td>
+                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                </tr>
+              )}
               {overtimeHours > 0 && (
-                <div>
-                  <div style={{ color: "#666", fontSize: "7px" }}>OT</div>
-                  <div style={{ fontWeight: "bold", fontSize: "9px" }}>{fmt(overtimeHours)}</div>
-                </div>
+                <tr>
+                  <td style={{ padding: "1px 2px", textAlign: "left" }}>Overtime</td>
+                  <td style={{ padding: "1px 2px", textAlign: "right" }}>{fmt(overtimeHours)}</td>
+                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                </tr>
               )}
               {doubleTimeHours > 0 && (
-                <div>
-                  <div style={{ color: "#666", fontSize: "7px" }}>DT</div>
-                  <div style={{ fontWeight: "bold", fontSize: "9px" }}>{fmt(doubleTimeHours)}</div>
-                </div>
+                <tr>
+                  <td style={{ padding: "1px 2px", textAlign: "left" }}>Double Time</td>
+                  <td style={{ padding: "1px 2px", textAlign: "right" }}>{fmt(doubleTimeHours)}</td>
+                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                </tr>
               )}
+              <tr style={{ fontWeight: "bold", borderTop: "1px solid #999" }}>
+                <td style={{ padding: "1px 2px", textAlign: "left" }}>TOTAL HOURS</td>
+                <td style={{ padding: "1px 2px", textAlign: "right" }}>{fmt(totalHours)}</td>
+                <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* Deductions header + columns on same line */}
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1px", fontSize: "6px", fontWeight: "bold" }}>
+            <span>DEDUCTIONS</span>
+            <div style={{ display: "flex", gap: "6px" }}>
+              <span style={{ width: "30px", textAlign: "right" }}>CURRENT</span>
+              <span style={{ width: "30px", textAlign: "right" }}>YTD</span>
             </div>
           </div>
 
-          {/* Pay summary box */}
-          <div style={{ border: "1px solid #000", padding: "3px", fontSize: "8px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "2px", paddingBottom: "1px", borderBottom: "1px solid #ccc" }}>
-              <span>Gross:</span>
-              <span style={{ fontWeight: "bold" }}>${fmt(grossPay)}</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "2px", paddingBottom: "1px", borderBottom: "1px solid #ccc" }}>
-              <span>Deductions:</span>
-              <span style={{ fontWeight: "bold" }}>${fmt(totalDeductions)}</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "9px", fontWeight: "bold", color: "#000" }}>
-              <span>NET PAY:</span>
-              <span>${fmt(netPay)}</span>
+          {/* Gross Pay row */}
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "1px 0", borderBottom: "1px solid #999", marginBottom: "1px" }}>
+            <span style={{ fontWeight: "bold" }}>GROSS PAY</span>
+            <div style={{ display: "flex", gap: "6px" }}>
+              <span style={{ width: "30px", textAlign: "right", fontWeight: "bold" }}>${fmt(grossPay)}</span>
+              <span style={{ width: "30px", textAlign: "right", fontWeight: "bold" }}>${fmt(item.ytdGross)}</span>
             </div>
           </div>
 
-          {/* YTD */}
-          {config.showYtdTotals && (
-            <div style={{ marginTop: "2px", fontSize: "7px", color: "#666", paddingTop: "2px", borderTop: "1px solid #ddd" }}>
-              YTD Gross: ${fmt(item.ytdGross)}
+          {/* Total Deductions row */}
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "1px 0", borderBottom: "1px solid #999", marginBottom: "1px" }}>
+            <span>TOTAL DEDUCTIONS</span>
+            <div style={{ display: "flex", gap: "6px" }}>
+              <span style={{ width: "30px", textAlign: "right", fontWeight: "bold" }}>${fmt(totalDeductions)}</span>
+              <span style={{ width: "30px", textAlign: "right", fontWeight: "bold" }}>${fmt(item.ytdNet - item.ytdGross + totalDeductions)}</span>
             </div>
-          )}
+          </div>
+
+          {/* Net Pay (prominent) */}
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", marginBottom: "2px", fontWeight: "bold", fontSize: "8px" }}>
+            <span>NET PAY</span>
+            <div style={{ display: "flex", gap: "6px" }}>
+              <span style={{ width: "30px", textAlign: "right" }}>${fmt(netPay)}</span>
+              <span style={{ width: "30px", textAlign: "right" }}>${fmt(item.ytdNet)}</span>
+            </div>
+          </div>
 
           {/* SE Tax for contractors */}
           {isContractor && (
-            <div style={{ marginTop: "2px", fontSize: "7px", color: "#2b5ea7", paddingTop: "2px", borderTop: "1px solid #4a90d9", paddingBottom: "2px" }}>
-              <strong>SE Tax (ref):</strong> ${fmt(totalSeTaxCurrent)}
+            <div style={{ marginTop: "2px", paddingTop: "2px", borderTop: "1px solid #4a90d9", fontSize: "6px", color: "#2b5ea7" }}>
+              <div style={{ fontWeight: "bold", marginBottom: "1px" }}>SELF-EMPLOYMENT TAX REFERENCE</div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1px" }}>
+                <span>Social Security (SS) 12.4%</span>
+                <span>${fmt(ssTaxCurrent)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1px" }}>
+                <span>Medicare 2.9%</span>
+                <span>${fmt(medicareTaxCurrent)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: "bold" }}>
+                <span>Total SE Tax 15.3%</span>
+                <span>${fmt(totalSeTaxCurrent)}</span>
+              </div>
             </div>
           )}
         </div>
