@@ -151,6 +151,8 @@ export default function SchedulePage() {
   const [editScheduleOpen, setEditScheduleOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [addRecurringOpen, setAddRecurringOpen] = useState(false);
+  const [editRecurringOpen, setEditRecurringOpen] = useState(false);
+  const [editingRecurring, setEditingRecurring] = useState<RecurringSchedule | null>(null);
   const [generateOpen, setGenerateOpen] = useState(false);
 
   const [scheduleForm, setScheduleForm] = useState({
@@ -179,6 +181,17 @@ export default function SchedulePage() {
     endTime: "",
     effectiveFrom: "",
     effectiveTo: "",
+  });
+
+  const [editRecurringForm, setEditRecurringForm] = useState({
+    companyId: "",
+    workerId: "",
+    dayOfWeek: "",
+    startTime: "",
+    endTime: "",
+    effectiveFrom: "",
+    effectiveTo: "",
+    isActive: true,
   });
 
   const [generateForm, setGenerateForm] = useState({
@@ -448,6 +461,39 @@ export default function SchedulePage() {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
+
+  const updateRecurringMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: typeof editRecurringForm }) => {
+      await apiRequest("PATCH", `/api/recurring-schedules/${id}`, {
+        ...data,
+        dayOfWeek: data.dayOfWeek ? Number(data.dayOfWeek) : undefined,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/recurring-schedules"] });
+      setEditRecurringOpen(false);
+      setEditingRecurring(null);
+      toast({ title: "Recurring schedule updated" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const openEditRecurring = (rs: RecurringSchedule) => {
+    setEditingRecurring(rs);
+    setEditRecurringForm({
+      companyId: rs.companyId || "",
+      workerId: rs.workerId || "",
+      dayOfWeek: String(rs.dayOfWeek),
+      startTime: rs.startTime,
+      endTime: rs.endTime,
+      effectiveFrom: rs.effectiveFrom || "",
+      effectiveTo: rs.effectiveTo || "",
+      isActive: rs.isActive ?? true,
+    });
+    setEditRecurringOpen(true);
+  };
 
   const openEditSchedule = (s: Schedule) => {
     setEditingSchedule(s);
@@ -1340,14 +1386,24 @@ export default function SchedulePage() {
                             </Badge>
                           </TableCell>
                           <TableCell>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => deleteRecurringMutation.mutate(rs.id)}
-                              data-testid={`button-delete-recurring-${rs.id}`}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => openEditRecurring(rs)}
+                                data-testid={`button-edit-recurring-${rs.id}`}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => deleteRecurringMutation.mutate(rs.id)}
+                                data-testid={`button-delete-recurring-${rs.id}`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))
@@ -1357,6 +1413,99 @@ export default function SchedulePage() {
               )}
             </CardContent>
           </Card>
+
+          <Dialog open={editRecurringOpen} onOpenChange={v => { setEditRecurringOpen(v); if (!v) { setEditingRecurring(null); } }}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Edit Recurring Schedule</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-4 py-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Company</label>
+                  <Select value={editRecurringForm.companyId} onValueChange={v => setEditRecurringForm(f => ({ ...f, companyId: v }))}>
+                    <SelectTrigger data-testid="select-edit-recurring-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                    <SelectContent>
+                      {companies.map(c => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Employee</label>
+                  <Select value={editRecurringForm.workerId} onValueChange={v => setEditRecurringForm(f => ({ ...f, workerId: v }))}>
+                    <SelectTrigger data-testid="select-edit-recurring-worker"><SelectValue placeholder="Select employee" /></SelectTrigger>
+                    <SelectContent>
+                      {workers.filter(w => !editRecurringForm.companyId || w.companyId === editRecurringForm.companyId).map(w => (
+                        <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Day of Week</label>
+                  <Select value={editRecurringForm.dayOfWeek} onValueChange={v => setEditRecurringForm(f => ({ ...f, dayOfWeek: v }))}>
+                    <SelectTrigger data-testid="select-edit-recurring-day"><SelectValue placeholder="Select day" /></SelectTrigger>
+                    <SelectContent>
+                      {DAY_NAMES.map((d, i) => (
+                        <SelectItem key={i} value={String(i)}>{d}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">Start Time</label>
+                    <input type="time" className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                      value={editRecurringForm.startTime}
+                      onChange={e => setEditRecurringForm(f => ({ ...f, startTime: e.target.value }))}
+                      data-testid="input-edit-recurring-start-time" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">End Time</label>
+                    <input type="time" className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                      value={editRecurringForm.endTime}
+                      onChange={e => setEditRecurringForm(f => ({ ...f, endTime: e.target.value }))}
+                      data-testid="input-edit-recurring-end-time" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">Effective From</label>
+                    <input type="date" className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                      value={editRecurringForm.effectiveFrom}
+                      onChange={e => setEditRecurringForm(f => ({ ...f, effectiveFrom: e.target.value }))}
+                      data-testid="input-edit-recurring-effective-from" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">Effective To</label>
+                    <input type="date" className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                      value={editRecurringForm.effectiveTo}
+                      onChange={e => setEditRecurringForm(f => ({ ...f, effectiveTo: e.target.value }))}
+                      data-testid="input-edit-recurring-effective-to" />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" id="edit-recurring-active" checked={editRecurringForm.isActive}
+                    onChange={e => setEditRecurringForm(f => ({ ...f, isActive: e.target.checked }))}
+                    data-testid="checkbox-edit-recurring-active" className="h-4 w-4 rounded border" />
+                  <label htmlFor="edit-recurring-active" className="text-sm">Active</label>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setEditRecurringOpen(false)} data-testid="button-cancel-edit-recurring">
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={() => editingRecurring && updateRecurringMutation.mutate({ id: editingRecurring.id, data: editRecurringForm })}
+                    disabled={updateRecurringMutation.isPending}
+                    data-testid="button-submit-edit-recurring"
+                  >
+                    {updateRecurringMutation.isPending ? "Saving..." : "Save Changes"}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         <TabsContent value="templates">
