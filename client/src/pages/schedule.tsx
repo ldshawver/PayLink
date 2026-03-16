@@ -463,22 +463,23 @@ export default function SchedulePage() {
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
       setGenerateOpen(false);
-      if (data.created === 0 && data.templatesFound > 0) {
-        toast({
-          title: "No new schedules created",
-          description: `Found ${data.templatesFound} recurring template(s) but all shifts already exist for this date range.`,
-          variant: "default"
-        });
-      } else if (data.created === 0 && data.templatesFound === 0) {
+      if (data.created === 0 && data.templatesFound === 0) {
         toast({
           title: "No templates found",
           description: "No active recurring schedule templates found for this company. Add recurring schedules first.",
           variant: "destructive"
         });
+      } else if (data.created === 0 && data.skipped > 0) {
+        toast({
+          title: "Already up to date",
+          description: `All ${data.skipped} shift(s) from ${data.templatesFound} recurring template(s) already exist in this date range. View them in the Schedule Grid.`,
+          variant: "default"
+        });
       } else {
+        const skipNote = data.skipped > 0 ? ` (${data.skipped} already existed and were skipped)` : "";
         toast({ 
           title: "Schedules Generated", 
-          description: `Created ${data.created} draft shift(s) from ${data.templatesFound} recurring template(s).`,
+          description: `Created ${data.created} draft shift(s) from ${data.templatesFound} recurring template(s).${skipNote}`,
           variant: "default"
         });
       }

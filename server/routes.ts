@@ -1167,7 +1167,17 @@ export async function registerRoutes(
         const worker = allWorkers.find(w => w.id === r.workerId);
         return worker?.companyId === companyId;
       });
+
+      // Pre-load all existing schedules for this company in the date range for duplicate checking
+      const allExisting = await storage.getSchedules();
+      const existingSet = new Set(
+        allExisting
+          .filter(s => s.companyId === companyId && s.date >= startDate && s.date <= endDate)
+          .map(s => `${s.workerId}::${s.date}::${s.startTime}::${s.endTime}`)
+      );
+
       const created: any[] = [];
+      let skipped = 0;
       const start = new Date(startDate);
       const end = new Date(endDate);
       end.setHours(23, 59, 59, 999);
@@ -1175,36 +1185,34 @@ export async function registerRoutes(
       for (let d = new Date(start); d <= end;) {
         const dayOfWeek = d.getDay();
         const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-        try {
-          for (const rs of activeRecurring) {
-            if (rs.dayOfWeek !== dayOfWeek) continue;
-            if (rs.effectiveFrom && dateStr < rs.effectiveFrom) continue;
-            if (rs.effectiveTo && dateStr > rs.effectiveTo) continue;
-            try {
-              const schedule = await storage.createSchedule({
-                companyId,
-                workerId: rs.workerId,
-                date: dateStr,
-                startTime: rs.startTime,
-                endTime: rs.endTime,
-                status: "draft",
-              });
-              created.push(schedule);
-            } catch (scheduleError: any) {
-              // Silently skip duplicate schedules (already exists for this worker on this date)
-              if (scheduleError?.message?.includes("duplicate") || scheduleError?.code === "23505") {
-                // Duplicate key - this is expected if schedules already exist
-              } else {
-                console.error(`Failed to create schedule for date ${dateStr}, worker ${rs.workerId}:`, scheduleError?.message || scheduleError);
-              }
-            }
+        for (const rs of activeRecurring) {
+          if (rs.dayOfWeek !== dayOfWeek) continue;
+          if (rs.effectiveFrom && dateStr < rs.effectiveFrom) continue;
+          if (rs.effectiveTo && dateStr > rs.effectiveTo) continue;
+          // Skip if an identical shift already exists for this worker on this date
+          const key = `${rs.workerId}::${dateStr}::${rs.startTime}::${rs.endTime}`;
+          if (existingSet.has(key)) {
+            skipped++;
+            continue;
           }
-        } catch (dayError) {
-          console.error(`Error processing day ${dateStr}:`, dayError);
+          try {
+            const schedule = await storage.createSchedule({
+              companyId,
+              workerId: rs.workerId,
+              date: dateStr,
+              startTime: rs.startTime,
+              endTime: rs.endTime,
+              status: "draft",
+            });
+            created.push(schedule);
+            existingSet.add(key); // prevent duplicates within the same generation run
+          } catch (scheduleError: any) {
+            console.error(`Failed to create schedule for date ${dateStr}, worker ${rs.workerId}:`, scheduleError?.message || scheduleError);
+          }
         }
         d.setDate(d.getDate() + 1);
       }
-      res.status(201).json({ created: created.length, templatesFound: activeRecurring.length, schedules: created });
+      res.status(201).json({ created: created.length, skipped, templatesFound: activeRecurring.length, schedules: created });
     } catch (error) {
       console.error("Schedule generation error:", error);
       res.status(500).json({ message: `Failed to generate schedules: ${error instanceof Error ? error.message : String(error)}` });
