@@ -534,6 +534,7 @@ export default function SchedulePage() {
       await apiRequest("PATCH", `/api/recurring-schedules/${id}`, {
         ...data,
         dayOfWeek: data.dayOfWeek ? Number(data.dayOfWeek) : undefined,
+        jobId: data.jobId || null,
       });
     },
     onSuccess: () => {
