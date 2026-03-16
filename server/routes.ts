@@ -1176,6 +1176,10 @@ export async function registerRoutes(
           .map(s => `${s.workerId}::${s.date}::${s.startTime}::${s.endTime}`)
       );
 
+      // Build a set of valid job IDs so we don't pass a deleted job_id into the new schedule
+      const allJobs = await storage.getJobs();
+      const validJobIds = new Set(allJobs.map(j => j.id));
+
       const created: any[] = [];
       let skipped = 0;
       const start = new Date(startDate);
@@ -1195,6 +1199,8 @@ export async function registerRoutes(
             skipped++;
             continue;
           }
+          // Only pass jobId if it still exists — avoids FK violation from deleted jobs
+          const safeJobId = rs.jobId && validJobIds.has(rs.jobId) ? rs.jobId : null;
           try {
             const schedule = await storage.createSchedule({
               companyId,
@@ -1202,6 +1208,7 @@ export async function registerRoutes(
               date: dateStr,
               startTime: rs.startTime,
               endTime: rs.endTime,
+              jobId: safeJobId,
               status: "draft",
             });
             created.push(schedule);

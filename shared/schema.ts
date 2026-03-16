@@ -463,6 +463,7 @@ export const recurringSchedules = pgTable("recurring_schedules", {
   endTime: text("end_time").notNull(),
   effectiveFrom: date("effective_from"),
   effectiveTo: date("effective_to"),
+  jobId: varchar("job_id").references(() => jobs.id),
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
