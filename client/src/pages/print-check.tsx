@@ -188,44 +188,10 @@ function StubSummarySection({
     .filter(d => d.amount > 0);
 
   return (
-    <div style={{ height: "3.667in", boxSizing: "border-box", display: "flex", flexDirection: "row" }}>
+    <div style={{ height: "3.667in", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
 
-      {/* ── LEFT ADDRESS PANEL (2.8in) ── */}
-      <div style={{ width: "2.8in", flexShrink: 0, boxSizing: "border-box", padding: "0.2in 0.15in 0.2in 0.35in", display: "flex", flexDirection: "column", fontSize: "10px" }}>
-
-        {/* FROM — company return address, top-left */}
-        <div>
-          <div style={{ fontSize: "8px", color: "#888", marginBottom: "2px", textTransform: "uppercase", letterSpacing: "0.5px" }}>From</div>
-          <div style={{ display: "flex", alignItems: "center", gap: "5px", marginBottom: "2px" }}>
-            {config.showCompanyLogo && company.logoUrl && (
-              <img src={company.logoUrl} alt="" style={{ height: "20px", width: "20px", objectFit: "contain" }} />
-            )}
-            <div style={{ fontWeight: "bold", fontSize: "11px" }}>{company.name}</div>
-          </div>
-          {company.address && <div style={{ fontSize: "10px" }}>{company.address}</div>}
-          {(company.city || company.state || company.zip) && (
-            <div style={{ fontSize: "10px" }}>{[company.city, company.state].filter(Boolean).join(", ")} {company.zip}</div>
-          )}
-        </div>
-
-        {/* Spacer — pushes employee address into envelope window zone */}
-        <div style={{ flex: 1 }} />
-
-        {/* TO — employee mailing address only, no label, sized for envelope window — shifted 0.5in right */}
-        <div style={{ marginBottom: "0.6in", marginLeft: "0.5in" }}>
-          <div style={{ fontSize: "13px", fontWeight: "bold" }}>{worker.firstName} {worker.lastName}</div>
-          {worker.address && <div style={{ fontSize: "12px", marginTop: "3px" }}>{worker.address}</div>}
-          {(worker.city || worker.state || worker.zip) && (
-            <div style={{ fontSize: "12px" }}>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
-          )}
-        </div>
-      </div>
-
-      {/* Vertical divider */}
-      <div style={{ width: "1px", background: "#ccc", margin: "0.15in 0" }} />
-
-      {/* ── RIGHT STUB DATA PANEL ── */}
-      <div style={{ flex: 1, boxSizing: "border-box", padding: "0.2in 0.35in 0.2in 0.25in", display: "flex", flexDirection: "column", fontSize: "10px" }}>
+      {/* ── TOP DATA PANEL — all pay stub info, above the window zone ── */}
+      <div style={{ flex: 1, boxSizing: "border-box", padding: "0.15in 0.35in 0.1in 0.35in", display: "flex", flexDirection: "column", fontSize: "10px", overflow: "hidden" }}>
 
         {/* Stub header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "6px", borderBottom: "2px solid #000", paddingBottom: "4px" }}>
@@ -407,6 +373,42 @@ function StubSummarySection({
             </div>
           </div>
         )}
+      </div>
+
+      {/* ── BOTTOM ADDRESS STRIP — only this zone shows through the envelope window ── */}
+      <div style={{
+        height: "1.25in",
+        flexShrink: 0,
+        borderTop: "1px dashed #bbb",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
+        padding: "0.1in 0.35in",
+      }}>
+        {/* FROM — company return address, bottom-left */}
+        <div style={{ width: "3in", flexShrink: 0, fontSize: "9px" }}>
+          <div style={{ fontSize: "7px", color: "#999", marginBottom: "2px", textTransform: "uppercase", letterSpacing: "0.5px" }}>From</div>
+          <div style={{ display: "flex", alignItems: "center", gap: "4px", marginBottom: "2px" }}>
+            {config.showCompanyLogo && company.logoUrl && (
+              <img src={company.logoUrl} alt="" style={{ height: "16px", width: "16px", objectFit: "contain" }} />
+            )}
+            <div style={{ fontWeight: "bold", fontSize: "10px" }}>{company.name}</div>
+          </div>
+          {company.address && <div>{company.address}</div>}
+          {(company.city || company.state || company.zip) && (
+            <div>{[company.city, company.state].filter(Boolean).join(", ")} {company.zip}</div>
+          )}
+        </div>
+
+        {/* TO — employee mailing address, right side aligned for envelope window */}
+        <div style={{ flex: 1, fontSize: "11px", paddingLeft: "0.3in" }}>
+          <div style={{ fontWeight: "bold", fontSize: "13px" }}>{worker.firstName} {worker.lastName}</div>
+          {worker.address && <div style={{ marginTop: "3px" }}>{worker.address}</div>}
+          {(worker.city || worker.state || worker.zip) && (
+            <div>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
+          )}
+        </div>
       </div>
     </div>
   );
