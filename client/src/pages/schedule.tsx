@@ -4,7 +4,7 @@ import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
-import type { Schedule, Worker, Company, RecurringSchedule, ShiftOffer } from "@shared/schema";
+import type { Schedule, Worker, Company, RecurringSchedule, ShiftOffer, Department } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -272,6 +272,10 @@ export default function SchedulePage() {
 
   const { data: recurringSchedules = [], isLoading: recurringLoading } = useQuery<RecurringSchedule[]>({
     queryKey: ["/api/recurring-schedules"],
+  });
+
+  const { data: departments = [] } = useQuery<Department[]>({
+    queryKey: ["/api/departments"],
   });
 
   const { data: shiftOffers = [] } = useQuery<ShiftOffer[]>({
@@ -837,12 +841,24 @@ export default function SchedulePage() {
                     </div>
                     <div>
                       <Label>Department</Label>
-                      <Input
-                        value={scheduleForm.department}
-                        onChange={(e) => setScheduleForm((f) => ({ ...f, department: e.target.value }))}
-                        placeholder="Department"
-                        data-testid="input-schedule-department"
-                      />
+                      <Select
+                        value={scheduleForm.department || "__none__"}
+                        onValueChange={(v) => setScheduleForm((f) => ({ ...f, department: v === "__none__" ? "" : v }))}
+                      >
+                        <SelectTrigger data-testid="select-schedule-department">
+                          <SelectValue placeholder="Select department (optional)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">None</SelectItem>
+                          {departments
+                            .filter(d => !d.companyId || d.companyId === scheduleForm.companyId)
+                            .map(d => (
+                              <SelectItem key={d.id} value={d.name}>
+                                {d.name}{!d.companyId ? " (All Companies)" : ""}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div>
                       <Label>Note</Label>
@@ -1082,6 +1098,7 @@ export default function SchedulePage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Employee</TableHead>
+                      <TableHead>Company</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead>Start Time</TableHead>
                       <TableHead>End Time</TableHead>
@@ -1094,7 +1111,7 @@ export default function SchedulePage() {
                   <TableBody>
                     {schedules.filter(s => selectedCompany === "all" || s.companyId === selectedCompany).length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8} className="text-center text-muted-foreground">
+                        <TableCell colSpan={9} className="text-center text-muted-foreground">
                           No scheduled shifts found.
                         </TableCell>
                       </TableRow>
@@ -1105,6 +1122,9 @@ export default function SchedulePage() {
                           <TableRow key={s.id} data-testid={`row-shift-${s.id}`}>
                             <TableCell data-testid={`text-employee-${s.id}`}>
                               {getWorkerName(workers, s.workerId)}
+                            </TableCell>
+                            <TableCell data-testid={`text-company-${s.id}`}>
+                              {companies.find(c => c.id === s.companyId)?.name || "-"}
                             </TableCell>
                             <TableCell>{s.date}</TableCell>
                             <TableCell>{s.startTime}</TableCell>
@@ -1848,12 +1868,24 @@ export default function SchedulePage() {
               </div>
               <div>
                 <Label>Department</Label>
-                <Input
-                  value={editForm.department}
-                  onChange={(e) => setEditForm((f) => ({ ...f, department: e.target.value }))}
-                  placeholder="Department"
-                  data-testid="input-edit-department"
-                />
+                <Select
+                  value={editForm.department || "__none__"}
+                  onValueChange={(v) => setEditForm((f) => ({ ...f, department: v === "__none__" ? "" : v }))}
+                >
+                  <SelectTrigger data-testid="select-edit-department">
+                    <SelectValue placeholder="Select department (optional)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None</SelectItem>
+                    {departments
+                      .filter(d => !d.companyId || d.companyId === editingSchedule?.companyId)
+                      .map(d => (
+                        <SelectItem key={d.id} value={d.name}>
+                          {d.name}{!d.companyId ? " (All Companies)" : ""}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div>
                 <Label>Note</Label>

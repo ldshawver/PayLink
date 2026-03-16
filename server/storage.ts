@@ -791,7 +791,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getDepartments(companyId?: string): Promise<Department[]> {
-    if (companyId) return db.select().from(departments).where(eq(departments.companyId, companyId)).orderBy(departments.name);
+    if (companyId) return db.select().from(departments).where(
+      or(eq(departments.companyId, companyId), isNull(departments.companyId))
+    ).orderBy(departments.name);
     return db.select().from(departments).orderBy(departments.name);
   }
   async createDepartment(data: InsertDepartment): Promise<Department> {
