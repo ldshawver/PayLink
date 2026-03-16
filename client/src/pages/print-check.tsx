@@ -456,8 +456,44 @@ function StubDetailSection({
     })
     .filter(d => d.amount > 0);
 
+  const ssnDigits = worker.ssn ? worker.ssn.replace(/\D/g, '') : '';
+  const ssnLast4 = ssnDigits.length >= 4 ? ssnDigits.slice(-4) : ssnDigits || '—';
+  const ssnDisplay = ssnDigits.length >= 4 ? `***-**-${ssnLast4}` : (worker.ssn ? worker.ssn : '—');
+  const fmtDate = (d: string | null | undefined) => {
+    if (!d) return '—';
+    const parts = d.split('-');
+    return parts.length === 3 ? `${parts[1]}/${parts[2]}/${parts[0]}` : d;
+  };
+  const platformLabel: Record<string, string> = {
+    apple_pay: 'Apple Pay', cash_app: 'Cash App', paypal: 'PayPal', venmo: 'Venmo', zelle: 'Zelle'
+  };
+  const paymentMethodLabel = item.paymentMethod === 'check' ? 'Check'
+    : item.paymentMethod === 'cash' ? 'Cash'
+    : item.paymentMethod === 'direct_deposit' ? 'Direct Deposit'
+    : '—';
+  const paymentPlatformLabel = item.paymentPlatform ? (platformLabel[item.paymentPlatform] || item.paymentPlatform) : '';
+
   return (
     <div style={{ padding: "0.15in 0.4in 0.2in", fontSize: "10px", height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
+      {/* Employee info header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderBottom: "1px solid #000", paddingBottom: "5px", marginBottom: "6px" }}>
+        <div>
+          <div style={{ fontWeight: "bold", fontSize: "11px" }}>{worker.firstName} {worker.lastName}</div>
+          {worker.address && <div>{worker.address}{worker.address2 ? `, ${worker.address2}` : ''}</div>}
+          {(worker.city || worker.state || worker.zip) && (
+            <div>{[worker.city, worker.state, worker.zip].filter(Boolean).join(', ')}</div>
+          )}
+          <div style={{ marginTop: "2px" }}>SSN: {ssnDisplay}</div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div><span style={{ fontWeight: "bold" }}>Pay Period:</span> {fmtDate(run.periodStart)} — {fmtDate(run.periodEnd)}</div>
+          {run.processedAt && <div><span style={{ fontWeight: "bold" }}>Pay Date:</span> {fmtDate(new Date(run.processedAt).toISOString().split('T')[0])}</div>}
+          <div style={{ marginTop: "2px" }}>
+            <span style={{ fontWeight: "bold" }}>Payment:</span>{' '}
+            {paymentMethodLabel}{paymentPlatformLabel ? ` — ${paymentPlatformLabel}` : ''}
+          </div>
+        </div>
+      </div>
       <div style={{ display: "flex", gap: "16px", flex: 1 }}>
         {/* Earnings table */}
         {config.showEarningsDetail && (

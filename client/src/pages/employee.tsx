@@ -1536,7 +1536,8 @@ function PayMethodsTab() {
   const [form, setForm] = useState({
     workerId: "", methodType: "direct_deposit", bankName: "",
     accountType: "checking", routingNumber: "", accountNumber: "", isPrimary: false,
-    remittanceSourceId: "", priority: "1", amountType: "remainder", amountValue: ""
+    remittanceSourceId: "", priority: "1", amountType: "remainder", amountValue: "",
+    platform: "", handle: ""
   });
 
   const payMethodsQuery = useQuery<PayMethod[]>({ queryKey: ["/api/pay-methods"] });
@@ -1554,7 +1555,7 @@ function PayMethodsTab() {
       queryClient.invalidateQueries({ queryKey: ["/api/pay-methods"] });
       toast({ title: "Pay method added successfully" });
       setAddOpen(false);
-      setForm({ workerId: "", methodType: "direct_deposit", bankName: "", accountType: "checking", routingNumber: "", accountNumber: "", isPrimary: false, remittanceSourceId: "", priority: "1", amountType: "remainder", amountValue: "" });
+      setForm({ workerId: "", methodType: "direct_deposit", bankName: "", accountType: "checking", routingNumber: "", accountNumber: "", isPrimary: false, remittanceSourceId: "", priority: "1", amountType: "remainder", amountValue: "", platform: "", handle: "" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -1630,6 +1631,29 @@ function PayMethodsTab() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
+                  <Label>Digital Platform (Optional)</Label>
+                  <Select value={form.platform} onValueChange={v => setForm(f => ({ ...f, platform: v === "none" ? "" : v }))}>
+                    <SelectTrigger data-testid="select-platform"><SelectValue placeholder="Select platform" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None</SelectItem>
+                      <SelectItem value="apple_pay">Apple Pay</SelectItem>
+                      <SelectItem value="cash_app">Cash App</SelectItem>
+                      <SelectItem value="paypal">PayPal</SelectItem>
+                      <SelectItem value="venmo">Venmo</SelectItem>
+                      <SelectItem value="zelle">Zelle</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {form.platform && form.platform !== "" && (
+                  <div className="space-y-2">
+                    <Label>Account Handle / Email / Phone</Label>
+                    <Input data-testid="input-handle" value={form.handle} placeholder="@username or email"
+                      onChange={e => setForm(f => ({ ...f, handle: e.target.value }))} />
+                  </div>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
                   <Label>Remittance Source</Label>
                   <Select value={form.remittanceSourceId} onValueChange={v => setForm(f => ({ ...f, remittanceSourceId: v }))}>
                     <SelectTrigger data-testid="select-remittanceSourceId"><SelectValue placeholder="Select source" /></SelectTrigger>
@@ -1694,8 +1718,9 @@ function PayMethodsTab() {
                 <TableRow>
                   <TableHead>Employee</TableHead>
                   <TableHead>Method Type</TableHead>
-                  <TableHead>Bank Name</TableHead>
+                  <TableHead>Bank / Platform</TableHead>
                   <TableHead>Account Type</TableHead>
+                  <TableHead>Handle</TableHead>
                   <TableHead>Remittance Source</TableHead>
                   <TableHead>Priority</TableHead>
                   <TableHead>Amount Type</TableHead>
@@ -1719,8 +1744,9 @@ function PayMethodsTab() {
                         {pm.methodType === "direct_deposit" ? "Direct Deposit" : pm.methodType === "check" ? "Check" : "Cash"}
                       </Badge>
                     </TableCell>
-                    <TableCell>{pm.bankName || "—"}</TableCell>
+                    <TableCell>{pm.platform ? pm.platform.replace(/_/g, ' ') : (pm.bankName || "—")}</TableCell>
                     <TableCell>{pm.accountType || "—"}</TableCell>
+                    <TableCell>{pm.handle || "—"}</TableCell>
                     <TableCell>{pm.remittanceSourceId ? (rsMap.get(pm.remittanceSourceId) || pm.remittanceSourceId) : "—"}</TableCell>
                     <TableCell>{pm.priority || 1}</TableCell>
                     <TableCell>{pm.amountType || "remainder"}</TableCell>
