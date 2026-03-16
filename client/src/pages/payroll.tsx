@@ -3407,6 +3407,7 @@ function PaymentMethodsTab() {
   const quickSetupMutation = useMutation({
     mutationFn: async () => { const res = await apiRequest("POST", "/api/payroll-payment-methods/quick-setup", { companyId: selectedCompany !== "all" ? selectedCompany : null }); return res.json(); },
     onSuccess: (d: any) => { queryClient.invalidateQueries({ queryKey: ["/api/payroll-payment-methods"] }); toast({ title: "Quick Setup Complete", description: d.message }); },
+    onError: (err: Error) => toast({ title: "Quick Setup Failed", description: err.message, variant: "destructive" }),
   });
 
   const openEdit = (m: PayrollPaymentMethod) => {
