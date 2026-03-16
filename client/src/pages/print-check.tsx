@@ -191,20 +191,20 @@ function StubSummarySection({
     <div style={{ height: "3.667in", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
 
       {/* ══ ENVELOPE WINDOWS + PAYSTUB LAYOUT ══
-           Left: stacked company + employee addresses (top/bottom windows)
-           Right: readable paystub */}
+           Company address top-left | Employee address (0.5" indent) below
+           Paystub starts at 4.3" and extends right (larger fonts) */}
       <div style={{
         flex: 1,
         boxSizing: "border-box",
+        position: "relative",
         display: "flex",
         flexDirection: "row",
-        padding: "0.2in 0.35in",
-        gap: "0.35in",
+        padding: "0.1in 0.35in",
       }}>
-        {/* LEFT: STACKED ADDRESSES (top window = company, bottom window = employee) */}
-        <div style={{ flex: 1, minWidth: "2.5in", display: "flex", flexDirection: "column", gap: "0.3in" }}>
+        {/* LEFT SECTION: Addresses (company at top, employee indented below) */}
+        <div style={{ position: "absolute", left: "0.35in", top: "0.1in", width: "3.95in" }}>
           {/* TOP WINDOW: Company return address */}
-          <div style={{ fontSize: "9px", paddingTop: "0.08in" }}>
+          <div style={{ fontSize: "9px", marginBottom: "0.5in" }}>
             <div style={{ fontWeight: "bold", fontSize: "10px", marginBottom: "2px" }}>{company.name}</div>
             {company.address && <div style={{ fontSize: "8px", lineHeight: "1.1" }}>{company.address}</div>}
             {(company.city || company.state || company.zip) && (
@@ -212,8 +212,8 @@ function StubSummarySection({
             )}
           </div>
 
-          {/* BOTTOM WINDOW: Employee mailing address */}
-          <div style={{ fontSize: "10px", paddingTop: "0.08in" }}>
+          {/* BOTTOM WINDOW: Employee mailing address (indented 0.5" from left) */}
+          <div style={{ marginLeft: "0.5in", fontSize: "10px" }}>
             <div style={{ fontWeight: "bold", fontSize: "11px", marginBottom: "3px" }}>{worker.firstName} {worker.lastName}</div>
             {worker.address && <div style={{ fontSize: "9px", lineHeight: "1.1" }}>{worker.address}</div>}
             {(worker.city || worker.state || worker.zip) && (
@@ -222,8 +222,8 @@ function StubSummarySection({
           </div>
         </div>
 
-        {/* RIGHT: PAYSTUB DETAIL — tabular layout */}
-        <div style={{ minWidth: "2.8in", flexShrink: 0, fontSize: "7px", display: "flex", flexDirection: "column", justifyContent: "flex-start" }}>
+        {/* RIGHT: PAYSTUB DETAIL — starts at 4.3", larger fonts */}
+        <div style={{ marginLeft: "4.3in", flex: 1, fontSize: "8px", display: "flex", flexDirection: "column", justifyContent: "flex-start", paddingRight: "0.2in" }}>
           {/* Header and pay period info */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "2px" }}>
             <div style={{ fontWeight: "bold", fontSize: "10px" }}>PAYSTUB</div>
@@ -234,46 +234,46 @@ function StubSummarySection({
           </div>
 
           {/* Earnings table */}
-          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "2px", fontSize: "7px" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "2px", fontSize: "8px" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid #000" }}>
-                <th style={{ textAlign: "left", padding: "1px 2px", fontSize: "6px", fontWeight: "bold" }}>EARNINGS</th>
-                <th style={{ textAlign: "right", padding: "1px 2px", fontSize: "6px", fontWeight: "bold" }}>HOURS</th>
-                <th style={{ textAlign: "right", padding: "1px 2px", fontSize: "6px", fontWeight: "bold" }}>RATE</th>
-                <th style={{ textAlign: "right", padding: "1px 2px", fontSize: "6px", fontWeight: "bold" }}>CURRENT</th>
-                <th style={{ textAlign: "right", padding: "1px 2px", fontSize: "6px", fontWeight: "bold" }}>YTD</th>
+                <th style={{ textAlign: "left", padding: "2px 3px", fontSize: "7px", fontWeight: "bold" }}>EARNINGS</th>
+                <th style={{ textAlign: "right", padding: "2px 3px", fontSize: "7px", fontWeight: "bold" }}>HOURS</th>
+                <th style={{ textAlign: "right", padding: "2px 3px", fontSize: "7px", fontWeight: "bold" }}>RATE</th>
+                <th style={{ textAlign: "right", padding: "2px 3px", fontSize: "7px", fontWeight: "bold" }}>CURRENT</th>
+                <th style={{ textAlign: "right", padding: "2px 3px", fontSize: "7px", fontWeight: "bold" }}>YTD</th>
               </tr>
             </thead>
             <tbody>
               {regularHours > 0 && (
                 <tr>
-                  <td style={{ padding: "1px 2px", textAlign: "left" }}>Regular</td>
-                  <td style={{ padding: "1px 2px", textAlign: "right" }}>{fmt(regularHours)}</td>
-                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
-                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
-                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 3px", textAlign: "left" }}>Regular</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>{fmt(regularHours)}</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
                 </tr>
               )}
               {overtimeHours > 0 && (
                 <tr>
-                  <td style={{ padding: "1px 2px", textAlign: "left" }}>Overtime</td>
-                  <td style={{ padding: "1px 2px", textAlign: "right" }}>{fmt(overtimeHours)}</td>
-                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
-                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
-                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 3px", textAlign: "left" }}>Overtime</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>{fmt(overtimeHours)}</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
                 </tr>
               )}
               {doubleTimeHours > 0 && (
                 <tr>
-                  <td style={{ padding: "1px 2px", textAlign: "left" }}>Double Time</td>
-                  <td style={{ padding: "1px 2px", textAlign: "right" }}>{fmt(doubleTimeHours)}</td>
-                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
-                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
-                  <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 3px", textAlign: "left" }}>Double Time</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>{fmt(doubleTimeHours)}</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
                 </tr>
               )}
               <tr style={{ fontWeight: "bold", borderTop: "1px solid #999" }}>
-                <td style={{ padding: "1px 2px", textAlign: "left" }}>TOTAL HOURS</td>
+                <td style={{ padding: "1px 3px", textAlign: "left" }}>TOTAL HOURS</td>
                 <td style={{ padding: "1px 2px", textAlign: "right" }}>{fmt(totalHours)}</td>
                 <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
                 <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
@@ -283,45 +283,45 @@ function StubSummarySection({
           </table>
 
           {/* Deductions header + columns on same line */}
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1px", fontSize: "6px", fontWeight: "bold" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "2px", fontSize: "7px", fontWeight: "bold", marginTop: "2px" }}>
             <span>DEDUCTIONS</span>
-            <div style={{ display: "flex", gap: "6px" }}>
-              <span style={{ width: "30px", textAlign: "right" }}>CURRENT</span>
-              <span style={{ width: "30px", textAlign: "right" }}>YTD</span>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <span style={{ width: "35px", textAlign: "right" }}>CURRENT</span>
+              <span style={{ width: "35px", textAlign: "right" }}>YTD</span>
             </div>
           </div>
 
           {/* Gross Pay row */}
-          <div style={{ display: "flex", justifyContent: "space-between", padding: "1px 0", borderBottom: "1px solid #999", marginBottom: "1px" }}>
-            <span style={{ fontWeight: "bold" }}>GROSS PAY</span>
-            <div style={{ display: "flex", gap: "6px" }}>
-              <span style={{ width: "30px", textAlign: "right", fontWeight: "bold" }}>${fmt(grossPay)}</span>
-              <span style={{ width: "30px", textAlign: "right", fontWeight: "bold" }}>${fmt(item.ytdGross)}</span>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", borderBottom: "1px solid #999", marginBottom: "1px" }}>
+            <span style={{ fontWeight: "bold", fontSize: "8px" }}>GROSS PAY</span>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <span style={{ width: "35px", textAlign: "right", fontWeight: "bold", fontSize: "8px" }}>${fmt(grossPay)}</span>
+              <span style={{ width: "35px", textAlign: "right", fontWeight: "bold", fontSize: "8px" }}>${fmt(item.ytdGross)}</span>
             </div>
           </div>
 
           {/* Total Deductions row */}
-          <div style={{ display: "flex", justifyContent: "space-between", padding: "1px 0", borderBottom: "1px solid #999", marginBottom: "1px" }}>
-            <span>TOTAL DEDUCTIONS</span>
-            <div style={{ display: "flex", gap: "6px" }}>
-              <span style={{ width: "30px", textAlign: "right", fontWeight: "bold" }}>${fmt(totalDeductions)}</span>
-              <span style={{ width: "30px", textAlign: "right", fontWeight: "bold" }}>${fmt(item.ytdNet - item.ytdGross + totalDeductions)}</span>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", borderBottom: "1px solid #999", marginBottom: "2px" }}>
+            <span style={{ fontSize: "8px" }}>TOTAL DEDUCTIONS</span>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <span style={{ width: "35px", textAlign: "right", fontWeight: "bold", fontSize: "8px" }}>${fmt(totalDeductions)}</span>
+              <span style={{ width: "35px", textAlign: "right", fontWeight: "bold", fontSize: "8px" }}>${fmt(item.ytdNet - item.ytdGross + totalDeductions)}</span>
             </div>
           </div>
 
           {/* Net Pay (prominent) */}
-          <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", marginBottom: "2px", fontWeight: "bold", fontSize: "8px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", fontWeight: "bold", fontSize: "9px" }}>
             <span>NET PAY</span>
-            <div style={{ display: "flex", gap: "6px" }}>
-              <span style={{ width: "30px", textAlign: "right" }}>${fmt(netPay)}</span>
-              <span style={{ width: "30px", textAlign: "right" }}>${fmt(item.ytdNet)}</span>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <span style={{ width: "35px", textAlign: "right" }}>${fmt(netPay)}</span>
+              <span style={{ width: "35px", textAlign: "right" }}>${fmt(item.ytdNet)}</span>
             </div>
           </div>
 
           {/* SE Tax for contractors */}
           {isContractor && (
-            <div style={{ marginTop: "2px", paddingTop: "2px", borderTop: "1px solid #4a90d9", fontSize: "6px", color: "#2b5ea7" }}>
-              <div style={{ fontWeight: "bold", marginBottom: "1px" }}>SELF-EMPLOYMENT TAX REFERENCE</div>
+            <div style={{ marginTop: "2px", paddingTop: "2px", borderTop: "1px solid #4a90d9", fontSize: "7px", color: "#2b5ea7" }}>
+              <div style={{ fontWeight: "bold", marginBottom: "2px" }}>SELF-EMPLOYMENT TAX REFERENCE</div>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1px" }}>
                 <span>Social Security (SS) 12.4%</span>
                 <span>${fmt(ssTaxCurrent)}</span>
