@@ -190,8 +190,9 @@ function StubSummarySection({
   return (
     <div style={{ height: "3.667in", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
 
-      {/* ══ COMBINED SECTION: ADDRESSES (left/center) + PAYSTUB (right) ══
-           Left: company return address | Center: employee address | Right: readable paystub */}
+      {/* ══ ENVELOPE WINDOWS + PAYSTUB LAYOUT ══
+           Left: stacked company + employee addresses (top/bottom windows)
+           Right: readable paystub */}
       <div style={{
         flex: 1,
         boxSizing: "border-box",
@@ -200,22 +201,25 @@ function StubSummarySection({
         padding: "0.2in 0.35in",
         gap: "0.35in",
       }}>
-        {/* LEFT: FROM address (return window) */}
-        <div style={{ fontSize: "9px", minWidth: "1.95in", flexShrink: 0, paddingTop: "0.15in" }}>
-          <div style={{ fontWeight: "bold", fontSize: "10px", marginBottom: "2px" }}>{company.name}</div>
-          {company.address && <div style={{ fontSize: "8px", lineHeight: "1.1" }}>{company.address}</div>}
-          {(company.city || company.state || company.zip) && (
-            <div style={{ fontSize: "8px" }}>{[company.city, company.state].filter(Boolean).join(", ")} {company.zip}</div>
-          )}
-        </div>
+        {/* LEFT: STACKED ADDRESSES (top window = company, bottom window = employee) */}
+        <div style={{ flex: 1, minWidth: "2.5in", display: "flex", flexDirection: "column", gap: "0.3in" }}>
+          {/* TOP WINDOW: Company return address */}
+          <div style={{ fontSize: "9px", paddingTop: "0.08in" }}>
+            <div style={{ fontWeight: "bold", fontSize: "10px", marginBottom: "2px" }}>{company.name}</div>
+            {company.address && <div style={{ fontSize: "8px", lineHeight: "1.1" }}>{company.address}</div>}
+            {(company.city || company.state || company.zip) && (
+              <div style={{ fontSize: "8px" }}>{[company.city, company.state].filter(Boolean).join(", ")} {company.zip}</div>
+            )}
+          </div>
 
-        {/* CENTER: TO address (mailing window) */}
-        <div style={{ flex: 1, paddingTop: "0.15in" }}>
-          <div style={{ fontWeight: "bold", fontSize: "11px", marginBottom: "3px" }}>{worker.firstName} {worker.lastName}</div>
-          {worker.address && <div style={{ fontSize: "9px", lineHeight: "1.1" }}>{worker.address}</div>}
-          {(worker.city || worker.state || worker.zip) && (
-            <div style={{ fontSize: "9px" }}>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
-          )}
+          {/* BOTTOM WINDOW: Employee mailing address */}
+          <div style={{ fontSize: "10px", paddingTop: "0.08in" }}>
+            <div style={{ fontWeight: "bold", fontSize: "11px", marginBottom: "3px" }}>{worker.firstName} {worker.lastName}</div>
+            {worker.address && <div style={{ fontSize: "9px", lineHeight: "1.1" }}>{worker.address}</div>}
+            {(worker.city || worker.state || worker.zip) && (
+              <div style={{ fontSize: "9px" }}>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
+            )}
+          </div>
         </div>
 
         {/* RIGHT: PAYSTUB DETAIL (readable, not in windows) */}
