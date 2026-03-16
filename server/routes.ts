@@ -1107,7 +1107,15 @@ export async function registerRoutes(
 
   app.patch("/api/schedules/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const schedule = await storage.updateSchedule(req.params.id, req.body);
+      const { startTime, endTime, department, jobId, note, status } = req.body;
+      const updateData: any = {};
+      if (startTime !== undefined) updateData.startTime = startTime;
+      if (endTime !== undefined) updateData.endTime = endTime;
+      if (department !== undefined) updateData.department = department || null;
+      if (jobId !== undefined) updateData.jobId = jobId || null;
+      if (note !== undefined) updateData.note = note || null;
+      if (status !== undefined) updateData.status = status;
+      const schedule = await storage.updateSchedule(req.params.id, updateData);
       if (!schedule) {
         return res.status(404).json({ message: "Schedule not found" });
       }
