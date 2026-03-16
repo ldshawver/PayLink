@@ -51,7 +51,6 @@ import {
   ChevronRight,
   Plus,
   Clock,
-  FileText,
   RefreshCw,
   Settings,
   Printer,
@@ -157,6 +156,7 @@ export default function SchedulePage() {
   const [editRecurringOpen, setEditRecurringOpen] = useState(false);
   const [editingRecurring, setEditingRecurring] = useState<RecurringSchedule | null>(null);
   const [generateOpen, setGenerateOpen] = useState(false);
+  const [recurringViewMode, setRecurringViewMode] = useState<"list" | "weekly">("list");
 
   const [scheduleForm, setScheduleForm] = useState({
     workerId: "",
@@ -572,6 +572,7 @@ export default function SchedulePage() {
   };
 
   const handleTabChange = (value: string) => {
+    if (value === "templates") value = "recurring";
     setActiveTab(value);
     setLocation(value === "schedules" ? "/schedule" : `/schedule?tab=${value}`);
   };
@@ -641,10 +642,6 @@ export default function SchedulePage() {
           <TabsTrigger value="recurring" data-testid="tab-recurring">
             <RefreshCw className="h-4 w-4 mr-1" />
             Recurring Schedule
-          </TabsTrigger>
-          <TabsTrigger value="templates" data-testid="tab-templates">
-            <FileText className="h-4 w-4 mr-1" />
-            Recurring Templates
           </TabsTrigger>
           <TabsTrigger value="labor" data-testid="tab-labor">
             <TrendingUp className="h-4 w-4 mr-1" />
@@ -1434,6 +1431,24 @@ export default function SchedulePage() {
               Recurring Schedules
             </h2>
             <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1 border rounded-md overflow-hidden">
+                <Button
+                  variant={recurringViewMode === "list" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setRecurringViewMode("list")}
+                  data-testid="button-recurring-list-view"
+                >
+                  List
+                </Button>
+                <Button
+                  variant={recurringViewMode === "weekly" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setRecurringViewMode("weekly")}
+                  data-testid="button-recurring-weekly-view"
+                >
+                  Weekly View
+                </Button>
+              </div>
               <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
                 <DialogTrigger asChild>
                   <Button variant="outline" data-testid="button-generate-schedules">
@@ -1648,6 +1663,7 @@ export default function SchedulePage() {
             </div>
           </div>
 
+          {recurringViewMode === "list" ? (
           <Card>
             <CardContent className="pt-4">
               {recurringLoading || workersLoading ? (
@@ -1726,6 +1742,45 @@ export default function SchedulePage() {
               )}
             </CardContent>
           </Card>
+          ) : (
+          <Card>
+            <CardContent className="pt-4">
+              {recurringLoading || workersLoading ? (
+                <Skeleton className="h-40 w-full" />
+              ) : recurringSchedules.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <RefreshCw className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p>No recurring templates defined yet. Switch to List view to add some.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-7 gap-2">
+                  {DAY_NAMES.map((day, dayIndex) => {
+                    const dayTemplates = recurringSchedules.filter(rs => rs.dayOfWeek === dayIndex && rs.isActive);
+                    return (
+                      <Card key={dayIndex} className={dayTemplates.length > 0 ? "border-primary/30" : ""}>
+                        <CardHeader className="p-2 pb-1">
+                          <CardTitle className="text-xs font-medium text-center">{day}</CardTitle>
+                        </CardHeader>
+                        <CardContent className="p-2 pt-0 space-y-1">
+                          {dayTemplates.length === 0 ? (
+                            <p className="text-xs text-muted-foreground text-center">—</p>
+                          ) : (
+                            dayTemplates.map(rs => (
+                              <div key={rs.id} className="rounded bg-primary/10 p-1 text-xs">
+                                <div className="font-medium truncate">{getWorkerName(workers, rs.workerId)}</div>
+                                <div className="text-muted-foreground">{rs.startTime}–{rs.endTime}</div>
+                              </div>
+                            ))
+                          )}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          )}
 
           <Dialog open={editRecurringOpen} onOpenChange={v => { setEditRecurringOpen(v); if (!v) { setEditingRecurring(null); } }}>
             <DialogContent className="max-w-lg">
@@ -1819,58 +1874,6 @@ export default function SchedulePage() {
               </div>
             </DialogContent>
           </Dialog>
-        </TabsContent>
-
-        <TabsContent value="templates">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2">
-              <CardTitle className="flex items-center gap-2">
-                <FileText className="h-5 w-5" />
-                Recurring Templates
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground mb-4" data-testid="text-templates-info">
-                Use the Recurring Schedule tab to define weekly shift templates, then use "Generate Schedules" to auto-create shifts for a date range.
-              </p>
-              {recurringLoading || workersLoading ? (
-                <Skeleton className="h-40 w-full" />
-              ) : recurringSchedules.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <RefreshCw className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p>No recurring templates defined yet.</p>
-                  <Button variant="outline" className="mt-3" onClick={() => handleTabChange("recurring")} data-testid="button-go-recurring">
-                    Set Up Recurring Schedules
-                  </Button>
-                </div>
-              ) : (
-                <div className="grid grid-cols-7 gap-2">
-                  {DAY_NAMES.map((day, dayIndex) => {
-                    const dayTemplates = recurringSchedules.filter(rs => rs.dayOfWeek === dayIndex && rs.isActive);
-                    return (
-                      <Card key={dayIndex} className={dayTemplates.length > 0 ? "border-primary/30" : ""}>
-                        <CardHeader className="p-2 pb-1">
-                          <CardTitle className="text-xs font-medium text-center">{day}</CardTitle>
-                        </CardHeader>
-                        <CardContent className="p-2 pt-0 space-y-1">
-                          {dayTemplates.length === 0 ? (
-                            <p className="text-xs text-muted-foreground text-center">-</p>
-                          ) : (
-                            dayTemplates.map(rs => (
-                              <div key={rs.id} className="rounded bg-primary/10 p-1 text-xs">
-                                <div className="font-medium truncate">{getWorkerName(workers, rs.workerId)}</div>
-                                <div className="text-muted-foreground">{rs.startTime} - {rs.endTime}</div>
-                              </div>
-                            ))
-                          )}
-                        </CardContent>
-                      </Card>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
         </TabsContent>
 
         <TabsContent value="labor" className="space-y-4">
