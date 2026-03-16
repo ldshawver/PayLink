@@ -192,38 +192,38 @@ function StubSummarySection({
 
       {/* ══ TOP DATA SECTION — hard ceiling, overflow clips before address zone ══ */}
       <div style={{
-        height: "2.1in",
+        height: "1.75in",
         flexShrink: 0,
         boxSizing: "border-box",
         overflow: "hidden",
-        padding: "0.12in 0.45in 0.08in 0.45in",
+        padding: "0.08in 0.4in 0.06in 0.4in",
         display: "flex",
         flexDirection: "column",
-        fontSize: "9px",
+        fontSize: "8px",
       }}>
         {/* Stub header */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "5px", borderBottom: "2px solid #000", paddingBottom: "3px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "3px", borderBottom: "1px solid #000", paddingBottom: "2px" }}>
           <div>
-            <div style={{ fontSize: "11px", fontWeight: "bold" }}>PAY STUB</div>
-            {company.ein && <div style={{ fontSize: "8px" }}>EIN: {company.ein}</div>}
+            <div style={{ fontSize: "10px", fontWeight: "bold" }}>PAY STUB</div>
+            {company.ein && <div style={{ fontSize: "7px" }}>EIN: {company.ein}</div>}
           </div>
-          <div style={{ textAlign: "right", fontSize: "8px" }}>
+          <div style={{ textAlign: "right", fontSize: "7px" }}>
             <div><strong>{isContractor ? "Contractor" : "Employee"}:</strong> {worker.firstName} {worker.lastName}</div>
-            <div><strong>#{worker.employeeNumber || "—"}</strong> &nbsp;|&nbsp; SSN: {worker.ssn ? "XXX-XX-" + worker.ssn.slice(-4) : "XXX-XX-XXXX"}</div>
+            <div><strong>#{worker.employeeNumber || "—"}</strong> | SSN: {worker.ssn ? "XXX-XX-" + worker.ssn.slice(-4) : "XXX-XX-XXXX"}</div>
             {config.showCheckNumber && <div><strong>Check #:</strong> {item.checkNumber || "—"}</div>}
           </div>
         </div>
 
         {/* Pay period */}
         {config.showPayPeriod && (
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "5px", fontSize: "8px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "3px", fontSize: "7px" }}>
             <div><strong>Pay Period:</strong> {run.periodStart} to {run.periodEnd}</div>
             <div><strong>Pay Date:</strong> {run.processedAt ? new Date(run.processedAt).toLocaleDateString() : "—"}</div>
           </div>
         )}
 
         {/* Hours */}
-        <div style={{ marginBottom: "5px" }}>
+        <div style={{ marginBottom: "3px" }}>
           <table style={{ borderCollapse: "collapse", fontSize: "8px", width: "100%" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid #000" }}>
@@ -247,26 +247,26 @@ function StubSummarySection({
         </div>
 
         {/* Pay totals */}
-        <div style={{ display: "flex", gap: "5px", marginBottom: "6px" }}>
+        <div style={{ display: "flex", gap: "3px", marginBottom: "2px" }}>
           {[
-            { label: "GROSS PAY", value: `$${fmt(grossPay)}` },
-            { label: "TOTAL DEDUCTIONS", value: `$${fmt(totalDeductions)}` },
-            { label: "NET PAY", value: `$${fmt(netPay)}`, bold: true },
+            { label: "GROSS", value: `$${fmt(grossPay)}` },
+            { label: "DEDUCTIONS", value: `$${fmt(totalDeductions)}` },
+            { label: "NET", value: `$${fmt(netPay)}`, bold: true },
           ].map(({ label, value, bold }) => (
-            <div key={label} style={{ flex: 1, border: "1px solid #999", padding: "4px 5px", textAlign: "center" }}>
-              <div style={{ fontSize: "6px", color: "#555", marginBottom: "2px" }}>{label}</div>
-              <div style={{ fontSize: bold ? "12px" : "11px", fontWeight: "bold" }}>{value}</div>
+            <div key={label} style={{ flex: 1, border: "1px solid #999", padding: "2px 3px", textAlign: "center" }}>
+              <div style={{ fontSize: "5px", color: "#555", marginBottom: "1px" }}>{label}</div>
+              <div style={{ fontSize: bold ? "10px" : "9px", fontWeight: "bold" }}>{value}</div>
             </div>
           ))}
           {config.showYtdTotals && (
             <>
-              <div style={{ flex: 1, border: "1px solid #ccc", padding: "4px 5px", textAlign: "center", background: "#f9f9f9" }}>
-                <div style={{ fontSize: "6px", color: "#555", marginBottom: "2px" }}>YTD GROSS</div>
-                <div style={{ fontSize: "11px", fontWeight: "bold" }}>${fmt(item.ytdGross)}</div>
+              <div style={{ flex: 1, border: "1px solid #ccc", padding: "2px 3px", textAlign: "center", background: "#f9f9f9" }}>
+                <div style={{ fontSize: "5px", color: "#555", marginBottom: "1px" }}>YTD GROSS</div>
+                <div style={{ fontSize: "9px", fontWeight: "bold" }}>${fmt(item.ytdGross)}</div>
               </div>
-              <div style={{ flex: 1, border: "1px solid #ccc", padding: "4px 5px", textAlign: "center", background: "#f9f9f9" }}>
-                <div style={{ fontSize: "6px", color: "#555", marginBottom: "2px" }}>YTD NET</div>
-                <div style={{ fontSize: "11px", fontWeight: "bold" }}>${fmt(item.ytdNet)}</div>
+              <div style={{ flex: 1, border: "1px solid #ccc", padding: "2px 3px", textAlign: "center", background: "#f9f9f9" }}>
+                <div style={{ fontSize: "5px", color: "#555", marginBottom: "1px" }}>YTD NET</div>
+                <div style={{ fontSize: "9px", fontWeight: "bold" }}>${fmt(item.ytdNet)}</div>
               </div>
             </>
           )}
@@ -274,19 +274,17 @@ function StubSummarySection({
 
         {/* SE Tax 1-line summary for contractors (condensed — full detail is in the bottom stub) */}
         {isContractor && (
-          <div style={{ fontSize: "7px", color: "#2b5ea7", border: "1px solid #4a90d9", padding: "3px 6px", background: "#f0f5ff" }}>
-            <strong>SE TAX REFERENCE (not deducted):</strong>&nbsp;
-            SSI 12.4% = ${fmt(ssTaxCurrent)} &nbsp;|&nbsp; Medicare 2.9% = ${fmt(medicareTaxCurrent)} &nbsp;|&nbsp; <strong>Total 15.3% = ${fmt(totalSeTaxCurrent)}</strong>
-            &nbsp;— See bottom stub for full detail.
+          <div style={{ fontSize: "6px", color: "#2b5ea7", border: "1px solid #4a90d9", padding: "2px 4px", background: "#f0f5ff" }}>
+            <strong>SE TAX REFERENCE (not deducted):</strong> SSI 12.4% = ${fmt(ssTaxCurrent)} | Medicare 2.9% = ${fmt(medicareTaxCurrent)} | <strong>Total 15.3% = ${fmt(totalSeTaxCurrent)}</strong>
           </div>
         )}
 
         {/* Deductions 1-line summary for employees (condensed) */}
         {!isContractor && (
-          <div style={{ fontSize: "7px", color: "#444", marginTop: "2px" }}>
+          <div style={{ fontSize: "6px", color: "#444" }}>
             {deductionBreakdown.length > 0
-              ? deductionBreakdown.map(d => `${d.name}: $${fmt(d.amount)}`).join("  |  ")
-              : "No deductions this period"}
+              ? deductionBreakdown.map(d => `${d.name}: $${fmt(d.amount)}`).join(" | ")
+              : "No deductions"}
           </div>
         )}
       </div>
@@ -301,8 +299,9 @@ function StubSummarySection({
         display: "flex",
         flexDirection: "row",
         alignItems: "center",
-        padding: "0.15in 0.45in",
-        gap: "0.5in",
+        justifyContent: "center",
+        padding: "0.35in 0.4in 0.3in",
+        gap: "0.6in",
       }}>
         {/* FROM — company return address */}
         <div style={{ fontSize: "9px", minWidth: "2.2in" }}>
