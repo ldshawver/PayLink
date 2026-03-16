@@ -446,15 +446,20 @@ export default function SchedulePage() {
   const generateMutation = useMutation({
     mutationFn: async (data: typeof generateForm) => {
       const res = await apiRequest("POST", "/api/schedules/generate", data);
-      return res.json();
+      const json = await res.json();
+      return json;
     },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
       setGenerateOpen(false);
-      toast({ title: "Schedules generated", description: `Created ${data.created} schedule entries from recurring templates.` });
+      toast({ 
+        title: "Success", 
+        description: `Created ${data.created} schedule(s) from recurring templates.`,
+        variant: "default"
+      });
     },
     onError: (error: Error) => {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      toast({ title: "Error generating schedules", description: error.message, variant: "destructive" });
     },
   });
 
