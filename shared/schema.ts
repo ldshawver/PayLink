@@ -551,6 +551,7 @@ export const payStubAmendments = pgTable("pay_stub_amendments", {
   companyId: varchar("company_id").notNull().references(() => companies.id),
   workerId: varchar("worker_id").notNull().references(() => workers.id),
   payStubAccountId: varchar("pay_stub_account_id"),
+  amendmentType: text("amendment_type").default("earning"),
   status: text("status").default("active"),
   amountType: text("amount_type").default("fixed"),
   rate: numeric("rate").default("0"),

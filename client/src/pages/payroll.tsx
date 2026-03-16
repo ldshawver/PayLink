@@ -2357,13 +2357,17 @@ function PayStubAccountsTab() {
   );
 }
 
+const BLANK_AMENDMENT = {
+  companyId: "", workerId: "", payStubAccountId: "", amendmentType: "earning",
+  amountType: "fixed", amount: "", rate: "", units: "", percent: "",
+  effectiveDate: "", description: "", status: "active",
+};
+
 function PayStubAmendmentsTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [formData, setFormData] = useState({
-    companyId: "", workerId: "", payStubAccountId: "", amountType: "fixed",
-    amount: "", rate: "", units: "", percent: "", effectiveDate: "", description: "",
-  });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [formData, setFormData] = useState({ ...BLANK_AMENDMENT });
 
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
@@ -2371,32 +2375,64 @@ function PayStubAmendmentsTab() {
   const { data: amendments = [], isLoading } = useQuery<PayStubAmendment[]>({ queryKey: ["/api/pay-stub-amendments"] });
 
   const getWorkerName = (id: string) => { const w = workers.find(w => w.id === id); return w ? `${w.firstName} ${w.lastName}` : id; };
-  const getAccountName = (id: string) => payStubAccountsList.find(a => a.id === id)?.name || id;
   const filteredWorkers = formData.companyId ? workers.filter(w => w.companyId === formData.companyId) : workers;
 
-  const createMutation = useMutation({
+  const openAdd = () => { setEditingId(null); setFormData({ ...BLANK_AMENDMENT }); setDialogOpen(true); };
+  const openEdit = (am: any) => {
+    setEditingId(am.id);
+    setFormData({
+      companyId: am.companyId || "",
+      workerId: am.workerId || "",
+      payStubAccountId: am.payStubAccountId || "",
+      amendmentType: am.amendmentType || "earning",
+      amountType: am.amountType || "fixed",
+      amount: am.amount ? String(am.amount) : "",
+      rate: am.rate ? String(am.rate) : "",
+      units: am.units ? String(am.units) : "",
+      percent: am.percent ? String(am.percent) : "",
+      effectiveDate: am.effectiveDate || "",
+      description: am.description || "",
+      status: am.status || "active",
+    });
+    setDialogOpen(true);
+  };
+
+  const buildPayload = (data: typeof formData) => ({
+    ...data,
+    amount: data.amount ? String(data.amount) : "0",
+    rate: data.rate ? String(data.rate) : "0",
+    units: data.units ? String(data.units) : "0",
+    percent: data.percent ? String(data.percent) : "0",
+    effectiveDate: data.effectiveDate || null,
+    description: data.description || null,
+    payStubAccountId: data.payStubAccountId || null,
+  });
+
+  const saveMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
-      const res = await apiRequest("POST", "/api/pay-stub-amendments", {
-        ...data,
-        amount: data.amount ? String(data.amount) : "0",
-        rate: data.rate ? String(data.rate) : "0",
-        units: data.units ? String(data.units) : "0",
-        percent: data.percent ? String(data.percent) : "0",
-        effectiveDate: data.effectiveDate || null,
-        description: data.description || null,
-        payStubAccountId: data.payStubAccountId || null,
-      });
-      return res.json();
+      if (editingId) {
+        const res = await apiRequest("PATCH", `/api/pay-stub-amendments/${editingId}`, buildPayload(data));
+        return res.json();
+      } else {
+        const res = await apiRequest("POST", "/api/pay-stub-amendments", buildPayload(data));
+        return res.json();
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/pay-stub-amendments"] });
-      toast({ title: "Pay stub amendment created" });
+      toast({ title: editingId ? "Amendment updated" : "Amendment created" });
       setDialogOpen(false);
-      setFormData({ companyId: "", workerId: "", payStubAccountId: "", amountType: "fixed", amount: "", rate: "", units: "", percent: "", effectiveDate: "", description: "" });
     },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/pay-stub-amendments/${id}`); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-stub-amendments"] });
+      toast({ title: "Amendment deleted" });
     },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
   if (isLoading) return <div data-testid="loading-pay-stub-amendments"><Skeleton className="h-64 w-full" /></div>;
@@ -2404,87 +2440,70 @@ function PayStubAmendmentsTab() {
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-pay-stub-amendment"><Plus className="mr-2 h-4 w-4" />Add Amendment</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader><DialogTitle>Add Pay Stub Amendment</DialogTitle></DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label>Company</Label>
-                <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v, workerId: "" }))}>
-                  <SelectTrigger data-testid="select-psam-company"><SelectValue placeholder="Select company" /></SelectTrigger>
-                  <SelectContent>
-                    {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Worker</Label>
-                <Select value={formData.workerId} onValueChange={v => setFormData(p => ({ ...p, workerId: v }))}>
-                  <SelectTrigger data-testid="select-psam-worker"><SelectValue placeholder="Select worker" /></SelectTrigger>
-                  <SelectContent>
-                    {filteredWorkers.map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Pay Stub Account</Label>
-                <Select value={formData.payStubAccountId} onValueChange={v => setFormData(p => ({ ...p, payStubAccountId: v }))}>
-                  <SelectTrigger data-testid="select-psam-account"><SelectValue placeholder="Select account" /></SelectTrigger>
-                  <SelectContent>
-                    {payStubAccountsList.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Amount Type</Label>
-                <Select value={formData.amountType} onValueChange={v => setFormData(p => ({ ...p, amountType: v }))}>
-                  <SelectTrigger data-testid="select-psam-amount-type"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="fixed">Fixed</SelectItem>
-                    <SelectItem value="percentage">Percentage</SelectItem>
-                    <SelectItem value="units">Units</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Amount</Label>
-                <Input type="number" step="0.01" data-testid="input-psam-amount" value={formData.amount} onChange={e => setFormData(p => ({ ...p, amount: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Rate</Label>
-                <Input type="number" step="0.01" data-testid="input-psam-rate" value={formData.rate} onChange={e => setFormData(p => ({ ...p, rate: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Units</Label>
-                <Input type="number" step="0.01" data-testid="input-psam-units" value={formData.units} onChange={e => setFormData(p => ({ ...p, units: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Percent</Label>
-                <Input type="number" step="0.01" data-testid="input-psam-percent" value={formData.percent} onChange={e => setFormData(p => ({ ...p, percent: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Effective Date</Label>
-                <Input type="date" data-testid="input-psam-effective-date" value={formData.effectiveDate} onChange={e => setFormData(p => ({ ...p, effectiveDate: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Description</Label>
-                <Textarea data-testid="input-psam-description" value={formData.description} onChange={e => setFormData(p => ({ ...p, description: e.target.value }))} />
-              </div>
-              <Button
-                className="w-full"
-                data-testid="button-submit-pay-stub-amendment"
-                disabled={createMutation.isPending}
-                onClick={() => createMutation.mutate(formData)}
-              >
-                {createMutation.isPending ? "Creating..." : "Create Amendment"}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+        <Button data-testid="button-add-pay-stub-amendment" onClick={openAdd}><Plus className="mr-2 h-4 w-4" />Add Amendment</Button>
       </div>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>{editingId ? "Edit Amendment" : "Add Pay Stub Amendment"}</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            {/* Type — most important, shown first */}
+            <div className="space-y-2">
+              <Label>Type <span className="text-red-500">*</span></Label>
+              <Select value={formData.amendmentType} onValueChange={v => setFormData(p => ({ ...p, amendmentType: v }))}>
+                <SelectTrigger data-testid="select-psam-amendment-type"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="earning">Earning — adds to gross pay (bonus, reimbursement)</SelectItem>
+                  <SelectItem value="deduction">Deduction — reduces net pay (loan repayment, advance)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Company</Label>
+              <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v, workerId: "" }))}>
+                <SelectTrigger data-testid="select-psam-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                <SelectContent>{companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Worker <span className="text-red-500">*</span></Label>
+              <Select value={formData.workerId} onValueChange={v => setFormData(p => ({ ...p, workerId: v }))}>
+                <SelectTrigger data-testid="select-psam-worker"><SelectValue placeholder="Select worker" /></SelectTrigger>
+                <SelectContent>{filteredWorkers.map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Amount ($)</Label>
+              <Input type="number" step="0.01" placeholder="0.00" data-testid="input-psam-amount" value={formData.amount} onChange={e => setFormData(p => ({ ...p, amount: e.target.value }))} />
+            </div>
+            <div className="space-y-2">
+              <Label>Effective Date</Label>
+              <Input type="date" data-testid="input-psam-effective-date" value={formData.effectiveDate} onChange={e => setFormData(p => ({ ...p, effectiveDate: e.target.value }))} />
+              <p className="text-xs text-muted-foreground">Must fall within the pay period being processed.</p>
+            </div>
+            <div className="space-y-2">
+              <Label>Description</Label>
+              <Textarea placeholder="e.g. Paycheck advance repayment" data-testid="input-psam-description" value={formData.description} onChange={e => setFormData(p => ({ ...p, description: e.target.value }))} />
+            </div>
+            <div className="space-y-2">
+              <Label>Status</Label>
+              <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
+                <SelectTrigger data-testid="select-psam-status"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="inactive">Inactive</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button className="w-full" data-testid="button-submit-pay-stub-amendment"
+              disabled={saveMutation.isPending || !formData.workerId}
+              onClick={() => saveMutation.mutate(formData)}>
+              {saveMutation.isPending ? "Saving..." : editingId ? "Save Changes" : "Create Amendment"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
@@ -2492,34 +2511,50 @@ function PayStubAmendmentsTab() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Worker</TableHead>
-                  <TableHead>Account</TableHead>
-                  <TableHead>Amount Type</TableHead>
+                  <TableHead>Type</TableHead>
                   <TableHead>Amount</TableHead>
-                  <TableHead>Rate</TableHead>
+                  <TableHead>Description</TableHead>
                   <TableHead>Effective Date</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="w-20"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {amendments.map(am => (
                   <TableRow key={am.id} data-testid={`row-pay-stub-amendment-${am.id}`}>
-                    <TableCell>{getWorkerName(am.workerId)}</TableCell>
-                    <TableCell>{am.payStubAccountId ? getAccountName(am.payStubAccountId) : "—"}</TableCell>
+                    <TableCell className="font-medium">{getWorkerName(am.workerId)}</TableCell>
                     <TableCell>
-                      <Badge variant="outline" data-testid={`badge-psam-type-${am.id}`}>{am.amountType}</Badge>
+                      <Badge variant={(am as any).amendmentType === "deduction" ? "destructive" : "default"}
+                        data-testid={`badge-psam-type-${am.id}`}>
+                        {(am as any).amendmentType === "deduction" ? "Deduction" : "Earning"}
+                      </Badge>
                     </TableCell>
-                    <TableCell>${Number(am.amount || 0).toFixed(2)}</TableCell>
-                    <TableCell>${Number(am.rate || 0).toFixed(2)}</TableCell>
+                    <TableCell className={(am as any).amendmentType === "deduction" ? "text-red-600 font-medium" : "text-green-600 font-medium"}>
+                      {(am as any).amendmentType === "deduction" ? "-" : "+"}${Number(am.amount || 0).toFixed(2)}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-sm">{am.description || "—"}</TableCell>
                     <TableCell>{am.effectiveDate || "—"}</TableCell>
                     <TableCell>
                       <Badge variant={am.status === "active" ? "default" : "outline"} data-testid={`badge-psam-status-${am.id}`}>
                         {am.status}
                       </Badge>
                     </TableCell>
+                    <TableCell>
+                      <div className="flex gap-1">
+                        <Button size="icon" variant="ghost" data-testid={`button-edit-amendment-${am.id}`} onClick={() => openEdit(am)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="text-red-500 hover:text-red-700"
+                          data-testid={`button-delete-amendment-${am.id}`}
+                          onClick={() => { if (confirm("Delete this amendment?")) deleteMutation.mutate(am.id); }}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}
                 {amendments.length === 0 && (
-                  <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">No pay stub amendments</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No pay stub amendments</TableCell></TableRow>
                 )}
               </TableBody>
             </Table>
