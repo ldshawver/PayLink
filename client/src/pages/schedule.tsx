@@ -463,11 +463,25 @@ export default function SchedulePage() {
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
       setGenerateOpen(false);
-      toast({ 
-        title: "Success", 
-        description: `Created ${data.created} schedule(s) from recurring templates.`,
-        variant: "default"
-      });
+      if (data.created === 0 && data.templatesFound > 0) {
+        toast({
+          title: "No new schedules created",
+          description: `Found ${data.templatesFound} recurring template(s) but all shifts already exist for this date range.`,
+          variant: "default"
+        });
+      } else if (data.created === 0 && data.templatesFound === 0) {
+        toast({
+          title: "No templates found",
+          description: "No active recurring schedule templates found for this company. Add recurring schedules first.",
+          variant: "destructive"
+        });
+      } else {
+        toast({ 
+          title: "Schedules Generated", 
+          description: `Created ${data.created} draft shift(s) from ${data.templatesFound} recurring template(s).`,
+          variant: "default"
+        });
+      }
     },
     onError: (error: Error) => {
       toast({ title: "Error generating schedules", description: error.message, variant: "destructive" });
@@ -1474,24 +1488,35 @@ export default function SchedulePage() {
                     
                     {generateForm.companyId && (
                       <div className="bg-accent/50 border border-primary/20 rounded p-3 space-y-2">
-                        <p className="text-sm font-semibold">Recurring Schedules for Selected Company:</p>
-                        {recurringSchedules.filter(r => r.companyId === generateForm.companyId && r.isActive).length === 0 ? (
-                          <p className="text-sm text-muted-foreground">⚠ No active recurring schedules found for this company.</p>
-                        ) : (
-                          <div className="space-y-1">
-                            {recurringSchedules
-                              .filter(r => r.companyId === generateForm.companyId && r.isActive)
-                              .map((r, i) => {
-                                const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                        <p className="text-sm font-semibold">Recurring Templates to be Used:</p>
+                        {(() => {
+                          const matching = recurringSchedules.filter(r => {
+                            if (!r.isActive) return false;
+                            if (r.companyId === generateForm.companyId) return true;
+                            const worker = workers.find(w => w.id === r.workerId);
+                            return worker?.companyId === generateForm.companyId;
+                          });
+                          if (matching.length === 0) {
+                            return <p className="text-sm text-muted-foreground">⚠ No active recurring schedules found for this company.</p>;
+                          }
+                          const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                          return (
+                            <div className="space-y-1">
+                              {matching.map((r, i) => {
                                 const worker = workers.find(w => w.id === r.workerId);
+                                const companyMismatch = r.companyId !== generateForm.companyId;
                                 return (
-                                  <div key={i} className="text-sm text-foreground">
-                                    • {worker?.firstName} {worker?.lastName} - {dayNames[r.dayOfWeek]} {r.startTime}-{r.endTime}
+                                  <div key={i} className="text-sm text-foreground flex items-center gap-1">
+                                    • {worker?.firstName} {worker?.lastName} — {dayNames[r.dayOfWeek]} {r.startTime}–{r.endTime}
+                                    {companyMismatch && (
+                                      <span className="text-xs text-amber-600 dark:text-amber-400">(matched via worker)</span>
+                                    )}
                                   </div>
                                 );
                               })}
-                          </div>
-                        )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
                     
