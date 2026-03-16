@@ -998,16 +998,59 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getRecurringSchedules(companyId?: string): Promise<RecurringSchedule[]> {
-    if (companyId) return db.select().from(recurringSchedules).where(eq(recurringSchedules.companyId, companyId));
-    return db.select().from(recurringSchedules);
+    try {
+      if (companyId) return await db.select().from(recurringSchedules).where(eq(recurringSchedules.companyId, companyId));
+      return await db.select().from(recurringSchedules);
+    } catch (e: any) {
+      // Graceful fallback when job_id column hasn't been migrated yet (VPS)
+      if (e.code === "42703") {
+        const baseQuery = companyId
+          ? sql`SELECT id, company_id, worker_id, name, day_of_week, start_time, end_time, effective_from, effective_to, is_active, created_at, NULL::varchar as job_id FROM recurring_schedules WHERE company_id = ${companyId}`
+          : sql`SELECT id, company_id, worker_id, name, day_of_week, start_time, end_time, effective_from, effective_to, is_active, created_at, NULL::varchar as job_id FROM recurring_schedules`;
+        const result = await db.execute(baseQuery);
+        return result.rows.map((r: any) => ({
+          id: r.id,
+          companyId: r.company_id,
+          workerId: r.worker_id,
+          name: r.name,
+          dayOfWeek: r.day_of_week,
+          startTime: r.start_time,
+          endTime: r.end_time,
+          effectiveFrom: r.effective_from ?? null,
+          effectiveTo: r.effective_to ?? null,
+          jobId: null,
+          isActive: r.is_active,
+          createdAt: r.created_at,
+        })) as RecurringSchedule[];
+      }
+      throw e;
+    }
   }
   async createRecurringSchedule(data: InsertRecurringSchedule): Promise<RecurringSchedule> {
-    const [r] = await db.insert(recurringSchedules).values(data).returning();
-    return r;
+    try {
+      const [r] = await db.insert(recurringSchedules).values(data).returning();
+      return r;
+    } catch (e: any) {
+      if (e.code === "42703") {
+        const { jobId, ...rest } = data as any;
+        const [r] = await db.insert(recurringSchedules).values(rest).returning();
+        return r;
+      }
+      throw e;
+    }
   }
   async updateRecurringSchedule(id: string, data: Partial<RecurringSchedule>): Promise<RecurringSchedule | undefined> {
-    const [r] = await db.update(recurringSchedules).set(data).where(eq(recurringSchedules.id, id)).returning();
-    return r;
+    try {
+      const [r] = await db.update(recurringSchedules).set(data).where(eq(recurringSchedules.id, id)).returning();
+      return r;
+    } catch (e: any) {
+      if (e.code === "42703") {
+        const { jobId, ...rest } = data as any;
+        const [r] = await db.update(recurringSchedules).set(rest).where(eq(recurringSchedules.id, id)).returning();
+        return r;
+      }
+      throw e;
+    }
   }
   async deleteRecurringSchedule(id: string): Promise<void> {
     await db.delete(recurringSchedules).where(eq(recurringSchedules.id, id));
@@ -1196,7 +1239,9 @@ export class DatabaseStorage implements IStorage {
 
   async getEmployeeGroups(companyId?: string): Promise<EmployeeGroup[]> {
     if (companyId) {
-      return db.select().from(employeeGroups).where(eq(employeeGroups.companyId, companyId)).orderBy(employeeGroups.name);
+      return db.select().from(employeeGroups).where(
+        or(eq(employeeGroups.companyId, companyId), isNull(employeeGroups.companyId))
+      ).orderBy(employeeGroups.name);
     }
     return db.select().from(employeeGroups).orderBy(employeeGroups.name);
   }

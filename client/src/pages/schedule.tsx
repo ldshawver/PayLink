@@ -186,6 +186,7 @@ export default function SchedulePage() {
     endTime: "",
     effectiveFrom: "",
     effectiveTo: "",
+    jobId: "",
   });
 
   const [editRecurringForm, setEditRecurringForm] = useState({
@@ -196,6 +197,7 @@ export default function SchedulePage() {
     endTime: "",
     effectiveFrom: "",
     effectiveTo: "",
+    jobId: "",
     isActive: true,
   });
 
@@ -441,12 +443,13 @@ export default function SchedulePage() {
       await apiRequest("POST", "/api/recurring-schedules", {
         ...data,
         dayOfWeek: parseInt(data.dayOfWeek),
+        jobId: data.jobId || null,
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-schedules"] });
       setAddRecurringOpen(false);
-      setRecurringForm({ companyId: "", workerId: "", dayOfWeek: "", startTime: "", endTime: "", effectiveFrom: "", effectiveTo: "" });
+      setRecurringForm({ companyId: "", workerId: "", dayOfWeek: "", startTime: "", endTime: "", effectiveFrom: "", effectiveTo: "", jobId: "" });
       toast({ title: "Recurring schedule added" });
     },
     onError: (error: Error) => {
@@ -531,6 +534,7 @@ export default function SchedulePage() {
       await apiRequest("PATCH", `/api/recurring-schedules/${id}`, {
         ...data,
         dayOfWeek: data.dayOfWeek ? Number(data.dayOfWeek) : undefined,
+        jobId: data.jobId || null,
       });
     },
     onSuccess: () => {
@@ -554,6 +558,7 @@ export default function SchedulePage() {
       endTime: rs.endTime,
       effectiveFrom: rs.effectiveFrom || "",
       effectiveTo: rs.effectiveTo || "",
+      jobId: (rs as any).jobId || "",
       isActive: rs.isActive ?? true,
     });
     setEditRecurringOpen(true);

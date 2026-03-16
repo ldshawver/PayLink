@@ -126,3 +126,9 @@ ALTER TABLE policy_groups ALTER COLUMN company_id DROP NOT NULL;
 
 -- Add job_id to schedules for job cost tracking
 ALTER TABLE schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR REFERENCES jobs(id);
+
+-- Add job_id to recurring_schedules to match generated schedules
+ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR REFERENCES jobs(id);
+
+-- Make employee_groups.company_id nullable for universal (all-company) groups
+ALTER TABLE employee_groups ALTER COLUMN company_id DROP NOT NULL;

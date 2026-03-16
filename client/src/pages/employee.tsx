@@ -1975,6 +1975,7 @@ function EmployeeGroupsTab() {
     mutationFn: async (data: typeof form) => {
       const cleanData: Record<string, any> = { ...data };
       if (cleanData.parentId === "" || cleanData.parentId === "none") cleanData.parentId = null;
+      if (cleanData.companyId === "" || cleanData.companyId === "__universal__") cleanData.companyId = null;
       await apiRequest("POST", "/api/employee-groups", cleanData);
     },
     onSuccess: () => {
@@ -1992,6 +1993,7 @@ function EmployeeGroupsTab() {
     mutationFn: async ({ id, data }: { id: string; data: typeof form }) => {
       const cleanData: Record<string, any> = { ...data };
       if (cleanData.parentId === "" || cleanData.parentId === "none") cleanData.parentId = null;
+      if (cleanData.companyId === "" || cleanData.companyId === "__universal__") cleanData.companyId = null;
       await apiRequest("PATCH", `/api/employee-groups/${id}`, cleanData);
     },
     onSuccess: () => {
@@ -2037,11 +2039,12 @@ function EmployeeGroupsTab() {
       <div className="grid gap-4 py-4">
         <div className="space-y-2">
           <Label>Company</Label>
-          <Select value={form.companyId} onValueChange={v => setForm(f => ({ ...f, companyId: v }))}>
+          <Select value={form.companyId || "__universal__"} onValueChange={v => setForm(f => ({ ...f, companyId: v }))}>
             <SelectTrigger data-testid={isEdit ? "select-edit-group-companyId" : "select-group-companyId"}>
               <SelectValue placeholder="Select company" />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
               {companies.map(c => (
                 <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
               ))}
@@ -2119,7 +2122,7 @@ function EmployeeGroupsTab() {
                 <TableRow key={g.id} data-testid={`row-group-${g.id}`}>
                   <TableCell data-testid={`text-group-name-${g.id}`}>{g.name}</TableCell>
                   <TableCell>{g.parentId ? (groupMap.get(g.parentId) || g.parentId) : "—"}</TableCell>
-                  <TableCell>{companyMap.get(g.companyId) || g.companyId}</TableCell>
+                  <TableCell>{g.companyId ? (companyMap.get(g.companyId) || g.companyId) : <span className="text-xs text-muted-foreground italic">All Companies</span>}</TableCell>
                   <TableCell>{workers.filter(w => w.groupId === g.id).length}</TableCell>
                   <TableCell>
                     <DropdownMenu>
@@ -2131,7 +2134,7 @@ function EmployeeGroupsTab() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem data-testid={`button-edit-group-${g.id}`} onClick={() => {
                           setEditGroup(g);
-                          setForm({ companyId: g.companyId, name: g.name, parentId: g.parentId || "" });
+                          setForm({ companyId: g.companyId || "__universal__", name: g.name, parentId: g.parentId || "" });
                           setEditOpen(true);
                         }}>
                           <Pencil className="mr-2 h-4 w-4" /> Edit
