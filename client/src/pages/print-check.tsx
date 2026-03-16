@@ -136,9 +136,9 @@ function CheckPortion({
 // Left column: company return address (top) + employee mailing address (center window zone)
 // Right column: all pay stub data — clear of address areas
 function StubSummarySection({
-  item, worker, company, run, config, accrualAccounts = [], accrualBalances = [],
+  item, worker, company, run, config, deductions = [], accrualAccounts = [], accrualBalances = [],
 }: {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; config: Record<string, boolean>; accrualAccounts?: AccrualAccount[]; accrualBalances?: AccrualBalance[];
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; config: Record<string, boolean>; deductions?: TaxDeduction[]; accrualAccounts?: AccrualAccount[]; accrualBalances?: AccrualBalance[];
 }) {
   const netPay = Number(item.netPay || 0);
   const grossPay = Number(item.grossPay || 0);
@@ -168,6 +168,25 @@ function StubSummarySection({
     })
     .filter((b): b is NonNullable<typeof b> => b !== null);
 
+  const deductionBreakdown = deductions
+    .filter(d => d.isActive && !d.isEmployerPaid && !d.isReferenceOnly)
+    .filter(d => {
+      const appliesTo = d.appliesTo || "all";
+      if (appliesTo === "contractor") return false;
+      return !isContractor;
+    })
+    .map(d => {
+      let amount = 0;
+      if (d.calculationType === "percentage") {
+        const base = d.maxAmount ? Math.min(grossPay, Number(d.maxAmount)) : grossPay;
+        amount = base * (Number(d.rate || 0) / 100);
+      } else {
+        amount = Number(d.rate || 0);
+      }
+      return { name: d.name, amount };
+    })
+    .filter(d => d.amount > 0);
+
   return (
     <div style={{ height: "3.667in", boxSizing: "border-box", display: "flex", flexDirection: "row" }}>
 
@@ -192,8 +211,8 @@ function StubSummarySection({
         {/* Spacer — pushes employee address into envelope window zone */}
         <div style={{ flex: 1 }} />
 
-        {/* TO — employee mailing address only, no label, sized for envelope window */}
-        <div style={{ marginBottom: "0.6in" }}>
+        {/* TO — employee mailing address only, no label, sized for envelope window — shifted 0.5in right */}
+        <div style={{ marginBottom: "0.6in", marginLeft: "0.5in" }}>
           <div style={{ fontSize: "13px", fontWeight: "bold" }}>{worker.firstName} {worker.lastName}</div>
           {worker.address && <div style={{ fontSize: "12px", marginTop: "3px" }}>{worker.address}</div>}
           {(worker.city || worker.state || worker.zip) && (
@@ -278,6 +297,43 @@ function StubSummarySection({
             </>
           )}
         </div>
+
+        {/* Deductions line items — employees only */}
+        {!isContractor && config.showDeductionsDetail && (
+          <div style={{ marginBottom: "6px" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "8px" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #000" }}>
+                  <th style={{ textAlign: "left", padding: "2px 2px 2px 0", fontWeight: "bold" }}>DEDUCTIONS</th>
+                  <th style={{ textAlign: "right", padding: "2px", fontWeight: "bold" }}>CURRENT</th>
+                  {config.showYtdTotals && <th style={{ textAlign: "right", padding: "2px", fontWeight: "bold" }}>YTD</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {deductionBreakdown.map((d, i) => (
+                  <tr key={i}>
+                    <td style={{ padding: "1px 2px 1px 0" }}>{d.name}</td>
+                    <td style={{ textAlign: "right", padding: "1px 2px" }}>${fmt(d.amount)}</td>
+                    {config.showYtdTotals && <td style={{ textAlign: "right", padding: "1px 2px" }}>—</td>}
+                  </tr>
+                ))}
+                {deductionBreakdown.length === 0 && (
+                  <tr><td colSpan={config.showYtdTotals ? 3 : 2} style={{ padding: "1px 2px", color: "#999" }}>No deductions</td></tr>
+                )}
+                <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
+                  <td style={{ padding: "2px 2px 2px 0" }}>TOTAL DEDUCTIONS</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(totalDeductions)}</td>
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdDeductions)}</td>}
+                </tr>
+                <tr style={{ borderTop: "2px solid #000", fontWeight: "bold" }}>
+                  <td style={{ padding: "2px 2px 2px 0" }}>NET PAY</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(netPay)}</td>
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdNet)}</td>}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {/* Leave balances */}
         {!isContractor && workerLeaveBalances.length > 0 && (
@@ -839,7 +895,7 @@ function StandardCheck({ item, worker, company, run, deductions, config, payStub
       </div>
       {/* Middle third: pay stub summary */}
       <div style={{ height: "3.667in" }}>
-        <StubSummarySection item={item} worker={worker} company={company} run={run} config={config} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
+        <StubSummarySection item={item} worker={worker} company={company} run={run} config={config} deductions={deductions} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
       </div>
       {/* Bottom third: earnings & deductions detail */}
       <div style={{ height: "3.666in" }}>
