@@ -388,7 +388,7 @@ export const taxesDeductions = pgTable("taxes_deductions", {
 
 export const policyGroups = pgTable("policy_groups", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   description: text("description"),
   isDefault: boolean("is_default").default(false),

@@ -2124,16 +2124,14 @@ export async function registerRoutes(
 
   app.post("/api/policy-groups/quick-setup", requireAuth, async (req, res) => {
     try {
-      const { companyId } = req.body;
-      if (!companyId) return res.status(400).json({ message: "companyId required" });
-      const existing = await storage.getPolicyGroups(companyId);
+      const existing = await storage.getPolicyGroups();
       const existingNames = new Set(existing.map(e => e.name));
       const defaultGroups = [
-        { companyId, name: "Full-Time Employees", description: "Policy group for full-time employees with standard benefits, overtime after 8 hrs/day, meal/break rules, and vacation accrual.", isDefault: true },
-        { companyId, name: "Part-Time Employees", description: "Policy group for part-time employees with prorated benefits and limited overtime eligibility." },
-        { companyId, name: "Hourly Workers", description: "Policy group for hourly workers with overtime rules, meal/break policies, and time-clock requirements." },
-        { companyId, name: "Managers", description: "Policy group for managers/supervisors — may be exempt from overtime under CA executive exemption." },
-        { companyId, name: "Contractors", description: "Policy group for independent contractors — no overtime, benefits, or tax withholding applies." },
+        { companyId: null, name: "Full-Time Employees", description: "Policy group for full-time employees with standard benefits, overtime after 8 hrs/day, meal/break rules, and vacation accrual.", isDefault: true },
+        { companyId: null, name: "Part-Time Employees", description: "Policy group for part-time employees with prorated benefits and limited overtime eligibility." },
+        { companyId: null, name: "Hourly Workers", description: "Policy group for hourly workers with overtime rules, meal/break policies, and time-clock requirements." },
+        { companyId: null, name: "Managers", description: "Policy group for managers/supervisors — may be exempt from overtime under CA executive exemption." },
+        { companyId: null, name: "Contractors", description: "Policy group for independent contractors — no overtime, benefits, or tax withholding applies." },
       ];
       const created: any[] = [];
       const skipped: string[] = [];
