@@ -1167,8 +1167,13 @@ export async function registerRoutes(
                 status: "draft",
               });
               created.push(schedule);
-            } catch (scheduleError) {
-              console.error(`Failed to create schedule for date ${dateStr}, worker ${rs.workerId}:`, scheduleError);
+            } catch (scheduleError: any) {
+              // Silently skip duplicate schedules (already exists for this worker on this date)
+              if (scheduleError?.message?.includes("duplicate") || scheduleError?.code === "23505") {
+                // Duplicate key - this is expected if schedules already exist
+              } else {
+                console.error(`Failed to create schedule for date ${dateStr}, worker ${rs.workerId}:`, scheduleError?.message || scheduleError);
+              }
             }
           }
         } catch (dayError) {
