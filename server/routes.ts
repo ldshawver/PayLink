@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import bcrypt from "bcrypt";
 import multer from "multer";
+import { sendScheduleEmailNotification, sendScheduleSmsNotification } from "./notifications";
 import path from "path";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema } from "@shared/schema";
 
@@ -1185,6 +1186,89 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Schedule generation error:", error);
       res.status(500).json({ message: `Failed to generate schedules: ${error instanceof Error ? error.message : String(error)}` });
+    }
+  });
+
+  // Publish schedules endpoint — marks drafts as published and sends email + SMS notifications
+  app.post("/api/schedules/publish", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { companyId, startDate, endDate, scheduleIds } = req.body;
+
+      let targetSchedules: any[] = [];
+
+      if (scheduleIds && Array.isArray(scheduleIds) && scheduleIds.length > 0) {
+        // Publish specific schedule IDs
+        const all = await storage.getSchedules();
+        targetSchedules = all.filter((s: any) => scheduleIds.includes(s.id) && s.status === "draft");
+      } else if (companyId && startDate && endDate) {
+        // Publish all drafts for a company in date range
+        const all = await storage.getSchedulesByDateRange(companyId, startDate, endDate);
+        targetSchedules = all.filter((s: any) => s.status === "draft");
+      } else {
+        return res.status(400).json({ message: "Provide scheduleIds or companyId + startDate + endDate" });
+      }
+
+      if (targetSchedules.length === 0) {
+        return res.json({ published: 0, notified: 0, message: "No draft schedules found to publish" });
+      }
+
+      // Mark all as published
+      await Promise.all(targetSchedules.map((s: any) => storage.updateSchedule(s.id, { status: "published" })));
+
+      // Group shifts by worker for notifications
+      const byWorker: Record<string, { worker: any; shifts: any[] }> = {};
+      const allWorkers = await storage.getWorkers();
+      const allCompanies = await storage.getCompanies();
+
+      for (const s of targetSchedules) {
+        if (!byWorker[s.workerId]) {
+          const worker = allWorkers.find((w: any) => w.id === s.workerId);
+          if (worker) byWorker[s.workerId] = { worker, shifts: [] };
+        }
+        if (byWorker[s.workerId]) byWorker[s.workerId].shifts.push(s);
+      }
+
+      // Determine base URL for schedule view link
+      const proto = req.headers["x-forwarded-proto"] || "http";
+      const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:5000";
+      const scheduleViewUrl = `${proto}://${host}/schedule`;
+
+      // Send notifications
+      let notified = 0;
+      const notificationResults: any[] = [];
+
+      for (const { worker, shifts } of Object.values(byWorker)) {
+        const company = allCompanies.find((c: any) => c.id === (shifts[0]?.companyId));
+        const workerName = `${worker.firstName} ${worker.lastName}`;
+        const companyName = company?.name || "Your employer";
+
+        const email = worker.workEmail || worker.email || worker.homeEmail;
+        const phone = worker.mobilePhone || worker.phone || worker.homePhone;
+
+        const payload = {
+          workerName,
+          email,
+          phone,
+          companyName,
+          shifts: shifts.map((s: any) => ({ date: s.date, startTime: s.startTime, endTime: s.endTime, department: s.department })),
+          scheduleViewUrl,
+        };
+
+        const [emailResult, smsResult] = await Promise.all([
+          sendScheduleEmailNotification(payload),
+          sendScheduleSmsNotification(payload),
+        ]);
+
+        const sent = emailResult.sent || smsResult.sent;
+        if (sent) notified++;
+        notificationResults.push({ worker: workerName, email: emailResult, sms: smsResult });
+      }
+
+      console.log(`[Publish] Published ${targetSchedules.length} schedules, notified ${notified} workers`);
+      res.json({ published: targetSchedules.length, notified, results: notificationResults });
+    } catch (error) {
+      console.error("Schedule publish error:", error);
+      res.status(500).json({ message: `Failed to publish schedules: ${error instanceof Error ? error.message : String(error)}` });
     }
   });
 
