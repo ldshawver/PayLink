@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import type { Schedule, Worker, Company, RecurringSchedule, ShiftOffer } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -133,6 +134,8 @@ type ViewMode = "day" | "week" | "month";
 
 export default function SchedulePage() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isAdminOrManager = user?.role === "admin" || user?.role === "manager";
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useTabParam("schedules");
   const [viewMode, setViewMode] = useState<ViewMode>("week");
@@ -142,6 +145,8 @@ export default function SchedulePage() {
   const [showDailyTotals, setShowDailyTotals] = useState(true);
   const [showWeeklyTotals, setShowWeeklyTotals] = useState(false);
   const [showUnscheduled, setShowUnscheduled] = useState(false);
+  const [showNotes, setShowNotes] = useState(false);
+  const [showLaborCosts, setShowLaborCosts] = useState(false);
   const [addScheduleOpen, setAddScheduleOpen] = useState(false);
   const [editScheduleOpen, setEditScheduleOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
@@ -466,23 +471,30 @@ export default function SchedulePage() {
   };
 
   const dailyTotals = useMemo(() => {
-    const totals: Record<string, { shifts: number; hours: number }> = {};
+    const totals: Record<string, { shifts: number; hours: number; cost: number }> = {};
     dateStrings.forEach(ds => {
       const daySchedules = schedules.filter(s => s.date === ds && (selectedCompany === "all" || s.companyId === selectedCompany));
       const hours = daySchedules.reduce((sum, s) => sum + parseTimeToHours(s.startTime, s.endTime), 0);
-      totals[ds] = { shifts: daySchedules.length, hours };
+      const cost = daySchedules.reduce((sum, s) => {
+        const worker = workers.find(w => w.id === s.workerId);
+        const rate = Number(worker?.payRate || 0);
+        return sum + parseTimeToHours(s.startTime, s.endTime) * rate;
+      }, 0);
+      totals[ds] = { shifts: daySchedules.length, hours, cost };
     });
     return totals;
-  }, [schedules, dateStrings, selectedCompany]);
+  }, [schedules, dateStrings, selectedCompany, workers]);
 
   const weeklyTotal = useMemo(() => {
     let shifts = 0;
     let hours = 0;
+    let cost = 0;
     Object.values(dailyTotals).forEach(t => {
       shifts += t.shifts;
       hours += t.hours;
+      cost += t.cost;
     });
-    return { shifts, hours: Math.round(hours * 100) / 100 };
+    return { shifts, hours: Math.round(hours * 100) / 100, cost: Math.round(cost * 100) / 100 };
   }, [dailyTotals]);
 
   const isLoading = schedulesLoading || workersLoading || companiesLoading;
@@ -679,6 +691,22 @@ export default function SchedulePage() {
                   >
                     Show Unscheduled Employees
                   </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={showNotes}
+                    onCheckedChange={setShowNotes}
+                    data-testid="checkbox-show-notes"
+                  >
+                    Show Shift Notes
+                  </DropdownMenuCheckboxItem>
+                  {isAdminOrManager && (
+                    <DropdownMenuCheckboxItem
+                      checked={showLaborCosts}
+                      onCheckedChange={setShowLaborCosts}
+                      data-testid="checkbox-show-labor-costs"
+                    >
+                      Show Projected Labor Costs
+                    </DropdownMenuCheckboxItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
 
@@ -840,6 +868,8 @@ export default function SchedulePage() {
                       displayWorkers.map((worker) => {
                         let workerWeekHours = 0;
                         let workerWeekShifts = 0;
+                        let workerWeekCost = 0;
+                        const workerPayRate = Number(worker.payRate || 0);
                         return (
                           <TableRow key={worker.id} data-testid={`row-worker-${worker.id}`}>
                             <TableCell className="sticky left-0 bg-card z-10 border-r font-medium" data-testid={`text-worker-name-${worker.id}`}>
@@ -855,6 +885,7 @@ export default function SchedulePage() {
                               cellSchedules.forEach(s => {
                                 const h = parseTimeToHours(s.startTime, s.endTime);
                                 workerWeekHours += h;
+                                workerWeekCost += h * workerPayRate;
                                 workerWeekShifts++;
                               });
                               return (
@@ -874,7 +905,17 @@ export default function SchedulePage() {
                                           data-testid={`shift-${s.id}`}
                                         >
                                           <div className="font-medium">{s.startTime} - {s.endTime}</div>
-                                          <div className="text-muted-foreground">{parseTimeToHours(s.startTime, s.endTime)}h</div>
+                                          <div className="text-muted-foreground">{parseTimeToHours(s.startTime, s.endTime)}h
+                                            {showLaborCosts && isAdminOrManager && (() => {
+                                              const worker = workers.find(w => w.id === s.workerId);
+                                              const rate = Number(worker?.payRate || 0);
+                                              const cost = parseTimeToHours(s.startTime, s.endTime) * rate;
+                                              return rate > 0 ? <span className="ml-1 text-emerald-600 dark:text-emerald-400">${cost.toFixed(2)}</span> : null;
+                                            })()}
+                                          </div>
+                                          {showNotes && s.note && (
+                                            <div className="text-muted-foreground text-[10px] italic leading-tight mt-0.5 break-words">{s.note}</div>
+                                          )}
                                           {shiftOffers.some(o => o.scheduleId === s.id && o.status === "open") && (
                                             <div className="text-amber-600 dark:text-amber-400 font-semibold text-[10px]">⚑ Open for pickup</div>
                                           )}
@@ -919,6 +960,9 @@ export default function SchedulePage() {
                               <TableCell className="text-center font-medium" data-testid={`total-worker-${worker.id}`}>
                                 <div className="text-xs">{workerWeekShifts} shifts</div>
                                 <div className="text-sm font-bold">{Math.round(workerWeekHours * 100) / 100}h</div>
+                                {showLaborCosts && isAdminOrManager && workerPayRate > 0 && (
+                                  <div className="text-xs text-emerald-600 dark:text-emerald-400">${Math.round(workerWeekCost * 100) / 100}</div>
+                                )}
                               </TableCell>
                             )}
                           </TableRow>
@@ -930,11 +974,14 @@ export default function SchedulePage() {
                         <TableCell className="sticky left-0 bg-card z-10 border-r text-sm">Daily Totals</TableCell>
                         {viewDates.map((d) => {
                           const ds = formatDate(d);
-                          const t = dailyTotals[ds] || { shifts: 0, hours: 0 };
+                          const t = dailyTotals[ds] || { shifts: 0, hours: 0, cost: 0 };
                           return (
                             <TableCell key={ds} className="text-center" data-testid={`daily-total-${ds}`}>
                               <div className="text-xs">{t.shifts} shifts</div>
                               <div className="text-sm">{t.hours}h</div>
+                              {showLaborCosts && isAdminOrManager && (
+                                <div className="text-xs text-emerald-600 dark:text-emerald-400">${t.cost.toFixed(2)}</div>
+                              )}
                             </TableCell>
                           );
                         })}
@@ -942,6 +989,9 @@ export default function SchedulePage() {
                           <TableCell className="text-center" data-testid="grand-total">
                             <div className="text-xs">{weeklyTotal.shifts} shifts</div>
                             <div className="text-sm">{weeklyTotal.hours}h</div>
+                            {showLaborCosts && isAdminOrManager && (
+                              <div className="text-xs text-emerald-600 dark:text-emerald-400">${weeklyTotal.cost.toFixed(2)}</div>
+                            )}
                           </TableCell>
                         )}
                       </TableRow>
