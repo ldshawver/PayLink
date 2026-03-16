@@ -735,10 +735,26 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getSchedules(companyId?: string): Promise<Schedule[]> {
-    if (companyId) {
-      return db.select().from(schedules).where(eq(schedules.companyId, companyId)).orderBy(desc(schedules.date));
+    try {
+      if (companyId) {
+        return await db.select().from(schedules).where(eq(schedules.companyId, companyId)).orderBy(desc(schedules.date));
+      }
+      return await db.select().from(schedules).orderBy(desc(schedules.date));
+    } catch (e: any) {
+      if (e.code === "42703" || String(e.message).includes("does not exist")) {
+        const base = companyId
+          ? sql`SELECT id, worker_id, company_id, date, start_time, end_time, department, status, note, created_at, NULL::varchar as job_id FROM schedules WHERE company_id = ${companyId} ORDER BY date DESC`
+          : sql`SELECT id, worker_id, company_id, date, start_time, end_time, department, status, note, created_at, NULL::varchar as job_id FROM schedules ORDER BY date DESC`;
+        const result = await db.execute(base);
+        return result.rows.map((r: any) => ({
+          id: r.id, workerId: r.worker_id, companyId: r.company_id,
+          date: r.date, startTime: r.start_time, endTime: r.end_time,
+          department: r.department, jobId: null, status: r.status,
+          note: r.note, createdAt: r.created_at,
+        })) as Schedule[];
+      }
+      throw e;
     }
-    return db.select().from(schedules).orderBy(desc(schedules.date));
   }
   async getSchedulesByDateRange(companyId: string, startDate: string, endDate: string): Promise<Schedule[]> {
     return db.select().from(schedules).where(
@@ -746,8 +762,17 @@ export class DatabaseStorage implements IStorage {
     ).orderBy(schedules.date);
   }
   async createSchedule(data: InsertSchedule): Promise<Schedule> {
-    const [schedule] = await db.insert(schedules).values(data).returning();
-    return schedule;
+    try {
+      const [schedule] = await db.insert(schedules).values(data).returning();
+      return schedule;
+    } catch (e: any) {
+      if (e.code === "42703" || String(e.message).includes("does not exist")) {
+        const { jobId, ...rest } = data as any;
+        const [schedule] = await db.insert(schedules).values(rest).returning();
+        return schedule;
+      }
+      throw e;
+    }
   }
   async updateSchedule(id: string, data: Partial<Schedule>): Promise<Schedule | undefined> {
     const [schedule] = await db.update(schedules).set(data).where(eq(schedules.id, id)).returning();
@@ -1003,7 +1028,7 @@ export class DatabaseStorage implements IStorage {
       return await db.select().from(recurringSchedules);
     } catch (e: any) {
       // Graceful fallback when job_id column hasn't been migrated yet (VPS)
-      if (e.code === "42703") {
+      if (e.code === "42703" || String(e.message).includes("does not exist")) {
         const baseQuery = companyId
           ? sql`SELECT id, company_id, worker_id, name, day_of_week, start_time, end_time, effective_from, effective_to, is_active, created_at, NULL::varchar as job_id FROM recurring_schedules WHERE company_id = ${companyId}`
           : sql`SELECT id, company_id, worker_id, name, day_of_week, start_time, end_time, effective_from, effective_to, is_active, created_at, NULL::varchar as job_id FROM recurring_schedules`;
@@ -1031,7 +1056,7 @@ export class DatabaseStorage implements IStorage {
       const [r] = await db.insert(recurringSchedules).values(data).returning();
       return r;
     } catch (e: any) {
-      if (e.code === "42703") {
+      if (e.code === "42703" || String(e.message).includes("does not exist")) {
         const { jobId, ...rest } = data as any;
         const [r] = await db.insert(recurringSchedules).values(rest).returning();
         return r;
@@ -1044,7 +1069,7 @@ export class DatabaseStorage implements IStorage {
       const [r] = await db.update(recurringSchedules).set(data).where(eq(recurringSchedules.id, id)).returning();
       return r;
     } catch (e: any) {
-      if (e.code === "42703") {
+      if (e.code === "42703" || String(e.message).includes("does not exist")) {
         const { jobId, ...rest } = data as any;
         const [r] = await db.update(recurringSchedules).set(rest).where(eq(recurringSchedules.id, id)).returning();
         return r;
