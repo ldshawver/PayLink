@@ -123,3 +123,6 @@ CREATE TABLE IF NOT EXISTS payroll_payment_records (
 
 -- Make policy_groups.company_id nullable (policy groups are now universal across all companies)
 ALTER TABLE policy_groups ALTER COLUMN company_id DROP NOT NULL;
+
+-- Add job_id to schedules for job cost tracking
+ALTER TABLE schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR REFERENCES jobs(id);
