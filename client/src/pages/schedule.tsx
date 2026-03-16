@@ -1330,12 +1330,12 @@ export default function SchedulePage() {
                         onValueChange={(v) => setRecurringForm((f) => ({ ...f, workerId: v }))}
                       >
                         <SelectTrigger data-testid="select-recurring-worker">
-                          <SelectValue placeholder="Select employee" />
+                          <SelectValue placeholder="Select employee or contractor" />
                         </SelectTrigger>
                         <SelectContent>
-                          {workers.map((w) => (
+                          {workers.sort((a, b) => `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`)).map((w) => (
                             <SelectItem key={w.id} value={w.id}>
-                              {w.lastName}, {w.firstName}
+                              {w.lastName}, {w.firstName} {w.workerType === "contractor" ? "(Contractor)" : ""}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -1510,10 +1510,10 @@ export default function SchedulePage() {
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-muted-foreground">Employee</label>
                   <Select value={editRecurringForm.workerId} onValueChange={v => setEditRecurringForm(f => ({ ...f, workerId: v }))}>
-                    <SelectTrigger data-testid="select-edit-recurring-worker"><SelectValue placeholder="Select employee" /></SelectTrigger>
+                    <SelectTrigger data-testid="select-edit-recurring-worker"><SelectValue placeholder="Select employee or contractor" /></SelectTrigger>
                     <SelectContent>
-                      {workers.filter(w => !editRecurringForm.companyId || w.companyId === editRecurringForm.companyId).map(w => (
-                        <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>
+                      {workers.sort((a, b) => `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`)).map(w => (
+                        <SelectItem key={w.id} value={w.id}>{w.lastName}, {w.firstName} {w.workerType === "contractor" ? "(Contractor)" : ""}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
