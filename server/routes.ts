@@ -5,6 +5,8 @@ import bcrypt from "bcrypt";
 import multer from "multer";
 import { sendScheduleEmailNotification, sendScheduleSmsNotification } from "./notifications";
 import path from "path";
+import { db } from "./db";
+import { sql } from "drizzle-orm";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema } from "@shared/schema";
 
 const uploadStorage = multer.diskStorage({
@@ -1102,6 +1104,7 @@ export async function registerRoutes(
       if (!workerId || !companyId || !date || !startTime || !endTime) {
         return res.status(400).json({ message: "Employee, company, date, start time, and end time are required" });
       }
+      try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`); } catch {}
       const data = {
         workerId,
         companyId,
@@ -1157,6 +1160,9 @@ export async function registerRoutes(
       if (!companyId || !startDate || !endDate) {
         return res.status(400).json({ message: "companyId, startDate, endDate required" });
       }
+      // Ensure job_id columns exist — safe no-op if already present, fixes VPS without migration
+      try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`); } catch {}
+      try { await db.execute(sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`); } catch {}
       // Get ALL recurring schedules (no company filter) so we can match by worker's company too
       const allRecurring = await storage.getRecurringSchedules();
       const allWorkers = await storage.getWorkers();
