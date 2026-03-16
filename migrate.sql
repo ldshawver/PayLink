@@ -120,3 +120,6 @@ CREATE TABLE IF NOT EXISTS payroll_payment_records (
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Make policy_groups.company_id nullable (policy groups are now universal across all companies)
+ALTER TABLE policy_groups ALTER COLUMN company_id DROP NOT NULL;

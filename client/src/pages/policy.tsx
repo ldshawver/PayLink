@@ -60,17 +60,15 @@ function PolicyGroupsTab() {
   const [open, setOpen] = useState(false);
   const [editItem, setEditItem] = useState<PolicyGroup | null>(null);
   const defaultForm = {
-    companyId: "", name: "", description: "", isDefault: false,
+    name: "", description: "", isDefault: false,
     regularTimePolicyId: "", overtimePolicyId: "", premiumPolicyId: "",
     mealPolicyId: "", breakPolicyId: "", schedulePolicyId: "",
     exceptionPolicyId: "", accrualPolicyId: "", absencePolicyId: "",
     holidayPolicyId: "", roundingPolicyId: "",
   };
   const [form, setForm] = useState(defaultForm);
-  const [quickSetupCompanyId, setQuickSetupCompanyId] = useState("");
 
   const { data: groups, isLoading } = useQuery<PolicyGroup[]>({ queryKey: ["/api/policy-groups"] });
-  const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: regularTimePolicies } = useQuery<RegularTimePolicy[]>({ queryKey: ["/api/regular-time-policies"] });
   const { data: overtimePolicies } = useQuery<OvertimePolicy[]>({ queryKey: ["/api/overtime-policies"] });
   const { data: premiumPolicies } = useQuery<PremiumPolicy[]>({ queryKey: ["/api/premium-policies"] });
@@ -84,8 +82,8 @@ function PolicyGroupsTab() {
   const { data: roundingPolicies } = useQuery<RoundingPolicy[]>({ queryKey: ["/api/rounding-policies"] });
 
   const quickSetupMutation = useMutation({
-    mutationFn: async (companyId: string) => {
-      const res = await apiRequest("POST", "/api/policy-groups/quick-setup", { companyId });
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/policy-groups/quick-setup", {});
       return res.json();
     },
     onSuccess: (data: any) => {
@@ -99,10 +97,11 @@ function PolicyGroupsTab() {
 
   const mutation = useMutation({
     mutationFn: async (data: typeof form) => {
+      const payload = { ...data, companyId: null };
       if (editItem) {
-        await apiRequest("PATCH", `/api/policy-groups/${editItem.id}`, data);
+        await apiRequest("PATCH", `/api/policy-groups/${editItem.id}`, payload);
       } else {
-        await apiRequest("POST", "/api/policy-groups", data);
+        await apiRequest("POST", "/api/policy-groups", payload);
       }
     },
     onSuccess: () => {
@@ -133,7 +132,7 @@ function PolicyGroupsTab() {
   const handleEdit = (item: PolicyGroup) => {
     setEditItem(item);
     setForm({
-      companyId: item.companyId, name: item.name, description: item.description || "", isDefault: item.isDefault ?? false,
+      name: item.name, description: item.description || "", isDefault: item.isDefault ?? false,
       regularTimePolicyId: item.regularTimePolicyId || "", overtimePolicyId: item.overtimePolicyId || "",
       premiumPolicyId: item.premiumPolicyId || "", mealPolicyId: item.mealPolicyId || "",
       breakPolicyId: item.breakPolicyId || "", schedulePolicyId: item.schedulePolicyId || "",
@@ -181,19 +180,11 @@ function PolicyGroupsTab() {
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Policy Groups</h3>
         <div className="flex items-center gap-2 flex-wrap">
-          <Select value={quickSetupCompanyId} onValueChange={setQuickSetupCompanyId}>
-            <SelectTrigger data-testid="select-policy-group-quick-company" className="w-[180px]">
-              <SelectValue placeholder="Select company" />
-            </SelectTrigger>
-            <SelectContent>
-              {companies?.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
           <Button
             variant="outline"
             data-testid="button-quick-setup-policy-groups"
-            disabled={!quickSetupCompanyId || quickSetupMutation.isPending}
-            onClick={() => quickSetupMutation.mutate(quickSetupCompanyId)}
+            disabled={quickSetupMutation.isPending}
+            onClick={() => quickSetupMutation.mutate()}
           >
             <Zap className="w-4 h-4 mr-1" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
           </Button>
@@ -206,24 +197,9 @@ function PolicyGroupsTab() {
                 <DialogTitle>{editItem ? "Edit Policy Group" : "Add Policy Group"}</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="grid gap-2">
-                    <Label>Company</Label>
-                    <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
-                      <SelectTrigger data-testid="select-policy-group-company">
-                        <SelectValue placeholder="Select company" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {companies?.map((c) => (
-                          <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>Name</Label>
-                    <Input data-testid="input-policy-group-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-                  </div>
+                <div className="grid gap-2">
+                  <Label>Name</Label>
+                  <Input data-testid="input-policy-group-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
                 </div>
                 <div className="grid gap-2">
                   <Label>Description</Label>
@@ -271,7 +247,6 @@ function PolicyGroupsTab() {
                 <TableHead>Description</TableHead>
                 <TableHead>Linked Policies</TableHead>
                 <TableHead>Default</TableHead>
-                <TableHead>Company</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -284,7 +259,6 @@ function PolicyGroupsTab() {
                     <Badge variant="secondary" data-testid={`badge-linked-policies-${g.id}`}>{countLinkedPolicies(g)}/11</Badge>
                   </TableCell>
                   <TableCell>{g.isDefault ? <Badge variant="secondary">Default</Badge> : null}</TableCell>
-                  <TableCell>{companies?.find((c) => c.id === g.companyId)?.name || g.companyId}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
                       <Button size="icon" variant="ghost" data-testid={`button-edit-policy-group-${g.id}`} onClick={() => handleEdit(g)}><Pencil className="w-4 h-4" /></Button>
@@ -294,7 +268,7 @@ function PolicyGroupsTab() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No policy groups yet</TableCell>
+                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">No policy groups yet</TableCell>
                 </TableRow>
               )}
             </TableBody>
