@@ -61,6 +61,9 @@ import {
   Download,
   X,
   TrendingUp,
+  Send,
+  AlertTriangle,
+  CheckCircle2,
 } from "lucide-react";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -201,6 +204,14 @@ export default function SchedulePage() {
     startDate: "",
     endDate: "",
   });
+
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishForm, setPublishForm] = useState({
+    companyId: "",
+    startDate: "",
+    endDate: "",
+  });
+  const [publishResult, setPublishResult] = useState<{ published: number; notified: number } | null>(null);
 
   const getLaborWeekRange = () => {
     const now = new Date();
@@ -463,6 +474,30 @@ export default function SchedulePage() {
     },
   });
 
+  const publishMutation = useMutation({
+    mutationFn: async (data: typeof publishForm) => {
+      const res = await apiRequest("POST", "/api/schedules/publish", data);
+      const json = await res.json();
+      return json;
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
+      setPublishResult({ published: data.published, notified: data.notified });
+      if (data.published === 0) {
+        toast({ title: "No draft schedules found", description: "All schedules in that range are already published.", variant: "default" });
+      } else {
+        toast({ 
+          title: "Schedule Published!", 
+          description: `Published ${data.published} shift(s) and notified ${data.notified} worker(s).`,
+          variant: "default"
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error publishing schedule", description: error.message, variant: "destructive" });
+    },
+  });
+
   const deleteRecurringMutation = useMutation({
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/recurring-schedules/${id}`);
@@ -559,6 +594,16 @@ export default function SchedulePage() {
   }, [dailyTotals]);
 
   const isLoading = schedulesLoading || workersLoading || companiesLoading;
+
+  // Count draft shifts in the currently visible date range
+  const visibleDraftCount = useMemo(() => {
+    const dateSet = new Set(dateStrings);
+    return schedules.filter(s =>
+      s.status === "draft" &&
+      dateSet.has(s.date) &&
+      (selectedCompany === "all" || s.companyId === selectedCompany)
+    ).length;
+  }, [schedules, dateStrings, selectedCompany]);
 
   return (
     <div className="p-4 md:p-6 space-y-4">
@@ -774,6 +819,157 @@ export default function SchedulePage() {
               <Button variant="outline" size="icon" onClick={handlePrint} data-testid="button-print-schedule">
                 <Printer className="h-4 w-4" />
               </Button>
+
+              {isAdminOrManager && (
+                <Dialog open={publishOpen} onOpenChange={(o) => { setPublishOpen(o); if (!o) { setPublishResult(null); } }}>
+                  <DialogTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="relative border-emerald-500 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-400 dark:text-emerald-400 dark:hover:bg-emerald-950"
+                      data-testid="button-publish-schedule"
+                      onClick={() => {
+                        // Pre-populate with current view's date range
+                        const first = dateStrings[0] || "";
+                        const last = dateStrings[dateStrings.length - 1] || "";
+                        setPublishForm(f => ({
+                          ...f,
+                          companyId: selectedCompany === "all" ? (companies[0]?.id || "") : selectedCompany,
+                          startDate: first,
+                          endDate: last,
+                        }));
+                        setPublishResult(null);
+                      }}
+                    >
+                      <Send className="h-4 w-4 mr-1" />
+                      Publish Schedule
+                      {visibleDraftCount > 0 && (
+                        <Badge className="ml-1.5 h-4 px-1 text-[10px] bg-amber-500 hover:bg-amber-500 text-white border-0">
+                          {visibleDraftCount}
+                        </Badge>
+                      )}
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-md">
+                    <DialogHeader>
+                      <DialogTitle className="flex items-center gap-2">
+                        <Send className="h-5 w-5 text-emerald-600" />
+                        Publish Schedule
+                      </DialogTitle>
+                    </DialogHeader>
+                    {publishResult ? (
+                      <div className="space-y-4">
+                        <div className="rounded-lg border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 p-4 text-center space-y-2">
+                          <CheckCircle2 className="h-10 w-10 text-emerald-600 mx-auto" />
+                          <div className="font-semibold text-emerald-800 dark:text-emerald-200">Schedule Published!</div>
+                          <div className="text-sm text-emerald-700 dark:text-emerald-300">
+                            {publishResult.published} shift{publishResult.published !== 1 ? "s" : ""} published
+                          </div>
+                          <div className="text-sm text-muted-foreground">
+                            {publishResult.notified > 0
+                              ? `${publishResult.notified} worker${publishResult.notified !== 1 ? "s" : ""} notified via email and SMS`
+                              : "Workers were not notified (email/SMS not configured)"}
+                          </div>
+                        </div>
+                        {publishResult.notified === 0 && (
+                          <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 p-3 flex gap-2">
+                            <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                            <div className="text-xs text-amber-800 dark:text-amber-200">
+                              To enable email & SMS notifications, configure SMTP and Twilio credentials in your environment settings.
+                            </div>
+                          </div>
+                        )}
+                        <DialogClose asChild>
+                          <Button className="w-full" variant="outline">Close</Button>
+                        </DialogClose>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <p className="text-sm text-muted-foreground">
+                          Publishing will mark all <strong>draft</strong> shifts in the selected date range as published and send email + SMS notifications to each employee and contractor on the schedule.
+                        </p>
+                        <div>
+                          <Label>Company</Label>
+                          <Select
+                            value={publishForm.companyId}
+                            onValueChange={(v) => setPublishForm(f => ({ ...f, companyId: v }))}
+                          >
+                            <SelectTrigger data-testid="select-publish-company">
+                              <SelectValue placeholder="Select company" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {companies.map(c => (
+                                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <Label>From Date</Label>
+                            <Input
+                              type="date"
+                              value={publishForm.startDate}
+                              onChange={(e) => setPublishForm(f => ({ ...f, startDate: e.target.value }))}
+                              data-testid="input-publish-start-date"
+                            />
+                          </div>
+                          <div>
+                            <Label>To Date</Label>
+                            <Input
+                              type="date"
+                              value={publishForm.endDate}
+                              onChange={(e) => setPublishForm(f => ({ ...f, endDate: e.target.value }))}
+                              data-testid="input-publish-end-date"
+                            />
+                          </div>
+                        </div>
+                        {(() => {
+                          if (!publishForm.companyId || !publishForm.startDate || !publishForm.endDate) return null;
+                          const rangeStart = publishForm.startDate;
+                          const rangeEnd = publishForm.endDate;
+                          const drafts = schedules.filter(s =>
+                            s.status === "draft" &&
+                            s.companyId === publishForm.companyId &&
+                            s.date >= rangeStart &&
+                            s.date <= rangeEnd
+                          );
+                          const uniqueWorkers = new Set(drafts.map(s => s.workerId)).size;
+                          if (drafts.length === 0) {
+                            return (
+                              <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/30 p-3 flex gap-2 items-start">
+                                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                                <div className="text-xs text-amber-800 dark:text-amber-200">No draft shifts found in this range. All shifts may already be published.</div>
+                              </div>
+                            );
+                          }
+                          return (
+                            <div className="rounded-lg border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30 p-3 text-xs text-emerald-800 dark:text-emerald-200">
+                              <strong>{drafts.length}</strong> draft shift{drafts.length !== 1 ? "s" : ""} for <strong>{uniqueWorkers}</strong> worker{uniqueWorkers !== 1 ? "s" : ""} will be published and notified.
+                            </div>
+                          );
+                        })()}
+                        <DialogFooter>
+                          <DialogClose asChild>
+                            <Button variant="outline">Cancel</Button>
+                          </DialogClose>
+                          <Button
+                            onClick={() => publishMutation.mutate(publishForm)}
+                            disabled={publishMutation.isPending || !publishForm.companyId || !publishForm.startDate || !publishForm.endDate}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                            data-testid="button-confirm-publish"
+                          >
+                            {publishMutation.isPending ? (
+                              <>Publishing...</>
+                            ) : (
+                              <><Send className="h-4 w-4 mr-1" />Publish & Notify</>
+                            )}
+                          </Button>
+                        </DialogFooter>
+                      </div>
+                    )}
+                  </DialogContent>
+                </Dialog>
+              )}
 
               <Dialog open={addScheduleOpen} onOpenChange={setAddScheduleOpen}>
                 <DialogTrigger asChild>
@@ -995,12 +1191,23 @@ export default function SchedulePage() {
                                       {cellSchedules.map((s) => (
                                         <div
                                           key={s.id}
-                                          className={`group relative rounded px-1 py-0.5 text-xs cursor-pointer hover-elevate ${shiftOffers.some(o => o.scheduleId === s.id && (o.status === "open" || o.status === "claimed")) ? "bg-amber-100 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700" : "bg-primary/10"}`}
+                                          className={`group relative rounded px-1 py-0.5 text-xs cursor-pointer hover-elevate ${
+                                            shiftOffers.some(o => o.scheduleId === s.id && (o.status === "open" || o.status === "claimed"))
+                                              ? "bg-amber-100 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700"
+                                              : s.status === "draft"
+                                                ? "bg-primary/10 border border-dashed border-amber-400 dark:border-amber-600"
+                                                : "bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800"
+                                          }`}
                                           data-testid={`shift-${s.id}`}
                                           onClick={() => openEditSchedule(s)}
-                                          title="Click to edit shift"
+                                          title={s.status === "draft" ? "Draft — click to edit" : "Published — click to edit"}
                                         >
-                                          <div className="font-medium pr-5">{s.startTime} - {s.endTime}</div>
+                                          <div className="font-medium pr-5 flex items-center gap-1">
+                                            {s.startTime} - {s.endTime}
+                                            {s.status === "draft" && (
+                                              <span className="text-[9px] font-bold text-amber-600 dark:text-amber-400 uppercase leading-none">draft</span>
+                                            )}
+                                          </div>
                                           {selectedCompany === "all" && (() => {
                                             const co = companies.find(c => c.id === s.companyId);
                                             return co ? <div className="text-[10px] text-indigo-600 dark:text-indigo-400 font-medium leading-tight truncate">{co.name}</div> : null;
