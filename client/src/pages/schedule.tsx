@@ -982,143 +982,10 @@ export default function SchedulePage() {
                 </Dialog>
               )}
 
-              <Dialog open={addScheduleOpen} onOpenChange={setAddScheduleOpen}>
-                <DialogTrigger asChild>
-                  <Button data-testid="button-add-schedule">
-                    <Plus className="h-4 w-4 mr-1" />
-                    Add Shift
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Add Scheduled Shift</DialogTitle>
-                  </DialogHeader>
-                  <div className="space-y-3">
-                    <div>
-                      <Label>Employee</Label>
-                      <Select
-                        value={scheduleForm.workerId}
-                        onValueChange={(v) => setScheduleForm((f) => ({ ...f, workerId: v }))}
-                      >
-                        <SelectTrigger data-testid="select-schedule-worker">
-                          <SelectValue placeholder="Select employee" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {workers.map((w) => (
-                            <SelectItem key={w.id} value={w.id}>
-                              {w.lastName}, {w.firstName}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label>Company</Label>
-                      <Select
-                        value={scheduleForm.companyId}
-                        onValueChange={(v) => setScheduleForm((f) => ({ ...f, companyId: v }))}
-                      >
-                        <SelectTrigger data-testid="select-schedule-company">
-                          <SelectValue placeholder="Select company" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {companies.map((c) => (
-                            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label>Date</Label>
-                      <Input
-                        type="date"
-                        value={scheduleForm.date}
-                        onChange={(e) => setScheduleForm((f) => ({ ...f, date: e.target.value }))}
-                        data-testid="input-schedule-date"
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label>Start Time</Label>
-                        <Input
-                          type="time"
-                          value={scheduleForm.startTime}
-                          onChange={(e) => setScheduleForm((f) => ({ ...f, startTime: e.target.value }))}
-                          data-testid="input-schedule-start-time"
-                        />
-                      </div>
-                      <div>
-                        <Label>End Time</Label>
-                        <Input
-                          type="time"
-                          value={scheduleForm.endTime}
-                          onChange={(e) => setScheduleForm((f) => ({ ...f, endTime: e.target.value }))}
-                          data-testid="input-schedule-end-time"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <Label>Department</Label>
-                      <Select
-                        value={scheduleForm.department || "__none__"}
-                        onValueChange={(v) => setScheduleForm((f) => ({ ...f, department: v === "__none__" ? "" : v }))}
-                      >
-                        <SelectTrigger data-testid="select-schedule-department">
-                          <SelectValue placeholder="Select department (optional)" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">None</SelectItem>
-                          {departments
-                            .filter(d => !d.companyId || d.companyId === scheduleForm.companyId)
-                            .map(d => (
-                              <SelectItem key={d.id} value={d.name}>
-                                {d.name}{!d.companyId ? " (All Companies)" : ""}
-                              </SelectItem>
-                            ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label>Job</Label>
-                      <Select
-                        value={scheduleForm.jobId || "__none__"}
-                        onValueChange={(v) => setScheduleForm((f) => ({ ...f, jobId: v === "__none__" ? "" : v }))}
-                      >
-                        <SelectTrigger data-testid="select-schedule-job">
-                          <SelectValue placeholder="Select job (optional)" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">None</SelectItem>
-                          {jobs
-                            .filter((j: any) => !j.companyId || j.companyId === scheduleForm.companyId)
-                            .map((j: any) => (
-                              <SelectItem key={j.id} value={j.id}>
-                                {j.name}{!j.companyId ? " (All Companies)" : ""}
-                              </SelectItem>
-                            ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label>Note</Label>
-                      <Input
-                        value={scheduleForm.note}
-                        onChange={(e) => setScheduleForm((f) => ({ ...f, note: e.target.value }))}
-                        placeholder="Optional note"
-                        data-testid="input-schedule-note"
-                      />
-                    </div>
-                    <Button
-                      className="w-full"
-                      onClick={() => addScheduleMutation.mutate(scheduleForm)}
-                      disabled={addScheduleMutation.isPending || !scheduleForm.workerId || !scheduleForm.companyId || !scheduleForm.date || !scheduleForm.startTime || !scheduleForm.endTime}
-                      data-testid="button-submit-schedule"
-                    >
-                      {addScheduleMutation.isPending ? "Adding..." : "Add Shift"}
-                    </Button>
-                  </div>
-                </DialogContent>
-              </Dialog>
+              <Button onClick={() => setAddScheduleOpen(true)} data-testid="button-add-schedule">
+                <Plus className="h-4 w-4 mr-1" />
+                Add Shift
+              </Button>
             </div>
           </div>
 
@@ -2120,6 +1987,138 @@ export default function SchedulePage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={addScheduleOpen} onOpenChange={(v) => { setAddScheduleOpen(v); if (!v) setScheduleForm({ workerId: "", companyId: "", date: "", startTime: "", endTime: "", department: "", jobId: "", note: "" }); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Scheduled Shift</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Employee</Label>
+              <Select
+                value={scheduleForm.workerId}
+                onValueChange={(v) => setScheduleForm((f) => ({ ...f, workerId: v }))}
+              >
+                <SelectTrigger data-testid="select-schedule-worker">
+                  <SelectValue placeholder="Select employee" />
+                </SelectTrigger>
+                <SelectContent>
+                  {workers.map((w) => (
+                    <SelectItem key={w.id} value={w.id}>
+                      {w.lastName}, {w.firstName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Company</Label>
+              <Select
+                value={scheduleForm.companyId}
+                onValueChange={(v) => setScheduleForm((f) => ({ ...f, companyId: v }))}
+              >
+                <SelectTrigger data-testid="select-schedule-company">
+                  <SelectValue placeholder="Select company" />
+                </SelectTrigger>
+                <SelectContent>
+                  {companies.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Date</Label>
+              <Input
+                type="date"
+                value={scheduleForm.date}
+                onChange={(e) => setScheduleForm((f) => ({ ...f, date: e.target.value }))}
+                data-testid="input-schedule-date"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label>Start Time</Label>
+                <Input
+                  type="time"
+                  value={scheduleForm.startTime}
+                  onChange={(e) => setScheduleForm((f) => ({ ...f, startTime: e.target.value }))}
+                  data-testid="input-schedule-start-time"
+                />
+              </div>
+              <div>
+                <Label>End Time</Label>
+                <Input
+                  type="time"
+                  value={scheduleForm.endTime}
+                  onChange={(e) => setScheduleForm((f) => ({ ...f, endTime: e.target.value }))}
+                  data-testid="input-schedule-end-time"
+                />
+              </div>
+            </div>
+            <div>
+              <Label>Department</Label>
+              <Select
+                value={scheduleForm.department || "__none__"}
+                onValueChange={(v) => setScheduleForm((f) => ({ ...f, department: v === "__none__" ? "" : v }))}
+              >
+                <SelectTrigger data-testid="select-schedule-department">
+                  <SelectValue placeholder="Select department (optional)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {departments
+                    .filter(d => !d.companyId || d.companyId === scheduleForm.companyId)
+                    .map(d => (
+                      <SelectItem key={d.id} value={d.name}>
+                        {d.name}{!d.companyId ? " (All Companies)" : ""}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Job</Label>
+              <Select
+                value={scheduleForm.jobId || "__none__"}
+                onValueChange={(v) => setScheduleForm((f) => ({ ...f, jobId: v === "__none__" ? "" : v }))}
+              >
+                <SelectTrigger data-testid="select-schedule-job">
+                  <SelectValue placeholder="Select job (optional)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {jobs
+                    .filter((j: any) => !j.companyId || j.companyId === scheduleForm.companyId)
+                    .map((j: any) => (
+                      <SelectItem key={j.id} value={j.id}>
+                        {j.name}{!j.companyId ? " (All Companies)" : ""}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Note</Label>
+              <Input
+                value={scheduleForm.note}
+                onChange={(e) => setScheduleForm((f) => ({ ...f, note: e.target.value }))}
+                placeholder="Optional note"
+                data-testid="input-schedule-note"
+              />
+            </div>
+            <Button
+              className="w-full"
+              onClick={() => addScheduleMutation.mutate(scheduleForm)}
+              disabled={addScheduleMutation.isPending || !scheduleForm.workerId || !scheduleForm.companyId || !scheduleForm.date || !scheduleForm.startTime || !scheduleForm.endTime}
+              data-testid="button-submit-schedule"
+            >
+              {addScheduleMutation.isPending ? "Adding..." : "Add Shift"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={editScheduleOpen} onOpenChange={setEditScheduleOpen}>
         <DialogContent>

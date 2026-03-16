@@ -1098,7 +1098,21 @@ export async function registerRoutes(
 
   app.post("/api/schedules", async (req, res) => {
     try {
-      const schedule = await storage.createSchedule(req.body);
+      const { workerId, companyId, date, startTime, endTime, department, jobId, note } = req.body;
+      if (!workerId || !companyId || !date || !startTime || !endTime) {
+        return res.status(400).json({ message: "Employee, company, date, start time, and end time are required" });
+      }
+      const data = {
+        workerId,
+        companyId,
+        date,
+        startTime,
+        endTime,
+        department: department || null,
+        jobId: jobId || null,
+        note: note || null,
+      };
+      const schedule = await storage.createSchedule(data);
       res.status(201).json(schedule);
     } catch (error) {
       console.error(error);
