@@ -4981,5 +4981,170 @@ export async function registerRoutes(
     }
   });
 
+  // ── Payroll Payment Methods ───────────────────────────────────────────────
+  app.get("/api/payroll-payment-methods", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      res.json(await storage.getPayrollPaymentMethods(companyId));
+    } catch (e) { res.status(500).json({ message: "Failed to fetch payment methods" }); }
+  });
+
+  app.post("/api/payroll-payment-methods", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      res.status(201).json(await storage.createPayrollPaymentMethod(req.body));
+    } catch (e) { res.status(500).json({ message: "Failed to create payment method" }); }
+  });
+
+  app.patch("/api/payroll-payment-methods/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const r = await storage.updatePayrollPaymentMethod(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: "Failed to update payment method" }); }
+  });
+
+  app.delete("/api/payroll-payment-methods/:id", requireRole("admin"), async (req, res) => {
+    try {
+      await storage.deletePayrollPaymentMethod(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete payment method" }); }
+  });
+
+  app.post("/api/payroll-payment-methods/quick-setup", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      const existing = await storage.getPayrollPaymentMethods(companyId);
+      const existingCodes = new Set(existing.filter(e => !e.companyId || e.companyId === companyId).map(e => e.code));
+      const defaults = [
+        { code: "CASH", name: "Cash", category: "cash", isDigitalWallet: false, isBankBased: false, requiresReferenceNumber: false, requiresAccountSelection: true, sortOrder: 1 },
+        { code: "CHECK", name: "Paper Check", category: "check", isDigitalWallet: false, isBankBased: true, requiresReferenceNumber: true, requiresAccountSelection: true, sortOrder: 2 },
+        { code: "ACH", name: "ACH Direct Deposit", category: "ach", isDigitalWallet: false, isBankBased: true, requiresReferenceNumber: true, requiresAccountSelection: true, sortOrder: 3 },
+        { code: "APPLE_PAY", name: "Apple Pay", category: "digital_wallet", isDigitalWallet: true, isBankBased: false, requiresReferenceNumber: false, requiresAccountSelection: true, sortOrder: 4 },
+        { code: "CASH_APP", name: "Cash App", category: "digital_wallet", isDigitalWallet: true, isBankBased: false, requiresReferenceNumber: false, requiresAccountSelection: true, sortOrder: 5 },
+        { code: "PAYPAL", name: "PayPal", category: "digital_wallet", isDigitalWallet: true, isBankBased: false, requiresReferenceNumber: false, requiresAccountSelection: true, sortOrder: 6 },
+        { code: "VENMO", name: "Venmo", category: "digital_wallet", isDigitalWallet: true, isBankBased: false, requiresReferenceNumber: false, requiresAccountSelection: true, sortOrder: 7 },
+        { code: "ZELLE", name: "Zelle", category: "digital_wallet", isDigitalWallet: false, isBankBased: true, requiresReferenceNumber: false, requiresAccountSelection: true, sortOrder: 8 },
+      ];
+      let created = 0;
+      for (const d of defaults) {
+        if (!existingCodes.has(d.code)) {
+          await storage.createPayrollPaymentMethod({ ...d, companyId: companyId || null, active: true });
+          created++;
+        }
+      }
+      res.json({ message: `Quick setup complete. Created ${created} payment method(s).`, created });
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to run quick setup" }); }
+  });
+
+  // ── Funding Accounts ──────────────────────────────────────────────────────
+  app.get("/api/funding-accounts", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      res.json(await storage.getFundingAccounts(companyId));
+    } catch (e) { res.status(500).json({ message: "Failed to fetch funding accounts" }); }
+  });
+
+  app.post("/api/funding-accounts", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      res.status(201).json(await storage.createFundingAccount(req.body));
+    } catch (e) { res.status(500).json({ message: "Failed to create funding account" }); }
+  });
+
+  app.patch("/api/funding-accounts/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const r = await storage.updateFundingAccount(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: "Failed to update funding account" }); }
+  });
+
+  app.delete("/api/funding-accounts/:id", requireRole("admin"), async (req, res) => {
+    try {
+      await storage.deleteFundingAccount(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete funding account" }); }
+  });
+
+  app.post("/api/funding-accounts/quick-setup", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { companyId } = req.body;
+      const existing = await storage.getFundingAccounts(companyId);
+      const existingNames = new Set(existing.filter(e => !e.companyId || e.companyId === companyId).map(e => e.accountName));
+      const defaults = [
+        { accountCode: "OC-001", accountName: "Operating Checking", accountType: "bank_checking", currency: "USD", allowForPayroll: true },
+        { accountCode: "PC-001", accountName: "Payroll Checking", accountType: "bank_checking", currency: "USD", allowForPayroll: true },
+        { accountCode: "CASH-001", accountName: "Petty Cash", accountType: "cash_on_hand", currency: "USD", allowForPayroll: false },
+        { accountCode: "PP-001", accountName: "PayPal Wallet", accountType: "paypal_balance", currency: "USD", allowForPayroll: true },
+        { accountCode: "VB-001", accountName: "Venmo Business", accountType: "venmo_balance", currency: "USD", allowForPayroll: true },
+        { accountCode: "CA-001", accountName: "Cash App Business", accountType: "cash_app_balance", currency: "USD", allowForPayroll: true },
+        { accountCode: "AP-001", accountName: "Apple Pay Linked Account", accountType: "apple_pay_linked", currency: "USD", allowForPayroll: true },
+        { accountCode: "ZL-001", accountName: "Zelle Linked Checking", accountType: "bank_checking", currency: "USD", allowForPayroll: true },
+      ];
+      let created = 0;
+      for (const d of defaults) {
+        if (!existingNames.has(d.accountName)) {
+          await storage.createFundingAccount({ ...d, companyId: companyId || null, active: true, reconciliationEnabled: false, openingBalance: "0" });
+          created++;
+        }
+      }
+      res.json({ message: `Quick setup complete. Created ${created} funding account(s).`, created });
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to run quick setup" }); }
+  });
+
+  // ── Payroll Payment Records ───────────────────────────────────────────────
+  app.get("/api/payroll-payment-records", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const payrollRunId = req.query.payrollRunId as string | undefined;
+      res.json(await storage.getPayrollPaymentRecords(companyId, payrollRunId));
+    } catch (e) { res.status(500).json({ message: "Failed to fetch payment records" }); }
+  });
+
+  app.get("/api/payroll-payment-records/ytd-summary", async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const taxYear = req.query.taxYear ? Number(req.query.taxYear) : new Date().getFullYear();
+      const records = await storage.getPayrollPaymentRecords(companyId);
+      const yearRecords = records.filter(r => r.taxYear === taxYear || (r.payDate && new Date(r.payDate).getFullYear() === taxYear));
+      const byMethod: Record<string, { code: string; name: string; count: number; totalGross: number; totalNet: number; totalTax: number }> = {};
+      const byAccount: Record<string, { name: string; count: number; totalGross: number; totalNet: number }> = {};
+      for (const r of yearRecords) {
+        const mc = r.paymentMethodCode || "UNKNOWN";
+        if (!byMethod[mc]) byMethod[mc] = { code: mc, name: mc, count: 0, totalGross: 0, totalNet: 0, totalTax: 0 };
+        byMethod[mc].count++;
+        byMethod[mc].totalGross += Number(r.grossPayAmount || 0);
+        byMethod[mc].totalNet += Number(r.netPayAmount || 0);
+        byMethod[mc].totalTax += Number(r.employeeTaxWithheld || 0);
+        const fa = r.fundingAccountId || "UNKNOWN";
+        if (!byAccount[fa]) byAccount[fa] = { name: fa, count: 0, totalGross: 0, totalNet: 0 };
+        byAccount[fa].count++;
+        byAccount[fa].totalGross += Number(r.grossPayAmount || 0);
+        byAccount[fa].totalNet += Number(r.netPayAmount || 0);
+      }
+      res.json({ taxYear, totalRecords: yearRecords.length, byMethod: Object.values(byMethod), byAccount: Object.values(byAccount) });
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to fetch YTD summary" }); }
+  });
+
+  app.post("/api/payroll-payment-records", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      res.status(201).json(await storage.createPayrollPaymentRecord(req.body));
+    } catch (e) { res.status(500).json({ message: "Failed to create payment record" }); }
+  });
+
+  app.patch("/api/payroll-payment-records/:id", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const r = await storage.updatePayrollPaymentRecord(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: "Failed to update payment record" }); }
+  });
+
+  app.delete("/api/payroll-payment-records/:id", requireRole("admin"), async (req, res) => {
+    try {
+      await storage.deletePayrollPaymentRecord(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete payment record" }); }
+  });
+
   return httpServer;
 }

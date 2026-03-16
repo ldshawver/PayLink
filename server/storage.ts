@@ -76,6 +76,7 @@ import {
   kpiGroups, qualificationGroups, workerLanguages, workerMemberships,
   stations, secondaryWageGroups, currencies, employeeWageGroups,
   receipts, shiftOffers,
+  payrollPaymentMethods, fundingAccounts, payrollPaymentRecords,
   type WorkerDocument, type InsertWorkerDocument,
   type SavedReport, type InsertSavedReport,
   type Station, type InsertStation,
@@ -88,6 +89,9 @@ import {
   type WorkerMembership, type InsertWorkerMembership,
   type Receipt, type InsertReceipt,
   type ShiftOffer, type InsertShiftOffer,
+  type PayrollPaymentMethod, type InsertPayrollPaymentMethod,
+  type FundingAccount, type InsertFundingAccount,
+  type PayrollPaymentRecord, type InsertPayrollPaymentRecord,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -454,6 +458,22 @@ export interface IStorage {
     totalHoursThisWeek: number;
     overtimeHoursThisWeek: number;
   }>;
+
+  getPayrollPaymentMethods(companyId?: string): Promise<PayrollPaymentMethod[]>;
+  createPayrollPaymentMethod(data: InsertPayrollPaymentMethod): Promise<PayrollPaymentMethod>;
+  updatePayrollPaymentMethod(id: string, data: Partial<PayrollPaymentMethod>): Promise<PayrollPaymentMethod | undefined>;
+  deletePayrollPaymentMethod(id: string): Promise<void>;
+
+  getFundingAccounts(companyId?: string): Promise<FundingAccount[]>;
+  createFundingAccount(data: InsertFundingAccount): Promise<FundingAccount>;
+  updateFundingAccount(id: string, data: Partial<FundingAccount>): Promise<FundingAccount | undefined>;
+  deleteFundingAccount(id: string): Promise<void>;
+
+  getPayrollPaymentRecords(companyId?: string, payrollRunId?: string): Promise<PayrollPaymentRecord[]>;
+  getPayrollPaymentRecord(id: string): Promise<PayrollPaymentRecord | undefined>;
+  createPayrollPaymentRecord(data: InsertPayrollPaymentRecord): Promise<PayrollPaymentRecord>;
+  updatePayrollPaymentRecord(id: string, data: Partial<PayrollPaymentRecord>): Promise<PayrollPaymentRecord | undefined>;
+  deletePayrollPaymentRecord(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1840,6 +1860,61 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteEmployeeWageGroup(id: string): Promise<void> {
     await db.delete(employeeWageGroups).where(eq(employeeWageGroups.id, id));
+  }
+
+  async getPayrollPaymentMethods(companyId?: string): Promise<PayrollPaymentMethod[]> {
+    if (companyId) return db.select().from(payrollPaymentMethods).where(or(eq(payrollPaymentMethods.companyId, companyId), isNull(payrollPaymentMethods.companyId))).orderBy(payrollPaymentMethods.sortOrder);
+    return db.select().from(payrollPaymentMethods).orderBy(payrollPaymentMethods.sortOrder);
+  }
+  async createPayrollPaymentMethod(data: InsertPayrollPaymentMethod): Promise<PayrollPaymentMethod> {
+    const [r] = await db.insert(payrollPaymentMethods).values(data).returning();
+    return r;
+  }
+  async updatePayrollPaymentMethod(id: string, data: Partial<PayrollPaymentMethod>): Promise<PayrollPaymentMethod | undefined> {
+    const [r] = await db.update(payrollPaymentMethods).set({ ...data, updatedAt: new Date() }).where(eq(payrollPaymentMethods.id, id)).returning();
+    return r;
+  }
+  async deletePayrollPaymentMethod(id: string): Promise<void> {
+    await db.delete(payrollPaymentMethods).where(eq(payrollPaymentMethods.id, id));
+  }
+
+  async getFundingAccounts(companyId?: string): Promise<FundingAccount[]> {
+    if (companyId) return db.select().from(fundingAccounts).where(or(eq(fundingAccounts.companyId, companyId), isNull(fundingAccounts.companyId))).orderBy(fundingAccounts.accountName);
+    return db.select().from(fundingAccounts).orderBy(fundingAccounts.accountName);
+  }
+  async createFundingAccount(data: InsertFundingAccount): Promise<FundingAccount> {
+    const [r] = await db.insert(fundingAccounts).values(data).returning();
+    return r;
+  }
+  async updateFundingAccount(id: string, data: Partial<FundingAccount>): Promise<FundingAccount | undefined> {
+    const [r] = await db.update(fundingAccounts).set({ ...data, updatedAt: new Date() }).where(eq(fundingAccounts.id, id)).returning();
+    return r;
+  }
+  async deleteFundingAccount(id: string): Promise<void> {
+    await db.delete(fundingAccounts).where(eq(fundingAccounts.id, id));
+  }
+
+  async getPayrollPaymentRecords(companyId?: string, payrollRunId?: string): Promise<PayrollPaymentRecord[]> {
+    const conditions = [];
+    if (companyId) conditions.push(eq(payrollPaymentRecords.companyId, companyId));
+    if (payrollRunId) conditions.push(eq(payrollPaymentRecords.payrollRunId, payrollRunId));
+    if (conditions.length > 0) return db.select().from(payrollPaymentRecords).where(and(...conditions)).orderBy(desc(payrollPaymentRecords.createdAt));
+    return db.select().from(payrollPaymentRecords).orderBy(desc(payrollPaymentRecords.createdAt));
+  }
+  async getPayrollPaymentRecord(id: string): Promise<PayrollPaymentRecord | undefined> {
+    const [r] = await db.select().from(payrollPaymentRecords).where(eq(payrollPaymentRecords.id, id));
+    return r;
+  }
+  async createPayrollPaymentRecord(data: InsertPayrollPaymentRecord): Promise<PayrollPaymentRecord> {
+    const [r] = await db.insert(payrollPaymentRecords).values(data).returning();
+    return r;
+  }
+  async updatePayrollPaymentRecord(id: string, data: Partial<PayrollPaymentRecord>): Promise<PayrollPaymentRecord | undefined> {
+    const [r] = await db.update(payrollPaymentRecords).set({ ...data, updatedAt: new Date() }).where(eq(payrollPaymentRecords.id, id)).returning();
+    return r;
+  }
+  async deletePayrollPaymentRecord(id: string): Promise<void> {
+    await db.delete(payrollPaymentRecords).where(eq(payrollPaymentRecords.id, id));
   }
 }
 

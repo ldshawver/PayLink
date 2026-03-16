@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Company, Worker, PayrollRun, PayrollItem, PayPeriod, TaxDeduction, RemittanceSource, RemittanceAgency, RemittanceAgencyEvent, PayStubAccount, PayStubAmendment, PayStubTransaction, PayPeriodSchedule, LegalEntity, CheckTemplate } from "@shared/schema";
+import type { Company, Worker, PayrollRun, PayrollItem, PayPeriod, TaxDeduction, RemittanceSource, RemittanceAgency, RemittanceAgencyEvent, PayStubAccount, PayStubAmendment, PayStubTransaction, PayPeriodSchedule, LegalEntity, CheckTemplate, PayrollPaymentMethod, FundingAccount, PayrollPaymentRecord } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -21,7 +21,8 @@ import {
   DollarSign, Clock, Calendar, ChevronDown, ChevronUp, Plus, Download, Printer,
   Calculator, FileText, CreditCard, CalendarDays, Settings, Building, Receipt, Zap,
   ChevronLeft, ChevronRight, Check, AlertCircle, ArrowRight, Pencil, Trash2,
-  Layout, Eye, EyeOff, Image, Save, Copy, ExternalLink, RefreshCw
+  Layout, Eye, EyeOff, Image, Save, Copy, ExternalLink, RefreshCw,
+  Banknote, Wallet, BadgeCheck, CircleDot, ToggleLeft, ToggleRight, BarChart3
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
@@ -1967,10 +1968,15 @@ const PSA_TYPE_ORDER = ["earning", "tax", "deduction", "employer_contribution", 
 function PayStubAccountsTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<PayStubAccount | null>(null);
   const [selectedCompany, setSelectedCompany] = useState<string>("all");
   const [formData, setFormData] = useState({
     companyId: "", legalEntityId: "", name: "", type: "earning", status: "enabled",
     displayOrder: 0, debitAccount: "", creditAccount: "",
+  });
+  const [editFormData, setEditFormData] = useState({
+    name: "", type: "earning", status: "enabled", displayOrder: 0, debitAccount: "", creditAccount: "", legalEntityId: "",
   });
 
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
@@ -2017,6 +2023,39 @@ function PayStubAccountsTab() {
       toast({ title: "Account deleted" });
     },
   });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: typeof editFormData }) => {
+      const res = await apiRequest("PATCH", `/api/pay-stub-accounts/${id}`, {
+        ...data,
+        legalEntityId: data.legalEntityId && data.legalEntityId !== "none" ? data.legalEntityId : null,
+        debitAccount: data.debitAccount || null,
+        creditAccount: data.creditAccount || null,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-stub-accounts"] });
+      toast({ title: "Account updated" });
+      setEditDialogOpen(false);
+      setEditingAccount(null);
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const openEdit = (psa: PayStubAccount) => {
+    setEditingAccount(psa);
+    setEditFormData({
+      name: psa.name,
+      type: psa.type || "earning",
+      status: psa.status || "enabled",
+      displayOrder: psa.displayOrder ?? 0,
+      debitAccount: psa.debitAccount || "",
+      creditAccount: psa.creditAccount || "",
+      legalEntityId: psa.legalEntityId || "",
+    });
+    setEditDialogOpen(true);
+  };
 
   const toggleStatusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
@@ -2222,9 +2261,14 @@ function PayStubAccountsTab() {
                             <TableCell className="text-xs">{psa.debitAccount || "—"}</TableCell>
                             <TableCell className="text-xs">{psa.creditAccount || "—"}</TableCell>
                             <TableCell>
-                              <Button size="icon" variant="ghost" data-testid={`button-delete-psa-${psa.id}`} onClick={() => deleteMutation.mutate(psa.id)}>
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
+                              <div className="flex items-center gap-1">
+                                <Button size="icon" variant="ghost" data-testid={`button-edit-psa-${psa.id}`} onClick={() => openEdit(psa)}>
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                                <Button size="icon" variant="ghost" data-testid={`button-delete-psa-${psa.id}`} onClick={() => deleteMutation.mutate(psa.id)}>
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
                             </TableCell>
                           </TableRow>
                         );
@@ -2237,6 +2281,78 @@ function PayStubAccountsTab() {
           );
         })
       )}
+
+      {/* Edit Dialog */}
+      <Dialog open={editDialogOpen} onOpenChange={v => { setEditDialogOpen(v); if (!v) setEditingAccount(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Edit Pay Stub Account</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input data-testid="input-edit-psa-name" value={editFormData.name} onChange={e => setEditFormData(p => ({ ...p, name: e.target.value }))} />
+            </div>
+            <div className="space-y-2">
+              <Label>Paid By (Legal Entity)</Label>
+              <Select value={editFormData.legalEntityId || "none"} onValueChange={v => setEditFormData(p => ({ ...p, legalEntityId: v }))}>
+                <SelectTrigger data-testid="select-edit-psa-legal-entity"><SelectValue placeholder="Optional" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None</SelectItem>
+                  {legalEntities.map(le => <SelectItem key={le.id} value={le.id}>{le.legalName}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>Type</Label>
+                <Select value={editFormData.type} onValueChange={v => setEditFormData(p => ({ ...p, type: v }))}>
+                  <SelectTrigger data-testid="select-edit-psa-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="earning">Earning</SelectItem>
+                    <SelectItem value="tax">Tax</SelectItem>
+                    <SelectItem value="deduction">Deduction</SelectItem>
+                    <SelectItem value="employer_contribution">Employer Contribution</SelectItem>
+                    <SelectItem value="employee_contribution">Employee Contribution</SelectItem>
+                    <SelectItem value="benefit">Benefit</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={editFormData.status} onValueChange={v => setEditFormData(p => ({ ...p, status: v }))}>
+                  <SelectTrigger data-testid="select-edit-psa-status"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="enabled">Enabled</SelectItem>
+                    <SelectItem value="disabled">Disabled</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Display Order</Label>
+                <Input type="number" data-testid="input-edit-psa-display-order" value={editFormData.displayOrder} onChange={e => setEditFormData(p => ({ ...p, displayOrder: Number(e.target.value) }))} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Debit Account (GL)</Label>
+                <Input data-testid="input-edit-psa-debit" value={editFormData.debitAccount} onChange={e => setEditFormData(p => ({ ...p, debitAccount: e.target.value }))} placeholder="Optional" />
+              </div>
+              <div className="space-y-2">
+                <Label>Credit Account (GL)</Label>
+                <Input data-testid="input-edit-psa-credit" value={editFormData.creditAccount} onChange={e => setEditFormData(p => ({ ...p, creditAccount: e.target.value }))} placeholder="Optional" />
+              </div>
+            </div>
+            <Button
+              className="w-full"
+              data-testid="button-save-edit-psa"
+              disabled={updateMutation.isPending || !editFormData.name}
+              onClick={() => editingAccount && updateMutation.mutate({ id: editingAccount.id, data: editFormData })}
+            >
+              {updateMutation.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -3243,6 +3359,682 @@ function CheckLayoutTab() {
   );
 }
 
+// ── Payment Methods Tab ───────────────────────────────────────────────────────
+const PM_CATEGORY_LABELS: Record<string, string> = { cash: "Cash", check: "Check", ach: "Bank / ACH", digital_wallet: "Digital Wallet", other: "Other" };
+
+function PaymentMethodsTab() {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingMethod, setEditingMethod] = useState<PayrollPaymentMethod | null>(null);
+  const [selectedCompany, setSelectedCompany] = useState<string>("all");
+  const emptyForm = { companyId: "" as string | null, code: "", name: "", category: "other", isDigitalWallet: false, isBankBased: false, requiresReferenceNumber: false, requiresAccountSelection: true, sortOrder: 0 };
+  const [formData, setFormData] = useState(emptyForm);
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: methods = [], isLoading } = useQuery<PayrollPaymentMethod[]>({ queryKey: ["/api/payroll-payment-methods"] });
+
+  const filteredMethods = selectedCompany === "all" ? methods : methods.filter(m => !m.companyId || m.companyId === selectedCompany);
+
+  const saveMutation = useMutation({
+    mutationFn: async (data: typeof formData) => {
+      if (editingMethod) {
+        const res = await apiRequest("PATCH", `/api/payroll-payment-methods/${editingMethod.id}`, { ...data, companyId: data.companyId || null });
+        return res.json();
+      }
+      const res = await apiRequest("POST", "/api/payroll-payment-methods", { ...data, companyId: data.companyId || null });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-payment-methods"] });
+      toast({ title: editingMethod ? "Payment method updated" : "Payment method created" });
+      setDialogOpen(false);
+      setEditingMethod(null);
+      setFormData(emptyForm);
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/payroll-payment-methods/${id}`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/payroll-payment-methods"] }); toast({ title: "Deleted" }); },
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: async ({ id, active }: { id: string; active: boolean }) => { await apiRequest("PATCH", `/api/payroll-payment-methods/${id}`, { active }); },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/payroll-payment-methods"] }),
+  });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async () => { const res = await apiRequest("POST", "/api/payroll-payment-methods/quick-setup", { companyId: selectedCompany !== "all" ? selectedCompany : null }); return res.json(); },
+    onSuccess: (d: any) => { queryClient.invalidateQueries({ queryKey: ["/api/payroll-payment-methods"] }); toast({ title: "Quick Setup Complete", description: d.message }); },
+  });
+
+  const openEdit = (m: PayrollPaymentMethod) => {
+    setEditingMethod(m);
+    setFormData({ companyId: m.companyId || "", code: m.code, name: m.name, category: m.category || "other", isDigitalWallet: m.isDigitalWallet ?? false, isBankBased: m.isBankBased ?? false, requiresReferenceNumber: m.requiresReferenceNumber ?? false, requiresAccountSelection: m.requiresAccountSelection ?? true, sortOrder: m.sortOrder ?? 0 });
+    setDialogOpen(true);
+  };
+
+  if (isLoading) return <Skeleton className="h-64 w-full" />;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <Select value={selectedCompany} onValueChange={setSelectedCompany}>
+          <SelectTrigger className="w-[200px]"><SelectValue placeholder="All companies" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Companies</SelectItem>
+            {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => quickSetupMutation.mutate()} disabled={quickSetupMutation.isPending}>
+            <Zap className="mr-2 h-4 w-4" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup (8 methods)"}
+          </Button>
+          <Dialog open={dialogOpen} onOpenChange={v => { setDialogOpen(v); if (!v) { setEditingMethod(null); setFormData(emptyForm); } }}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-payment-method"><Plus className="mr-2 h-4 w-4" />Add Method</Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-lg">
+              <DialogHeader><DialogTitle>{editingMethod ? "Edit Payment Method" : "Add Payment Method"}</DialogTitle></DialogHeader>
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Code</Label>
+                    <Input placeholder="e.g. ACH" value={formData.code} onChange={e => setFormData(p => ({ ...p, code: e.target.value.toUpperCase() }))} data-testid="input-pm-code" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Name</Label>
+                    <Input placeholder="e.g. ACH Direct Deposit" value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} data-testid="input-pm-name" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Category</Label>
+                    <Select value={formData.category} onValueChange={v => setFormData(p => ({ ...p, category: v }))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {Object.entries(PM_CATEGORY_LABELS).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Company (optional)</Label>
+                    <Select value={formData.companyId || "global"} onValueChange={v => setFormData(p => ({ ...p, companyId: v === "global" ? null : v }))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="global">Global (all companies)</SelectItem>
+                        {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Sort Order</Label>
+                    <Input type="number" value={formData.sortOrder} onChange={e => setFormData(p => ({ ...p, sortOrder: Number(e.target.value) }))} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    { key: "isDigitalWallet", label: "Digital Wallet" },
+                    { key: "isBankBased", label: "Bank-Based" },
+                    { key: "requiresReferenceNumber", label: "Requires Reference #" },
+                    { key: "requiresAccountSelection", label: "Requires Account Selection" },
+                  ] as const).map(({ key, label }) => (
+                    <label key={key} className="flex items-center gap-2 cursor-pointer text-sm">
+                      <Checkbox checked={!!formData[key]} onCheckedChange={v => setFormData(p => ({ ...p, [key]: !!v }))} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+                <Button className="w-full" disabled={saveMutation.isPending || !formData.code || !formData.name} onClick={() => saveMutation.mutate(formData)} data-testid="button-save-pm">
+                  {saveMutation.isPending ? "Saving..." : editingMethod ? "Save Changes" : "Create Method"}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </div>
+
+      {filteredMethods.length === 0 ? (
+        <Card><CardContent className="p-8 text-center">
+          <CreditCard className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+          <p className="text-muted-foreground mb-2">No payment methods configured.</p>
+          <p className="text-sm text-muted-foreground">Use Quick Setup to seed the 8 standard methods (Cash, Check, ACH, Apple Pay, Cash App, PayPal, Venmo, Zelle).</p>
+        </CardContent></Card>
+      ) : (
+        <Card><CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Code</TableHead>
+                <TableHead>Name</TableHead>
+                <TableHead>Category</TableHead>
+                <TableHead>Flags</TableHead>
+                <TableHead>Order</TableHead>
+                <TableHead>Company</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="w-24">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredMethods.map(m => (
+                <TableRow key={m.id} data-testid={`row-pm-${m.id}`}>
+                  <TableCell><Badge variant="outline" className="font-mono text-xs">{m.code}</Badge></TableCell>
+                  <TableCell className="font-medium">{m.name}</TableCell>
+                  <TableCell className="text-sm">{PM_CATEGORY_LABELS[m.category || "other"] || m.category}</TableCell>
+                  <TableCell className="text-xs space-x-1">
+                    {m.isDigitalWallet && <Badge variant="secondary" className="text-xs">Digital</Badge>}
+                    {m.isBankBased && <Badge variant="secondary" className="text-xs">Bank</Badge>}
+                    {m.requiresReferenceNumber && <Badge variant="outline" className="text-xs">Ref#</Badge>}
+                  </TableCell>
+                  <TableCell className="text-sm">{m.sortOrder ?? 0}</TableCell>
+                  <TableCell className="text-sm">{m.companyId ? (companies.find(c => c.id === m.companyId)?.name || "—") : <span className="text-muted-foreground italic text-xs">Global</span>}</TableCell>
+                  <TableCell>
+                    <button onClick={() => toggleMutation.mutate({ id: m.id, active: !m.active })} className="cursor-pointer" data-testid={`toggle-pm-${m.id}`}>
+                      <Badge variant={m.active ? "default" : "outline"} className="cursor-pointer text-xs">{m.active ? "Active" : "Inactive"}</Badge>
+                    </button>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      <Button size="icon" variant="ghost" onClick={() => openEdit(m)} data-testid={`button-edit-pm-${m.id}`}><Pencil className="h-4 w-4" /></Button>
+                      <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(m.id)} data-testid={`button-delete-pm-${m.id}`}><Trash2 className="h-4 w-4" /></Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent></Card>
+      )}
+    </div>
+  );
+}
+
+// ── Funding Accounts Tab ──────────────────────────────────────────────────────
+const FA_TYPE_LABELS: Record<string, string> = {
+  bank_checking: "Bank Checking", bank_savings: "Bank Savings", cash_on_hand: "Cash on Hand",
+  paypal_balance: "PayPal Balance", venmo_balance: "Venmo Balance", cash_app_balance: "Cash App Balance",
+  apple_pay_linked: "Apple Pay Linked", clearing_account: "Clearing Account",
+};
+
+function FundingAccountsTab() {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<FundingAccount | null>(null);
+  const [selectedCompany, setSelectedCompany] = useState<string>("all");
+  const emptyForm = { companyId: "" as string | null, accountCode: "", accountName: "", accountType: "bank_checking", institutionName: "", maskedIdentifier: "", currency: "USD", allowForPayroll: true, reconciliationEnabled: false, openingBalance: "0", notes: "" };
+  const [formData, setFormData] = useState(emptyForm);
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: accounts = [], isLoading } = useQuery<FundingAccount[]>({ queryKey: ["/api/funding-accounts"] });
+
+  const filteredAccounts = selectedCompany === "all" ? accounts : accounts.filter(a => !a.companyId || a.companyId === selectedCompany);
+
+  const saveMutation = useMutation({
+    mutationFn: async (data: typeof formData) => {
+      if (editingAccount) {
+        const res = await apiRequest("PATCH", `/api/funding-accounts/${editingAccount.id}`, { ...data, companyId: data.companyId || null });
+        return res.json();
+      }
+      const res = await apiRequest("POST", "/api/funding-accounts", { ...data, companyId: data.companyId || null });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/funding-accounts"] });
+      toast({ title: editingAccount ? "Funding account updated" : "Funding account created" });
+      setDialogOpen(false);
+      setEditingAccount(null);
+      setFormData(emptyForm);
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/funding-accounts/${id}`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/funding-accounts"] }); toast({ title: "Deleted" }); },
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: async ({ id, active }: { id: string; active: boolean }) => { await apiRequest("PATCH", `/api/funding-accounts/${id}`, { active }); },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/funding-accounts"] }),
+  });
+
+  const quickSetupMutation = useMutation({
+    mutationFn: async () => { const res = await apiRequest("POST", "/api/funding-accounts/quick-setup", { companyId: selectedCompany !== "all" ? selectedCompany : null }); return res.json(); },
+    onSuccess: (d: any) => { queryClient.invalidateQueries({ queryKey: ["/api/funding-accounts"] }); toast({ title: "Quick Setup Complete", description: d.message }); },
+  });
+
+  const openEdit = (a: FundingAccount) => {
+    setEditingAccount(a);
+    setFormData({ companyId: a.companyId || "", accountCode: a.accountCode || "", accountName: a.accountName, accountType: a.accountType || "bank_checking", institutionName: a.institutionName || "", maskedIdentifier: a.maskedIdentifier || "", currency: a.currency || "USD", allowForPayroll: a.allowForPayroll ?? true, reconciliationEnabled: a.reconciliationEnabled ?? false, openingBalance: String(a.openingBalance || "0"), notes: a.notes || "" });
+    setDialogOpen(true);
+  };
+
+  if (isLoading) return <Skeleton className="h-64 w-full" />;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <Select value={selectedCompany} onValueChange={setSelectedCompany}>
+          <SelectTrigger className="w-[200px]"><SelectValue placeholder="All companies" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Companies</SelectItem>
+            {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => quickSetupMutation.mutate()} disabled={quickSetupMutation.isPending}>
+            <Zap className="mr-2 h-4 w-4" />{quickSetupMutation.isPending ? "Setting up..." : "Quick Setup (8 accounts)"}
+          </Button>
+          <Dialog open={dialogOpen} onOpenChange={v => { setDialogOpen(v); if (!v) { setEditingAccount(null); setFormData(emptyForm); } }}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-funding-account"><Plus className="mr-2 h-4 w-4" />Add Account</Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-lg">
+              <DialogHeader><DialogTitle>{editingAccount ? "Edit Funding Account" : "Add Funding Account"}</DialogTitle></DialogHeader>
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Account Code</Label>
+                    <Input placeholder="e.g. PC-001" value={formData.accountCode} onChange={e => setFormData(p => ({ ...p, accountCode: e.target.value }))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Account Name *</Label>
+                    <Input placeholder="e.g. Payroll Checking" value={formData.accountName} onChange={e => setFormData(p => ({ ...p, accountName: e.target.value }))} data-testid="input-fa-name" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Account Type</Label>
+                    <Select value={formData.accountType} onValueChange={v => setFormData(p => ({ ...p, accountType: v }))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {Object.entries(FA_TYPE_LABELS).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Company (optional)</Label>
+                    <Select value={formData.companyId || "global"} onValueChange={v => setFormData(p => ({ ...p, companyId: v === "global" ? null : v }))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="global">Global (all companies)</SelectItem>
+                        {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Institution Name</Label>
+                    <Input placeholder="e.g. Chase Bank" value={formData.institutionName} onChange={e => setFormData(p => ({ ...p, institutionName: e.target.value }))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Masked Identifier</Label>
+                    <Input placeholder="e.g. ••••4321" value={formData.maskedIdentifier} onChange={e => setFormData(p => ({ ...p, maskedIdentifier: e.target.value }))} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Currency</Label>
+                    <Select value={formData.currency} onValueChange={v => setFormData(p => ({ ...p, currency: v }))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="USD">USD</SelectItem>
+                        <SelectItem value="CAD">CAD</SelectItem>
+                        <SelectItem value="EUR">EUR</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Opening Balance</Label>
+                    <Input type="number" value={formData.openingBalance} onChange={e => setFormData(p => ({ ...p, openingBalance: e.target.value }))} />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Notes</Label>
+                  <Textarea value={formData.notes} onChange={e => setFormData(p => ({ ...p, notes: e.target.value }))} rows={2} />
+                </div>
+                <div className="flex gap-6">
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <Checkbox checked={formData.allowForPayroll} onCheckedChange={v => setFormData(p => ({ ...p, allowForPayroll: !!v }))} />
+                    Allow for Payroll
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <Checkbox checked={formData.reconciliationEnabled} onCheckedChange={v => setFormData(p => ({ ...p, reconciliationEnabled: !!v }))} />
+                    Reconciliation Enabled
+                  </label>
+                </div>
+                <Button className="w-full" disabled={saveMutation.isPending || !formData.accountName} onClick={() => saveMutation.mutate(formData)} data-testid="button-save-fa">
+                  {saveMutation.isPending ? "Saving..." : editingAccount ? "Save Changes" : "Create Account"}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </div>
+
+      {filteredAccounts.length === 0 ? (
+        <Card><CardContent className="p-8 text-center">
+          <Banknote className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+          <p className="text-muted-foreground mb-2">No funding accounts configured.</p>
+          <p className="text-sm text-muted-foreground">Use Quick Setup to seed 8 standard accounts (Operating Checking, Payroll Checking, digital wallets, etc.).</p>
+        </CardContent></Card>
+      ) : (
+        <Card><CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Code</TableHead>
+                <TableHead>Account Name</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Institution</TableHead>
+                <TableHead>Identifier</TableHead>
+                <TableHead>Currency</TableHead>
+                <TableHead>Payroll</TableHead>
+                <TableHead>Company</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="w-24">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredAccounts.map(a => (
+                <TableRow key={a.id} data-testid={`row-fa-${a.id}`}>
+                  <TableCell><span className="font-mono text-xs">{a.accountCode || "—"}</span></TableCell>
+                  <TableCell className="font-medium">{a.accountName}</TableCell>
+                  <TableCell className="text-sm">{FA_TYPE_LABELS[a.accountType || ""] || a.accountType}</TableCell>
+                  <TableCell className="text-sm">{a.institutionName || "—"}</TableCell>
+                  <TableCell className="text-sm">{a.maskedIdentifier || "—"}</TableCell>
+                  <TableCell className="text-sm">{a.currency || "USD"}</TableCell>
+                  <TableCell>{a.allowForPayroll ? <Check className="h-4 w-4 text-green-600" /> : <span className="text-muted-foreground text-xs">No</span>}</TableCell>
+                  <TableCell className="text-sm">{a.companyId ? (companies.find(c => c.id === a.companyId)?.name || "—") : <span className="text-muted-foreground italic text-xs">Global</span>}</TableCell>
+                  <TableCell>
+                    <button onClick={() => toggleMutation.mutate({ id: a.id, active: !a.active })} className="cursor-pointer">
+                      <Badge variant={a.active ? "default" : "outline"} className="cursor-pointer text-xs">{a.active ? "Active" : "Inactive"}</Badge>
+                    </button>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      <Button size="icon" variant="ghost" onClick={() => openEdit(a)} data-testid={`button-edit-fa-${a.id}`}><Pencil className="h-4 w-4" /></Button>
+                      <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(a.id)} data-testid={`button-delete-fa-${a.id}`}><Trash2 className="h-4 w-4" /></Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent></Card>
+      )}
+    </div>
+  );
+}
+
+// ── Payment Records Tab ───────────────────────────────────────────────────────
+const PR_STATUS_COLORS: Record<string, string> = { pending: "outline", processing: "secondary", paid: "default", cleared: "default", failed: "destructive", voided: "outline", reversed: "destructive", partial: "secondary" };
+
+function PaymentRecordsTab() {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<PayrollPaymentRecord | null>(null);
+  const [filterCompany, setFilterCompany] = useState<string>("all");
+  const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [ytdYear, setYtdYear] = useState(new Date().getFullYear());
+
+  const emptyForm = {
+    companyId: "" as string | null, payrollRunId: "" as string | null, payrollItemId: "" as string | null,
+    workerId: "" as string | null, payDate: "", payPeriodStart: "", payPeriodEnd: "", taxYear: new Date().getFullYear(),
+    grossPayAmount: "", taxableWagesAmount: "", employeeTaxWithheld: "", employerTaxAmount: "", netPayAmount: "",
+    paymentMethodId: "" as string | null, fundingAccountId: "" as string | null, paymentMethodCode: "",
+    status: "pending", paymentReference: "", checkNumber: "", memo: "",
+  };
+  const [formData, setFormData] = useState(emptyForm);
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
+  const { data: runs = [] } = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"] });
+  const { data: methods = [] } = useQuery<PayrollPaymentMethod[]>({ queryKey: ["/api/payroll-payment-methods"] });
+  const { data: fundingAccts = [] } = useQuery<FundingAccount[]>({ queryKey: ["/api/funding-accounts"] });
+  const { data: records = [], isLoading } = useQuery<PayrollPaymentRecord[]>({ queryKey: ["/api/payroll-payment-records"] });
+  const { data: ytdSummary } = useQuery<any>({ queryKey: ["/api/payroll-payment-records/ytd-summary", ytdYear], queryFn: async () => { const res = await fetch(`/api/payroll-payment-records/ytd-summary?taxYear=${ytdYear}`); return res.json(); } });
+
+  const filteredRecords = records.filter(r => {
+    if (filterCompany !== "all" && r.companyId !== filterCompany) return false;
+    if (filterStatus !== "all" && r.status !== filterStatus) return false;
+    return true;
+  });
+
+  const fmt = (v: any) => Number(v || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const saveMutation = useMutation({
+    mutationFn: async (data: typeof formData) => {
+      const payload = { ...data, companyId: data.companyId || null, payrollRunId: data.payrollRunId || null, payrollItemId: data.payrollItemId || null, workerId: data.workerId || null, paymentMethodId: data.paymentMethodId || null, fundingAccountId: data.fundingAccountId || null, payDate: data.payDate || null, payPeriodStart: data.payPeriodStart || null, payPeriodEnd: data.payPeriodEnd || null };
+      if (editingRecord) { const res = await apiRequest("PATCH", `/api/payroll-payment-records/${editingRecord.id}`, payload); return res.json(); }
+      const res = await apiRequest("POST", "/api/payroll-payment-records", payload);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-payment-records"] });
+      toast({ title: editingRecord ? "Record updated" : "Payment record created" });
+      setDialogOpen(false);
+      setEditingRecord(null);
+      setFormData(emptyForm);
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/payroll-payment-records/${id}`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/payroll-payment-records"] }); toast({ title: "Deleted" }); },
+  });
+
+  const voidMutation = useMutation({
+    mutationFn: async (id: string) => { const res = await apiRequest("PATCH", `/api/payroll-payment-records/${id}`, { status: "voided", voidedAt: new Date().toISOString() }); return res.json(); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/payroll-payment-records"] }); toast({ title: "Payment record voided" }); },
+  });
+
+  const openEdit = (r: PayrollPaymentRecord) => {
+    setEditingRecord(r);
+    setFormData({ companyId: r.companyId || "", payrollRunId: r.payrollRunId || "", payrollItemId: r.payrollItemId || "", workerId: r.workerId || "", payDate: r.payDate || "", payPeriodStart: r.payPeriodStart || "", payPeriodEnd: r.payPeriodEnd || "", taxYear: r.taxYear || new Date().getFullYear(), grossPayAmount: String(r.grossPayAmount || ""), taxableWagesAmount: String(r.taxableWagesAmount || ""), employeeTaxWithheld: String(r.employeeTaxWithheld || ""), employerTaxAmount: String(r.employerTaxAmount || ""), netPayAmount: String(r.netPayAmount || ""), paymentMethodId: r.paymentMethodId || "", fundingAccountId: r.fundingAccountId || "", paymentMethodCode: r.paymentMethodCode || "", status: r.status || "pending", paymentReference: r.paymentReference || "", checkNumber: r.checkNumber || "", memo: r.memo || "" });
+    setDialogOpen(true);
+  };
+
+  if (isLoading) return <Skeleton className="h-64 w-full" />;
+
+  const workerName = (id: string | null | undefined) => { if (!id) return "—"; const w = workers.find(w => w.id === id); return w ? `${w.firstName} ${w.lastName}` : id; };
+  const methodName = (id: string | null | undefined) => methods.find(m => m.id === id)?.name || id || "—";
+  const accountName = (id: string | null | undefined) => fundingAccts.find(a => a.id === id)?.accountName || id || "—";
+
+  return (
+    <div className="space-y-4">
+      {/* YTD Summary Cards */}
+      {ytdSummary && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold flex items-center gap-2"><BarChart3 className="h-4 w-4" />YTD by Payment Method ({ytdYear})</CardTitle></CardHeader>
+            <CardContent>
+              {ytdSummary.byMethod?.length > 0 ? (
+                <Table>
+                  <TableHeader><TableRow><TableHead>Method</TableHead><TableHead className="text-right">Count</TableHead><TableHead className="text-right">Gross</TableHead><TableHead className="text-right">Net</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {ytdSummary.byMethod.map((m: any) => (
+                      <TableRow key={m.code}><TableCell><Badge variant="outline" className="font-mono text-xs">{m.code}</Badge></TableCell><TableCell className="text-right">{m.count}</TableCell><TableCell className="text-right">${fmt(m.totalGross)}</TableCell><TableCell className="text-right font-medium">${fmt(m.totalNet)}</TableCell></TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : <p className="text-sm text-muted-foreground">No payment data for {ytdYear}.</p>}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold flex items-center gap-2"><Banknote className="h-4 w-4" />YTD by Funding Account ({ytdYear})</CardTitle></CardHeader>
+            <CardContent>
+              {ytdSummary.byAccount?.length > 0 ? (
+                <Table>
+                  <TableHeader><TableRow><TableHead>Account</TableHead><TableHead className="text-right">Count</TableHead><TableHead className="text-right">Gross</TableHead><TableHead className="text-right">Net</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {ytdSummary.byAccount.map((a: any) => (
+                      <TableRow key={a.name}><TableCell className="text-sm">{accountName(a.name)}</TableCell><TableCell className="text-right">{a.count}</TableCell><TableCell className="text-right">${fmt(a.totalGross)}</TableCell><TableCell className="text-right font-medium">${fmt(a.totalNet)}</TableCell></TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : <p className="text-sm text-muted-foreground">No payment data for {ytdYear}.</p>}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Filter + Add bar */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-2">
+          <Select value={filterCompany} onValueChange={setFilterCompany}>
+            <SelectTrigger className="w-[180px]"><SelectValue placeholder="All companies" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={filterStatus} onValueChange={setFilterStatus}>
+            <SelectTrigger className="w-[140px]"><SelectValue placeholder="All statuses" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Statuses</SelectItem>
+              {["pending","processing","paid","cleared","failed","voided","reversed","partial"].map(s => <SelectItem key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={String(ytdYear)} onValueChange={v => setYtdYear(Number(v))}>
+            <SelectTrigger className="w-[100px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {[2024, 2025, 2026, 2027].map(y => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <Dialog open={dialogOpen} onOpenChange={v => { setDialogOpen(v); if (!v) { setEditingRecord(null); setFormData(emptyForm); } }}>
+          <DialogTrigger asChild>
+            <Button data-testid="button-add-payment-record"><Plus className="mr-2 h-4 w-4" />Record Payment</Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader><DialogTitle>{editingRecord ? "Edit Payment Record" : "Record Payroll Payment"}</DialogTitle></DialogHeader>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Company</Label>
+                  <Select value={formData.companyId || "none"} onValueChange={v => setFormData(p => ({ ...p, companyId: v === "none" ? null : v }))}>
+                    <SelectTrigger><SelectValue placeholder="Select company" /></SelectTrigger>
+                    <SelectContent><SelectItem value="none">None</SelectItem>{companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Employee</Label>
+                  <Select value={formData.workerId || "none"} onValueChange={v => setFormData(p => ({ ...p, workerId: v === "none" ? null : v }))}>
+                    <SelectTrigger><SelectValue placeholder="Select employee" /></SelectTrigger>
+                    <SelectContent><SelectItem value="none">None</SelectItem>{workers.map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2"><Label>Pay Date</Label><Input type="date" value={formData.payDate} onChange={e => setFormData(p => ({ ...p, payDate: e.target.value }))} /></div>
+                <div className="space-y-2"><Label>Period Start</Label><Input type="date" value={formData.payPeriodStart} onChange={e => setFormData(p => ({ ...p, payPeriodStart: e.target.value }))} /></div>
+                <div className="space-y-2"><Label>Period End</Label><Input type="date" value={formData.payPeriodEnd} onChange={e => setFormData(p => ({ ...p, payPeriodEnd: e.target.value }))} /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Payment Method</Label>
+                  <Select value={formData.paymentMethodId || "none"} onValueChange={v => { const m = methods.find(m => m.id === v); setFormData(p => ({ ...p, paymentMethodId: v === "none" ? null : v, paymentMethodCode: m?.code || "" })); }}>
+                    <SelectTrigger><SelectValue placeholder="Select method" /></SelectTrigger>
+                    <SelectContent><SelectItem value="none">None</SelectItem>{methods.map(m => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Funding Account</Label>
+                  <Select value={formData.fundingAccountId || "none"} onValueChange={v => setFormData(p => ({ ...p, fundingAccountId: v === "none" ? null : v }))}>
+                    <SelectTrigger><SelectValue placeholder="Select account" /></SelectTrigger>
+                    <SelectContent><SelectItem value="none">None</SelectItem>{fundingAccts.filter(a => a.allowForPayroll && a.active).map(a => <SelectItem key={a.id} value={a.id}>{a.accountName}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2"><Label>Gross Pay</Label><Input type="number" value={formData.grossPayAmount} onChange={e => setFormData(p => ({ ...p, grossPayAmount: e.target.value }))} /></div>
+                <div className="space-y-2"><Label>Tax Withheld</Label><Input type="number" value={formData.employeeTaxWithheld} onChange={e => setFormData(p => ({ ...p, employeeTaxWithheld: e.target.value }))} /></div>
+                <div className="space-y-2"><Label>Net Pay</Label><Input type="number" value={formData.netPayAmount} onChange={e => setFormData(p => ({ ...p, netPayAmount: e.target.value }))} /></div>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label>Status</Label>
+                  <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>{["pending","processing","paid","cleared","failed","voided","reversed","partial"].map(s => <SelectItem key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2"><Label>Check Number</Label><Input value={formData.checkNumber} onChange={e => setFormData(p => ({ ...p, checkNumber: e.target.value }))} /></div>
+                <div className="space-y-2"><Label>Reference</Label><Input value={formData.paymentReference} onChange={e => setFormData(p => ({ ...p, paymentReference: e.target.value }))} /></div>
+              </div>
+              <div className="space-y-2"><Label>Memo</Label><Textarea value={formData.memo} onChange={e => setFormData(p => ({ ...p, memo: e.target.value }))} rows={2} /></div>
+              <Button className="w-full" disabled={saveMutation.isPending} onClick={() => saveMutation.mutate(formData)} data-testid="button-save-pr">
+                {saveMutation.isPending ? "Saving..." : editingRecord ? "Save Changes" : "Create Record"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {filteredRecords.length === 0 ? (
+        <Card><CardContent className="p-8 text-center">
+          <FileText className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+          <p className="text-muted-foreground">No payment records found.</p>
+          <p className="text-sm text-muted-foreground mt-1">Use "Record Payment" to log payroll disbursements separate from the payroll calculation.</p>
+        </CardContent></Card>
+      ) : (
+        <Card><CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Pay Date</TableHead>
+                  <TableHead>Employee</TableHead>
+                  <TableHead>Method</TableHead>
+                  <TableHead>Funding Account</TableHead>
+                  <TableHead className="text-right">Gross</TableHead>
+                  <TableHead className="text-right">Tax</TableHead>
+                  <TableHead className="text-right">Net</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Check #</TableHead>
+                  <TableHead className="w-24">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredRecords.map(r => (
+                  <TableRow key={r.id} data-testid={`row-pr-${r.id}`}>
+                    <TableCell className="text-sm">{r.payDate || "—"}</TableCell>
+                    <TableCell className="text-sm font-medium">{workerName(r.workerId)}</TableCell>
+                    <TableCell className="text-sm">{methodName(r.paymentMethodId)}</TableCell>
+                    <TableCell className="text-sm">{accountName(r.fundingAccountId)}</TableCell>
+                    <TableCell className="text-right text-sm">${fmt(r.grossPayAmount)}</TableCell>
+                    <TableCell className="text-right text-sm">${fmt(r.employeeTaxWithheld)}</TableCell>
+                    <TableCell className="text-right text-sm font-medium">${fmt(r.netPayAmount)}</TableCell>
+                    <TableCell>
+                      <Badge variant={(PR_STATUS_COLORS[r.status || "pending"] || "outline") as any} className="text-xs">{r.status || "pending"}</Badge>
+                    </TableCell>
+                    <TableCell className="text-xs">{r.checkNumber || "—"}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        <Button size="icon" variant="ghost" onClick={() => openEdit(r)} data-testid={`button-edit-pr-${r.id}`}><Pencil className="h-4 w-4" /></Button>
+                        {r.status !== "voided" && (
+                          <Button size="icon" variant="ghost" onClick={() => voidMutation.mutate(r.id)} title="Void" data-testid={`button-void-pr-${r.id}`}><AlertCircle className="h-4 w-4 text-amber-500" /></Button>
+                        )}
+                        <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(r.id)} data-testid={`button-delete-pr-${r.id}`}><Trash2 className="h-4 w-4" /></Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent></Card>
+      )}
+    </div>
+  );
+}
+
 export default function PayrollPage() {
   const [activeTab, setActiveTab] = useTabParam();
 
@@ -3259,6 +4051,9 @@ export default function PayrollPage() {
     { value: "remittance-agencies", label: "Remittance Agencies" },
     { value: "remittance-sources", label: "Remittance Sources" },
     { value: "check-layout", label: "Check Layout" },
+    { value: "payment-methods", label: "Payment Methods" },
+    { value: "funding-accounts", label: "Funding Accounts" },
+    { value: "payment-records", label: "Payment Records" },
   ];
 
   return (
@@ -3289,6 +4084,9 @@ export default function PayrollPage() {
         <TabsContent value="remittance-agencies"><RemittanceAgenciesTab /></TabsContent>
         <TabsContent value="remittance-sources"><RemittanceSourcesTab /></TabsContent>
         <TabsContent value="check-layout"><CheckLayoutTab /></TabsContent>
+        <TabsContent value="payment-methods"><PaymentMethodsTab /></TabsContent>
+        <TabsContent value="funding-accounts"><FundingAccountsTab /></TabsContent>
+        <TabsContent value="payment-records"><PaymentRecordsTab /></TabsContent>
       </Tabs>
     </div>
   );
