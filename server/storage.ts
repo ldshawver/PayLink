@@ -767,16 +767,48 @@ export class DatabaseStorage implements IStorage {
       return schedule;
     } catch (e: any) {
       if (e.code === "42703" || String(e.message).includes("does not exist")) {
-        const { jobId, ...rest } = data as any;
-        const [schedule] = await db.insert(schedules).values(rest).returning();
-        return schedule;
+        // Fallback: raw SQL without job_id column in both INSERT and RETURNING
+        const result = await db.execute(sql`
+          INSERT INTO schedules (id, worker_id, company_id, date, start_time, end_time, department, status, note)
+          VALUES (gen_random_uuid(), ${data.workerId}, ${data.companyId}, ${data.date}, ${data.startTime}, ${data.endTime},
+                  ${(data as any).department || null}, ${'draft'}, ${(data as any).note || null})
+          RETURNING id, worker_id, company_id, date, start_time, end_time, department, status, note, created_at, NULL::varchar as job_id
+        `);
+        const r = result.rows[0] as any;
+        return { id: r.id, workerId: r.worker_id, companyId: r.company_id, date: r.date, startTime: r.start_time, endTime: r.end_time, department: r.department, jobId: null, status: r.status, note: r.note, createdAt: r.created_at } as Schedule;
       }
       throw e;
     }
   }
   async updateSchedule(id: string, data: Partial<Schedule>): Promise<Schedule | undefined> {
-    const [schedule] = await db.update(schedules).set(data).where(eq(schedules.id, id)).returning();
-    return schedule;
+    try {
+      const [schedule] = await db.update(schedules).set(data).where(eq(schedules.id, id)).returning();
+      return schedule;
+    } catch (e: any) {
+      if (e.code === "42703" || String(e.message).includes("does not exist")) {
+        // Fallback: build raw SET clause without job_id
+        const { jobId, ...rest } = data as any;
+        const setClauses: string[] = [];
+        const vals: any[] = [];
+        let idx = 1;
+        if (rest.startTime !== undefined) { setClauses.push(`start_time = $${idx++}`); vals.push(rest.startTime); }
+        if (rest.endTime !== undefined) { setClauses.push(`end_time = $${idx++}`); vals.push(rest.endTime); }
+        if (rest.department !== undefined) { setClauses.push(`department = $${idx++}`); vals.push(rest.department || null); }
+        if (rest.status !== undefined) { setClauses.push(`status = $${idx++}`); vals.push(rest.status); }
+        if (rest.note !== undefined) { setClauses.push(`note = $${idx++}`); vals.push(rest.note || null); }
+        if (setClauses.length === 0) {
+          const [s] = await db.execute(sql`SELECT id, worker_id, company_id, date, start_time, end_time, department, status, note, created_at, NULL::varchar as job_id FROM schedules WHERE id = ${id}`).then(r => r.rows);
+          if (!s) return undefined;
+          return { id: (s as any).id, workerId: (s as any).worker_id, companyId: (s as any).company_id, date: (s as any).date, startTime: (s as any).start_time, endTime: (s as any).end_time, department: (s as any).department, jobId: null, status: (s as any).status, note: (s as any).note, createdAt: (s as any).created_at } as Schedule;
+        }
+        vals.push(id);
+        const { rows } = await db.execute(sql.raw(`UPDATE schedules SET ${setClauses.join(', ')} WHERE id = $${idx} RETURNING id, worker_id, company_id, date, start_time, end_time, department, status, note, created_at, NULL::varchar as job_id`, vals));
+        if (!rows[0]) return undefined;
+        const r = rows[0] as any;
+        return { id: r.id, workerId: r.worker_id, companyId: r.company_id, date: r.date, startTime: r.start_time, endTime: r.end_time, department: r.department, jobId: null, status: r.status, note: r.note, createdAt: r.created_at } as Schedule;
+      }
+      throw e;
+    }
   }
   async deleteSchedule(id: string): Promise<void> {
     await db.delete(schedules).where(eq(schedules.id, id));
