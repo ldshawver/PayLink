@@ -15,10 +15,24 @@ function getTransporter() {
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
   const fromAddress = process.env.SMTP_FROM || user || "noreply@paylink.app";
+  const useTls = process.env.SMTP_TLS === "true";
 
   if (!host || !user || !pass) return null;
 
-  return { transporter: nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass } }), fromAddress };
+  // Port 465 = implicit TLS (secure:true). Port 587 with SMTP_TLS=true = STARTTLS (secure:false + requireTLS:true).
+  const secure = port === 465;
+  const transportOptions: any = {
+    host,
+    port,
+    secure,
+    auth: { user, pass },
+  };
+  if (!secure && useTls) {
+    transportOptions.requireTLS = true;
+    transportOptions.tls = { ciphers: "SSLv3", rejectUnauthorized: false };
+  }
+
+  return { transporter: nodemailer.createTransport(transportOptions), fromAddress };
 }
 
 function formatShiftList(shifts: ScheduleNotificationPayload["shifts"]): string {
