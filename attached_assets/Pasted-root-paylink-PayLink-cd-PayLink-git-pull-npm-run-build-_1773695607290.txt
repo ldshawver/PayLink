@@ -1,0 +1,34 @@
+root@paylink:~/PayLink# cd ~/PayLink && git pull && npm run build && pm2 restart paylink
+Already up to date.
+
+> rest-express@1.0.0 build
+> tsx script/build.ts
+
+building client...
+vite v7.3.0 building client environment for production...
+transforming (4) src/App.tsx
+A PostCSS plugin did not pass the `from` option to `postcss.parse`. This may cause imported assets to be incorrectly transformed. If you've recently added a PostCSS plugin that raised this warning, please contact the package author to fix the issue.
+✓ 1763 modules transformed.
+../dist/public/index.html                                                      2.26 kB │ gzip:   0.88 kB
+../dist/public/assets/PayLink_Logo_transparent_1771416877301-C_7uCr63.png    193.11 kB
+../dist/public/assets/index-DruOACmp.css                                      85.53 kB │ gzip:  14.07 kB
+../dist/public/assets/index-DmcF-RdX.js                                    1,214.91 kB │ gzip: 255.27 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 15.13s
+building server...
+
+  dist/index.cjs  1.7mb ⚠️
+
+⚡ Done in 521ms
+Use --update-env to update environment variables
+[PM2] Applying action restartProcessId on app [paylink](ids: [ 0 ])
+[PM2] [paylink](0) ✓
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ 1.0.0   │ fork    │ 2733     │ 0s     │ 5    │ online    │ 0%       │ 14.3mb   │ root     │ disabled │
+└────┴────────────┴──────────
