@@ -1143,8 +1143,16 @@ export async function registerRoutes(
       if (!companyId || !startDate || !endDate) {
         return res.status(400).json({ message: "companyId, startDate, endDate required" });
       }
-      const recurring = await storage.getRecurringSchedules(companyId);
-      const activeRecurring = recurring.filter(r => r.isActive);
+      // Get ALL recurring schedules (no company filter) so we can match by worker's company too
+      const allRecurring = await storage.getRecurringSchedules();
+      const allWorkers = await storage.getWorkers();
+      // Match recurring schedules where the recurring record's companyId matches OR the worker belongs to this company
+      const activeRecurring = allRecurring.filter(r => {
+        if (!r.isActive) return false;
+        if (r.companyId === companyId) return true;
+        const worker = allWorkers.find(w => w.id === r.workerId);
+        return worker?.companyId === companyId;
+      });
       const created: any[] = [];
       const start = new Date(startDate);
       const end = new Date(endDate);
@@ -1182,7 +1190,7 @@ export async function registerRoutes(
         }
         d.setDate(d.getDate() + 1);
       }
-      res.status(201).json({ created: created.length, schedules: created });
+      res.status(201).json({ created: created.length, templatesFound: activeRecurring.length, schedules: created });
     } catch (error) {
       console.error("Schedule generation error:", error);
       res.status(500).json({ message: `Failed to generate schedules: ${error instanceof Error ? error.message : String(error)}` });
