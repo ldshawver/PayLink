@@ -647,6 +647,16 @@ export async function registerRoutes(
         };
       }
 
+      // Load amendments and pay stub accounts for this pay period
+      const allAmendments = await storage.getPayStubAmendments(run.companyId);
+      const periodAmendments = allAmendments.filter(a =>
+        a.status === "active" &&
+        (!a.effectiveDate || (a.effectiveDate >= run.periodStart && a.effectiveDate <= run.periodEnd))
+      );
+      const allPsAccounts = await storage.getPayStubAccounts(run.companyId);
+      const psAccountMap: Record<string, string> = {};
+      for (const acc of allPsAccounts) { psAccountMap[acc.id] = acc.type || "earning"; }
+
       for (const worker of activeWorkers) {
         const workerEntries = entries.filter(e => e.workerId === worker.id);
         let regHrs = 0, otHrs = 0, dtHrs = 0;
@@ -693,6 +703,28 @@ export async function registerRoutes(
           grossPay = regPay + otPay + dtPay;
         }
 
+        // Apply pay stub amendments for this worker in this pay period
+        const workerAmendments = periodAmendments.filter(a => a.workerId === worker.id);
+        let amendmentEarnings = 0;
+        let amendmentDeductions = 0;
+        for (const am of workerAmendments) {
+          let amAmt = 0;
+          if (am.amountType === "percentage") {
+            amAmt = grossPay * (parseFloat(am.percent || "0") / 100);
+          } else if (parseFloat(am.rate || "0") > 0 && parseFloat(am.units || "0") > 0) {
+            amAmt = parseFloat(am.rate) * parseFloat(am.units);
+          } else {
+            amAmt = parseFloat(am.amount || "0");
+          }
+          const accountType = am.payStubAccountId ? (psAccountMap[am.payStubAccountId] || "earning") : "earning";
+          if (accountType === "deduction") {
+            amendmentDeductions += amAmt;
+          } else {
+            amendmentEarnings += amAmt;
+          }
+        }
+        grossPay += amendmentEarnings;
+
         const rate = defaultRate;
 
         const isContractor = worker.workerType === "contractor";
@@ -717,6 +749,8 @@ export async function registerRoutes(
             totalDeductions += parseFloat(ded.rate || "0");
           }
         }
+        // Add amendment-based deductions (e.g. loan repayments, advances)
+        totalDeductions += amendmentDeductions;
 
         const netPay = grossPay - totalDeductions;
         const ytd = existingYtdByWorker[worker.id] || { gross: 0, deductions: 0, net: 0 };
