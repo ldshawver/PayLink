@@ -996,6 +996,10 @@ export default function SchedulePage() {
                                           title="Click to edit shift"
                                         >
                                           <div className="font-medium pr-5">{s.startTime} - {s.endTime}</div>
+                                          {selectedCompany === "all" && (() => {
+                                            const co = companies.find(c => c.id === s.companyId);
+                                            return co ? <div className="text-[10px] text-indigo-600 dark:text-indigo-400 font-medium leading-tight truncate">{co.name}</div> : null;
+                                          })()}
                                           <div className="text-muted-foreground">{parseTimeToHours(s.startTime, s.endTime)}h
                                             {showLaborCosts && isAdminOrManager && (() => {
                                               const worker = workers.find(w => w.id === s.workerId);
