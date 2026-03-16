@@ -716,8 +716,10 @@ export async function registerRoutes(
           } else {
             amAmt = parseFloat(am.amount || "0");
           }
+          // Use explicit amendmentType first, fall back to account type
           const accountType = am.payStubAccountId ? (psAccountMap[am.payStubAccountId] || "earning") : "earning";
-          if (accountType === "deduction") {
+          const effectiveType = (am as any).amendmentType || accountType;
+          if (effectiveType === "deduction") {
             amendmentDeductions += amAmt;
           } else {
             amendmentEarnings += amAmt;
