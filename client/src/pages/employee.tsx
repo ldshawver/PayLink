@@ -2122,7 +2122,7 @@ function EmployeeGroupsTab() {
                 <TableRow key={g.id} data-testid={`row-group-${g.id}`}>
                   <TableCell data-testid={`text-group-name-${g.id}`}>{g.name}</TableCell>
                   <TableCell>{g.parentId ? (groupMap.get(g.parentId) || g.parentId) : "—"}</TableCell>
-                  <TableCell>{companyMap.get(g.companyId) || g.companyId}</TableCell>
+                  <TableCell>{g.companyId ? (companyMap.get(g.companyId) || g.companyId) : <span className="text-xs text-muted-foreground italic">All Companies</span>}</TableCell>
                   <TableCell>{workers.filter(w => w.groupId === g.id).length}</TableCell>
                   <TableCell>
                     <DropdownMenu>
@@ -2134,7 +2134,7 @@ function EmployeeGroupsTab() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem data-testid={`button-edit-group-${g.id}`} onClick={() => {
                           setEditGroup(g);
-                          setForm({ companyId: g.companyId, name: g.name, parentId: g.parentId || "" });
+                          setForm({ companyId: g.companyId || "__universal__", name: g.name, parentId: g.parentId || "" });
                           setEditOpen(true);
                         }}>
                           <Pencil className="mr-2 h-4 w-4" /> Edit
