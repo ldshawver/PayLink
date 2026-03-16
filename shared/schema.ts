@@ -1284,3 +1284,86 @@ export const savedReports = pgTable("saved_reports", {
 export const insertSavedReportSchema = createInsertSchema(savedReports).omit({ id: true, createdAt: true });
 export type SavedReport = typeof savedReports.$inferSelect;
 export type InsertSavedReport = z.infer<typeof insertSavedReportSchema>;
+
+// ── Payroll Payment Methods (company-level lookup) ──────────────────────────
+export const payrollPaymentMethods = pgTable("payroll_payment_methods", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  code: text("code").notNull(),
+  name: text("name").notNull(),
+  category: text("category").default("other"),
+  isDigitalWallet: boolean("is_digital_wallet").default(false),
+  isBankBased: boolean("is_bank_based").default(false),
+  requiresReferenceNumber: boolean("requires_reference_number").default(false),
+  requiresAccountSelection: boolean("requires_account_selection").default(true),
+  active: boolean("active").default(true),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertPayrollPaymentMethodSchema = createInsertSchema(payrollPaymentMethods).omit({ id: true, createdAt: true, updatedAt: true });
+export type PayrollPaymentMethod = typeof payrollPaymentMethods.$inferSelect;
+export type InsertPayrollPaymentMethod = z.infer<typeof insertPayrollPaymentMethodSchema>;
+
+// ── Funding Accounts (company bank/wallet accounts used to fund payroll) ─────
+export const fundingAccounts = pgTable("funding_accounts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  accountCode: text("account_code"),
+  accountName: text("account_name").notNull(),
+  accountType: text("account_type").default("bank_checking"),
+  institutionName: text("institution_name"),
+  maskedIdentifier: text("masked_identifier"),
+  currency: text("currency").default("USD"),
+  active: boolean("active").default(true),
+  allowForPayroll: boolean("allow_for_payroll").default(true),
+  reconciliationEnabled: boolean("reconciliation_enabled").default(false),
+  openingBalance: numeric("opening_balance").default("0"),
+  currentBalance: numeric("current_balance"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertFundingAccountSchema = createInsertSchema(fundingAccounts).omit({ id: true, createdAt: true, updatedAt: true });
+export type FundingAccount = typeof fundingAccounts.$inferSelect;
+export type InsertFundingAccount = z.infer<typeof insertFundingAccountSchema>;
+
+// ── Payroll Payment Records (actual disbursement tracking) ───────────────────
+export const payrollPaymentRecords = pgTable("payroll_payment_records", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  payrollRunId: varchar("payroll_run_id").references(() => payrollRuns.id),
+  payrollItemId: varchar("payroll_item_id").references(() => payrollItems.id),
+  workerId: varchar("worker_id").references(() => workers.id),
+  payDate: date("pay_date"),
+  payPeriodStart: date("pay_period_start"),
+  payPeriodEnd: date("pay_period_end"),
+  taxYear: integer("tax_year"),
+  grossPayAmount: numeric("gross_pay_amount").default("0"),
+  taxableWagesAmount: numeric("taxable_wages_amount").default("0"),
+  employeeTaxWithheld: numeric("employee_tax_withheld").default("0"),
+  employerTaxAmount: numeric("employer_tax_amount").default("0"),
+  netPayAmount: numeric("net_pay_amount").default("0"),
+  paymentMethodId: varchar("payment_method_id").references(() => payrollPaymentMethods.id),
+  fundingAccountId: varchar("funding_account_id").references(() => fundingAccounts.id),
+  paymentMethodCode: text("payment_method_code"),
+  status: text("status").default("pending"),
+  paymentReference: text("payment_reference"),
+  externalTransactionId: text("external_transaction_id"),
+  checkNumber: text("check_number"),
+  memo: text("memo"),
+  initiatedAt: timestamp("initiated_at"),
+  paidAt: timestamp("paid_at"),
+  clearedAt: timestamp("cleared_at"),
+  voidedAt: timestamp("voided_at"),
+  createdBy: varchar("created_by"),
+  updatedBy: varchar("updated_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertPayrollPaymentRecordSchema = createInsertSchema(payrollPaymentRecords).omit({ id: true, createdAt: true, updatedAt: true });
+export type PayrollPaymentRecord = typeof payrollPaymentRecords.$inferSelect;
+export type InsertPayrollPaymentRecord = z.infer<typeof insertPayrollPaymentRecordSchema>;

@@ -1,0 +1,215 @@
+I want to enhance the current payroll structure so payroll disbursements can be tracked by both payment method and source/funding account, with year-to-date totals and reporting.
+
+Goal:
+Build a payroll payment tracking layer that separates payroll calculation from payroll disbursement. I need to track how net payroll was paid and which account it came from, including YTD totals by payment method and funding account.
+
+Requirements:
+
+1. Add a Payment Methods model/table
+Fields:
+- id
+- company_id
+- code
+- name
+- category
+- is_digital_wallet
+- is_bank_based
+- requires_reference_number
+- requires_account_selection
+- active
+- sort_order
+- created_at
+- updated_at
+
+Seed these default methods:
+- CASH = Cash
+- CHECK = Paper Check
+- ACH = ACH Direct Deposit
+- APPLE_PAY = Apple Pay
+- CASH_APP = Cash App
+- PAYPAL = PayPal
+- VENMO = Venmo
+- ZELLE = Zelle
+
+2. Add a Funding Accounts model/table
+Fields:
+- id
+- company_id
+- account_code
+- account_name
+- account_type
+- institution_name
+- masked_identifier
+- currency
+- active
+- allow_for_payroll
+- reconciliation_enabled
+- opening_balance
+- current_balance_optional
+- created_at
+- updated_at
+
+Support account types such as:
+- bank_checking
+- bank_savings
+- cash_on_hand
+- paypal_balance
+- venmo_balance
+- cash_app_balance
+- apple_pay_linked
+- clearing_account
+
+Seed examples:
+- Operating Checking
+- Payroll Checking
+- Petty Cash
+- PayPal Wallet
+- Venmo Business
+- Cash App Business
+- Apple Pay Linked Account
+- Zelle Linked Checking
+
+3. Add a payroll_payment_records table
+This should store actual payroll disbursement records separate from payroll calculation.
+
+Fields:
+- id
+- company_id
+- payroll_run_id
+- payroll_run_employee_id
+- employee_id
+- pay_stub_id
+- pay_date
+- pay_period_start
+- pay_period_end
+- tax_year
+- gross_pay_amount
+- taxable_wages_amount
+- employee_tax_withheld
+- employer_tax_amount
+- net_pay_amount
+- payment_method_id
+- funding_account_id
+- status
+- payment_reference
+- external_transaction_id
+- check_number
+- memo
+- initiated_at
+- paid_at
+- cleared_at
+- voided_at
+- created_by
+- updated_by
+- created_at
+- updated_at
+
+Statuses:
+- pending
+- processing
+- paid
+- cleared
+- failed
+- voided
+- reversed
+- partial
+
+4. Keep payroll calculation separate from payment
+A payroll run should be able to exist before payment is issued.
+Support these states at the payroll run level if not already present:
+- draft
+- approved
+- posted
+- partially_paid
+- paid
+- closed
+
+5. Add validations
+- Cash can only use cash/petty cash style accounts
+- Check can only use checking accounts
+- ACH can only use bank accounts
+- PayPal should use PayPal or linked funding sources
+- Venmo should use Venmo or linked funding sources
+- Cash App should use Cash App or linked funding sources
+- Zelle should use Zelle-linked bank accounts
+- Apple Pay should use Apple Pay linked or card/bank-linked accounts
+
+6. Update payroll payment UI
+When marking payroll as paid, require:
+- payment method dropdown
+- funding account dropdown
+- payment date
+- payment reference
+- check number if applicable
+- memo
+- status
+
+7. Add admin screens
+Create:
+- Payroll > Payment Methods
+- Payroll > Funding Accounts
+
+Allow:
+- activate/deactivate methods
+- create/edit funding accounts
+- set defaults by company
+- set default funding account by payment method
+- map funding accounts to GL accounts if GL exists
+
+8. Add YTD reporting
+Build reports for:
+- Payroll by Payment Method YTD
+- Payroll by Funding Account YTD
+- Employee Payment History
+- Unreconciled Payroll Payments
+- Tax-year payroll summary including gross pay, taxable wages, taxes withheld, net pay, and payment method history
+
+9. Add accounting logic if ledger exists
+When payroll is approved/posted:
+- Dr Payroll Expense
+- Cr withholding/tax payable accounts
+- Cr benefits payable
+- Cr Net Pay Payable
+
+When payroll is actually paid:
+- Dr Net Pay Payable
+- Cr selected funding account
+
+10. Build API/service layer
+Create service methods for:
+- create_payment_method
+- create_funding_account
+- record_payroll_payment
+- void_payroll_payment
+- reconcile_payroll_payment
+- get_ytd_totals_by_payment_method
+- get_ytd_totals_by_funding_account
+- get_employee_payment_history
+
+11. Handle failed and reversed payments
+Do not overwrite payroll records.
+Create a status trail and keep immutable payment history.
+
+12. Prepare for split payments
+Design the service layer so a future payroll payment can be split across multiple methods/accounts even if UI initially supports one method per payment.
+
+13. Add migration and seed scripts
+Generate all migrations needed and seed the default methods and example funding accounts.
+
+14. Preserve backward compatibility
+Do not break current payroll runs, pay stubs, or reports.
+If legacy payroll records do not have payment method/account data, mark them as Unknown/Legacy until updated.
+
+15. Deliverables
+Provide:
+- database migrations
+- models
+- admin UI
+- payroll payment UI changes
+- reports
+- service layer
+- validation rules
+- seed data
+- test coverage
+- sample screenshots or route list
+- notes on where each file was added/changed
