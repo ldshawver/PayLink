@@ -1196,7 +1196,9 @@ export class DatabaseStorage implements IStorage {
 
   async getEmployeeGroups(companyId?: string): Promise<EmployeeGroup[]> {
     if (companyId) {
-      return db.select().from(employeeGroups).where(eq(employeeGroups.companyId, companyId)).orderBy(employeeGroups.name);
+      return db.select().from(employeeGroups).where(
+        or(eq(employeeGroups.companyId, companyId), isNull(employeeGroups.companyId))
+      ).orderBy(employeeGroups.name);
     }
     return db.select().from(employeeGroups).orderBy(employeeGroups.name);
   }

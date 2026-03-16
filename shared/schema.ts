@@ -603,7 +603,7 @@ export const employeeTitles = pgTable("employee_titles", {
 
 export const employeeGroups = pgTable("employee_groups", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   parentId: varchar("parent_id"),
   createdAt: timestamp("created_at").defaultNow(),
