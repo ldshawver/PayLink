@@ -1783,7 +1783,7 @@ function TitlesTab() {
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      await apiRequest("POST", "/api/employee-titles", data);
+      await apiRequest("POST", "/api/employee-titles", { ...data, companyId: data.companyId || null });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/employee-titles"] });
@@ -1798,7 +1798,7 @@ function TitlesTab() {
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof form }) => {
-      await apiRequest("PATCH", `/api/employee-titles/${id}`, data);
+      await apiRequest("PATCH", `/api/employee-titles/${id}`, { ...data, companyId: data.companyId || null });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/employee-titles"] });
@@ -1849,9 +1849,10 @@ function TitlesTab() {
             <div className="grid gap-4 py-4">
               <div className="space-y-2">
                 <Label>Company</Label>
-                <Select value={form.companyId} onValueChange={v => setForm(f => ({ ...f, companyId: v }))}>
+                <Select value={form.companyId || "__universal__"} onValueChange={v => setForm(f => ({ ...f, companyId: v === "__universal__" ? "" : v }))}>
                   <SelectTrigger data-testid="select-title-companyId"><SelectValue placeholder="Select company" /></SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
                     {companies.map(c => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
@@ -1893,7 +1894,7 @@ function TitlesTab() {
               ) : titles.map(t => (
                 <TableRow key={t.id} data-testid={`row-title-${t.id}`}>
                   <TableCell data-testid={`text-title-name-${t.id}`}>{t.name}</TableCell>
-                  <TableCell>{companyMap.get(t.companyId) || t.companyId}</TableCell>
+                  <TableCell>{t.companyId ? (companyMap.get(t.companyId) || t.companyId) : <span className="text-muted-foreground italic text-xs">All Companies</span>}</TableCell>
                   <TableCell>{workers.filter(w => w.titleId === t.id).length}</TableCell>
                   <TableCell>
                     <DropdownMenu>
@@ -1905,7 +1906,7 @@ function TitlesTab() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem data-testid={`button-edit-title-${t.id}`} onClick={() => {
                           setEditTitle(t);
-                          setForm({ companyId: t.companyId, name: t.name });
+                          setForm({ companyId: t.companyId || "", name: t.name });
                           setEditOpen(true);
                         }}>
                           <Pencil className="mr-2 h-4 w-4" /> Edit
@@ -1932,9 +1933,10 @@ function TitlesTab() {
           <div className="grid gap-4 py-4">
             <div className="space-y-2">
               <Label>Company</Label>
-              <Select value={form.companyId} onValueChange={v => setForm(f => ({ ...f, companyId: v }))}>
+              <Select value={form.companyId || "__universal__"} onValueChange={v => setForm(f => ({ ...f, companyId: v === "__universal__" ? "" : v }))}>
                 <SelectTrigger data-testid="select-edit-title-companyId"><SelectValue placeholder="Select company" /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="__universal__">All Companies (Universal)</SelectItem>
                   {companies.map(c => (
                     <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                   ))}
