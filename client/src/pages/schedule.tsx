@@ -965,8 +965,10 @@ export default function SchedulePage() {
                                           key={s.id}
                                           className={`group relative rounded px-1 py-0.5 text-xs cursor-pointer hover-elevate ${shiftOffers.some(o => o.scheduleId === s.id && (o.status === "open" || o.status === "claimed")) ? "bg-amber-100 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700" : "bg-primary/10"}`}
                                           data-testid={`shift-${s.id}`}
+                                          onClick={() => openEditSchedule(s)}
+                                          title="Click to edit shift"
                                         >
-                                          <div className="font-medium">{s.startTime} - {s.endTime}</div>
+                                          <div className="font-medium pr-5">{s.startTime} - {s.endTime}</div>
                                           <div className="text-muted-foreground">{parseTimeToHours(s.startTime, s.endTime)}h
                                             {showLaborCosts && isAdminOrManager && (() => {
                                               const worker = workers.find(w => w.id === s.workerId);
@@ -984,7 +986,10 @@ export default function SchedulePage() {
                                           {shiftOffers.some(o => o.scheduleId === s.id && o.status === "claimed") && (
                                             <div className="text-blue-600 dark:text-blue-400 font-semibold text-[10px]">⚑ Claimed — needs approval</div>
                                           )}
-                                          <div className="invisible group-hover:visible absolute top-0 right-0 flex gap-0.5 z-20">
+                                          {/* Always-visible edit icon in top-right corner */}
+                                          <Pencil className="absolute top-0.5 right-0.5 h-2.5 w-2.5 text-muted-foreground/50 group-hover:text-primary transition-colors" />
+                                          {/* Hover-only offer & delete buttons */}
+                                          <div className="invisible group-hover:visible absolute top-0 right-4 flex gap-0.5 z-20">
                                             <Button
                                               size="icon"
                                               variant="ghost"
@@ -993,14 +998,6 @@ export default function SchedulePage() {
                                               data-testid={`button-offer-shift-${s.id}`}
                                             >
                                               <RefreshCw className="h-3 w-3 text-amber-600" />
-                                            </Button>
-                                            <Button
-                                              size="icon"
-                                              variant="ghost"
-                                              onClick={(e) => { e.stopPropagation(); openEditSchedule(s); }}
-                                              data-testid={`button-edit-shift-${s.id}`}
-                                            >
-                                              <Pencil className="h-3 w-3" />
                                             </Button>
                                             <Button
                                               size="icon"
