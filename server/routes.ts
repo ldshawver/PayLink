@@ -1147,7 +1147,8 @@ export async function registerRoutes(
       const created: any[] = [];
       const start = new Date(startDate);
       const end = new Date(endDate);
-      for (let d = new Date(start.getFullYear(), start.getMonth(), start.getDate()); d <= end; d.setDate(d.getDate() + 1)) {
+      end.setHours(23, 59, 59, 999);
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
         const dayOfWeek = d.getDay();
         const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
         for (const rs of activeRecurring) {
@@ -1167,7 +1168,7 @@ export async function registerRoutes(
       }
       res.status(201).json({ created: created.length, schedules: created });
     } catch (error) {
-      console.error(error);
+      console.error("Schedule generation error:", error);
       res.status(500).json({ message: "Failed to generate schedules" });
     }
   });
