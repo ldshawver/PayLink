@@ -190,69 +190,103 @@ function StubSummarySection({
   return (
     <div style={{ height: "3.667in", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
 
-      {/* ══ ADDRESS STRIP ONLY — CLEAN WINDOWS for mailing ══
-           Contains ONLY mailing addresses: company return address on left,
-           employee mailing address in center. Right side is blank for paystub data below. */}
+      {/* ══ COMBINED SECTION: ADDRESSES (left/center) + PAYSTUB (right) ══
+           Left: company return address | Center: employee address | Right: readable paystub */}
       <div style={{
         flex: 1,
         boxSizing: "border-box",
         display: "flex",
         flexDirection: "row",
-        alignItems: "center",
-        padding: "0.25in 0.35in 0.25in",
-        gap: "0.4in",
+        padding: "0.2in 0.35in",
+        gap: "0.35in",
       }}>
-        {/* FROM — company return address (top envelope window) */}
-        <div style={{ fontSize: "9px", minWidth: "2in", flexShrink: 0 }}>
-          <div style={{ fontWeight: "bold", fontSize: "10px", marginBottom: "1px" }}>{company.name}</div>
-          {company.address && <div style={{ fontSize: "8px" }}>{company.address}</div>}
+        {/* LEFT: FROM address (return window) */}
+        <div style={{ fontSize: "9px", minWidth: "1.95in", flexShrink: 0, paddingTop: "0.15in" }}>
+          <div style={{ fontWeight: "bold", fontSize: "10px", marginBottom: "2px" }}>{company.name}</div>
+          {company.address && <div style={{ fontSize: "8px", lineHeight: "1.1" }}>{company.address}</div>}
           {(company.city || company.state || company.zip) && (
             <div style={{ fontSize: "8px" }}>{[company.city, company.state].filter(Boolean).join(", ")} {company.zip}</div>
           )}
         </div>
 
-        {/* TO — employee mailing address (bottom envelope window) */}
-        <div style={{ fontSize: "10px", flex: 1 }}>
-          <div style={{ fontWeight: "bold", fontSize: "11px", marginBottom: "1px" }}>{worker.firstName} {worker.lastName}</div>
-          {worker.address && <div style={{ fontSize: "9px" }}>{worker.address}</div>}
+        {/* CENTER: TO address (mailing window) */}
+        <div style={{ flex: 1, paddingTop: "0.15in" }}>
+          <div style={{ fontWeight: "bold", fontSize: "11px", marginBottom: "3px" }}>{worker.firstName} {worker.lastName}</div>
+          {worker.address && <div style={{ fontSize: "9px", lineHeight: "1.1" }}>{worker.address}</div>}
           {(worker.city || worker.state || worker.zip) && (
             <div style={{ fontSize: "9px" }}>{[worker.city, worker.state].filter(Boolean).join(", ")} {worker.zip}</div>
           )}
         </div>
 
-        {/* RIGHT SIDE — PAY STUB SUMMARY (between/below windows, not in windows) */}
-        <div style={{ fontSize: "7px", minWidth: "2.2in", flexShrink: 0, paddingLeft: "0.2in" }}>
-          <div style={{ fontWeight: "bold", fontSize: "8px", marginBottom: "2px", borderBottom: "1px solid #000", paddingBottom: "1px" }}>PAY STUB</div>
-          {company.ein && <div style={{ fontSize: "6px", marginBottom: "1px" }}>EIN: {company.ein}</div>}
+        {/* RIGHT: PAYSTUB DETAIL (readable, not in windows) */}
+        <div style={{ minWidth: "2.35in", flexShrink: 0, fontSize: "9px", display: "flex", flexDirection: "column", justifyContent: "flex-start" }}>
+          {/* Header */}
+          <div style={{ fontWeight: "bold", fontSize: "11px", marginBottom: "3px", paddingBottom: "2px", borderBottom: "2px solid #000" }}>
+            PAY STUB
+          </div>
+
+          {/* Employee info line */}
+          <div style={{ fontSize: "8px", marginBottom: "2px", color: "#333" }}>
+            {isContractor ? "Contractor" : "Employee"}: {worker.firstName} {worker.lastName}
+          </div>
+
+          {/* Pay period */}
           {config.showPayPeriod && (
-            <div style={{ fontSize: "6px", marginBottom: "1px" }}>
-              <strong>Pay Period:</strong> {run.periodStart}
+            <div style={{ fontSize: "8px", marginBottom: "2px", color: "#555" }}>
+              Period: {run.periodStart.slice(0, 10)}
             </div>
           )}
-          <div style={{ fontSize: "6px", marginBottom: "1px" }}>
-            <strong>REG:</strong> {fmt(regularHours)}h &nbsp;&nbsp; 
-            {overtimeHours > 0 && <><strong>OT:</strong> {fmt(overtimeHours)}h &nbsp;&nbsp;</>}
-            {doubleTimeHours > 0 && <><strong>DT:</strong> {fmt(doubleTimeHours)}h</>}
-          </div>
-          <div style={{ fontSize: "6px", marginBottom: "1px", borderTop: "1px solid #999", paddingTop: "1px" }}>
-            <strong>GROSS:</strong> ${fmt(grossPay)}
-          </div>
-          <div style={{ fontSize: "6px", marginBottom: "1px" }}>
-            <strong>DEDUCT:</strong> ${fmt(totalDeductions)}
-          </div>
-          <div style={{ fontSize: "7px", fontWeight: "bold", color: "#000" }}>
-            <strong>NET:</strong> ${fmt(netPay)}
-          </div>
-          {config.showYtdTotals && (
-            <>
-              <div style={{ fontSize: "6px", marginTop: "1px", borderTop: "1px solid #ccc", paddingTop: "1px", color: "#555" }}>
-                YTD: ${fmt(item.ytdGross)}
+
+          {/* Hours box */}
+          <div style={{ border: "1px solid #999", padding: "3px", marginBottom: "2px", fontSize: "8px", background: "#f9f9f9" }}>
+            <div style={{ fontWeight: "bold", marginBottom: "1px", fontSize: "9px" }}>HOURS</div>
+            <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ color: "#666", fontSize: "7px" }}>Regular</div>
+                <div style={{ fontWeight: "bold", fontSize: "9px" }}>{fmt(regularHours)}</div>
               </div>
-            </>
+              {overtimeHours > 0 && (
+                <div>
+                  <div style={{ color: "#666", fontSize: "7px" }}>OT</div>
+                  <div style={{ fontWeight: "bold", fontSize: "9px" }}>{fmt(overtimeHours)}</div>
+                </div>
+              )}
+              {doubleTimeHours > 0 && (
+                <div>
+                  <div style={{ color: "#666", fontSize: "7px" }}>DT</div>
+                  <div style={{ fontWeight: "bold", fontSize: "9px" }}>{fmt(doubleTimeHours)}</div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Pay summary box */}
+          <div style={{ border: "1px solid #000", padding: "3px", fontSize: "8px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "2px", paddingBottom: "1px", borderBottom: "1px solid #ccc" }}>
+              <span>Gross:</span>
+              <span style={{ fontWeight: "bold" }}>${fmt(grossPay)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "2px", paddingBottom: "1px", borderBottom: "1px solid #ccc" }}>
+              <span>Deductions:</span>
+              <span style={{ fontWeight: "bold" }}>${fmt(totalDeductions)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "9px", fontWeight: "bold", color: "#000" }}>
+              <span>NET PAY:</span>
+              <span>${fmt(netPay)}</span>
+            </div>
+          </div>
+
+          {/* YTD */}
+          {config.showYtdTotals && (
+            <div style={{ marginTop: "2px", fontSize: "7px", color: "#666", paddingTop: "2px", borderTop: "1px solid #ddd" }}>
+              YTD Gross: ${fmt(item.ytdGross)}
+            </div>
           )}
+
+          {/* SE Tax for contractors */}
           {isContractor && (
-            <div style={{ fontSize: "5px", color: "#2b5ea7", marginTop: "1px", paddingTop: "1px", borderTop: "1px solid #4a90d9" }}>
-              <strong>SE TAX:</strong> ${fmt(totalSeTaxCurrent)}
+            <div style={{ marginTop: "2px", fontSize: "7px", color: "#2b5ea7", paddingTop: "2px", borderTop: "1px solid #4a90d9", paddingBottom: "2px" }}>
+              <strong>SE Tax (ref):</strong> ${fmt(totalSeTaxCurrent)}
             </div>
           )}
         </div>
