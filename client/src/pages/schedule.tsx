@@ -1322,7 +1322,7 @@ export default function SchedulePage() {
 
         <TabsContent value="shifts">
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2">
+            <CardHeader className="flex flex-row items-center justify-between gap-2 flex-wrap">
               <CardTitle className="flex items-center gap-2">
                 <Clock className="h-5 w-5" />
                 Scheduled Shifts
@@ -1339,6 +1339,10 @@ export default function SchedulePage() {
                     ))}
                   </SelectContent>
                 </Select>
+                <Button onClick={() => setAddScheduleOpen(true)} data-testid="button-add-shift-list">
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Shift
+                </Button>
               </div>
             </CardHeader>
             <CardContent>
