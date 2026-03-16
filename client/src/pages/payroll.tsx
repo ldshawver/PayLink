@@ -2924,45 +2924,79 @@ function CheckPreview({ templateType, config, company }: {
 
   const mailingStub = (
     <div className="border border-dashed border-muted-foreground/30 rounded overflow-hidden">
-      <div className="flex h-20">
-        <div className="w-2/5 border-r border-dashed border-muted-foreground/30 p-2 flex flex-col justify-between bg-muted/10">
+      <div className="flex h-24 relative">
+        {/* LEFT: Stacked addresses */}
+        <div className="absolute left-0 top-0 p-2 w-1/2 space-y-3 text-[9px]">
+          {/* Top: Company address */}
           <div>
-            <p className="text-[8px] text-muted-foreground uppercase tracking-wide mb-0.5">From</p>
             <p className="text-[9px] font-semibold">{coName}</p>
             <p className="text-[8px] text-muted-foreground leading-tight">{coAddr}</p>
           </div>
-          <div className="border border-muted-foreground/20 rounded p-1 bg-white/50">
+          {/* Bottom: Employee address (indented) */}
+          <div className="ml-2 border border-muted-foreground/20 rounded p-1 bg-white/50">
             <p className="text-[9px] font-bold">John Doe</p>
-            <p className="text-[8px] text-muted-foreground">456 Employee St</p>
+            <p className="text-[8px] text-muted-foreground leading-tight">456 Employee St</p>
             <p className="text-[8px] text-muted-foreground">City, ST 11111</p>
           </div>
         </div>
-        <div className="flex-1 p-2 space-y-1">
-          <div className="flex justify-between">
-            <p className="text-[9px] font-bold">PAY STUB</p>
-            <p className="text-[8px] text-muted-foreground">Emp #1001</p>
-          </div>
-          {config.showPayPeriod && <p className="text-[8px] text-muted-foreground">Period: Mar 1 – Mar 15, 2026</p>}
-          <div className="grid grid-cols-3 gap-1 pt-1">
-            <div className="text-center border rounded p-0.5">
-              <p className="text-[7px] text-muted-foreground">GROSS</p>
-              <p className="text-[9px] font-bold">$2,580</p>
-            </div>
-            <div className="text-center border rounded p-0.5">
-              <p className="text-[7px] text-muted-foreground">DED</p>
-              <p className="text-[9px] font-bold">$408</p>
-            </div>
-            <div className="text-center border border-primary/40 rounded p-0.5 bg-primary/5">
-              <p className="text-[7px] text-muted-foreground">NET</p>
-              <p className="text-[9px] font-bold">$2,172</p>
+
+        {/* RIGHT: Paystub (starting ~55% left) */}
+        <div className="absolute left-1/2 top-0 p-2 flex-1 space-y-1">
+          <div className="flex justify-between items-start">
+            <p className="text-[10px] font-bold">PAYSTUB</p>
+            <div className="text-[6px] text-muted-foreground text-right">
+              {config.showPayPeriod && <div>Period: Mar 1 – Mar 15, 2026</div>}
+              <div>Pay Date: Mar 20, 2026</div>
             </div>
           </div>
-          {config.showYtdTotals && (
-            <div className="flex gap-2 text-[8px] text-muted-foreground pt-0.5">
-              <span>YTD Gross: $12,000</span>
-              <span>YTD Net: $9,180</span>
+          
+          {/* Earnings table */}
+          <table className="w-full border-collapse text-[7px]">
+            <thead>
+              <tr className="border-b border-foreground">
+                <th className="text-left px-1 text-[6px] font-bold">EARNINGS</th>
+                <th className="text-right px-1 text-[6px] font-bold">HOURS</th>
+                <th className="text-right px-1 text-[6px] font-bold">RATE</th>
+                <th className="text-right px-1 text-[6px] font-bold">CURRENT</th>
+                <th className="text-right px-1 text-[6px] font-bold">YTD</th>
+              </tr>
+            </thead>
+            <tbody className="text-[7px]">
+              <tr>
+                <td className="px-1 text-left">Regular</td>
+                <td className="px-1 text-right">80</td>
+                <td className="px-1 text-right">—</td>
+                <td className="px-1 text-right">—</td>
+                <td className="px-1 text-right">—</td>
+              </tr>
+              <tr className="border-t border-muted-foreground/50">
+                <td className="px-1 text-left font-bold">TOTAL HOURS</td>
+                <td className="px-1 text-right font-bold">80</td>
+                <td className="px-1 text-right">—</td>
+                <td className="px-1 text-right">—</td>
+                <td className="px-1 text-right">—</td>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* Deductions section */}
+          <div className="pt-0.5 space-y-0.5 text-[7px]">
+            <div className="flex justify-between font-bold">
+              <span>GROSS PAY</span>
+              <span>$2,400</span>
+              <span>$12,000</span>
             </div>
-          )}
+            <div className="flex justify-between border-b border-muted-foreground/30 pb-0.5">
+              <span>TOTAL DEDUCTIONS</span>
+              <span>$228</span>
+              <span>$1,140</span>
+            </div>
+            <div className="flex justify-between font-bold text-[8px]">
+              <span>NET PAY</span>
+              <span>$2,172</span>
+              <span>$10,860</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
