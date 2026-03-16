@@ -99,6 +99,18 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Auto-apply safe column additions so VPS stays in sync without manual migrations
+  try {
+    const { db } = await import("./db");
+    const { sql } = await import("drizzle-orm");
+    await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR REFERENCES jobs(id)`);
+    await db.execute(sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR REFERENCES jobs(id)`);
+    await db.execute(sql`ALTER TABLE employee_groups ALTER COLUMN company_id DROP NOT NULL`);
+    console.log("Auto-migration: schema columns verified");
+  } catch (e) {
+    console.log("Auto-migration skipped:", (e as Error).message);
+  }
+
   const { seedDatabase } = await import("./seed");
   try {
     await seedDatabase();
