@@ -223,10 +223,10 @@ export async function registerRoutes(
       const enhancedTotals = Object.values(workerTotals).map(wt => {
         const worker = workerMap[wt.workerId];
         const isContractor = worker?.workerType === "contractor";
-        const deds = companyDeductionsList.filter(d => {
+        // Contractors have no employee withholding — use employee-only deductions for tax calcs
+        const deds = isContractor ? [] : companyDeductionsList.filter(d => {
           const appliesTo = d.appliesTo || "all";
-          if (appliesTo === "employee" && isContractor) return false;
-          if (appliesTo === "contractor" && !isContractor) return false;
+          if (appliesTo === "contractor") return false;
           return true;
         });
 
@@ -249,9 +249,9 @@ export async function registerRoutes(
 
         return {
           ...wt,
-          fedWithholding: gross * fedRate,
-          stateWithholding: gross * stateRate,
-          sdiWithheld: gross * sdiRate,
+          fedWithholding: !isContractor ? gross * fedRate : 0,
+          stateWithholding: !isContractor ? gross * stateRate : 0,
+          sdiWithheld: !isContractor ? gross * sdiRate : 0,
           ssTaxEmployee: !isContractor ? ssTaxableWages * 0.062 : 0,
           ssTaxEmployer: !isContractor ? ssTaxableWages * 0.062 : 0,
           medicareTaxEmployee: !isContractor ? gross * 0.0145 : 0,
@@ -693,14 +693,15 @@ export async function registerRoutes(
         const rate = defaultRate;
 
         const isContractor = worker.workerType === "contractor";
-        const workerDeductions = companyDeductions.filter(d => {
+        // Contractors have NO withholding deductions — SE tax is informational only on their stub.
+        // Only employees have deductions applied.
+        const workerDeductions = isContractor ? [] : companyDeductions.filter(d => {
           if (!d.isActive || d.isEmployerPaid) return false;
           if (d.isReferenceOnly) return false;
           const appliesTo = d.appliesTo || "all";
-          if (appliesTo === "employee" && isContractor) return false;
-          if (appliesTo === "contractor" && !isContractor) return false;
+          if (appliesTo === "contractor") return false;
           const nameLower = d.name.toLowerCase();
-          if (!isContractor && (nameLower.includes("se tax") || nameLower.includes("self-employment") || nameLower.includes("self employment"))) return false;
+          if (nameLower.includes("se tax") || nameLower.includes("self-employment") || nameLower.includes("self employment")) return false;
           return true;
         });
 
@@ -1291,13 +1292,13 @@ export async function registerRoutes(
         if (totalHrs === 0 && worker.payType !== "salary") continue;
 
         const isContractor = worker.workerType === "contractor";
-        const workerDeds = companyDeductions.filter(d => {
+        // Contractors have NO withholding deductions — SE tax is informational only on their stub.
+        const workerDeds = isContractor ? [] : companyDeductions.filter(d => {
           if (!d.isActive || d.isEmployerPaid || d.isReferenceOnly) return false;
           const appliesTo = d.appliesTo || "all";
-          if (appliesTo === "employee" && isContractor) return false;
-          if (appliesTo === "contractor" && !isContractor) return false;
+          if (appliesTo === "contractor") return false;
           const nl = d.name.toLowerCase();
-          if (!isContractor && (nl.includes("se tax") || nl.includes("self-employment") || nl.includes("self employment"))) return false;
+          if (nl.includes("se tax") || nl.includes("self-employment") || nl.includes("self employment")) return false;
           return true;
         });
 
