@@ -610,7 +610,11 @@ export async function registerRoutes(
 
       const companyDeductions = await storage.getTaxesDeductions(run.companyId);
 
+      // Delete existing items so reprocessing always recalculates everything from scratch
       const existingItems = await storage.getPayrollItems(run.id);
+      for (const old of existingItems) {
+        await storage.deletePayrollItem(old.id);
+      }
       const existingYtdByWorker: Record<string, { gross: number; deductions: number; net: number }> = {};
 
       const allRuns = await storage.getPayrollRuns(run.companyId);
@@ -762,28 +766,25 @@ export async function registerRoutes(
         totalHours += regHrs + otHrs + dtHrs;
         totalOT += otHrs;
 
-        const alreadyExists = existingItems.find(i => i.workerId === worker.id);
-        if (!alreadyExists) {
-          items.push({
-            payrollRunId: run.id,
-            workerId: worker.id,
-            regularHours: regHrs.toFixed(2),
-            overtimeHours: otHrs.toFixed(2),
-            doubleTimeHours: dtHrs.toFixed(2),
-            regularPay: regPay.toFixed(2),
-            overtimePay: otPay.toFixed(2),
-            doubleTimePay: dtPay.toFixed(2),
-            grossPay: grossPay.toFixed(2),
-            deductions: totalDeductions.toFixed(2),
-            netPay: netPay.toFixed(2),
-            payRate: rate.toFixed(2),
-            payType: worker.payType || "hourly",
-            checkNumber: String(checkNum++),
-            ytdGross: (ytd.gross + grossPay).toFixed(2),
-            ytdDeductions: (ytd.deductions + totalDeductions).toFixed(2),
-            ytdNet: (ytd.net + netPay).toFixed(2),
-          });
-        }
+        items.push({
+          payrollRunId: run.id,
+          workerId: worker.id,
+          regularHours: regHrs.toFixed(2),
+          overtimeHours: otHrs.toFixed(2),
+          doubleTimeHours: dtHrs.toFixed(2),
+          regularPay: regPay.toFixed(2),
+          overtimePay: otPay.toFixed(2),
+          doubleTimePay: dtPay.toFixed(2),
+          grossPay: grossPay.toFixed(2),
+          deductions: totalDeductions.toFixed(2),
+          netPay: netPay.toFixed(2),
+          payRate: rate.toFixed(2),
+          payType: worker.payType || "hourly",
+          checkNumber: String(checkNum++),
+          ytdGross: (ytd.gross + grossPay).toFixed(2),
+          ytdDeductions: (ytd.deductions + totalDeductions).toFixed(2),
+          ytdNet: (ytd.net + netPay).toFixed(2),
+        });
       }
 
       for (const item of items) {
