@@ -2459,17 +2459,10 @@ function PayStubAmendmentsTab() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Company</Label>
-              <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v, workerId: "" }))}>
-                <SelectTrigger data-testid="select-psam-company"><SelectValue placeholder="Select company" /></SelectTrigger>
-                <SelectContent>{companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
               <Label>Worker <span className="text-red-500">*</span></Label>
               <Select value={formData.workerId} onValueChange={v => setFormData(p => ({ ...p, workerId: v }))}>
                 <SelectTrigger data-testid="select-psam-worker"><SelectValue placeholder="Select worker" /></SelectTrigger>
-                <SelectContent>{filteredWorkers.map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}</SelectContent>
+                <SelectContent>{workers.map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="space-y-2">

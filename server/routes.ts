@@ -3473,7 +3473,16 @@ export async function registerRoutes(
 
   app.post("/api/pay-stub-amendments", async (req, res) => {
     try {
-      const amendment = await storage.createPayStubAmendment(req.body);
+      const body = { ...req.body };
+      // Auto-fill companyId from the worker if not provided
+      if ((!body.companyId || body.companyId === "") && body.workerId) {
+        const w = await storage.getWorker(body.workerId);
+        if (w) body.companyId = w.companyId;
+      }
+      if (!body.companyId || body.companyId === "") {
+        return res.status(400).json({ message: "companyId is required (or select a valid worker)" });
+      }
+      const amendment = await storage.createPayStubAmendment(body);
       res.status(201).json(amendment);
     } catch (error) {
       console.error(error);
@@ -3483,7 +3492,13 @@ export async function registerRoutes(
 
   app.patch("/api/pay-stub-amendments/:id", async (req, res) => {
     try {
-      const amendment = await storage.updatePayStubAmendment(req.params.id, req.body);
+      const body = { ...req.body };
+      // Auto-fill companyId from the worker if not provided
+      if ((!body.companyId || body.companyId === "") && body.workerId) {
+        const w = await storage.getWorker(body.workerId);
+        if (w) body.companyId = w.companyId;
+      }
+      const amendment = await storage.updatePayStubAmendment(req.params.id, body);
       if (!amendment) return res.status(404).json({ message: "Not found" });
       res.json(amendment);
     } catch (error) {
