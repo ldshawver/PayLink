@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -234,6 +234,19 @@ function PayrollRunCard({
     },
     enabled: expanded,
   });
+
+  const { data: allAmendments = [] } = useQuery<PayStubAmendment[]>({
+    queryKey: ["/api/pay-stub-amendments"],
+    enabled: expanded,
+  });
+  // Active deduction amendments for this company's workers
+  const amendmentsByWorker: Record<string, PayStubAmendment[]> = {};
+  for (const a of allAmendments) {
+    if ((a as any).amendmentType === "deduction" && a.status === "active") {
+      if (!amendmentsByWorker[a.workerId]) amendmentsByWorker[a.workerId] = [];
+      amendmentsByWorker[a.workerId].push(a);
+    }
+  }
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editItem, setEditItem] = useState<PayrollItem | null>(null);
@@ -504,26 +517,46 @@ function PayrollRunCard({
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {items.map(item => (
-                      <TableRow key={item.id} data-testid={`row-payroll-item-${item.id}`}>
-                        <TableCell>{getWorkerName(item.workerId)}</TableCell>
-                        <TableCell>{item.payType || "hourly"}</TableCell>
-                        <TableCell>${Number(item.payRate || 0).toFixed(2)}</TableCell>
-                        <TableCell>{Number(item.regularHours || 0).toFixed(1)}</TableCell>
-                        <TableCell>{Number(item.overtimeHours || 0).toFixed(1)}</TableCell>
-                        <TableCell>${Number(item.regularPay || 0).toFixed(2)}</TableCell>
-                        <TableCell>${Number(item.overtimePay || 0).toFixed(2)}</TableCell>
-                        <TableCell className="font-medium">${Number(item.grossPay || 0).toFixed(2)}</TableCell>
-                        <TableCell>${Number(item.deductions || 0).toFixed(2)}</TableCell>
-                        <TableCell className="font-medium">${Number(item.netPay || 0).toFixed(2)}</TableCell>
-                        <TableCell>{item.checkNumber || "—"}</TableCell>
-                        <TableCell>
-                          <Button size="icon" variant="ghost" onClick={() => openEdit(item)} data-testid={`button-edit-payroll-item-${item.id}`}>
-                            <Pencil className="h-3 w-3" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {items.map(item => {
+                      const workerAmends = amendmentsByWorker[item.workerId] || [];
+                      const amendTotal = workerAmends.reduce((s, a) => s + Number(a.amount || 0), 0);
+                      return (
+                        <Fragment key={item.id}>
+                          <TableRow data-testid={`row-payroll-item-${item.id}`}>
+                            <TableCell>{getWorkerName(item.workerId)}</TableCell>
+                            <TableCell>{item.payType || "hourly"}</TableCell>
+                            <TableCell>${Number(item.payRate || 0).toFixed(2)}</TableCell>
+                            <TableCell>{Number(item.regularHours || 0).toFixed(1)}</TableCell>
+                            <TableCell>{Number(item.overtimeHours || 0).toFixed(1)}</TableCell>
+                            <TableCell>${Number(item.regularPay || 0).toFixed(2)}</TableCell>
+                            <TableCell>${Number(item.overtimePay || 0).toFixed(2)}</TableCell>
+                            <TableCell className="font-medium">${Number(item.grossPay || 0).toFixed(2)}</TableCell>
+                            <TableCell>
+                              <div>${Number(item.deductions || 0).toFixed(2)}</div>
+                              {amendTotal > 0 && (
+                                <div className="text-xs text-red-600 mt-0.5">incl. –${amendTotal.toFixed(2)} amendments</div>
+                              )}
+                            </TableCell>
+                            <TableCell className="font-medium">${Number(item.netPay || 0).toFixed(2)}</TableCell>
+                            <TableCell>{item.checkNumber || "—"}</TableCell>
+                            <TableCell>
+                              <Button size="icon" variant="ghost" onClick={() => openEdit(item)} data-testid={`button-edit-payroll-item-${item.id}`}>
+                                <Pencil className="h-3 w-3" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                          {workerAmends.map(a => (
+                            <TableRow key={`amend-${a.id}`} className="bg-red-50 dark:bg-red-950/20">
+                              <TableCell colSpan={8} className="text-xs text-red-700 dark:text-red-400 pl-6 py-1 italic">
+                                ↳ Deduction: {a.description || "Pay Stub Deduction"}
+                              </TableCell>
+                              <TableCell className="text-xs font-medium text-red-700 dark:text-red-400 py-1">–${Number(a.amount || 0).toFixed(2)}</TableCell>
+                              <TableCell colSpan={3} />
+                            </TableRow>
+                          ))}
+                        </Fragment>
+                      );
+                    })}
                     {items.length === 0 && (
                       <TableRow><TableCell colSpan={12} className="text-center text-muted-foreground">No items</TableCell></TableRow>
                     )}
