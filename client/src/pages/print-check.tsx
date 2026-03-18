@@ -3,7 +3,7 @@ import { useRoute } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Printer, ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
-import type { PayrollRun, PayrollItem, Worker, Company, TaxDeduction, CheckTemplate, PayStubAccount, AccrualAccount, AccrualBalance } from "@shared/schema";
+import type { PayrollRun, PayrollItem, Worker, Company, TaxDeduction, CheckTemplate, PayStubAccount, AccrualAccount, AccrualBalance, PayStubAmendment } from "@shared/schema";
 
 function numberToWords(num: number): string {
   const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
@@ -344,9 +344,9 @@ function StubSummarySection({
 
 // ── Bottom third for StandardCheck: earnings & deductions detail ──
 function StubDetailSection({
-  item, worker, company, run, deductions, config,
+  item, worker, company, run, deductions, config, amendments = [],
 }: {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>;
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; amendments?: PayStubAmendment[];
 }) {
   const netPay = Number(item.netPay || 0);
   const grossPay = Number(item.grossPay || 0);
@@ -366,7 +366,7 @@ function StubDetailSection({
   const medicareTaxYtd = isContractor ? ytdGross * 0.029 : 0;
   const totalSeTaxYtd = ssTaxYtd + medicareTaxYtd;
 
-  const deductionBreakdown = deductions
+  const taxDeductionBreakdown = deductions
     .filter(d => d.isActive && !d.isEmployerPaid && !d.isReferenceOnly)
     .filter(d => {
       const appliesTo = d.appliesTo || "all";
@@ -385,6 +385,13 @@ function StubDetailSection({
       return { name: d.name, amount };
     })
     .filter(d => d.amount > 0);
+
+  const workerAmendmentDeductions = (amendments || [])
+    .filter(a => a.workerId === item.workerId && a.status === "active" && (a as any).amendmentType === "deduction")
+    .map(a => ({ name: a.description || "Pay Stub Deduction", amount: Number(a.amount || 0) }))
+    .filter(a => a.amount > 0);
+
+  const deductionBreakdown = [...taxDeductionBreakdown, ...workerAmendmentDeductions];
 
   const ssnDigits = worker.ssn ? worker.ssn.replace(/\D/g, '') : '';
   const ssnLast4 = ssnDigits.length >= 4 ? ssnDigits.slice(-4) : ssnDigits || '—';
@@ -570,9 +577,9 @@ function StubDetailSection({
 
 // ── Original single-section stub (used by VoucherCheck + ThreePartCheck) ──
 function StubPortion({
-  item, worker, company, run, deductions, config, payStubAccounts = [], accrualAccounts = [], accrualBalances = [],
+  item, worker, company, run, deductions, config, payStubAccounts = [], accrualAccounts = [], accrualBalances = [], amendments = [],
 }: {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts?: PayStubAccount[]; accrualAccounts?: AccrualAccount[]; accrualBalances?: AccrualBalance[];
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts?: PayStubAccount[]; accrualAccounts?: AccrualAccount[]; accrualBalances?: AccrualBalance[]; amendments?: PayStubAmendment[];
 }) {
   const netPay = Number(item.netPay || 0);
   const grossPay = Number(item.grossPay || 0);
@@ -595,7 +602,7 @@ function StubPortion({
   const isContractor = worker.workerType === "contractor";
   const ytdGross = Number(item.ytdGross || 0);
 
-  const deductionBreakdown = deductions
+  const taxDeductionBreakdown = deductions
     .filter(d => d.isActive && !d.isEmployerPaid && !d.isReferenceOnly)
     .filter(d => {
       const appliesTo = d.appliesTo || "all";
@@ -614,6 +621,13 @@ function StubPortion({
       return { name: d.name, amount };
     })
     .filter(d => d.amount > 0);
+
+  const workerAmendmentDeductions = (amendments || [])
+    .filter(a => a.workerId === item.workerId && a.status === "active" && (a as any).amendmentType === "deduction")
+    .map(a => ({ name: a.description || "Pay Stub Deduction", amount: Number(a.amount || 0) }))
+    .filter(a => a.amount > 0);
+
+  const deductionBreakdown = [...taxDeductionBreakdown, ...workerAmendmentDeductions];
 
   // SE Tax reference (always computed for contractors — not deducted, for reference only)
   const SS_WAGE_BASE = 168600;
@@ -849,10 +863,10 @@ function StubPortion({
 }
 
 interface CheckProps {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts: PayStubAccount[]; accrualAccounts: AccrualAccount[]; accrualBalances: AccrualBalance[];
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts: PayStubAccount[]; accrualAccounts: AccrualAccount[]; accrualBalances: AccrualBalance[]; amendments?: PayStubAmendment[];
 }
 
-function StandardCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances }: CheckProps) {
+function StandardCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [] }: CheckProps) {
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
       {/* Top third: the actual check */}
@@ -865,39 +879,39 @@ function StandardCheck({ item, worker, company, run, deductions, config, payStub
       </div>
       {/* Bottom third: earnings & deductions detail */}
       <div style={{ height: "3.666in" }}>
-        <StubDetailSection item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} />
+        <StubDetailSection item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} amendments={amendments} />
       </div>
     </div>
   );
 }
 
-function VoucherCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances }: CheckProps) {
+function VoucherCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [] }: CheckProps) {
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
       <div style={{ height: "3.333in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
       </div>
       <div style={{ height: "3.667in" }}>
         <CheckPortion item={item} worker={worker} company={company} run={run} config={config} />
       </div>
       <div style={{ height: "4in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
       </div>
     </div>
   );
 }
 
-function ThreePartCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances }: CheckProps) {
+function ThreePartCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [] }: CheckProps) {
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
       <div style={{ height: "3.667in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
       </div>
       <div style={{ height: "3.667in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
       </div>
       <div style={{ height: "3.666in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
+        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
       </div>
     </div>
   );
@@ -933,6 +947,7 @@ export default function PrintCheckPage() {
   const { data: payStubAccounts = [] } = useQuery<PayStubAccount[]>({ queryKey: ["/api/pay-stub-accounts"] });
   const { data: accrualAccountsList = [] } = useQuery<AccrualAccount[]>({ queryKey: ["/api/accrual-accounts"] });
   const { data: accrualBalancesList = [] } = useQuery<AccrualBalance[]>({ queryKey: ["/api/accrual-balances"] });
+  const { data: amendments = [] } = useQuery<PayStubAmendment[]>({ queryKey: ["/api/pay-stub-amendments"] });
 
   const company = run ? companies.find(c => c.id === run.companyId) : undefined;
 
@@ -1021,6 +1036,7 @@ export default function PrintCheckPage() {
               payStubAccounts={companyPSAccounts}
               accrualAccounts={companyAccrualAccounts}
               accrualBalances={accrualBalancesList}
+              amendments={amendments}
             />
           );
         })}

@@ -653,10 +653,21 @@ export async function registerRoutes(
 
       // Load amendments and pay stub accounts for this pay period
       const allAmendments = await storage.getPayStubAmendments(run.companyId);
-      const periodAmendments = allAmendments.filter(a =>
-        a.status === "active" &&
-        (!a.effectiveDate || (a.effectiveDate >= run.periodStart && a.effectiveDate <= run.periodEnd))
-      );
+      console.log(`[PAYROLL] Run ${run.id} period: ${run.periodStart} -> ${run.periodEnd}`);
+      console.log(`[PAYROLL] Total amendments for company: ${allAmendments.length}`);
+      allAmendments.forEach(a => {
+        const effDate = a.effectiveDate ? String(a.effectiveDate) : null;
+        const pStart = String(run.periodStart);
+        const pEnd = String(run.periodEnd);
+        const inPeriod = !effDate || (effDate >= pStart && effDate <= pEnd);
+        console.log(`[PAYROLL] Amendment ${a.id}: worker=${a.workerId} type=${(a as any).amendmentType} amount=${a.amount} status=${a.status} effectiveDate=${effDate} (type: ${typeof a.effectiveDate}) periodStart=${pStart} periodEnd=${pEnd} inPeriod=${inPeriod}`);
+      });
+      const periodAmendments = allAmendments.filter(a => {
+        const effDate = a.effectiveDate ? String(a.effectiveDate) : null;
+        return a.status === "active" &&
+          (!effDate || (effDate >= String(run.periodStart) && effDate <= String(run.periodEnd)));
+      });
+      console.log(`[PAYROLL] Period amendments after filter: ${periodAmendments.length}`);
       const allPsAccounts = await storage.getPayStubAccounts(run.companyId);
       const psAccountMap: Record<string, string> = {};
       for (const acc of allPsAccounts) { psAccountMap[acc.id] = acc.type || "earning"; }
@@ -709,6 +720,7 @@ export async function registerRoutes(
 
         // Apply pay stub amendments for this worker in this pay period
         const workerAmendments = periodAmendments.filter(a => a.workerId === worker.id);
+        console.log(`[PAYROLL] Worker ${worker.firstName} ${worker.lastName}: ${workerAmendments.length} amendments`);
         let amendmentEarnings = 0;
         let amendmentDeductions = 0;
         for (const am of workerAmendments) {
@@ -723,12 +735,14 @@ export async function registerRoutes(
           // Use explicit amendmentType first, fall back to account type
           const accountType = am.payStubAccountId ? (psAccountMap[am.payStubAccountId] || "earning") : "earning";
           const effectiveType = (am as any).amendmentType || accountType;
+          console.log(`[PAYROLL]   Amendment: amount=${amAmt} effectiveType=${effectiveType} raw_amendmentType=${(am as any).amendmentType}`);
           if (effectiveType === "deduction") {
             amendmentDeductions += amAmt;
           } else {
             amendmentEarnings += amAmt;
           }
         }
+        console.log(`[PAYROLL] Worker ${worker.firstName}: earnings_adj=${amendmentEarnings} deductions_adj=${amendmentDeductions} grossBefore=${grossPay}`);
         grossPay += amendmentEarnings;
 
         const rate = defaultRate;
@@ -3473,7 +3487,16 @@ export async function registerRoutes(
 
   app.post("/api/pay-stub-amendments", async (req, res) => {
     try {
-      const amendment = await storage.createPayStubAmendment(req.body);
+      const body = { ...req.body };
+      // Auto-fill companyId from the worker if not provided
+      if ((!body.companyId || body.companyId === "") && body.workerId) {
+        const w = await storage.getWorker(body.workerId);
+        if (w) body.companyId = w.companyId;
+      }
+      if (!body.companyId || body.companyId === "") {
+        return res.status(400).json({ message: "companyId is required (or select a valid worker)" });
+      }
+      const amendment = await storage.createPayStubAmendment(body);
       res.status(201).json(amendment);
     } catch (error) {
       console.error(error);
@@ -3483,7 +3506,13 @@ export async function registerRoutes(
 
   app.patch("/api/pay-stub-amendments/:id", async (req, res) => {
     try {
-      const amendment = await storage.updatePayStubAmendment(req.params.id, req.body);
+      const body = { ...req.body };
+      // Auto-fill companyId from the worker if not provided
+      if ((!body.companyId || body.companyId === "") && body.workerId) {
+        const w = await storage.getWorker(body.workerId);
+        if (w) body.companyId = w.companyId;
+      }
+      const amendment = await storage.updatePayStubAmendment(req.params.id, body);
       if (!amendment) return res.status(404).json({ message: "Not found" });
       res.json(amendment);
     } catch (error) {
