@@ -520,6 +520,13 @@ function PayrollRunCard({
                     {items.map(item => {
                       const workerAmends = amendmentsByWorker[item.workerId] || [];
                       const amendTotal = workerAmends.reduce((s, a) => s + Number(a.amount || 0), 0);
+                      const storedDeductions = Number(item.deductions || 0);
+                      const grossPay = Number(item.grossPay || 0);
+                      // If amendments add up to more than what's already stored, show the corrected figures
+                      const displayDeductions = storedDeductions >= amendTotal
+                        ? storedDeductions
+                        : storedDeductions + amendTotal;
+                      const displayNetPay = grossPay - displayDeductions;
                       return (
                         <Fragment key={item.id}>
                           <TableRow data-testid={`row-payroll-item-${item.id}`}>
@@ -530,14 +537,16 @@ function PayrollRunCard({
                             <TableCell>{Number(item.overtimeHours || 0).toFixed(1)}</TableCell>
                             <TableCell>${Number(item.regularPay || 0).toFixed(2)}</TableCell>
                             <TableCell>${Number(item.overtimePay || 0).toFixed(2)}</TableCell>
-                            <TableCell className="font-medium">${Number(item.grossPay || 0).toFixed(2)}</TableCell>
+                            <TableCell className="font-medium">${grossPay.toFixed(2)}</TableCell>
                             <TableCell>
-                              <div>${Number(item.deductions || 0).toFixed(2)}</div>
-                              {amendTotal > 0 && (
-                                <div className="text-xs text-red-600 mt-0.5">incl. –${amendTotal.toFixed(2)} amendments</div>
+                              <div className={amendTotal > 0 && storedDeductions < amendTotal ? "font-medium text-red-700 dark:text-red-400" : ""}>
+                                ${displayDeductions.toFixed(2)}
+                              </div>
+                              {amendTotal > 0 && storedDeductions < amendTotal && (
+                                <div className="text-xs text-amber-600 mt-0.5">⚠ reprocess to save</div>
                               )}
                             </TableCell>
-                            <TableCell className="font-medium">${Number(item.netPay || 0).toFixed(2)}</TableCell>
+                            <TableCell className="font-medium">${displayNetPay.toFixed(2)}</TableCell>
                             <TableCell>{item.checkNumber || "—"}</TableCell>
                             <TableCell>
                               <Button size="icon" variant="ghost" onClick={() => openEdit(item)} data-testid={`button-edit-payroll-item-${item.id}`}>
