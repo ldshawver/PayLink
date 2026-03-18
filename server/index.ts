@@ -111,6 +111,50 @@ app.use((req, res, next) => {
     await run("recurring_schedules.job_id", sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`);
     await run("employee_groups.company_id nullable", sql`ALTER TABLE employee_groups ALTER COLUMN company_id DROP NOT NULL`);
     await run("pay_stub_amendments.amendment_type", sql`ALTER TABLE pay_stub_amendments ADD COLUMN IF NOT EXISTS amendment_type TEXT DEFAULT 'earning'`);
+    await run("payroll_payment_methods table", sql`CREATE TABLE IF NOT EXISTS payroll_payment_methods (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id),
+      code TEXT NOT NULL,
+      name TEXT NOT NULL,
+      category TEXT DEFAULT 'other',
+      is_digital_wallet BOOLEAN DEFAULT FALSE,
+      is_bank_based BOOLEAN DEFAULT FALSE,
+      requires_reference_number BOOLEAN DEFAULT FALSE,
+      requires_account_selection BOOLEAN DEFAULT TRUE,
+      active BOOLEAN DEFAULT TRUE,
+      sort_order INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("funding_accounts table", sql`CREATE TABLE IF NOT EXISTS funding_accounts (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id),
+      name TEXT NOT NULL,
+      account_type TEXT DEFAULT 'checking',
+      bank_name TEXT,
+      routing_number TEXT,
+      account_number TEXT,
+      is_active BOOLEAN DEFAULT TRUE,
+      is_default BOOLEAN DEFAULT FALSE,
+      sort_order INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("payroll_payment_records table", sql`CREATE TABLE IF NOT EXISTS payroll_payment_records (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      payroll_run_id VARCHAR REFERENCES payroll_runs(id),
+      worker_id VARCHAR REFERENCES workers(id),
+      company_id VARCHAR REFERENCES companies(id),
+      payment_method_id VARCHAR REFERENCES payroll_payment_methods(id),
+      funding_account_id VARCHAR REFERENCES funding_accounts(id),
+      amount NUMERIC DEFAULT 0,
+      reference_number TEXT,
+      status TEXT DEFAULT 'pending',
+      processed_at TIMESTAMP,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");
