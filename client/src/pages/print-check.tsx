@@ -393,6 +393,11 @@ function StubDetailSection({
 
   const deductionBreakdown = [...taxDeductionBreakdown, ...workerAmendmentDeductions];
 
+  // Compute totals from the actual line items so the grand total always matches what's listed,
+  // even if the payroll run hasn't been reprocessed since amendments were added.
+  const computedTotalDeductions = deductionBreakdown.reduce((s, d) => s + d.amount, 0);
+  const computedNetPay = grossPay - computedTotalDeductions;
+
   const ssnDigits = worker.ssn ? worker.ssn.replace(/\D/g, '') : '';
   const ssnLast4 = ssnDigits.length >= 4 ? ssnDigits.slice(-4) : ssnDigits || '—';
   const ssnDisplay = ssnDigits.length >= 4 ? `***-**-${ssnLast4}` : (worker.ssn ? worker.ssn : '—');
@@ -512,12 +517,12 @@ function StubDetailSection({
                 )}
                 <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
                   <td style={{ padding: "2px" }}>TOTAL DEDUCTIONS</td>
-                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(totalDeductions)}</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(computedTotalDeductions)}</td>
                   {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdDeductions)}</td>}
                 </tr>
                 <tr style={{ borderTop: "2px solid #000", fontWeight: "bold" }}>
                   <td style={{ padding: "2px" }}>NET PAY</td>
-                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(netPay)}</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(computedNetPay)}</td>
                   {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdNet)}</td>}
                 </tr>
               </tbody>
@@ -628,6 +633,11 @@ function StubPortion({
     .filter(a => a.amount > 0);
 
   const deductionBreakdown = [...taxDeductionBreakdown, ...workerAmendmentDeductions];
+
+  // Compute totals from the actual line items so the grand total always matches what's listed,
+  // even if the payroll run hasn't been reprocessed since amendments were added.
+  const computedTotalDeductions = deductionBreakdown.reduce((s, d) => s + d.amount, 0);
+  const computedNetPay = grossPay - computedTotalDeductions;
 
   // SE Tax reference (always computed for contractors — not deducted, for reference only)
   const SS_WAGE_BASE = 168600;
@@ -753,7 +763,7 @@ function StubPortion({
                 )}
                 <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
                   <td style={{ padding: "2px" }}>TOTAL DEDUCTIONS</td>
-                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(totalDeductions)}</td>
+                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(computedTotalDeductions)}</td>
                   {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdDeductions)}</td>}
                 </tr>
               </tbody>
@@ -767,8 +777,8 @@ function StubPortion({
           <div style={{ display: "flex", justifyContent: "space-between" }}>
             <div style={{ display: "flex", gap: "30px" }}>
               <div><div style={{ fontSize: "8px", color: "#666" }}>GROSS PAY</div><div style={{ fontSize: "12px", fontWeight: "bold" }}>${fmt(grossPay)}</div></div>
-              <div><div style={{ fontSize: "8px", color: "#666" }}>DEDUCTIONS</div><div style={{ fontSize: "12px", fontWeight: "bold" }}>${fmt(totalDeductions)}</div></div>
-              <div><div style={{ fontSize: "8px", color: "#666" }}>NET PAY</div><div style={{ fontSize: "12px", fontWeight: "bold" }}>${fmt(netPay)}</div></div>
+              <div><div style={{ fontSize: "8px", color: "#666" }}>DEDUCTIONS</div><div style={{ fontSize: "12px", fontWeight: "bold" }}>${fmt(computedTotalDeductions)}</div></div>
+              <div><div style={{ fontSize: "8px", color: "#666" }}>NET PAY</div><div style={{ fontSize: "12px", fontWeight: "bold" }}>${fmt(computedNetPay)}</div></div>
             </div>
             <div style={{ display: "flex", gap: "20px" }}>
               <div><div style={{ fontSize: "8px", color: "#666" }}>YTD GROSS</div><div style={{ fontWeight: "bold" }}>${fmt(item.ytdGross)}</div></div>
