@@ -5647,5 +5647,144 @@ export async function registerRoutes(
     } catch (e) { res.status(500).json({ message: "Failed to delete membership" }); }
   });
 
+  app.get("/api/my/time-off-requests", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.json([]);
+      const items = await storage.getTimeOffRequests(user.workerId);
+      res.json(items);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch time-off requests" }); }
+  });
+
+  app.post("/api/my/time-off-requests", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
+      const worker = await storage.getWorker(user.workerId);
+      if (!worker) return res.status(404).json({ message: "Worker not found" });
+      const created = await storage.createTimeOffRequest({ ...req.body, workerId: user.workerId, companyId: worker.companyId, status: "pending" });
+
+      // Notify managers of this company
+      const { sendTimeOffEmail, sendTimeOffSms } = await import("./notifications.js");
+      const allUsers = await storage.getUsers();
+      const managers = allUsers.filter(u => (u.role === "admin" || u.role === "manager") && (u.companyId === worker.companyId || u.role === "admin"));
+      const workerName = `${worker.firstName} ${worker.lastName}`;
+      const subject = `Time-Off Request — ${workerName}`;
+      const body = `${workerName} has submitted a time-off request.\n\nType: ${created.requestType}\nDates: ${created.startDate}${created.startTime ? " " + created.startTime : ""} — ${created.endDate}${created.endTime ? " " + created.endTime : ""}\nDays: ${created.totalDays}\nReason: ${created.reason || "—"}\n\nPlease log in to PayLink to approve or reject this request.`;
+      for (const mgr of managers) {
+        if (mgr.id === user.id) continue;
+        const mgrWorker = mgr.workerId ? await storage.getWorker(mgr.workerId) : null;
+        const mgrEmail = mgrWorker?.email || mgrWorker?.workEmail || null;
+        const mgrPhone = mgrWorker?.mobilePhone || mgrWorker?.workPhone || null;
+        await sendTimeOffEmail({ recipientName: mgr.username, email: mgrEmail, subject, bodyText: body });
+        await sendTimeOffSms({ phone: mgrPhone, body: `PayLink: ${workerName} submitted a time-off request (${created.requestType}) for ${created.startDate}–${created.endDate}. Log in to approve.` });
+      }
+
+      res.status(201).json(created);
+    } catch (e: any) { res.status(500).json({ message: "Failed to create time-off request", detail: e.message }); }
+  });
+
+  app.delete("/api/my/time-off-requests/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
+      const existing = await storage.getTimeOffRequest(req.params.id);
+      if (!existing || existing.workerId !== user.workerId) return res.status(404).json({ message: "Not found" });
+      if (existing.status !== "pending") return res.status(400).json({ message: "Cannot cancel a reviewed request" });
+      await storage.deleteTimeOffRequest(req.params.id);
+      res.json({ message: "Cancelled" });
+    } catch (e) { res.status(500).json({ message: "Failed to cancel request" }); }
+  });
+
+  app.get("/api/time-off-requests", requireAuth, requireRole(["admin", "manager"]), async (req, res) => {
+    try {
+      const { companyId, status } = req.query as Record<string, string>;
+      const items = await storage.getTimeOffRequests(undefined, companyId);
+      const filtered = status ? items.filter(i => i.status === status) : items;
+      res.json(filtered);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch time-off requests" }); }
+  });
+
+  app.patch("/api/time-off-requests/:id/review", requireAuth, requireRole(["admin", "manager"]), async (req, res) => {
+    try {
+      const { decision, reviewNote } = req.body as { decision: "approved" | "rejected"; reviewNote?: string };
+      if (!["approved", "rejected"].includes(decision)) return res.status(400).json({ message: "Invalid decision" });
+      const existing = await storage.getTimeOffRequest(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Request not found" });
+      const updated = await storage.updateTimeOffRequest(req.params.id, {
+        status: decision,
+        reviewedBy: req.session.userId,
+        reviewedAt: new Date(),
+        reviewNote: reviewNote || null,
+      });
+
+      // Notify the worker
+      const worker = await storage.getWorker(existing.workerId);
+      if (worker) {
+        const { sendTimeOffEmail, sendTimeOffSms } = await import("./notifications.js");
+        const workerName = `${worker.firstName} ${worker.lastName}`;
+        const decisionLabel = decision === "approved" ? "Approved" : "Rejected";
+        const subject = `Time-Off Request ${decisionLabel}`;
+        const body = `Hi ${workerName},\n\nYour time-off request (${existing.requestType}, ${existing.startDate}–${existing.endDate}) has been ${decisionLabel.toLowerCase()}.\n\n${reviewNote ? `Note from reviewer: ${reviewNote}` : ""}`;
+        const email = worker.email || worker.workEmail || null;
+        const phone = worker.mobilePhone || worker.workPhone || null;
+        await sendTimeOffEmail({ recipientName: workerName, email, subject, bodyText: body });
+        await sendTimeOffSms({ phone, body: `PayLink: Your time-off request (${existing.requestType}, ${existing.startDate}–${existing.endDate}) has been ${decisionLabel.toLowerCase()}.${reviewNote ? " Note: " + reviewNote : ""}` });
+      }
+
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: "Failed to update request", detail: e.message }); }
+  });
+
+  app.get("/api/my/schedule-preferences", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.json([]);
+      const items = await storage.getSchedulePreferences(user.workerId);
+      res.json(items);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch schedule preferences" }); }
+  });
+
+  app.post("/api/my/schedule-preferences", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
+      const worker = await storage.getWorker(user.workerId);
+      if (!worker) return res.status(404).json({ message: "Worker not found" });
+      const created = await storage.createSchedulePreference({ ...req.body, workerId: user.workerId, companyId: worker.companyId });
+      res.status(201).json(created);
+    } catch (e: any) { res.status(500).json({ message: "Failed to create schedule preference", detail: e.message }); }
+  });
+
+  app.patch("/api/my/schedule-preferences/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
+      const existing = await storage.getSchedulePreference(req.params.id);
+      if (!existing || existing.workerId !== user.workerId) return res.status(404).json({ message: "Not found" });
+      const updated = await storage.updateSchedulePreference(req.params.id, req.body);
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to update schedule preference" }); }
+  });
+
+  app.delete("/api/my/schedule-preferences/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
+      const existing = await storage.getSchedulePreference(req.params.id);
+      if (!existing || existing.workerId !== user.workerId) return res.status(404).json({ message: "Not found" });
+      await storage.deleteSchedulePreference(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete schedule preference" }); }
+  });
+
+  app.get("/api/schedule-preferences", requireAuth, requireRole(["admin", "manager"]), async (req, res) => {
+    try {
+      const { companyId } = req.query as Record<string, string>;
+      const items = await storage.getSchedulePreferences(undefined, companyId);
+      res.json(items);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch schedule preferences" }); }
+  });
+
   return httpServer;
 }
