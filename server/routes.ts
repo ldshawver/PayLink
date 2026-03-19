@@ -886,9 +886,14 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/time-punches", async (_req, res) => {
+  app.get("/api/time-punches", requireAuth, async (req, res) => {
     try {
-      const punches = await storage.getTimePunches();
+      const user = await storage.getUser(req.session.userId!);
+      let punches = await storage.getTimePunches();
+      // Employees and contractors only see their own punches
+      if (user && user.role === "employee" && user.workerId) {
+        punches = punches.filter(p => p.workerId === user.workerId);
+      }
       res.json(punches);
     } catch (error) {
       console.error(error);
@@ -1090,9 +1095,14 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/time-entries", async (_req, res) => {
+  app.get("/api/time-entries", requireAuth, async (req, res) => {
     try {
-      const entries = await storage.getTimeEntries();
+      const user = await storage.getUser(req.session.userId!);
+      let entries = await storage.getTimeEntries();
+      // Employees and contractors only see their own entries
+      if (user && user.role === "employee" && user.workerId) {
+        entries = entries.filter(e => e.workerId === user.workerId);
+      }
       res.json(entries);
     } catch (error) {
       console.error(error);
@@ -2884,8 +2894,104 @@ export async function registerRoutes(
 
   app.patch("/api/shift-offers/:id", requireAuth, async (req, res) => {
     try {
+      const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
+      const prevOffer = await storage.getShiftOffer(req.params.id as string);
       const item = await storage.updateShiftOffer(req.params.id as string, req.body);
       if (!item) return res.status(404).json({ message: "Shift offer not found" });
+
+      const newStatus = req.body.status;
+
+      if (newStatus === "claimed" && prevOffer && prevOffer.status !== "claimed") {
+        // Notify all managers/admins for the company about this claim request
+        const schedule = (await storage.getSchedules()).find(s => s.id === item.scheduleId);
+        const offeringWorker = await storage.getWorker(item.offeredByWorkerId);
+        const claimingWorker = item.claimedByWorkerId ? await storage.getWorker(item.claimedByWorkerId) : null;
+        const allUsers = await storage.getUsers();
+        const managers = allUsers.filter(u => (u.role === "admin" || u.role === "manager") &&
+          (!u.companyId || u.companyId === offeringWorker?.companyId));
+        const offeringName = offeringWorker ? `${offeringWorker.firstName} ${offeringWorker.lastName}` : "An employee";
+        const claimingName = claimingWorker ? `${claimingWorker.firstName} ${claimingWorker.lastName}` : "Another employee";
+        const shiftDate = schedule?.date || "unknown date";
+        const shiftTime = schedule ? `${schedule.startTime}–${schedule.endTime}` : "";
+        for (const mgr of managers) {
+          const mgrWorker = mgr.workerId ? await storage.getWorker(mgr.workerId) : null;
+          const mgrEmail = mgrWorker?.workEmail || mgrWorker?.homeEmail || null;
+          const mgrPhone = mgrWorker?.mobilePhone || mgrWorker?.homePhone || null;
+          const mgrName = mgrWorker ? `${mgrWorker.firstName} ${mgrWorker.lastName}` : mgr.username;
+          const subject = `Shift Exchange Request — Approval Needed`;
+          const bodyText = `${claimingName} would like to pick up a shift offered by ${offeringName}.\n\nShift: ${shiftDate} ${shiftTime}\n\nPlease log in to PayLink and go to Schedule → Shift Marketplace to approve or reject this request.`;
+          await Promise.all([
+            sendShiftMarketplaceEmail({ recipientName: mgrName, email: mgrEmail, subject, bodyText }),
+            sendShiftMarketplaceSms({ recipientName: mgrName, phone: mgrPhone, subject, bodyText: `PayLink: ${claimingName} wants to pick up ${offeringName}'s shift on ${shiftDate} ${shiftTime}. Please log in to approve or reject.` }),
+          ]);
+        }
+      }
+
+      if (newStatus === "approved" && prevOffer && prevOffer.status !== "approved") {
+        // Reassign the schedule to the claiming worker
+        const schedule = (await storage.getSchedules()).find(s => s.id === item.scheduleId);
+        if (schedule && item.claimedByWorkerId) {
+          await storage.updateSchedule(schedule.id, { workerId: item.claimedByWorkerId });
+        }
+        // Notify both workers
+        const offeringWorker = await storage.getWorker(item.offeredByWorkerId);
+        const claimingWorker = item.claimedByWorkerId ? await storage.getWorker(item.claimedByWorkerId) : null;
+        const shiftDate = schedule?.date || "unknown date";
+        const shiftTime = schedule ? `${schedule.startTime}–${schedule.endTime}` : "";
+        const note = item.notes ? `\n\nManager note: ${item.notes}` : "";
+        if (offeringWorker) {
+          const name = `${offeringWorker.firstName} ${offeringWorker.lastName}`;
+          const email = offeringWorker.workEmail || offeringWorker.homeEmail;
+          const phone = offeringWorker.mobilePhone || offeringWorker.homePhone;
+          const bodyText = `Your shift on ${shiftDate} ${shiftTime} has been approved to be taken by ${claimingWorker ? `${claimingWorker.firstName} ${claimingWorker.lastName}` : "another employee"}. You are no longer scheduled for that shift.${note}`;
+          await Promise.all([
+            sendShiftMarketplaceEmail({ recipientName: name, email, subject: "Shift Exchange Approved", bodyText }),
+            sendShiftMarketplaceSms({ recipientName: name, phone, subject: "Shift Exchange Approved", bodyText: `PayLink: Your shift on ${shiftDate} ${shiftTime} has been approved for exchange.${note}` }),
+          ]);
+        }
+        if (claimingWorker) {
+          const name = `${claimingWorker.firstName} ${claimingWorker.lastName}`;
+          const email = claimingWorker.workEmail || claimingWorker.homeEmail;
+          const phone = claimingWorker.mobilePhone || claimingWorker.homePhone;
+          const bodyText = `Your request to pick up the shift on ${shiftDate} ${shiftTime} has been approved! This shift is now on your schedule.${note}`;
+          await Promise.all([
+            sendShiftMarketplaceEmail({ recipientName: name, email, subject: "Shift Exchange Approved", bodyText }),
+            sendShiftMarketplaceSms({ recipientName: name, phone, subject: "Shift Exchange Approved", bodyText: `PayLink: Your request to pick up the shift on ${shiftDate} ${shiftTime} has been approved!${note}` }),
+          ]);
+        }
+      }
+
+      if (newStatus === "rejected" && prevOffer && prevOffer.status !== "rejected") {
+        const schedule = (await storage.getSchedules()).find(s => s.id === item.scheduleId);
+        const offeringWorker = await storage.getWorker(item.offeredByWorkerId);
+        const claimingWorker = item.claimedByWorkerId ? await storage.getWorker(item.claimedByWorkerId) : null;
+        const shiftDate = schedule?.date || "unknown date";
+        const shiftTime = schedule ? `${schedule.startTime}–${schedule.endTime}` : "";
+        const managerNote = req.body.managerNote ? `\n\nManager note: ${req.body.managerNote}` : "";
+        // Notify offering worker — their shift stays with them
+        if (offeringWorker) {
+          const name = `${offeringWorker.firstName} ${offeringWorker.lastName}`;
+          const email = offeringWorker.workEmail || offeringWorker.homeEmail;
+          const phone = offeringWorker.mobilePhone || offeringWorker.homePhone;
+          const bodyText = `Your shift exchange request for ${shiftDate} ${shiftTime} was not approved. Your shift remains on your schedule.${managerNote}`;
+          await Promise.all([
+            sendShiftMarketplaceEmail({ recipientName: name, email, subject: "Shift Exchange Not Approved", bodyText }),
+            sendShiftMarketplaceSms({ recipientName: name, phone, subject: "Shift Exchange Not Approved", bodyText: `PayLink: Your shift exchange for ${shiftDate} ${shiftTime} was not approved. Your shift remains on your schedule.${managerNote}` }),
+          ]);
+        }
+        // Notify claiming worker — they did not get the shift
+        if (claimingWorker) {
+          const name = `${claimingWorker.firstName} ${claimingWorker.lastName}`;
+          const email = claimingWorker.workEmail || claimingWorker.homeEmail;
+          const phone = claimingWorker.mobilePhone || claimingWorker.homePhone;
+          const bodyText = `Your request to pick up the shift on ${shiftDate} ${shiftTime} was not approved.${managerNote}`;
+          await Promise.all([
+            sendShiftMarketplaceEmail({ recipientName: name, email, subject: "Shift Exchange Not Approved", bodyText }),
+            sendShiftMarketplaceSms({ recipientName: name, phone, subject: "Shift Exchange Not Approved", bodyText: `PayLink: Your request to pick up the shift on ${shiftDate} ${shiftTime} was not approved.${managerNote}` }),
+          ]);
+        }
+      }
+
       res.json(item);
     } catch (error) {
       console.error(error);

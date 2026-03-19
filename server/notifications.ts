@@ -1,5 +1,14 @@
 import nodemailer from "nodemailer";
 
+export interface ShiftMarketplaceNotificationPayload {
+  recipientName: string;
+  email?: string | null;
+  phone?: string | null;
+  subject: string;
+  bodyText: string;
+  bodyHtml?: string;
+}
+
 export interface ScheduleNotificationPayload {
   workerName: string;
   email?: string | null;
@@ -95,6 +104,48 @@ export async function sendScheduleEmailNotification(payload: ScheduleNotificatio
     return { sent: true };
   } catch (err: any) {
     console.error(`[Email] Failed to send to ${payload.email}:`, err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
+export async function sendShiftMarketplaceEmail(payload: ShiftMarketplaceNotificationPayload): Promise<{ sent: boolean; error?: string }> {
+  if (!payload.email) return { sent: false, error: "No email address" };
+  const smtp = getTransporter();
+  if (!smtp) return { sent: false, error: "SMTP not configured" };
+  const html = payload.bodyHtml || `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+    <div style="background:linear-gradient(135deg,#0d9488,#2563eb);padding:20px;border-radius:8px 8px 0 0;">
+      <h1 style="color:white;margin:0;font-size:20px;">${payload.subject}</h1>
+    </div>
+    <div style="background:#f9fafb;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;">
+      <p style="font-size:15px;color:#111827;">Hi <strong>${payload.recipientName}</strong>,</p>
+      <p style="color:#374151;white-space:pre-line;">${payload.bodyText}</p>
+      <p style="color:#9ca3af;font-size:13px;margin-top:24px;">PayLink Shift Marketplace</p>
+    </div>
+  </div>`;
+  try {
+    await smtp.transporter.sendMail({ from: smtp.fromAddress, to: payload.email, subject: payload.subject, text: payload.bodyText, html });
+    console.log(`[Email] Shift marketplace notification sent to ${payload.email}`);
+    return { sent: true };
+  } catch (err: any) {
+    console.error(`[Email] Failed shift marketplace email to ${payload.email}:`, err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
+export async function sendShiftMarketplaceSms(payload: ShiftMarketplaceNotificationPayload): Promise<{ sent: boolean; error?: string }> {
+  if (!payload.phone) return { sent: false, error: "No phone number" };
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+  if (!accountSid || !authToken || !fromNumber) return { sent: false, error: "Twilio not configured" };
+  try {
+    const twilio = (await import("twilio")).default;
+    const client = twilio(accountSid, authToken);
+    await client.messages.create({ body: payload.bodyText, from: fromNumber, to: payload.phone });
+    console.log(`[SMS] Shift marketplace notification sent to ${payload.phone}`);
+    return { sent: true };
+  } catch (err: any) {
+    console.error(`[SMS] Failed shift marketplace SMS to ${payload.phone}:`, err.message);
     return { sent: false, error: err.message };
   }
 }
