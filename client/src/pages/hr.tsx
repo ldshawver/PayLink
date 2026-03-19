@@ -79,6 +79,7 @@ function LoadingSkeleton({ testId }: { testId: string }) {
 function ReviewsTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
+  const [filterCompanyId, setFilterCompanyId] = useState("all");
   const [workerId, setWorkerId] = useState("");
   const [companyId, setCompanyId] = useState("");
   const [reviewDate, setReviewDate] = useState("");
@@ -152,12 +153,29 @@ function ReviewsTab() {
 
   const workerMap = new Map((workers || []).map((w) => [w.id, w]));
 
+  const filteredReviews = filterCompanyId === "all"
+    ? (reviews || [])
+    : (reviews || []).filter((r) => r.companyId === filterCompanyId);
+
   if (reviewsLoading) return <LoadingSkeleton testId="reviews-loading" />;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h3 className="text-lg font-semibold">Performance Reviews</h3>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h3 className="text-lg font-semibold">Performance Reviews</h3>
+          <Select value={filterCompanyId} onValueChange={setFilterCompanyId}>
+            <SelectTrigger className="w-44" data-testid="select-filter-company-reviews">
+              <SelectValue placeholder="All Companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {(companies || []).map((c) => (
+                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-review">
@@ -283,14 +301,14 @@ function ReviewsTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(reviews || []).length === 0 ? (
+              {filteredReviews.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                     No reviews found
                   </TableCell>
                 </TableRow>
               ) : (
-                (reviews || []).map((review) => {
+                filteredReviews.map((review) => {
                   const worker = workerMap.get(review.workerId);
                   return (
                     <TableRow key={review.id} data-testid={`row-review-${review.id}`}>
@@ -346,6 +364,7 @@ function ReviewsTab() {
 function QualificationsTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
+  const [filterCompanyId, setFilterCompanyId] = useState("all");
   const [companyId, setCompanyId] = useState("");
   const [workerId, setWorkerId] = useState("");
   const [type, setType] = useState("skill");
@@ -418,13 +437,29 @@ function QualificationsTab() {
   }
 
   const workerMap = new Map((workers || []).map((w) => [w.id, w]));
+  const filteredQualifications = filterCompanyId === "all"
+    ? (qualifications || [])
+    : (qualifications || []).filter((q) => q.companyId === filterCompanyId);
 
   if (isLoading) return <LoadingSkeleton testId="qualifications-loading" />;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h3 className="text-lg font-semibold">Qualifications</h3>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h3 className="text-lg font-semibold">Qualifications</h3>
+          <Select value={filterCompanyId} onValueChange={setFilterCompanyId}>
+            <SelectTrigger className="w-44" data-testid="select-filter-company-qualifications">
+              <SelectValue placeholder="All Companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {(companies || []).map((c) => (
+                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-qualification">
@@ -550,14 +585,14 @@ function QualificationsTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(qualifications || []).length === 0 ? (
+              {filteredQualifications.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                     No qualifications found
                   </TableCell>
                 </TableRow>
               ) : (
-                (qualifications || []).map((qual) => {
+                filteredQualifications.map((qual) => {
                   const worker = qual.workerId ? workerMap.get(qual.workerId) : null;
                   return (
                     <TableRow key={qual.id} data-testid={`row-qualification-${qual.id}`}>
@@ -603,6 +638,7 @@ function QualificationsTab() {
 function SkillsTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
+  const [filterCompanyId, setFilterCompanyId] = useState("all");
   const [companyId, setCompanyId] = useState("");
   const [workerId, setWorkerId] = useState("");
   const [name, setName] = useState("");
@@ -616,7 +652,8 @@ function SkillsTab() {
   const { data: workers } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
-  const skills = (qualifications || []).filter((q) => q.type === "skill");
+  const allSkills = (qualifications || []).filter((q) => q.type === "skill");
+  const skills = filterCompanyId === "all" ? allSkills : allSkills.filter((q) => q.companyId === filterCompanyId);
   const workerMap = new Map((workers || []).map((w) => [w.id, w]));
 
   const createSkill = useMutation({
@@ -648,7 +685,18 @@ function SkillsTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h3 className="text-lg font-semibold">Skills</h3>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h3 className="text-lg font-semibold">Skills</h3>
+          <Select value={filterCompanyId} onValueChange={setFilterCompanyId}>
+            <SelectTrigger className="w-44" data-testid="select-filter-company-skills">
+              <SelectValue placeholder="All Companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {(companies || []).map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
+            </SelectContent>
+          </Select>
+        </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-skill"><Plus className="h-4 w-4 mr-2" />Add Skill</Button>
@@ -737,6 +785,7 @@ function SkillsTab() {
 function EducationTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
+  const [filterCompanyId, setFilterCompanyId] = useState("all");
   const [companyId, setCompanyId] = useState("");
   const [workerId, setWorkerId] = useState("");
   const [name, setName] = useState("");
@@ -747,7 +796,8 @@ function EducationTab() {
   const { data: workers } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
-  const education = (qualifications || []).filter((q) => q.type === "education");
+  const allEducation = (qualifications || []).filter((q) => q.type === "education");
+  const education = filterCompanyId === "all" ? allEducation : allEducation.filter((q) => q.companyId === filterCompanyId);
   const workerMap = new Map((workers || []).map((w) => [w.id, w]));
 
   const createEducation = useMutation({
@@ -779,7 +829,18 @@ function EducationTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h3 className="text-lg font-semibold">Education</h3>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h3 className="text-lg font-semibold">Education</h3>
+          <Select value={filterCompanyId} onValueChange={setFilterCompanyId}>
+            <SelectTrigger className="w-44" data-testid="select-filter-company-education">
+              <SelectValue placeholder="All Companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {(companies || []).map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
+            </SelectContent>
+          </Select>
+        </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-education"><Plus className="h-4 w-4 mr-2" />Add Education</Button>
@@ -869,6 +930,7 @@ function EducationTab() {
 function LicensesTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
+  const [filterCompanyId, setFilterCompanyId] = useState("all");
   const [companyId, setCompanyId] = useState("");
   const [workerId, setWorkerId] = useState("");
   const [name, setName] = useState("");
@@ -879,7 +941,8 @@ function LicensesTab() {
   const { data: workers } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
-  const licenses = (qualifications || []).filter((q) => q.type === "license" || q.type === "certification");
+  const allLicenses = (qualifications || []).filter((q) => q.type === "license" || q.type === "certification");
+  const licenses = filterCompanyId === "all" ? allLicenses : allLicenses.filter((q) => q.companyId === filterCompanyId);
   const workerMap = new Map((workers || []).map((w) => [w.id, w]));
 
   const createLicense = useMutation({
@@ -911,7 +974,18 @@ function LicensesTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h3 className="text-lg font-semibold">Licenses &amp; Certifications</h3>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h3 className="text-lg font-semibold">Licenses &amp; Certifications</h3>
+          <Select value={filterCompanyId} onValueChange={setFilterCompanyId}>
+            <SelectTrigger className="w-44" data-testid="select-filter-company-licenses">
+              <SelectValue placeholder="All Companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {(companies || []).map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
+            </SelectContent>
+          </Select>
+        </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-license"><Plus className="h-4 w-4 mr-2" />Add License</Button>
@@ -1196,6 +1270,7 @@ function QualificationGroupsTab() {
 function LanguagesTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
+  const [filterCompanyId, setFilterCompanyId] = useState("all");
   const [companyId, setCompanyId] = useState("");
   const [workerId, setWorkerId] = useState("");
   const [language, setLanguage] = useState("");
@@ -1205,6 +1280,9 @@ function LanguagesTab() {
   const { data: workers } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
+  const filteredLanguages = filterCompanyId === "all"
+    ? (languages || [])
+    : (languages || []).filter((l) => l.companyId === filterCompanyId);
   const workerMap = new Map((workers || []).map((w) => [w.id, w]));
 
   const createLanguage = useMutation({
@@ -1236,7 +1314,18 @@ function LanguagesTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h3 className="text-lg font-semibold">Languages</h3>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h3 className="text-lg font-semibold">Languages</h3>
+          <Select value={filterCompanyId} onValueChange={setFilterCompanyId}>
+            <SelectTrigger className="w-44" data-testid="select-filter-company-languages">
+              <SelectValue placeholder="All Companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {(companies || []).map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
+            </SelectContent>
+          </Select>
+        </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-language"><Plus className="h-4 w-4 mr-2" />Add Language</Button>
@@ -1295,10 +1384,10 @@ function LanguagesTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(languages || []).length === 0 ? (
+              {filteredLanguages.length === 0 ? (
                 <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-8">No languages found</TableCell></TableRow>
               ) : (
-                (languages || []).map((lang) => {
+                filteredLanguages.map((lang) => {
                   const worker = lang.workerId ? workerMap.get(lang.workerId) : null;
                   return (
                     <TableRow key={lang.id} data-testid={`row-language-${lang.id}`}>
@@ -1322,6 +1411,7 @@ function LanguagesTab() {
 function MembershipsTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
+  const [filterCompanyId, setFilterCompanyId] = useState("all");
   const [companyId, setCompanyId] = useState("");
   const [workerId, setWorkerId] = useState("");
   const [organization, setOrganization] = useState("");
@@ -1333,6 +1423,9 @@ function MembershipsTab() {
   const { data: workers } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
+  const filteredMemberships = filterCompanyId === "all"
+    ? (memberships || [])
+    : (memberships || []).filter((m) => m.companyId === filterCompanyId);
   const workerMap = new Map((workers || []).map((w) => [w.id, w]));
 
   const createMembership = useMutation({
@@ -1364,7 +1457,18 @@ function MembershipsTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h3 className="text-lg font-semibold">Memberships</h3>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h3 className="text-lg font-semibold">Memberships</h3>
+          <Select value={filterCompanyId} onValueChange={setFilterCompanyId}>
+            <SelectTrigger className="w-44" data-testid="select-filter-company-memberships">
+              <SelectValue placeholder="All Companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {(companies || []).map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
+            </SelectContent>
+          </Select>
+        </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-membership"><Plus className="h-4 w-4 mr-2" />Add Membership</Button>
@@ -1424,10 +1528,10 @@ function MembershipsTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(memberships || []).length === 0 ? (
+              {filteredMemberships.length === 0 ? (
                 <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No memberships found</TableCell></TableRow>
               ) : (
-                (memberships || []).map((m) => {
+                filteredMemberships.map((m) => {
                   const worker = m.workerId ? workerMap.get(m.workerId) : null;
                   return (
                     <TableRow key={m.id} data-testid={`row-membership-${m.id}`}>
