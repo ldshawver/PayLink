@@ -14,6 +14,7 @@ import {
   legalEntities,
   enterprises, divisions, positions, costCenters, jobs,
   roles, rolePermissions, userRoles, checkTemplates,
+  timeOffRequests, schedulePreferences,
   type Company, type InsertCompany,
   type Worker, type InsertWorker,
   type TimePunch, type InsertTimePunch,
@@ -89,6 +90,8 @@ import {
   type WorkerMembership, type InsertWorkerMembership,
   type Receipt, type InsertReceipt,
   type ShiftOffer, type InsertShiftOffer,
+  type TimeOffRequest, type InsertTimeOffRequest,
+  type SchedulePreference, type InsertSchedulePreference,
   type PayrollPaymentMethod, type InsertPayrollPaymentMethod,
   type FundingAccount, type InsertFundingAccount,
   type PayrollPaymentRecord, type InsertPayrollPaymentRecord,
@@ -428,6 +431,17 @@ export interface IStorage {
   createShiftOffer(data: InsertShiftOffer): Promise<ShiftOffer>;
   updateShiftOffer(id: string, data: Partial<ShiftOffer>): Promise<ShiftOffer | undefined>;
   deleteShiftOffer(id: string): Promise<void>;
+
+  getTimeOffRequests(companyId?: string, workerId?: string): Promise<TimeOffRequest[]>;
+  getTimeOffRequest(id: string): Promise<TimeOffRequest | undefined>;
+  createTimeOffRequest(data: InsertTimeOffRequest): Promise<TimeOffRequest>;
+  updateTimeOffRequest(id: string, data: Partial<TimeOffRequest>): Promise<TimeOffRequest | undefined>;
+  deleteTimeOffRequest(id: string): Promise<void>;
+
+  getSchedulePreferences(companyId?: string, workerId?: string): Promise<SchedulePreference[]>;
+  createSchedulePreference(data: InsertSchedulePreference): Promise<SchedulePreference>;
+  updateSchedulePreference(id: string, data: Partial<SchedulePreference>): Promise<SchedulePreference | undefined>;
+  deleteSchedulePreference(id: string): Promise<void>;
 
   updatePayrollItem(id: string, data: Partial<PayrollItem>): Promise<PayrollItem | undefined>;
 
@@ -2019,6 +2033,50 @@ export class DatabaseStorage implements IStorage {
   }
   async deletePayrollPaymentRecord(id: string): Promise<void> {
     await db.delete(payrollPaymentRecords).where(eq(payrollPaymentRecords.id, id));
+  }
+
+  // Time-Off Requests
+  async getTimeOffRequests(companyId?: string, workerId?: string): Promise<TimeOffRequest[]> {
+    const conditions: any[] = [];
+    if (companyId) conditions.push(eq(timeOffRequests.companyId, companyId));
+    if (workerId) conditions.push(eq(timeOffRequests.workerId, workerId));
+    if (conditions.length > 0) return db.select().from(timeOffRequests).where(and(...conditions)).orderBy(desc(timeOffRequests.createdAt));
+    return db.select().from(timeOffRequests).orderBy(desc(timeOffRequests.createdAt));
+  }
+  async getTimeOffRequest(id: string): Promise<TimeOffRequest | undefined> {
+    const [r] = await db.select().from(timeOffRequests).where(eq(timeOffRequests.id, id));
+    return r;
+  }
+  async createTimeOffRequest(data: InsertTimeOffRequest): Promise<TimeOffRequest> {
+    const [r] = await db.insert(timeOffRequests).values(data).returning();
+    return r;
+  }
+  async updateTimeOffRequest(id: string, data: Partial<TimeOffRequest>): Promise<TimeOffRequest | undefined> {
+    const [r] = await db.update(timeOffRequests).set(data).where(eq(timeOffRequests.id, id)).returning();
+    return r;
+  }
+  async deleteTimeOffRequest(id: string): Promise<void> {
+    await db.delete(timeOffRequests).where(eq(timeOffRequests.id, id));
+  }
+
+  // Schedule Preferences
+  async getSchedulePreferences(companyId?: string, workerId?: string): Promise<SchedulePreference[]> {
+    const conditions: any[] = [];
+    if (companyId) conditions.push(eq(schedulePreferences.companyId, companyId));
+    if (workerId) conditions.push(eq(schedulePreferences.workerId, workerId));
+    if (conditions.length > 0) return db.select().from(schedulePreferences).where(and(...conditions)).orderBy(desc(schedulePreferences.createdAt));
+    return db.select().from(schedulePreferences).orderBy(desc(schedulePreferences.createdAt));
+  }
+  async createSchedulePreference(data: InsertSchedulePreference): Promise<SchedulePreference> {
+    const [r] = await db.insert(schedulePreferences).values(data).returning();
+    return r;
+  }
+  async updateSchedulePreference(id: string, data: Partial<SchedulePreference>): Promise<SchedulePreference | undefined> {
+    const [r] = await db.update(schedulePreferences).set(data).where(eq(schedulePreferences.id, id)).returning();
+    return r;
+  }
+  async deleteSchedulePreference(id: string): Promise<void> {
+    await db.delete(schedulePreferences).where(eq(schedulePreferences.id, id));
   }
 }
 

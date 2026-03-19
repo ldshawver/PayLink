@@ -7,7 +7,7 @@ import { sendScheduleEmailNotification, sendScheduleSmsNotification } from "./no
 import path from "path";
 import { db } from "./db";
 import { sql } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema } from "@shared/schema";
 
 const uploadStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, path.join(process.cwd(), "uploads")),
@@ -5654,6 +5654,95 @@ export async function registerRoutes(
       await db.delete(workerMemberships).where(and(eq(workerMemberships.id, req.params.id), eq(workerMemberships.workerId, user.workerId)));
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete membership" }); }
+  });
+
+  // ── Time-Off Requests ──────────────────────────────────────────────────────
+  app.get("/api/time-off-requests", requireAuth, async (req, res) => {
+    try {
+      const { companyId, workerId } = req.query as Record<string, string>;
+      const items = await storage.getTimeOffRequests(companyId, workerId);
+      res.json(items);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch time-off requests" }); }
+  });
+
+  app.get("/api/time-off-requests/:id", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.getTimeOffRequest(req.params.id);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch time-off request" }); }
+  });
+
+  app.post("/api/time-off-requests", requireAuth, async (req, res) => {
+    try {
+      const parsed = insertTimeOffRequestSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid data", errors: parsed.error.errors });
+      const item = await storage.createTimeOffRequest(parsed.data);
+      res.status(201).json(item);
+    } catch (e) { res.status(500).json({ message: "Failed to create time-off request" }); }
+  });
+
+  app.patch("/api/time-off-requests/:id", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.updateTimeOffRequest(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (e) { res.status(500).json({ message: "Failed to update time-off request" }); }
+  });
+
+  app.patch("/api/time-off-requests/:id/review", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { decision, reviewNote } = req.body;
+      if (!decision) return res.status(400).json({ message: "decision is required" });
+      const item = await storage.updateTimeOffRequest(req.params.id, {
+        status: decision,
+        reviewNote: reviewNote ?? null,
+        reviewedBy: req.session.userId,
+        reviewedAt: new Date(),
+      });
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (e) { res.status(500).json({ message: "Failed to review time-off request" }); }
+  });
+
+  app.delete("/api/time-off-requests/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteTimeOffRequest(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete time-off request" }); }
+  });
+
+  // ── Schedule Preferences ───────────────────────────────────────────────────
+  app.get("/api/schedule-preferences", requireAuth, async (req, res) => {
+    try {
+      const { companyId, workerId } = req.query as Record<string, string>;
+      const items = await storage.getSchedulePreferences(companyId, workerId);
+      res.json(items);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch schedule preferences" }); }
+  });
+
+  app.post("/api/schedule-preferences", requireAuth, async (req, res) => {
+    try {
+      const parsed = insertSchedulePreferenceSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid data", errors: parsed.error.errors });
+      const item = await storage.createSchedulePreference(parsed.data);
+      res.status(201).json(item);
+    } catch (e) { res.status(500).json({ message: "Failed to create schedule preference" }); }
+  });
+
+  app.patch("/api/schedule-preferences/:id", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.updateSchedulePreference(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Not found" });
+      res.json(item);
+    } catch (e) { res.status(500).json({ message: "Failed to update schedule preference" }); }
+  });
+
+  app.delete("/api/schedule-preferences/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteSchedulePreference(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete schedule preference" }); }
   });
 
   return httpServer;

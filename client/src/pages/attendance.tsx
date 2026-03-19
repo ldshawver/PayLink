@@ -15,6 +15,14 @@ import {
   MoreHorizontal,
   RefreshCw,
   AlertTriangle,
+  CalendarOff,
+  SlidersHorizontal,
+  Star,
+  Sun,
+  Sunset,
+  Moon,
+  Sunrise,
+  Coffee,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -73,6 +81,8 @@ import type {
   Company,
   AccrualBalance,
   AccrualAccount,
+  TimeOffRequest,
+  SchedulePreference,
 } from "@shared/schema";
 
 function useTabParam(defaultTab: string): string {
@@ -1409,6 +1419,526 @@ function PendingApprovalsTab() {
   );
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const TIME_OFF_TYPES = [
+  { value: "vacation", label: "Vacation" },
+  { value: "personal", label: "Personal" },
+  { value: "sick", label: "Sick" },
+  { value: "unpaid", label: "Unpaid" },
+  { value: "bereavement", label: "Bereavement" },
+  { value: "jury_duty", label: "Jury Duty" },
+  { value: "medical", label: "Medical" },
+  { value: "other", label: "Other" },
+];
+
+const SHIFT_TIMES = [
+  { value: "early_morning", label: "Early Morning (before 6am)" },
+  { value: "morning", label: "Morning (6am–12pm)" },
+  { value: "midday", label: "Midday (10am–2pm)" },
+  { value: "afternoon", label: "Afternoon (12pm–6pm)" },
+  { value: "evening", label: "Evening (4pm–10pm)" },
+  { value: "graveyard", label: "Graveyard (10pm–6am)" },
+];
+
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function importanceBadge(n: number) {
+  const map: Record<number, { label: string; className: string }> = {
+    1: { label: "Critical", className: "bg-red-100 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-400" },
+    2: { label: "High", className: "bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-950/30 dark:text-orange-400" },
+    3: { label: "Medium", className: "bg-yellow-100 text-yellow-700 border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-400" },
+    4: { label: "Low", className: "bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-400" },
+    5: { label: "Lowest", className: "bg-gray-100 text-gray-500 border-gray-200 dark:bg-gray-800 dark:text-gray-400" },
+  };
+  const m = map[n] ?? map[3];
+  return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${m.className}`}>{m.label}</span>;
+}
+
+function timeOffStatusBadge(status: string) {
+  if (status === "approved") return <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400">Approved</Badge>;
+  if (status === "denied") return <Badge className="bg-red-100 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-400">Denied</Badge>;
+  return <Badge variant="secondary">Pending</Badge>;
+}
+
+// ── Time-Off Requests Tab ────────────────────────────────────────────────────
+function TimeOffRequestsTab() {
+  const { toast } = useToast();
+  const [companyFilter, setCompanyFilter] = useState<string>("all");
+  const [workerFilter, setWorkerFilter] = useState<string>("all");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
+  const [selectedRequest, setSelectedRequest] = useState<TimeOffRequest | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [form, setForm] = useState({ workerId: "", companyId: "", requestType: "vacation", startDate: "", endDate: "", reason: "" });
+  const [reviewForm, setReviewForm] = useState({ decision: "approved", reviewNote: "" });
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
+  const { data: requests = [], isLoading } = useQuery<TimeOffRequest[]>({
+    queryKey: ["/api/time-off-requests", companyFilter, workerFilter],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (companyFilter !== "all") params.set("companyId", companyFilter);
+      if (workerFilter !== "all") params.set("workerId", workerFilter);
+      const res = await fetch(`/api/time-off-requests?${params}`);
+      return res.json();
+    },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (data: typeof form) => apiRequest("POST", "/api/time-off-requests", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/time-off-requests"] });
+      setDialogOpen(false);
+      setForm({ workerId: "", companyId: "", requestType: "vacation", startDate: "", endDate: "", reason: "" });
+      toast({ title: "Request created" });
+    },
+    onError: () => toast({ title: "Failed to create request", variant: "destructive" }),
+  });
+
+  const reviewMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: typeof reviewForm }) =>
+      apiRequest("PATCH", `/api/time-off-requests/${id}/review`, { decision: data.decision, reviewNote: data.reviewNote }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/time-off-requests"] });
+      setReviewDialogOpen(false);
+      toast({ title: "Request reviewed" });
+    },
+    onError: () => toast({ title: "Failed to review request", variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/time-off-requests/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/time-off-requests"] });
+      setDeleteId(null);
+      toast({ title: "Request deleted" });
+    },
+    onError: () => toast({ title: "Failed to delete request", variant: "destructive" }),
+  });
+
+  const filteredWorkers = form.companyId ? workers.filter(w => w.companyId === form.companyId) : workers;
+  const workerName = (id: string) => { const w = workers.find(x => x.id === id); return w ? `${w.firstName} ${w.lastName}` : id; };
+  const companyName = (id: string) => companies.find(x => x.id === id)?.name ?? id;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-2 items-center justify-between p-4 pb-0">
+        <div className="flex gap-2">
+          <Select value={companyFilter} onValueChange={setCompanyFilter}>
+            <SelectTrigger className="w-44 h-8 text-sm" data-testid="select-tor-company">
+              <SelectValue placeholder="All Companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={workerFilter} onValueChange={setWorkerFilter}>
+            <SelectTrigger className="w-44 h-8 text-sm" data-testid="select-tor-worker">
+              <SelectValue placeholder="All Employees" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Employees</SelectItem>
+              {workers.map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button size="sm" data-testid="button-add-time-off-request">
+              <Plus className="h-4 w-4 mr-1" /> New Request
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader><DialogTitle>New Time-Off Request</DialogTitle></DialogHeader>
+            <div className="space-y-3">
+              <div>
+                <Label>Company</Label>
+                <Select value={form.companyId} onValueChange={v => setForm(f => ({ ...f, companyId: v, workerId: "" }))}>
+                  <SelectTrigger data-testid="select-tor-form-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                  <SelectContent>{companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Employee</Label>
+                <Select value={form.workerId} onValueChange={v => setForm(f => ({ ...f, workerId: v }))}>
+                  <SelectTrigger data-testid="select-tor-form-worker"><SelectValue placeholder="Select employee" /></SelectTrigger>
+                  <SelectContent>{filteredWorkers.map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Request Type</Label>
+                <Select value={form.requestType} onValueChange={v => setForm(f => ({ ...f, requestType: v }))}>
+                  <SelectTrigger data-testid="select-tor-form-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>{TIME_OFF_TYPES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label>Start Date</Label>
+                  <Input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} data-testid="input-tor-start-date" />
+                </div>
+                <div>
+                  <Label>End Date</Label>
+                  <Input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} data-testid="input-tor-end-date" />
+                </div>
+              </div>
+              <div>
+                <Label>Reason (optional)</Label>
+                <Textarea value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} rows={2} data-testid="textarea-tor-reason" />
+              </div>
+            </div>
+            <DialogFooter>
+              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+              <Button
+                onClick={() => createMutation.mutate(form)}
+                disabled={createMutation.isPending || !form.workerId || !form.companyId || !form.startDate || !form.endDate}
+                data-testid="button-submit-tor">
+                {createMutation.isPending ? "Saving…" : "Submit Request"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {isLoading ? (
+        <div className="p-4 space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
+      ) : requests.length === 0 ? (
+        <div className="text-center py-12 text-muted-foreground">
+          <CalendarOff className="h-10 w-10 mx-auto mb-2 opacity-30" />
+          <p>No time-off requests found</p>
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Employee</TableHead>
+              <TableHead>Company</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Dates</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Review Note</TableHead>
+              <TableHead className="w-20"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {requests.map(r => (
+              <TableRow key={r.id} data-testid={`row-tor-${r.id}`}>
+                <TableCell className="font-medium">{workerName(r.workerId)}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">{companyName(r.companyId)}</TableCell>
+                <TableCell className="capitalize text-sm">{TIME_OFF_TYPES.find(t => t.value === r.requestType)?.label ?? r.requestType}</TableCell>
+                <TableCell className="text-sm">{r.startDate} → {r.endDate}</TableCell>
+                <TableCell>{timeOffStatusBadge(r.status)}</TableCell>
+                <TableCell className="text-sm text-muted-foreground max-w-[160px] truncate">{r.reviewNote ?? "—"}</TableCell>
+                <TableCell>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" data-testid={`menu-tor-${r.id}`}>
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      {r.status === "pending" && (
+                        <DropdownMenuItem onClick={() => { setSelectedRequest(r); setReviewForm({ decision: "approved", reviewNote: "" }); setReviewDialogOpen(true); }}
+                          data-testid={`menu-review-tor-${r.id}`}>
+                          <Check className="h-4 w-4 mr-2" /> Review
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem className="text-destructive" onClick={() => setDeleteId(r.id)} data-testid={`menu-delete-tor-${r.id}`}>
+                        <Trash2 className="h-4 w-4 mr-2" /> Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      {/* Review Dialog */}
+      <Dialog open={reviewDialogOpen} onOpenChange={setReviewDialogOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Review Time-Off Request</DialogTitle></DialogHeader>
+          {selectedRequest && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                <strong>{workerName(selectedRequest.workerId)}</strong> — {TIME_OFF_TYPES.find(t => t.value === selectedRequest.requestType)?.label} from {selectedRequest.startDate} to {selectedRequest.endDate}
+              </p>
+              <div>
+                <Label>Decision</Label>
+                <Select value={reviewForm.decision} onValueChange={v => setReviewForm(f => ({ ...f, decision: v }))}>
+                  <SelectTrigger data-testid="select-review-decision"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="approved">Approve</SelectItem>
+                    <SelectItem value="denied">Deny</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Note (optional)</Label>
+                <Textarea value={reviewForm.reviewNote} onChange={e => setReviewForm(f => ({ ...f, reviewNote: e.target.value }))} rows={2} data-testid="textarea-review-note" />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            <Button
+              onClick={() => selectedRequest && reviewMutation.mutate({ id: selectedRequest.id, data: reviewForm })}
+              disabled={reviewMutation.isPending}
+              data-testid="button-submit-review">
+              {reviewMutation.isPending ? "Saving…" : "Submit Review"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirm */}
+      <AlertDialog open={!!deleteId} onOpenChange={open => !open && setDeleteId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this request?</AlertDialogTitle>
+            <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => deleteId && deleteMutation.mutate(deleteId)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+// ── Schedule Preferences Tab ─────────────────────────────────────────────────
+function SchedulePreferencesTab() {
+  const { toast } = useToast();
+  const [companyFilter, setCompanyFilter] = useState<string>("all");
+  const [workerFilter, setWorkerFilter] = useState<string>("all");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    workerId: "", companyId: "", preferenceType: "day_off",
+    dayOfWeek: "none" as string, shiftTime: "none", preferNotToWork: false, importance: 3, note: "",
+  });
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
+  const { data: prefs = [], isLoading } = useQuery<SchedulePreference[]>({
+    queryKey: ["/api/schedule-preferences", companyFilter, workerFilter],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (companyFilter !== "all") params.set("companyId", companyFilter);
+      if (workerFilter !== "all") params.set("workerId", workerFilter);
+      const res = await fetch(`/api/schedule-preferences?${params}`);
+      return res.json();
+    },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (data: typeof form) => apiRequest("POST", "/api/schedule-preferences", {
+      ...data,
+      dayOfWeek: data.dayOfWeek !== "none" ? Number(data.dayOfWeek) : null,
+      shiftTime: data.shiftTime !== "none" ? data.shiftTime : null,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/schedule-preferences"] });
+      setDialogOpen(false);
+      setForm({ workerId: "", companyId: "", preferenceType: "day_off", dayOfWeek: "none", shiftTime: "none", preferNotToWork: false, importance: 3, note: "" });
+      toast({ title: "Preference saved" });
+    },
+    onError: () => toast({ title: "Failed to save preference", variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/schedule-preferences/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/schedule-preferences"] });
+      setDeleteId(null);
+      toast({ title: "Preference deleted" });
+    },
+    onError: () => toast({ title: "Failed to delete preference", variant: "destructive" }),
+  });
+
+  const filteredWorkers = form.companyId ? workers.filter(w => w.companyId === form.companyId) : workers;
+  const workerName = (id: string) => { const w = workers.find(x => x.id === id); return w ? `${w.firstName} ${w.lastName}` : id; };
+  const companyName = (id: string) => companies.find(x => x.id === id)?.name ?? id;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-2 items-center justify-between p-4 pb-0">
+        <div className="flex gap-2">
+          <Select value={companyFilter} onValueChange={setCompanyFilter}>
+            <SelectTrigger className="w-44 h-8 text-sm" data-testid="select-sp-company">
+              <SelectValue placeholder="All Companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={workerFilter} onValueChange={setWorkerFilter}>
+            <SelectTrigger className="w-44 h-8 text-sm" data-testid="select-sp-worker">
+              <SelectValue placeholder="All Employees" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Employees</SelectItem>
+              {workers.map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button size="sm" data-testid="button-add-schedule-pref">
+              <Plus className="h-4 w-4 mr-1" /> Add Preference
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Add Schedule Preference</DialogTitle></DialogHeader>
+            <div className="space-y-3">
+              <div>
+                <Label>Company</Label>
+                <Select value={form.companyId} onValueChange={v => setForm(f => ({ ...f, companyId: v, workerId: "" }))}>
+                  <SelectTrigger data-testid="select-sp-form-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                  <SelectContent>{companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Employee</Label>
+                <Select value={form.workerId} onValueChange={v => setForm(f => ({ ...f, workerId: v }))}>
+                  <SelectTrigger data-testid="select-sp-form-worker"><SelectValue placeholder="Select employee" /></SelectTrigger>
+                  <SelectContent>{filteredWorkers.map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Preference Type</Label>
+                <Select value={form.preferenceType} onValueChange={v => setForm(f => ({ ...f, preferenceType: v }))}>
+                  <SelectTrigger data-testid="select-sp-form-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="day_off">Day Off</SelectItem>
+                    <SelectItem value="preferred_day">Preferred Work Day</SelectItem>
+                    <SelectItem value="preferred_shift">Preferred Shift</SelectItem>
+                    <SelectItem value="unavailable">Unavailable</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label>Day of Week</Label>
+                  <Select value={String(form.dayOfWeek)} onValueChange={v => setForm(f => ({ ...f, dayOfWeek: v }))}>
+                    <SelectTrigger data-testid="select-sp-form-day"><SelectValue placeholder="Any day" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Any day</SelectItem>
+                      {DAY_NAMES.map((d, i) => <SelectItem key={i} value={String(i)}>{d}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Shift Time</Label>
+                  <Select value={form.shiftTime} onValueChange={v => setForm(f => ({ ...f, shiftTime: v }))}>
+                    <SelectTrigger data-testid="select-sp-form-shift"><SelectValue placeholder="Any shift" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Any shift</SelectItem>
+                      {SHIFT_TIMES.map(s => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div>
+                <Label>Importance (1=Critical, 5=Lowest)</Label>
+                <Select value={String(form.importance)} onValueChange={v => setForm(f => ({ ...f, importance: Number(v) }))}>
+                  <SelectTrigger data-testid="select-sp-form-importance"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">1 — Critical</SelectItem>
+                    <SelectItem value="2">2 — High</SelectItem>
+                    <SelectItem value="3">3 — Medium</SelectItem>
+                    <SelectItem value="4">4 — Low</SelectItem>
+                    <SelectItem value="5">5 — Lowest</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Note (optional)</Label>
+                <Input value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} data-testid="input-sp-form-note" />
+              </div>
+            </div>
+            <DialogFooter>
+              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+              <Button
+                onClick={() => createMutation.mutate(form)}
+                disabled={createMutation.isPending || !form.workerId || !form.companyId}
+                data-testid="button-submit-sp">
+                {createMutation.isPending ? "Saving…" : "Save Preference"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {isLoading ? (
+        <div className="p-4 space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
+      ) : prefs.length === 0 ? (
+        <div className="text-center py-12 text-muted-foreground">
+          <SlidersHorizontal className="h-10 w-10 mx-auto mb-2 opacity-30" />
+          <p>No schedule preferences found</p>
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Employee</TableHead>
+              <TableHead>Company</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Day</TableHead>
+              <TableHead>Shift</TableHead>
+              <TableHead>Importance</TableHead>
+              <TableHead>Note</TableHead>
+              <TableHead className="w-16"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {prefs.map(p => (
+              <TableRow key={p.id} data-testid={`row-sp-${p.id}`}>
+                <TableCell className="font-medium">{workerName(p.workerId)}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">{companyName(p.companyId)}</TableCell>
+                <TableCell className="capitalize text-sm">{p.preferenceType.replace(/_/g, " ")}</TableCell>
+                <TableCell className="text-sm">{p.dayOfWeek != null ? DAY_NAMES[p.dayOfWeek] ?? String(p.dayOfWeek) : "—"}</TableCell>
+                <TableCell className="text-sm">{SHIFT_TIMES.find(s => s.value === p.shiftTime)?.label.split(" ")[0] ?? "—"}</TableCell>
+                <TableCell>{importanceBadge(p.importance)}</TableCell>
+                <TableCell className="text-sm text-muted-foreground max-w-[140px] truncate">{p.note ?? "—"}</TableCell>
+                <TableCell>
+                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                    onClick={() => setDeleteId(p.id)} data-testid={`button-delete-sp-${p.id}`}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      <AlertDialog open={!!deleteId} onOpenChange={open => !open && setDeleteId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this preference?</AlertDialogTitle>
+            <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => deleteId && deleteMutation.mutate(deleteId)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
 export default function AttendancePage() {
   const currentTab = useTabParam("timesheet");
 
@@ -1462,6 +1992,22 @@ export default function AttendancePage() {
               <span className="flex items-center gap-1.5">
                 <AlertTriangle className="h-4 w-4" />
                 Pending Approvals
+              </span>
+            </TabsTrigger>
+          </Link>
+          <Link href="/attendance?tab=time-off">
+            <TabsTrigger value="time-off" data-testid="tab-time-off" asChild>
+              <span className="flex items-center gap-1.5">
+                <CalendarOff className="h-4 w-4" />
+                Time Off
+              </span>
+            </TabsTrigger>
+          </Link>
+          <Link href="/attendance?tab=schedule-preferences">
+            <TabsTrigger value="schedule-preferences" data-testid="tab-schedule-preferences" asChild>
+              <span className="flex items-center gap-1.5">
+                <SlidersHorizontal className="h-4 w-4" />
+                Schedule Preferences
               </span>
             </TabsTrigger>
           </Link>
@@ -1521,6 +2067,34 @@ export default function AttendancePage() {
             </CardHeader>
             <CardContent className="p-0">
               <PendingApprovalsTab />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="time-off">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <CalendarOff className="h-5 w-5 text-teal-600" />
+                Time-Off Requests
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <TimeOffRequestsTab />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="schedule-preferences">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <SlidersHorizontal className="h-5 w-5 text-teal-600" />
+                Schedule Preferences
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <SchedulePreferencesTab />
             </CardContent>
           </Card>
         </TabsContent>
