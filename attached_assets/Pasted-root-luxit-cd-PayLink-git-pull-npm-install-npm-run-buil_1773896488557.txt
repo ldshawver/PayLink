@@ -1,0 +1,44 @@
+root@luxit:~# cd ~/PayLink && git pull && npm install && npm run build && pm2 restart paylink
+-bash: cd: /root/PayLink: No such file or directory
+root@luxit:~# pm2 start paylink
+-bash: pm2: command not found
+root@luxit:~# m2 list 
+-bash: m2: command not found
+root@luxit:~# cd ~/PayLink && git pull && npm install && npm run build && pm2 restart paylink
+-bash: cd: /root/PayLink: No such file or directory
+root@luxit:~# find /home /root /var /opt -maxdepth 4 -name "package.json" 2>/dev/null | grep -i paylink
+root@luxit:~# pm2 show paylink | grep "exec cwd"
+-bash: pm2: command not found
+root@luxit:~# cd /home/lshawver/PayLink && git pull && npm install && npm run build && pm2 restart paylink
+-bash: cd: /home/lshawver/PayLink: No such file or directory
+root@luxit:~# pm2 show paylink | grep "exec cwd"
+-bash: pm2: command not found
+root@luxit:~# # Find pm2
+which pm2 || ls /usr/local/bin/pm2 || ls ~/.npm-global/bin/pm2 || ls /usr/bin/pm2
+
+# Find PayLink directory
+find /home /var /opt /srv -maxdepth 4 -name "package.json" 2>/dev/null | xargs grep -l '"paylink"\|"PayLink"\|paylink' 2>/dev/null | head -5
+ls: cannot access '/usr/local/bin/pm2': No such file or directory
+ls: cannot access '/root/.npm-global/bin/pm2': No such file or directory
+ls: cannot access '/usr/bin/pm2': No such file or directory
+root@luxit:~# # Check if it's under the lshawver user
+ls /home/lshawver/
+
+# Try running pm2 as that user
+su - lshawver -c "which pm2; pm2 list"
+
+# Or find node/npm
+which node || find /usr /home /root -name "node" -type f 2>/dev/null | head -3
+find /usr /home /root -name "pm2" -type f 2>/dev/null | head -3
+ls: cannot access '/home/lshawver/': No such file or directory
+su: user lshawver does not exist or the user entry does not contain all the required fields
+root@luxit:~# # See all running node processes and their working directories
+ps aux | grep node | grep -v grep
+
+# Check for systemd services
+systemctl list-units --type=service --state=running | grep -i "node\|pay\|link"
+
+# Find the PayLink files anywhere on disk
+find / -maxdepth 6 -name "package.json" -not -path "*/node_modules/*" 2>/dev/null | xargs grep -l "PayLink\|paylink" 2>/dev/null | head -10
+root@luxit:~# ps aux | grep node | grep -v grep
+root@luxit:~# ps aux | grep node | grep -v grep
