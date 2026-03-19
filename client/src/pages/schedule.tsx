@@ -1009,10 +1009,12 @@ export default function SchedulePage() {
                 </Dialog>
               )}
 
-              <Button onClick={() => setAddScheduleOpen(true)} data-testid="button-add-schedule">
-                <Plus className="h-4 w-4 mr-1" />
-                Add Shift
-              </Button>
+              {isAdminOrManager && (
+                <Button onClick={() => setAddScheduleOpen(true)} data-testid="button-add-schedule">
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Shift
+                </Button>
+              )}
             </div>
           </div>
 
@@ -1104,8 +1106,9 @@ export default function SchedulePage() {
                                                 : "bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800"
                                           }`}
                                           data-testid={`shift-${s.id}`}
-                                          onClick={() => openEditSchedule(s)}
-                                          title={s.status === "draft" ? "Draft — click to edit" : "Published — click to edit"}
+                                          onClick={() => isAdminOrManager && openEditSchedule(s)}
+                                          title={isAdminOrManager ? (s.status === "draft" ? "Draft — click to edit" : "Published — click to edit") : undefined}
+                                          style={{ cursor: isAdminOrManager ? "pointer" : "default" }}
                                         >
                                           <div className="font-medium pr-5 flex items-center gap-1">
                                             {s.startTime} - {s.endTime}
@@ -1138,8 +1141,10 @@ export default function SchedulePage() {
                                           {shiftOffers.some(o => o.scheduleId === s.id && o.status === "claimed") && (
                                             <div className="text-blue-600 dark:text-blue-400 font-semibold text-[10px]">⚑ Claimed — needs approval</div>
                                           )}
-                                          {/* Always-visible edit icon in top-right corner */}
-                                          <Pencil className="absolute top-0.5 right-0.5 h-2.5 w-2.5 text-muted-foreground/50 group-hover:text-primary transition-colors" />
+                                          {/* Always-visible edit icon in top-right corner — managers/admins only */}
+                                          {isAdminOrManager && (
+                                            <Pencil className="absolute top-0.5 right-0.5 h-2.5 w-2.5 text-muted-foreground/50 group-hover:text-primary transition-colors" />
+                                          )}
                                           {/* Hover-only offer & delete buttons */}
                                           <div className="invisible group-hover:visible absolute top-0 right-4 flex gap-0.5 z-20">
                                             <Button
@@ -1151,14 +1156,16 @@ export default function SchedulePage() {
                                             >
                                               <RefreshCw className="h-3 w-3 text-amber-600" />
                                             </Button>
-                                            <Button
-                                              size="icon"
-                                              variant="ghost"
-                                              onClick={(e) => { e.stopPropagation(); deleteScheduleMutation.mutate(s.id); }}
-                                              data-testid={`button-delete-shift-${s.id}`}
-                                            >
-                                              <Trash2 className="h-3 w-3" />
-                                            </Button>
+                                            {isAdminOrManager && (
+                                              <Button
+                                                size="icon"
+                                                variant="ghost"
+                                                onClick={(e) => { e.stopPropagation(); deleteScheduleMutation.mutate(s.id); }}
+                                                data-testid={`button-delete-shift-${s.id}`}
+                                              >
+                                                <Trash2 className="h-3 w-3" />
+                                              </Button>
+                                            )}
                                           </div>
                                         </div>
                                       ))}
@@ -1233,10 +1240,12 @@ export default function SchedulePage() {
                     ))}
                   </SelectContent>
                 </Select>
-                <Button onClick={() => setAddScheduleOpen(true)} data-testid="button-add-shift-list">
-                  <Plus className="h-4 w-4 mr-1" />
-                  Add Shift
-                </Button>
+                {isAdminOrManager && (
+                  <Button onClick={() => setAddScheduleOpen(true)} data-testid="button-add-shift-list">
+                    <Plus className="h-4 w-4 mr-1" />
+                    Add Shift
+                  </Button>
+                )}
               </div>
             </CardHeader>
             <CardContent>
@@ -1258,7 +1267,7 @@ export default function SchedulePage() {
                       <TableHead>Hours</TableHead>
                       <TableHead>Department</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>Actions</TableHead>
+                      {isAdminOrManager && <TableHead>Actions</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1292,26 +1301,28 @@ export default function SchedulePage() {
                                 {s.status}
                               </Badge>
                             </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-1">
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  onClick={() => openEditSchedule(s)}
-                                  data-testid={`button-edit-${s.id}`}
-                                >
-                                  <Pencil className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  onClick={() => deleteScheduleMutation.mutate(s.id)}
-                                  data-testid={`button-delete-${s.id}`}
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            </TableCell>
+                            {isAdminOrManager && (
+                              <TableCell>
+                                <div className="flex items-center gap-1">
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    onClick={() => openEditSchedule(s)}
+                                    data-testid={`button-edit-${s.id}`}
+                                  >
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    onClick={() => deleteScheduleMutation.mutate(s.id)}
+                                    data-testid={`button-delete-${s.id}`}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            )}
                           </TableRow>
                         ))
                     )}
