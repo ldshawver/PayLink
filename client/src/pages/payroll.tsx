@@ -2199,6 +2199,9 @@ function PayStubAccountsTab() {
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
+  const [quickStartOpen, setQuickStartOpen] = useState(false);
+  const [quickStartCompany, setQuickStartCompany] = useState("");
+
   const quickSetupMutation = useMutation({
     mutationFn: async ({ companyId, legalEntityId }: { companyId: string; legalEntityId: string }) => {
       const res = await apiRequest("POST", "/api/pay-stub-accounts/quick-setup", { companyId, legalEntityId: legalEntityId || null });
@@ -2206,7 +2209,8 @@ function PayStubAccountsTab() {
     },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/pay-stub-accounts"] });
-      toast({ title: "Quick Setup Complete", description: data.message });
+      toast({ title: "Quick Start Complete", description: data.message });
+      setQuickStartOpen(false);
     },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
@@ -2300,17 +2304,13 @@ function PayStubAccountsTab() {
           </SelectContent>
         </Select>
         <div className="flex items-center gap-2">
-          {selectedCompany !== "all" && (
-            <Button
-              variant="outline"
-              data-testid="button-psa-quick-setup"
-              disabled={quickSetupMutation.isPending}
-              onClick={() => quickSetupMutation.mutate({ companyId: selectedCompany, legalEntityId: selectedCompLegalEntityId })}
-            >
-              <Zap className="mr-2 h-4 w-4" />
-              {quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
-            </Button>
-          )}
+          <Button
+            variant="outline"
+            data-testid="button-psa-quick-start"
+            onClick={() => { setQuickStartCompany(selectedCompany !== "all" ? selectedCompany : ""); setQuickStartOpen(true); }}
+          >
+            <Zap className="mr-2 h-4 w-4" />Quick Start
+          </Button>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
               <Button data-testid="button-add-pay-stub-account"><Plus className="mr-2 h-4 w-4" />Add Account</Button>
@@ -2398,14 +2398,71 @@ function PayStubAccountsTab() {
         </div>
       </div>
 
+      {/* Quick Start Dialog */}
+      <Dialog open={quickStartOpen} onOpenChange={setQuickStartOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Zap className="h-5 w-5 text-yellow-500" />Pay Stub Accounts — Quick Start</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">Creates the following standard accounts for the selected company. Accounts that already exist will be skipped.</p>
+          <div className="space-y-2 my-2 max-h-72 overflow-y-auto pr-1">
+            {[
+              { label: "Earnings", color: "text-green-700 dark:text-green-400", items: ["Regular Wages", "Overtime", "Vacation"] },
+              { label: "Taxes", color: "text-red-700 dark:text-red-400", items: ["Federal Income Tax", "Social Security", "Medicare", "CA Personal Income Tax", "CA State Disability Insurance"] },
+              { label: "Deductions", color: "text-orange-700 dark:text-orange-400", items: ["Health Insurance", "401k"] },
+              { label: "Employer Contributions", color: "text-blue-700 dark:text-blue-400", items: ["Employer Social Security", "Employer Medicare", "FUTA", "CA Unemployment Insurance (SUI)", "CA Employment Training Tax (ETT)"] },
+              { label: "Employee Contributions", color: "text-purple-700 dark:text-purple-400", items: ["Employee Social Security (12.4%)", "Employee Medicare (2.9%)"] },
+            ].map(group => (
+              <div key={group.label}>
+                <p className={`text-xs font-semibold uppercase tracking-wider mb-1 ${group.color}`}>{group.label}</p>
+                <div className="flex flex-wrap gap-1">
+                  {group.items.map(item => (
+                    <span key={item} className="text-xs bg-muted rounded px-2 py-0.5">{item}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="space-y-2">
+            <Label>Apply to Company</Label>
+            <Select value={quickStartCompany} onValueChange={setQuickStartCompany}>
+              <SelectTrigger data-testid="select-quick-start-company"><SelectValue placeholder="Select a company" /></SelectTrigger>
+              <SelectContent>
+                {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex justify-end gap-2 mt-2">
+            <Button variant="outline" onClick={() => setQuickStartOpen(false)}>Cancel</Button>
+            <Button
+              data-testid="button-quick-start-confirm"
+              disabled={!quickStartCompany || quickSetupMutation.isPending}
+              onClick={() => {
+                const comp = companies.find(c => c.id === quickStartCompany);
+                quickSetupMutation.mutate({ companyId: quickStartCompany, legalEntityId: comp?.legalEntityId || "" });
+              }}
+            >
+              <Zap className="mr-2 h-4 w-4" />
+              {quickSetupMutation.isPending ? "Creating accounts..." : "Run Quick Start"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {filteredAccounts.length === 0 ? (
-        <Card>
-          <CardContent className="p-8 text-center">
-            <Receipt className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
-            <p className="text-muted-foreground mb-2">No pay stub accounts configured.</p>
-            {selectedCompany !== "all" && (
-              <p className="text-sm text-muted-foreground">Use Quick Setup to add standard earnings, taxes, deductions, and employer contributions.</p>
-            )}
+        <Card className="border-dashed">
+          <CardContent className="p-10 text-center">
+            <Receipt className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" />
+            <h3 className="font-semibold mb-1">No pay stub accounts yet</h3>
+            <p className="text-sm text-muted-foreground mb-5 max-w-sm mx-auto">
+              Pay stub accounts define the line items that appear on employee pay stubs — earnings, taxes, deductions, and contributions.
+            </p>
+            <Button
+              data-testid="button-empty-quick-start"
+              onClick={() => { setQuickStartCompany(selectedCompany !== "all" ? selectedCompany : ""); setQuickStartOpen(true); }}
+            >
+              <Zap className="mr-2 h-4 w-4" />Quick Start — Create Standard Accounts
+            </Button>
           </CardContent>
         </Card>
       ) : (
