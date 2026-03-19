@@ -55,6 +55,7 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 -   **Expense Management:** CRUD for expense receipts, including photo uploads, approval workflows, and check printing with job-cost allocation.
 -   **User Account Management:** Admins can manage user accounts with role assignments and worker linkages. Login system supports employee PIN, manager username/password, and time clock kiosk modes.
 -   **Schedule Publishing:** Managers can publish draft schedules, triggering email and SMS notifications to employees.
+-   **NACHA ACH Direct Deposit:** Each payroll run has a "Direct Deposit (ACH) this payroll" toggle (on by default) and a Pay Date field. When a run is processed and direct deposit is enabled, a "Download ACH File" button generates a NACHA-formatted `.ach` file to upload to the company's bank, initiating all direct deposits. Workers without bank account info on file are skipped and receive checks. Source bank info is pulled from the company's Remittance Sources. Backend: `GET /api/payroll-runs/:id/nacha`. DB: `payroll_runs.use_direct_deposit` (boolean, default true), `payroll_runs.pay_date` (date).
 
 ## External Dependencies
 -   **PostgreSQL:** Primary application database.
