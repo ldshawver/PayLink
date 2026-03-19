@@ -4980,7 +4980,8 @@ export async function registerRoutes(
       const RESOURCES = [
         "dashboard", "companies", "workers", "schedules", "payroll", "timesheets",
         "departments", "branches", "divisions", "positions",
-        "policies", "hr", "reports", "timeclock", "settings", "permissions", "system_admin"
+        "policies", "hr", "reports", "timeclock", "settings", "permissions", "system_admin",
+        "my_preferences", "my_paystubs", "my_documents", "my_reviews", "my_qualifications"
       ];
 
       type PD = { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean; canExport: boolean; canApprove: boolean };
@@ -5016,7 +5017,12 @@ export async function registerRoutes(
           perms: { dashboard: viewOnly, companies: none, workers: none, schedules: viewOnly, payroll: viewOnly, timesheets: viewOnly,
             departments: none, branches: none, divisions: none, positions: none, policies: viewOnly, hr: none, reports: viewOnly,
             timeclock: { canView: true, canCreate: true, canEdit: false, canDelete: false, canExport: false, canApprove: false },
-            settings: none, permissions: none, system_admin: none } },
+            settings: none, permissions: none, system_admin: none,
+            my_preferences: { canView: true, canCreate: false, canEdit: true, canDelete: false, canExport: false, canApprove: false },
+            my_paystubs: viewOnly,
+            my_documents: viewOnly,
+            my_reviews: viewOnly,
+            my_qualifications: { canView: true, canCreate: true, canEdit: true, canDelete: true, canExport: false, canApprove: false } } },
       ];
 
       const created: string[] = [];
@@ -5465,6 +5471,180 @@ export async function registerRoutes(
       await storage.deletePayrollPaymentRecord(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete payment record" }); }
+  });
+
+  // ─── My Profile self-service endpoints (accessible by all authenticated users) ───
+
+  app.get("/api/my/worker", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.json(null);
+      const worker = await storage.getWorker(user.workerId);
+      res.json(worker || null);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch worker" }); }
+  });
+
+  app.patch("/api/my/preferences", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) {
+        return res.json({ message: "No linked worker — display preferences are available to employee accounts only", skipped: true });
+      }
+      const worker = await storage.getWorker(user.workerId);
+      if (!worker) return res.status(404).json({ message: "Worker not found" });
+      const existing = JSON.parse(worker.preferences || "{}");
+      const merged = { ...existing, ...req.body };
+      const updated = await storage.updateWorker(user.workerId, { preferences: JSON.stringify(merged) });
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to save preferences" }); }
+  });
+
+  app.get("/api/my/paystubs", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.json([]);
+      const { db } = await import("./db.js");
+      const { payrollItems, payrollRuns } = await import("../shared/schema.js");
+      const { eq } = await import("drizzle-orm");
+      const rows = await db
+        .select({ item: payrollItems, run: payrollRuns })
+        .from(payrollItems)
+        .innerJoin(payrollRuns, eq(payrollItems.payrollRunId, payrollRuns.id))
+        .where(eq(payrollItems.workerId, user.workerId))
+        .orderBy(payrollRuns.periodEnd);
+      res.json(rows.map(r => ({ ...r.item, run: r.run })));
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to fetch paystubs" }); }
+  });
+
+  app.get("/api/my/documents", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.json([]);
+      const docs = await storage.getWorkerDocuments(user.workerId);
+      res.json(docs);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch documents" }); }
+  });
+
+  app.get("/api/my/reviews", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.json([]);
+      const reviews = await storage.getReviews(undefined, user.workerId);
+      res.json(reviews);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch reviews" }); }
+  });
+
+  app.get("/api/my/qualifications", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.json([]);
+      const items = await storage.getQualifications(undefined, user.workerId);
+      res.json(items);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch qualifications" }); }
+  });
+
+  app.post("/api/my/qualifications", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(400).json({ message: "No linked worker" });
+      const data = { ...req.body, workerId: user.workerId };
+      const item = await storage.createQualification(data);
+      res.status(201).json(item);
+    } catch (e) { res.status(500).json({ message: "Failed to create qualification" }); }
+  });
+
+  app.patch("/api/my/qualifications/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
+      const items = await storage.getQualifications(undefined, user.workerId);
+      if (!items.find(i => i.id === req.params.id)) return res.status(403).json({ message: "Access denied" });
+      const item = await storage.updateQualification(req.params.id, req.body);
+      res.json(item);
+    } catch (e) { res.status(500).json({ message: "Failed to update qualification" }); }
+  });
+
+  app.delete("/api/my/qualifications/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
+      const items = await storage.getQualifications(undefined, user.workerId);
+      if (!items.find(i => i.id === req.params.id)) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteQualification(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete qualification" }); }
+  });
+
+  app.get("/api/my/languages", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.json([]);
+      const { db } = await import("./db.js");
+      const { workerLanguages } = await import("../shared/schema.js");
+      const { eq } = await import("drizzle-orm");
+      const items = await db.select().from(workerLanguages).where(eq(workerLanguages.workerId, user.workerId));
+      res.json(items);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch languages" }); }
+  });
+
+  app.post("/api/my/languages", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(400).json({ message: "No linked worker" });
+      const data = { ...req.body, workerId: user.workerId };
+      const { db } = await import("./db.js");
+      const { workerLanguages } = await import("../shared/schema.js");
+      const [item] = await db.insert(workerLanguages).values(data).returning();
+      res.status(201).json(item);
+    } catch (e) { res.status(500).json({ message: "Failed to create language" }); }
+  });
+
+  app.delete("/api/my/languages/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
+      const { db } = await import("./db.js");
+      const { workerLanguages } = await import("../shared/schema.js");
+      const { eq, and } = await import("drizzle-orm");
+      await db.delete(workerLanguages).where(and(eq(workerLanguages.id, req.params.id), eq(workerLanguages.workerId, user.workerId)));
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete language" }); }
+  });
+
+  app.get("/api/my/memberships", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.json([]);
+      const { db } = await import("./db.js");
+      const { workerMemberships } = await import("../shared/schema.js");
+      const { eq } = await import("drizzle-orm");
+      const items = await db.select().from(workerMemberships).where(eq(workerMemberships.workerId, user.workerId));
+      res.json(items);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch memberships" }); }
+  });
+
+  app.post("/api/my/memberships", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(400).json({ message: "No linked worker" });
+      const data = { ...req.body, workerId: user.workerId };
+      const { db } = await import("./db.js");
+      const { workerMemberships } = await import("../shared/schema.js");
+      const [item] = await db.insert(workerMemberships).values(data).returning();
+      res.status(201).json(item);
+    } catch (e) { res.status(500).json({ message: "Failed to create membership" }); }
+  });
+
+  app.delete("/api/my/memberships/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
+      const { db } = await import("./db.js");
+      const { workerMemberships } = await import("../shared/schema.js");
+      const { eq, and } = await import("drizzle-orm");
+      await db.delete(workerMemberships).where(and(eq(workerMemberships.id, req.params.id), eq(workerMemberships.workerId, user.workerId)));
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete membership" }); }
   });
 
   return httpServer;

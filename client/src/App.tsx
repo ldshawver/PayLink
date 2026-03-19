@@ -23,6 +23,7 @@ import ExpensesPage from "@/pages/expenses";
 import TimeClock from "@/pages/time-clock";
 import PrintCheckPage from "@/pages/print-check";
 import PrintExpenseCheckPage from "@/pages/print-expense-check";
+import MyProfilePage from "@/pages/my-profile";
 import LoginPage from "@/pages/login";
 import { Loader2 } from "lucide-react";
 
@@ -53,6 +54,7 @@ function AuthenticatedRouter() {
       <Route path="/reports">{() => <RoleGuard roles={["admin", "manager"]}><ReportsPage /></RoleGuard>}</Route>
       <Route path="/expenses" component={ExpensesPage} />
       <Route path="/print-expense-check" component={PrintExpenseCheckPage} />
+      <Route path="/my-profile" component={MyProfilePage} />
       <Route component={NotFound} />
     </Switch>
   );

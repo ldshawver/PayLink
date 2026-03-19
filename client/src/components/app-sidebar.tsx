@@ -51,6 +51,7 @@ import {
   FolderOpen,
   Banknote,
   AlertTriangle,
+  UserCircle,
 } from "lucide-react";
 import {
   Sidebar,
@@ -241,6 +242,20 @@ const navSections: NavSection[] = [
       { title: "Payroll Reports", url: "/reports?tab=payroll", icon: DollarSign },
       { title: "Tax Reports", url: "/reports?tab=tax", icon: Calculator },
       { title: "HR Reports", url: "/reports?tab=hr", icon: PieChart },
+    ],
+  },
+  {
+    label: "My Profile",
+    icon: UserCircle,
+    url: "/my-profile",
+    items: [
+      { title: "Preferences", url: "/my-profile?tab=preferences", icon: Settings },
+      { title: "Pay Stubs", url: "/my-profile?tab=paystubs", icon: Receipt },
+      { title: "Documents", url: "/my-profile?tab=documents", icon: FileText },
+      { title: "Reviews", url: "/my-profile?tab=reviews", icon: Star },
+      { title: "Qualifications", url: "/my-profile?tab=qualifications", icon: Zap },
+      { title: "Languages", url: "/my-profile?tab=languages", icon: Languages },
+      { title: "Memberships", url: "/my-profile?tab=memberships", icon: IdCard },
     ],
   },
 ];
