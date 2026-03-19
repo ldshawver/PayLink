@@ -189,6 +189,9 @@ app.use((req, res, next) => {
       review_note TEXT,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+    await run("payroll_runs.pay_date", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS pay_date DATE`);
+    await run("payroll_runs.use_direct_deposit", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS use_direct_deposit BOOLEAN NOT NULL DEFAULT TRUE`);
+
     await run("schedule_preferences table", sql`CREATE TABLE IF NOT EXISTS schedule_preferences (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       worker_id VARCHAR NOT NULL REFERENCES workers(id),

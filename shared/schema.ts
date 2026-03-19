@@ -193,6 +193,8 @@ export const payrollRuns = pgTable("payroll_runs", {
   totalOvertimeHours: numeric("total_overtime_hours").default("0"),
   workerCount: integer("worker_count").default(0),
   processedAt: timestamp("processed_at"),
+  payDate: date("pay_date"),
+  useDirectDeposit: boolean("use_direct_deposit").default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

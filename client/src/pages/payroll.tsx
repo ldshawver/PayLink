@@ -331,6 +331,59 @@ function PayrollRunCard({
     },
   });
 
+  const ddToggleMutation = useMutation({
+    mutationFn: async (val: boolean) => {
+      const res = await apiRequest("PATCH", `/api/payroll-runs/${run.id}`, { useDirectDeposit: val });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const payDateMutation = useMutation({
+    mutationFn: async (date: string) => {
+      const res = await apiRequest("PATCH", `/api/payroll-runs/${run.id}`, { payDate: date });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      toast({ title: "Pay date saved" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const [payDateInput, setPayDateInput] = useState(run.payDate || "");
+
+  const downloadNacha = async () => {
+    try {
+      const res = await fetch(`/api/payroll-runs/${run.id}/nacha`, { credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Failed to generate ACH file" }));
+        toast({ title: "ACH Error", description: err.message, variant: "destructive" });
+        return;
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const nameMatch = disposition.match(/filename="([^"]+)"/);
+      const fileName = nameMatch ? nameMatch[1] : `ACH_${run.periodEnd}.ach`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "ACH file downloaded", description: `${fileName} — upload to your bank to initiate direct deposits` });
+    } catch {
+      toast({ title: "Error", description: "Failed to download ACH file", variant: "destructive" });
+    }
+  };
+
   const statusVariant = run.status === "paid" ? "default" : run.status === "processed" ? "secondary" : "outline";
 
   return (
@@ -464,6 +517,49 @@ function PayrollRunCard({
             <Skeleton className="h-32 w-full" data-testid={`loading-items-${run.id}`} />
           ) : (
             <>
+              {/* Direct Deposit Controls */}
+              <div className="flex flex-wrap items-center gap-4 mb-3 p-3 rounded-lg border bg-muted/30">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id={`dd-toggle-${run.id}`}
+                    checked={run.useDirectDeposit !== false}
+                    onCheckedChange={(val) => ddToggleMutation.mutate(val)}
+                    disabled={ddToggleMutation.isPending}
+                    data-testid={`switch-direct-deposit-${run.id}`}
+                  />
+                  <Label htmlFor={`dd-toggle-${run.id}`} className="text-sm font-medium cursor-pointer">
+                    Direct Deposit (ACH) this payroll
+                  </Label>
+                </div>
+                {run.useDirectDeposit !== false && (
+                  <div className="flex items-center gap-2">
+                    <Label className="text-sm text-muted-foreground whitespace-nowrap">Pay Date:</Label>
+                    <Input
+                      type="date"
+                      className="h-7 w-36 text-sm"
+                      value={payDateInput}
+                      onChange={(e) => setPayDateInput(e.target.value)}
+                      onBlur={(e) => e.target.value && payDateMutation.mutate(e.target.value)}
+                      data-testid={`input-pay-date-${run.id}`}
+                    />
+                  </div>
+                )}
+                {run.useDirectDeposit !== false && (run.status === "processed" || run.status === "paid") && (
+                  <Button
+                    size="sm"
+                    variant="default"
+                    onClick={downloadNacha}
+                    data-testid={`button-download-ach-${run.id}`}
+                    className="bg-teal-600 hover:bg-teal-700 text-white"
+                  >
+                    <Download className="mr-2 h-4 w-4" />Download ACH File
+                  </Button>
+                )}
+                {run.useDirectDeposit === false && (
+                  <span className="text-sm text-muted-foreground italic">Direct deposit disabled — employees will receive checks</span>
+                )}
+              </div>
+
               <div className="flex gap-2 mb-4 flex-wrap">
                 {run.status === "draft" && (
                   <Button
