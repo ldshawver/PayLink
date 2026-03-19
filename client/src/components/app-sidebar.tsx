@@ -52,7 +52,6 @@ import {
   Banknote,
   AlertTriangle,
   UserCircle,
-  CalendarOff,
 } from "lucide-react";
 import {
   Sidebar,
@@ -111,7 +110,6 @@ const navSections: NavSection[] = [
       { title: "Accrual Balances", url: "/attendance?tab=accrual-balances", icon: CalendarCheck },
       { title: "Accruals", url: "/attendance?tab=accruals", icon: CalendarClock, roles: ["admin", "manager"] },
       { title: "Pending Approvals", url: "/attendance?tab=pending-approvals", icon: AlertTriangle, roles: ["admin", "manager"] },
-      { title: "Time-Off Requests", url: "/attendance?tab=time-off-requests", icon: CalendarOff, roles: ["admin", "manager"] },
       { title: "Expenses & Receipts", url: "/expenses", icon: Receipt },
     ],
   },
@@ -258,7 +256,6 @@ const navSections: NavSection[] = [
       { title: "Qualifications", url: "/my-profile?tab=qualifications", icon: Zap },
       { title: "Languages", url: "/my-profile?tab=languages", icon: Languages },
       { title: "Memberships", url: "/my-profile?tab=memberships", icon: IdCard },
-      { title: "Time Off", url: "/my-profile?tab=time-off", icon: CalendarOff },
     ],
   },
 ];

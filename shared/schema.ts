@@ -193,6 +193,8 @@ export const payrollRuns = pgTable("payroll_runs", {
   totalOvertimeHours: numeric("total_overtime_hours").default("0"),
   workerCount: integer("worker_count").default(0),
   processedAt: timestamp("processed_at"),
+  payDate: date("pay_date"),
+  useDirectDeposit: boolean("use_direct_deposit").default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -1371,42 +1373,3 @@ export const payrollPaymentRecords = pgTable("payroll_payment_records", {
 export const insertPayrollPaymentRecordSchema = createInsertSchema(payrollPaymentRecords).omit({ id: true, createdAt: true, updatedAt: true });
 export type PayrollPaymentRecord = typeof payrollPaymentRecords.$inferSelect;
 export type InsertPayrollPaymentRecord = z.infer<typeof insertPayrollPaymentRecordSchema>;
-
-export const timeOffRequests = pgTable("time_off_requests", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  workerId: varchar("worker_id").notNull().references(() => workers.id),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
-  requestType: text("request_type").notNull().default("vacation"),
-  startDate: date("start_date").notNull(),
-  startTime: text("start_time"),
-  endDate: date("end_date").notNull(),
-  endTime: text("end_time"),
-  totalDays: numeric("total_days").default("1"),
-  reason: text("reason"),
-  status: text("status").notNull().default("pending"),
-  reviewedBy: varchar("reviewed_by"),
-  reviewedAt: timestamp("reviewed_at"),
-  reviewNote: text("review_note"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-export const insertTimeOffRequestSchema = createInsertSchema(timeOffRequests).omit({ id: true, createdAt: true, reviewedAt: true });
-export type TimeOffRequest = typeof timeOffRequests.$inferSelect;
-export type InsertTimeOffRequest = z.infer<typeof insertTimeOffRequestSchema>;
-
-export const schedulePreferences = pgTable("schedule_preferences", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  workerId: varchar("worker_id").notNull().references(() => workers.id),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
-  preferenceType: text("preference_type").notNull().default("day_off"),
-  dayOfWeek: integer("day_of_week"),
-  shiftTime: text("shift_time"),
-  preferNotToWork: boolean("prefer_not_to_work").notNull().default(false),
-  importance: integer("importance").notNull().default(3),
-  note: text("note"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-export const insertSchedulePreferenceSchema = createInsertSchema(schedulePreferences).omit({ id: true, createdAt: true });
-export type SchedulePreference = typeof schedulePreferences.$inferSelect;
-export type InsertSchedulePreference = z.infer<typeof insertSchedulePreferenceSchema>;
