@@ -15,6 +15,7 @@ import {
   MoreHorizontal,
   RefreshCw,
   AlertTriangle,
+  CalendarOff,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -73,6 +74,7 @@ import type {
   Company,
   AccrualBalance,
   AccrualAccount,
+  TimeOffRequest,
 } from "@shared/schema";
 
 function useTabParam(defaultTab: string): string {
@@ -1409,6 +1411,174 @@ function PendingApprovalsTab() {
   );
 }
 
+const TIME_OFF_REQUEST_TYPE_LABELS: Record<string, string> = {
+  vacation: "Vacation", personal: "Personal Day", sick: "Sick Leave", unpaid: "Unpaid Leave",
+  bereavement: "Bereavement", jury_duty: "Jury Duty", medical: "Medical Appointment", other: "Other",
+};
+
+function TimeOffReviewTab() {
+  const { toast } = useToast();
+  const [filterStatus, setFilterStatus] = useState("pending");
+  const [filterCompanyId, setFilterCompanyId] = useState("all");
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [decision, setDecision] = useState<"approved" | "rejected">("approved");
+  const [reviewNote, setReviewNote] = useState("");
+
+  const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: workers } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
+  const { data: requests = [], isLoading } = useQuery<TimeOffRequest[]>({
+    queryKey: ["/api/time-off-requests"],
+  });
+
+  const workerMap = new Map((workers || []).map(w => [w.id, w]));
+
+  const filtered = requests.filter(r =>
+    (filterStatus === "all" || r.status === filterStatus) &&
+    (filterCompanyId === "all" || r.companyId === filterCompanyId)
+  );
+
+  const reviewMutation = useMutation({
+    mutationFn: ({ id, decision, reviewNote }: { id: string; decision: string; reviewNote: string }) =>
+      apiRequest("PATCH", `/api/time-off-requests/${id}/review`, { decision, reviewNote }).then(r => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/time-off-requests"] });
+      toast({ title: `Request ${decision === "approved" ? "approved" : "rejected"}`, description: "Worker has been notified." });
+      setReviewingId(null);
+      setReviewNote("");
+    },
+    onError: () => toast({ title: "Failed to update request", variant: "destructive" }),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <Select value={filterStatus} onValueChange={setFilterStatus}>
+          <SelectTrigger className="w-36" data-testid="select-filter-time-off-status">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Statuses</SelectItem>
+            <SelectItem value="pending">Pending</SelectItem>
+            <SelectItem value="approved">Approved</SelectItem>
+            <SelectItem value="rejected">Rejected</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={filterCompanyId} onValueChange={setFilterCompanyId}>
+          <SelectTrigger className="w-44" data-testid="select-filter-time-off-company">
+            <SelectValue placeholder="All Companies" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Companies</SelectItem>
+            {(companies || []).map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-2">{[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}</div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center text-muted-foreground py-12 border rounded-lg">No time-off requests found.</div>
+      ) : (
+        <div className="rounded-lg border overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Employee</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Dates</TableHead>
+                <TableHead>Days</TableHead>
+                <TableHead>Reason</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Review Note</TableHead>
+                <TableHead></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map(r => {
+                const worker = workerMap.get(r.workerId);
+                return (
+                  <TableRow key={r.id} data-testid={`row-time-off-review-${r.id}`}>
+                    <TableCell className="font-medium">
+                      {worker ? `${worker.firstName} ${worker.lastName}` : r.workerId}
+                      {worker?.employeeNumber && <div className="text-xs text-muted-foreground">#{worker.employeeNumber}</div>}
+                    </TableCell>
+                    <TableCell>{TIME_OFF_REQUEST_TYPE_LABELS[r.requestType] ?? r.requestType}</TableCell>
+                    <TableCell className="text-sm">
+                      {r.startDate}{r.startTime ? ` ${r.startTime}` : ""}<br />
+                      <span className="text-muted-foreground">to {r.endDate}{r.endTime ? ` ${r.endTime}` : ""}</span>
+                    </TableCell>
+                    <TableCell>{r.totalDays}</TableCell>
+                    <TableCell className="max-w-[140px] truncate text-sm text-muted-foreground">{r.reason || "—"}</TableCell>
+                    <TableCell>
+                      {r.status === "approved" && <Badge className="bg-green-100 text-green-800 border-green-200">Approved</Badge>}
+                      {r.status === "rejected" && <Badge className="bg-red-100 text-red-800 border-red-200">Rejected</Badge>}
+                      {r.status === "pending" && <Badge className="bg-amber-100 text-amber-800 border-amber-200">Pending</Badge>}
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{r.reviewNote || "—"}</TableCell>
+                    <TableCell>
+                      {r.status === "pending" && (
+                        <Button size="sm" variant="outline" onClick={() => { setReviewingId(r.id); setDecision("approved"); setReviewNote(""); }} data-testid={`button-review-${r.id}`}>
+                          Review
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      <Dialog open={!!reviewingId} onOpenChange={(o) => { if (!o) setReviewingId(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Review Time-Off Request</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Decision</Label>
+              <div className="flex gap-2 mt-2">
+                <Button
+                  type="button"
+                  variant={decision === "approved" ? "default" : "outline"}
+                  className={decision === "approved" ? "bg-green-600 hover:bg-green-700" : ""}
+                  onClick={() => setDecision("approved")}
+                  data-testid="button-decision-approve"
+                >
+                  Approve
+                </Button>
+                <Button
+                  type="button"
+                  variant={decision === "rejected" ? "destructive" : "outline"}
+                  onClick={() => setDecision("rejected")}
+                  data-testid="button-decision-reject"
+                >
+                  Reject
+                </Button>
+              </div>
+            </div>
+            <div>
+              <Label>Note to Employee <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Textarea value={reviewNote} onChange={e => setReviewNote(e.target.value)} placeholder="Reason for decision, alternative dates, etc." rows={3} data-testid="textarea-review-note" />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setReviewingId(null)}>Cancel</Button>
+              <Button
+                onClick={() => reviewMutation.mutate({ id: reviewingId!, decision, reviewNote })}
+                disabled={reviewMutation.isPending}
+                data-testid="button-submit-review"
+              >
+                {reviewMutation.isPending ? "Saving…" : "Submit Decision"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 export default function AttendancePage() {
   const currentTab = useTabParam("timesheet");
 
@@ -1462,6 +1632,14 @@ export default function AttendancePage() {
               <span className="flex items-center gap-1.5">
                 <AlertTriangle className="h-4 w-4" />
                 Pending Approvals
+              </span>
+            </TabsTrigger>
+          </Link>
+          <Link href="/attendance?tab=time-off-requests">
+            <TabsTrigger value="time-off-requests" data-testid="tab-time-off-requests" asChild>
+              <span className="flex items-center gap-1.5">
+                <CalendarOff className="h-4 w-4" />
+                Time-Off Requests
               </span>
             </TabsTrigger>
           </Link>
@@ -1521,6 +1699,20 @@ export default function AttendancePage() {
             </CardHeader>
             <CardContent className="p-0">
               <PendingApprovalsTab />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="time-off-requests">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <CalendarOff className="h-5 w-5 text-primary" />
+                Time-Off Requests
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <TimeOffReviewTab />
             </CardContent>
           </Card>
         </TabsContent>
