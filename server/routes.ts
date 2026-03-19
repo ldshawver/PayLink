@@ -909,21 +909,29 @@ export async function registerRoutes(
           return res.status(403).json({ message: "You can only clock in/out for yourself" });
         }
       }
+      if (!req.body.workerId) return res.status(400).json({ message: "workerId is required" });
       const worker = await storage.getWorker(req.body.workerId);
-      if (worker && worker.workerType === "contractor" && worker.contractorType === "invoice") {
+      if (!worker) return res.status(404).json({ message: "Worker not found" });
+      if (!worker.companyId) return res.status(400).json({ message: "Worker is not assigned to a company. Please assign the worker to a company before clocking in." });
+      if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in/out. They submit invoices instead." });
       }
       // Station enforcement: if company has active stations, require stationId for clock_in
-      if (req.body.punchType === "clock_in" && worker?.companyId) {
+      if (req.body.punchType === "clock_in" && worker.companyId) {
         const allStations = await storage.getStations(worker.companyId);
         const activeStations = allStations.filter(s => s.status === "active");
         if (activeStations.length > 0 && !req.body.stationId) {
           return res.status(400).json({ message: "A station must be selected to clock in. Please select an active station." });
         }
       }
+      // Only pass known punch fields — strip unknown properties like stationId that aren't in the schema
       const punch = await storage.createTimePunch({
-        ...req.body,
+        workerId: worker.id,
+        companyId: worker.companyId,
+        punchType: req.body.punchType,
         punchTime: new Date(),
+        note: req.body.note ?? null,
+        scheduleId: req.body.scheduleId ?? null,
       });
 
       if (punch.punchType === "clock_in") {
@@ -1009,9 +1017,10 @@ export async function registerRoutes(
       }
 
       res.status(201).json(punch);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to create time punch" });
+    } catch (error: any) {
+      console.error("Time punch error:", error);
+      const msg = error?.message || "Failed to create time punch";
+      res.status(500).json({ message: msg });
     }
   });
 
