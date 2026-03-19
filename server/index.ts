@@ -172,6 +172,37 @@ app.use((req, res, next) => {
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
+    await run("time_off_requests table", sql`CREATE TABLE IF NOT EXISTS time_off_requests (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      worker_id VARCHAR NOT NULL REFERENCES workers(id),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      request_type TEXT NOT NULL DEFAULT 'vacation',
+      start_date DATE NOT NULL,
+      start_time TEXT,
+      end_date DATE NOT NULL,
+      end_time TEXT,
+      total_days NUMERIC,
+      reason TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      reviewed_by VARCHAR,
+      reviewed_at TIMESTAMP,
+      review_note TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("payroll_runs.pay_date", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS pay_date DATE`);
+    await run("payroll_runs.use_direct_deposit", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS use_direct_deposit BOOLEAN NOT NULL DEFAULT TRUE`);
+    await run("schedule_preferences table", sql`CREATE TABLE IF NOT EXISTS schedule_preferences (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      worker_id VARCHAR NOT NULL REFERENCES workers(id),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      preference_type TEXT NOT NULL DEFAULT 'day_off',
+      day_of_week INTEGER,
+      shift_time TEXT,
+      prefer_not_to_work BOOLEAN NOT NULL DEFAULT FALSE,
+      importance INTEGER NOT NULL DEFAULT 3,
+      note TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");
