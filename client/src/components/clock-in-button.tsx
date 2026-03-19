@@ -110,29 +110,39 @@ export function ClockInButton() {
 
   const needsWorkerSelect = !linkedWorker;
 
+  const buttonLabel = isClockedIn
+    ? isOnBreak
+      ? "On Break"
+      : "Clocked In"
+    : "Clock In";
+
+  const buttonClass = isClockedIn
+    ? isOnBreak
+      ? "bg-amber-500 hover:bg-amber-600 text-white border-0 shadow-md font-semibold"
+      : "bg-emerald-600 hover:bg-emerald-700 text-white border-0 shadow-md font-semibold"
+    : "bg-teal-600 hover:bg-teal-700 text-white border-0 shadow-md font-semibold";
+
   return (
     <div className="flex items-center gap-2">
       <LiveTime />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
-            variant={isClockedIn ? "default" : "outline"}
-            size="sm"
-            className="gap-1.5"
+            variant="default"
+            size="default"
+            className={`gap-2 px-4 ${buttonClass}`}
             data-testid="button-clock-toggle"
           >
-            <Clock className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">
-              {isClockedIn
-                ? isOnBreak
-                  ? "On Break"
-                  : "Clocked In"
-                : "Clock In"}
-            </span>
-            {isClockedIn && (
-              <Badge variant="secondary" className="ml-0.5 text-[10px] px-1 py-0">
+            {isClockedIn
+              ? isOnBreak
+                ? <Coffee className="h-4 w-4" />
+                : <Clock className="h-4 w-4" />
+              : <LogIn className="h-4 w-4" />}
+            <span>{buttonLabel}</span>
+            {isClockedIn && !isOnBreak && (
+              <span className="inline-flex items-center rounded-full bg-white/25 text-white text-[10px] font-bold px-1.5 py-0.5 leading-none">
                 LIVE
-              </Badge>
+              </span>
             )}
           </Button>
         </DropdownMenuTrigger>
