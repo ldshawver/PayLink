@@ -5696,7 +5696,7 @@ export async function registerRoutes(
     } catch (e) { res.status(500).json({ message: "Failed to cancel request" }); }
   });
 
-  app.get("/api/time-off-requests", requireAuth, requireRole(["admin", "manager"]), async (req, res) => {
+  app.get("/api/time-off-requests", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { companyId, status } = req.query as Record<string, string>;
       const items = await storage.getTimeOffRequests(undefined, companyId);
@@ -5705,7 +5705,7 @@ export async function registerRoutes(
     } catch (e) { res.status(500).json({ message: "Failed to fetch time-off requests" }); }
   });
 
-  app.patch("/api/time-off-requests/:id/review", requireAuth, requireRole(["admin", "manager"]), async (req, res) => {
+  app.patch("/api/time-off-requests/:id/review", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { decision, reviewNote } = req.body as { decision: "approved" | "rejected"; reviewNote?: string };
       if (!["approved", "rejected"].includes(decision)) return res.status(400).json({ message: "Invalid decision" });
@@ -5778,7 +5778,7 @@ export async function registerRoutes(
     } catch (e) { res.status(500).json({ message: "Failed to delete schedule preference" }); }
   });
 
-  app.get("/api/schedule-preferences", requireAuth, requireRole(["admin", "manager"]), async (req, res) => {
+  app.get("/api/schedule-preferences", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { companyId } = req.query as Record<string, string>;
       const items = await storage.getSchedulePreferences(undefined, companyId);
