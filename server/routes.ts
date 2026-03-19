@@ -5487,7 +5487,9 @@ export async function registerRoutes(
   app.patch("/api/my/preferences", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (!user?.workerId) return res.status(400).json({ message: "No linked worker" });
+      if (!user?.workerId) {
+        return res.json({ message: "No linked worker — display preferences are available to employee accounts only", skipped: true });
+      }
       const worker = await storage.getWorker(user.workerId);
       if (!worker) return res.status(404).json({ message: "Worker not found" });
       const existing = JSON.parse(worker.preferences || "{}");

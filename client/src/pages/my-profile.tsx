@@ -94,11 +94,17 @@ function PreferencesTab({ worker }: { worker: Worker | null }) {
   const [dateFormat, setDateFormat] = useState<string>(prefs.dateFormat || "MM/DD/YYYY");
 
   const mutation = useMutation({
-    mutationFn: async (data: Record<string, unknown>) =>
-      apiRequest("PATCH", "/api/my/preferences", data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/my/worker"] });
-      toast({ title: "Preferences saved" });
+    mutationFn: async (data: Record<string, unknown>) => {
+      const res = await apiRequest("PATCH", "/api/my/preferences", data);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      if (data?.skipped) {
+        toast({ title: "Display preferences", description: "Notification preferences are saved to your employee record. Your account is admin-only.", variant: "default" });
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["/api/my/worker"] });
+        toast({ title: "Preferences saved" });
+      }
     },
     onError: () => toast({ title: "Failed to save preferences", variant: "destructive" }),
   });
