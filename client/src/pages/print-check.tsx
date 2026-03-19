@@ -62,11 +62,11 @@ function CompanyHeader({ company, config }: { company: Company; config: Record<s
 }
 
 function CheckPortion({
-  item, worker, company, run, config,
+  item, worker, company, run, config, overrideNetPay,
 }: {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; config: Record<string, boolean>;
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; config: Record<string, boolean>; overrideNetPay?: number;
 }) {
-  const netPay = Number(item.netPay || 0);
+  const netPay = overrideNetPay !== undefined ? overrideNetPay : Number(item.netPay || 0);
   const checkDate = run.processedAt ? new Date(run.processedAt).toLocaleDateString() : new Date().toLocaleDateString();
   const memoText = (run.periodStart && run.periodEnd)
     ? `Payroll ${new Date(run.periodStart + "T00:00:00").toLocaleDateString()} to ${new Date(run.periodEnd + "T00:00:00").toLocaleDateString()}`
@@ -876,12 +876,40 @@ interface CheckProps {
   item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts: PayStubAccount[]; accrualAccounts: AccrualAccount[]; accrualBalances: AccrualBalance[]; amendments?: PayStubAmendment[];
 }
 
+function computeCheckNetPay(item: PayrollItem, worker: Worker, deductions: TaxDeduction[], amendments: PayStubAmendment[]): number {
+  const grossPay = Number(item.grossPay || 0);
+  const isContractor = worker.workerType === "contractor";
+  const taxLines = deductions
+    .filter(d => d.isActive && !d.isEmployerPaid && !d.isReferenceOnly)
+    .filter(d => {
+      const appliesTo = d.appliesTo || "all";
+      if (appliesTo === "employee" && isContractor) return false;
+      if (appliesTo === "contractor" && !isContractor) return false;
+      return true;
+    })
+    .map(d => {
+      if (d.calculationType === "percentage") {
+        const base = d.maxAmount ? Math.min(grossPay, Number(d.maxAmount)) : grossPay;
+        return base * (Number(d.rate || 0) / 100);
+      }
+      return Number(d.rate || 0);
+    })
+    .filter(a => a > 0);
+  const amendLines = amendments
+    .filter(a => a.workerId === item.workerId && a.status === "active" && (a as any).amendmentType === "deduction")
+    .map(a => Number(a.amount || 0))
+    .filter(a => a > 0);
+  const totalDed = [...taxLines, ...amendLines].reduce((s, v) => s + v, 0);
+  return grossPay - totalDed;
+}
+
 function StandardCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [] }: CheckProps) {
+  const computedNetPay = computeCheckNetPay(item, worker, deductions, amendments);
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
       {/* Top third: the actual check */}
       <div style={{ height: "3.667in" }}>
-        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} />
+        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} overrideNetPay={computedNetPay} />
       </div>
       {/* Middle third: pay stub summary */}
       <div style={{ height: "3.667in" }}>
@@ -896,13 +924,14 @@ function StandardCheck({ item, worker, company, run, deductions, config, payStub
 }
 
 function VoucherCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [] }: CheckProps) {
+  const computedNetPay = computeCheckNetPay(item, worker, deductions, amendments);
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
       <div style={{ height: "3.333in" }}>
         <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
       </div>
       <div style={{ height: "3.667in" }}>
-        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} />
+        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} overrideNetPay={computedNetPay} />
       </div>
       <div style={{ height: "4in" }}>
         <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
