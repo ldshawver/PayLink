@@ -1101,15 +1101,36 @@ function TaxesDeductionsTab() {
 function RemittanceSourcesTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingSource, setEditingSource] = useState<RemittanceSource | null>(null);
   const [selectedCompany, setSelectedCompany] = useState<string>("all");
-  const [formData, setFormData] = useState({
-    companyId: "", name: "", type: "check", status: "enabled",
-    country: "US", currency: "USD", routingNumber: "", accountNumber: "",
-    institution: "", lastCheckNumber: 0,
-  });
+  const emptyForm = { companyId: "", name: "", type: "check", status: "enabled", country: "US", currency: "USD", routingNumber: "", accountNumber: "", institution: "", lastCheckNumber: 0 };
+  const [formData, setFormData] = useState(emptyForm);
 
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: remittanceSources = [], isLoading } = useQuery<RemittanceSource[]>({ queryKey: ["/api/remittance-sources"] });
+
+  const openEdit = (rs: RemittanceSource) => {
+    setEditingSource(rs);
+    setFormData({
+      companyId: rs.companyId || "",
+      name: rs.name || "",
+      type: rs.type || "check",
+      status: rs.status || "enabled",
+      country: rs.country || "US",
+      currency: rs.currency || "USD",
+      routingNumber: rs.routingNumber || "",
+      accountNumber: rs.accountNumber || "",
+      institution: rs.institution || "",
+      lastCheckNumber: rs.lastCheckNumber || 0,
+    });
+    setDialogOpen(true);
+  };
+
+  const openAdd = () => {
+    setEditingSource(null);
+    setFormData(emptyForm);
+    setDialogOpen(true);
+  };
 
   const quickSetupMutation = useMutation({
     mutationFn: async (companyId: string) => {
@@ -1137,12 +1158,48 @@ function RemittanceSourcesTab() {
       queryClient.invalidateQueries({ queryKey: ["/api/remittance-sources"] });
       toast({ title: "Remittance source created" });
       setDialogOpen(false);
-      setFormData({ companyId: "", name: "", type: "check", status: "enabled", country: "US", currency: "USD", routingNumber: "", accountNumber: "", institution: "", lastCheckNumber: 0 });
+      setFormData(emptyForm);
     },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: typeof formData }) => {
+      const res = await apiRequest("PATCH", `/api/remittance-sources/${id}`, {
+        ...data,
+        routingNumber: data.routingNumber || null,
+        accountNumber: data.accountNumber || null,
+        institution: data.institution || null,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/remittance-sources"] });
+      toast({ title: "Remittance source updated" });
+      setDialogOpen(false);
+      setEditingSource(null);
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/remittance-sources/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/remittance-sources"] });
+      toast({ title: "Remittance source deleted" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const handleSubmit = () => {
+    if (editingSource) {
+      updateMutation.mutate({ id: editingSource.id, data: formData });
+    } else {
+      createMutation.mutate(formData);
+    }
+  };
 
   if (isLoading) return <div data-testid="loading-remittance-sources"><Skeleton className="h-64 w-full" /></div>;
 
@@ -1172,12 +1229,10 @@ function RemittanceSourcesTab() {
               {quickSetupMutation.isPending ? "Setting up..." : "Quick Setup"}
             </Button>
           )}
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-remittance-source"><Plus className="mr-2 h-4 w-4" />Add Remittance Source</Button>
-          </DialogTrigger>
+        <Button data-testid="button-add-remittance-source" onClick={openAdd}><Plus className="mr-2 h-4 w-4" />Add Remittance Source</Button>
+        <Dialog open={dialogOpen} onOpenChange={open => { setDialogOpen(open); if (!open) setEditingSource(null); }}>
           <DialogContent>
-            <DialogHeader><DialogTitle>Add Remittance Source</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>{editingSource ? "Edit Remittance Source" : "Add Remittance Source"}</DialogTitle></DialogHeader>
             <div className="space-y-4">
               <div className="space-y-2">
                 <Label>Company</Label>
@@ -1223,11 +1278,11 @@ function RemittanceSourcesTab() {
               </div>
               <div className="space-y-2">
                 <Label>Routing Number</Label>
-                <Input data-testid="input-rs-routing" value={formData.routingNumber} onChange={e => setFormData(p => ({ ...p, routingNumber: e.target.value }))} />
+                <Input data-testid="input-rs-routing" value={formData.routingNumber} onChange={e => setFormData(p => ({ ...p, routingNumber: e.target.value }))} placeholder="9-digit bank routing number" />
               </div>
               <div className="space-y-2">
                 <Label>Account Number</Label>
-                <Input data-testid="input-rs-account" value={formData.accountNumber} onChange={e => setFormData(p => ({ ...p, accountNumber: e.target.value }))} />
+                <Input data-testid="input-rs-account" value={formData.accountNumber} onChange={e => setFormData(p => ({ ...p, accountNumber: e.target.value }))} placeholder="Business checking account number" />
               </div>
               <div className="space-y-2">
                 <Label>Institution</Label>
@@ -1240,10 +1295,10 @@ function RemittanceSourcesTab() {
               <Button
                 className="w-full"
                 data-testid="button-submit-remittance-source"
-                disabled={createMutation.isPending}
-                onClick={() => createMutation.mutate(formData)}
+                disabled={createMutation.isPending || updateMutation.isPending}
+                onClick={handleSubmit}
               >
-                {createMutation.isPending ? "Creating..." : "Create Remittance Source"}
+                {(createMutation.isPending || updateMutation.isPending) ? "Saving..." : editingSource ? "Save Changes" : "Create Remittance Source"}
               </Button>
             </div>
           </DialogContent>
@@ -1259,10 +1314,11 @@ function RemittanceSourcesTab() {
                   <TableHead>Name</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Country</TableHead>
-                  <TableHead>Currency</TableHead>
+                  <TableHead>Routing #</TableHead>
+                  <TableHead>Account #</TableHead>
                   <TableHead>Institution</TableHead>
                   <TableHead>Last Check #</TableHead>
+                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1279,14 +1335,24 @@ function RemittanceSourcesTab() {
                         {rs.status}
                       </Badge>
                     </TableCell>
-                    <TableCell>{rs.country || "—"}</TableCell>
-                    <TableCell>{rs.currency || "—"}</TableCell>
+                    <TableCell className="font-mono text-sm">{rs.routingNumber || <span className="text-muted-foreground">—</span>}</TableCell>
+                    <TableCell className="font-mono text-sm">{rs.accountNumber ? `••••${rs.accountNumber.slice(-4)}` : <span className="text-muted-foreground">—</span>}</TableCell>
                     <TableCell>{rs.institution || "—"}</TableCell>
                     <TableCell>{rs.lastCheckNumber || 0}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        <Button size="icon" variant="ghost" data-testid={`button-edit-rs-${rs.id}`} onClick={() => openEdit(rs)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="text-destructive hover:text-destructive" data-testid={`button-delete-rs-${rs.id}`} onClick={() => { if (confirm(`Delete "${rs.name}"?`)) deleteMutation.mutate(rs.id); }}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}
                 {remittanceSources.length === 0 && (
-                  <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">No remittance sources configured</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground">No remittance sources configured</TableCell></TableRow>
                 )}
               </TableBody>
             </Table>
