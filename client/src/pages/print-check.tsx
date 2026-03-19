@@ -3,7 +3,7 @@ import { useRoute } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Printer, ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
-import type { PayrollRun, PayrollItem, Worker, Company, TaxDeduction, CheckTemplate, PayStubAccount, AccrualAccount, AccrualBalance, PayStubAmendment } from "@shared/schema";
+import type { PayrollRun, PayrollItem, Worker, Company, TaxDeduction, CheckTemplate, PayStubAccount, AccrualAccount, AccrualBalance, PayStubAmendment, RemittanceSource } from "@shared/schema";
 
 function numberToWords(num: number): string {
   const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
@@ -62,10 +62,11 @@ function CompanyHeader({ company, config }: { company: Company; config: Record<s
 }
 
 function CheckPortion({
-  item, worker, company, run, config, overrideNetPay,
+  item, worker, company, run, config, overrideNetPay, remittanceSources = [],
 }: {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; config: Record<string, boolean>; overrideNetPay?: number;
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; config: Record<string, boolean>; overrideNetPay?: number; remittanceSources?: RemittanceSource[];
 }) {
+  const remittanceSource = remittanceSources.find(s => s.companyId === company.id && s.status === "enabled") || remittanceSources.find(s => s.companyId === company.id);
   const netPay = overrideNetPay !== undefined ? overrideNetPay : Number(item.netPay || 0);
   const checkDate = run.processedAt ? new Date(run.processedAt).toLocaleDateString() : new Date().toLocaleDateString();
   const memoText = (run.periodStart && run.periodEnd)
@@ -124,7 +125,7 @@ function CheckPortion({
       {config.showMicrLine && (
         <div style={{ textAlign: "center" }}>
           <span style={{ fontSize: "15px", fontWeight: "bold", fontFamily: "'MICR', 'Courier New', monospace", letterSpacing: "3px", color: "#000" }}>
-            ⑈021000021⑈ ⑆{company.ein || "000000000"}⑆ {String(item.checkNumber || "0000").padStart(4, "0")}
+            ⑈{remittanceSource?.routingNumber || "000000000"}⑈ ⑆{remittanceSource?.accountNumber || company.ein || "000000000"}⑆ {String(item.checkNumber || "0000").padStart(4, "0")}
           </span>
         </div>
       )}
@@ -873,7 +874,7 @@ function StubPortion({
 }
 
 interface CheckProps {
-  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts: PayStubAccount[]; accrualAccounts: AccrualAccount[]; accrualBalances: AccrualBalance[]; amendments?: PayStubAmendment[];
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts: PayStubAccount[]; accrualAccounts: AccrualAccount[]; accrualBalances: AccrualBalance[]; amendments?: PayStubAmendment[]; remittanceSources?: RemittanceSource[];
 }
 
 function computeCheckNetPay(item: PayrollItem, worker: Worker, deductions: TaxDeduction[], amendments: PayStubAmendment[]): number {
@@ -903,13 +904,13 @@ function computeCheckNetPay(item: PayrollItem, worker: Worker, deductions: TaxDe
   return grossPay - totalDed;
 }
 
-function StandardCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [] }: CheckProps) {
+function StandardCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [], remittanceSources = [] }: CheckProps) {
   const computedNetPay = computeCheckNetPay(item, worker, deductions, amendments);
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
       {/* Top third: the actual check */}
       <div style={{ height: "3.667in" }}>
-        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} overrideNetPay={computedNetPay} />
+        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} overrideNetPay={computedNetPay} remittanceSources={remittanceSources} />
       </div>
       {/* Middle third: pay stub summary */}
       <div style={{ height: "3.667in" }}>
@@ -923,7 +924,7 @@ function StandardCheck({ item, worker, company, run, deductions, config, payStub
   );
 }
 
-function VoucherCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [] }: CheckProps) {
+function VoucherCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [], remittanceSources = [] }: CheckProps) {
   const computedNetPay = computeCheckNetPay(item, worker, deductions, amendments);
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
@@ -931,7 +932,7 @@ function VoucherCheck({ item, worker, company, run, deductions, config, payStubA
         <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
       </div>
       <div style={{ height: "3.667in" }}>
-        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} overrideNetPay={computedNetPay} />
+        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} overrideNetPay={computedNetPay} remittanceSources={remittanceSources} />
       </div>
       <div style={{ height: "4in" }}>
         <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
@@ -987,6 +988,7 @@ export default function PrintCheckPage() {
   const { data: accrualAccountsList = [] } = useQuery<AccrualAccount[]>({ queryKey: ["/api/accrual-accounts"] });
   const { data: accrualBalancesList = [] } = useQuery<AccrualBalance[]>({ queryKey: ["/api/accrual-balances"] });
   const { data: amendments = [] } = useQuery<PayStubAmendment[]>({ queryKey: ["/api/pay-stub-amendments"] });
+  const { data: remittanceSources = [] } = useQuery<RemittanceSource[]>({ queryKey: ["/api/remittance-sources"] });
 
   const company = run ? companies.find(c => c.id === run.companyId) : undefined;
 
@@ -1076,6 +1078,7 @@ export default function PrintCheckPage() {
               accrualAccounts={companyAccrualAccounts}
               accrualBalances={accrualBalancesList}
               amendments={amendments}
+              remittanceSources={remittanceSources}
             />
           );
         })}
