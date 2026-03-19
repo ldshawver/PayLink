@@ -1246,6 +1246,7 @@ export const shiftOffers = pgTable("shift_offers", {
   claimedByWorkerId: varchar("claimed_by_worker_id").references(() => workers.id),
   approvedBy: varchar("approved_by"),
   notes: text("notes"),
+  managerNote: text("manager_note"),
   offeredAt: timestamp("offered_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

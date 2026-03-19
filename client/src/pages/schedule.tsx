@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
   TableBody,
@@ -63,6 +64,7 @@ import {
   Send,
   AlertTriangle,
   CheckCircle2,
+  XCircle,
 } from "lucide-react";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -307,6 +309,9 @@ export default function SchedulePage() {
   const [offerShiftOpen, setOfferShiftOpen] = useState(false);
   const [offeringSchedule, setOfferingSchedule] = useState<Schedule | null>(null);
   const [offerNote, setOfferNote] = useState("");
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [rejectOfferId, setRejectOfferId] = useState<string | null>(null);
+  const [rejectNote, setRejectNote] = useState("");
 
   const createOfferMutation = useMutation({
     mutationFn: async (data: { scheduleId: string; offeredByWorkerId: string; notes: string }) => {
@@ -356,6 +361,22 @@ export default function SchedulePage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/shift-offers"] });
       toast({ title: "Shift offer withdrawn" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const rejectOfferMutation = useMutation({
+    mutationFn: async ({ offerId, managerNote }: { offerId: string; managerNote: string }) => {
+      const res = await apiRequest("PATCH", `/api/shift-offers/${offerId}`, { status: "rejected", managerNote });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/shift-offers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
+      setRejectDialogOpen(false);
+      setRejectOfferId(null);
+      setRejectNote("");
+      toast({ title: "Shift exchange rejected", description: "Both employees have been notified." });
     },
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
@@ -1940,7 +1961,7 @@ export default function SchedulePage() {
                       <TableHead>Times</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Claimed By</TableHead>
-                      <TableHead>Notes</TableHead>
+                      <TableHead>Notes / Manager Note</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -1957,24 +1978,36 @@ export default function SchedulePage() {
                               offer.status === "open" ? "outline" :
                               offer.status === "claimed" ? "secondary" :
                               offer.status === "approved" ? "default" :
+                              offer.status === "rejected" ? "destructive" :
                               offer.status === "withdrawn" ? "secondary" : "outline"
                             } data-testid={`badge-offer-${offer.id}`}>
                               {offer.status}
                             </Badge>
                           </TableCell>
                           <TableCell>{offer.claimedByWorkerId ? getWorkerName(workers, offer.claimedByWorkerId) : "—"}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{offer.notes || "—"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground max-w-[200px]">
+                            {offer.notes && <div>{offer.notes}</div>}
+                            {offer.managerNote && <div className="mt-1 text-amber-600 dark:text-amber-400 font-medium">Manager: {offer.managerNote}</div>}
+                            {!offer.notes && !offer.managerNote && "—"}
+                          </TableCell>
                           <TableCell>
-                            <div className="flex gap-1">
+                            <div className="flex gap-1 flex-wrap">
                               {offer.status === "open" && currentUser?.workerId !== offer.offeredByWorkerId && (
                                 <Button size="sm" variant="outline" onClick={() => currentUser?.workerId && claimOfferMutation.mutate({ offerId: offer.id, workerId: currentUser.workerId })} data-testid={`button-claim-${offer.id}`}>
                                   Claim Shift
                                 </Button>
                               )}
                               {offer.status === "claimed" && (
-                                <Button size="sm" onClick={() => approveOfferMutation.mutate(offer.id)} data-testid={`button-approve-${offer.id}`}>
-                                  Approve
-                                </Button>
+                                <>
+                                  <Button size="sm" onClick={() => approveOfferMutation.mutate(offer.id)} disabled={approveOfferMutation.isPending} data-testid={`button-approve-${offer.id}`}>
+                                    <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                                    Approve
+                                  </Button>
+                                  <Button size="sm" variant="destructive" onClick={() => { setRejectOfferId(offer.id); setRejectNote(""); setRejectDialogOpen(true); }} data-testid={`button-reject-${offer.id}`}>
+                                    <XCircle className="h-3.5 w-3.5 mr-1" />
+                                    Reject
+                                  </Button>
+                                </>
                               )}
                               {(offer.status === "open" || offer.status === "claimed") && (
                                 <Button size="sm" variant="ghost" className="text-destructive" onClick={() => withdrawOfferMutation.mutate(offer.id)} data-testid={`button-withdraw-${offer.id}`}>
@@ -1993,6 +2026,35 @@ export default function SchedulePage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Reject Shift Exchange Dialog */}
+      <Dialog open={rejectDialogOpen} onOpenChange={(v) => { setRejectDialogOpen(v); if (!v) { setRejectOfferId(null); setRejectNote(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject Shift Exchange</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">Rejecting this request will keep the original employee on the shift. Both workers will be notified by email and text.</p>
+            <div>
+              <Label>Manager Note (optional)</Label>
+              <Textarea
+                data-testid="input-reject-note"
+                placeholder="Add a reason or note for the employees..."
+                value={rejectNote}
+                onChange={e => setRejectNote(e.target.value)}
+                className="mt-1"
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={() => { setRejectDialogOpen(false); setRejectOfferId(null); setRejectNote(""); }}>Cancel</Button>
+            <Button variant="destructive" data-testid="button-confirm-reject" disabled={rejectOfferMutation.isPending} onClick={() => { if (rejectOfferId) rejectOfferMutation.mutate({ offerId: rejectOfferId, managerNote: rejectNote }); }}>
+              {rejectOfferMutation.isPending ? "Rejecting..." : "Reject Exchange"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={addScheduleOpen} onOpenChange={(v) => { setAddScheduleOpen(v); if (!v) setScheduleForm({ workerId: "", companyId: "", date: "", startTime: "", endTime: "", department: "", jobId: "", note: "" }); }}>
         <DialogContent>
