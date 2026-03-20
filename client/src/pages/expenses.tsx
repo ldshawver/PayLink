@@ -352,7 +352,7 @@ export default function ExpensesPage() {
   }
   const sortedCatBudget = Object.entries(budgetByCategory).sort((a, b) => b[1] - a[1]);
 
-  const ReceiptFormContent = () => (
+  const receiptFormContent = (
     <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
       <div className="grid grid-cols-2 gap-3">
         <div className="grid gap-1">
@@ -783,14 +783,14 @@ export default function ExpensesPage() {
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>Add Expense Receipt</DialogTitle></DialogHeader>
-          <ReceiptFormContent />
+          {receiptFormContent}
         </DialogContent>
       </Dialog>
 
       <Dialog open={!!editingReceipt} onOpenChange={v => !v && setEditingReceipt(null)}>
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>Edit Receipt</DialogTitle></DialogHeader>
-          <ReceiptFormContent />
+          {receiptFormContent}
         </DialogContent>
       </Dialog>
     </div>

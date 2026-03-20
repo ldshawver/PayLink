@@ -7,7 +7,7 @@ import { sendScheduleEmailNotification, sendScheduleSmsNotification } from "./no
 import path from "path";
 import { db } from "./db";
 import { sql } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema } from "@shared/schema";
 
 const uploadStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, path.join(process.cwd(), "uploads")),
@@ -2893,7 +2893,47 @@ export async function registerRoutes(
 
   app.post("/api/shift-offers", requireAuth, async (req, res) => {
     try {
-      const item = await storage.createShiftOffer(req.body);
+      const parsed = insertShiftOfferSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid data", errors: parsed.error.errors });
+
+      const schedule = (await storage.getSchedules()).find(s => s.id === parsed.data.scheduleId);
+      if (!schedule) return res.status(404).json({ message: "Schedule not found" });
+      const callerUser = await storage.getUser(req.session.userId!);
+      const isAdminOrManager = callerUser?.role === "admin" || callerUser?.role === "manager";
+      const isOwnShift = callerUser?.workerId === parsed.data.offeredByWorkerId;
+      if (!isOwnShift && !isAdminOrManager) return res.status(403).json({ message: "Not authorized to offer this shift" });
+      if (schedule.workerId !== parsed.data.offeredByWorkerId) return res.status(400).json({ message: "Schedule does not belong to this worker" });
+
+      const item = await storage.createShiftOffer(parsed.data);
+
+      try {
+        const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
+        const offeringWorker = await storage.getWorker(item.offeredByWorkerId);
+        const offeringName = offeringWorker ? `${offeringWorker.firstName} ${offeringWorker.lastName}` : "An employee";
+        const shiftDate = schedule?.date || "unknown date";
+        const shiftTime = schedule ? `${schedule.startTime}–${schedule.endTime}` : "";
+        const companyId = offeringWorker?.companyId;
+        if (companyId) {
+          const allWorkers = await storage.getWorkers();
+          const eligibleWorkers = allWorkers.filter(w =>
+            w.companyId === companyId && w.id !== item.offeredByWorkerId && w.isActive && w.workerType === "employee"
+          );
+          const subject = "New Shift Available on Marketplace";
+          const bodyText = `${offeringName} has posted their shift on ${shiftDate} ${shiftTime} to the Shift Marketplace.\n\nLog in to PayLink and go to Schedule → Shift Marketplace to claim this shift.`;
+          for (const w of eligibleWorkers) {
+            const wEmail = w.workEmail || w.homeEmail || w.email;
+            const wPhone = w.mobilePhone || w.homePhone;
+            const wName = `${w.firstName} ${w.lastName}`;
+            await Promise.all([
+              sendShiftMarketplaceEmail({ recipientName: wName, email: wEmail, subject, bodyText }),
+              sendShiftMarketplaceSms({ recipientName: wName, phone: wPhone, subject, bodyText: `PayLink: ${offeringName} posted a shift on ${shiftDate} ${shiftTime}. Log in to claim it!` }),
+            ]);
+          }
+        }
+      } catch (notifErr) {
+        console.error("[Shift Offer] Notification error (non-fatal):", (notifErr as Error).message);
+      }
+
       res.status(201).json(item);
     } catch (error) {
       console.error(error);
