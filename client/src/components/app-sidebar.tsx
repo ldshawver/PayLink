@@ -189,6 +189,7 @@ const navSections: NavSection[] = [
       { title: "Taxes & Deductions", url: "/payroll?tab=taxes-deductions", icon: Landmark },
       { title: "Remittance Agencies", url: "/payroll?tab=remittance-agencies", icon: Building },
       { title: "Remittance Sources", url: "/payroll?tab=remittance-sources", icon: Globe },
+      { title: "Expenses & Receipts", url: "/expenses", icon: Receipt },
     ],
   },
   {
