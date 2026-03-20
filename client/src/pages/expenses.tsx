@@ -125,6 +125,7 @@ type ReceiptForm = {
   subtotal: string;
   lineItems: LineItem[];
   receiptImagePath: string;
+  isReimbursement: boolean;
 };
 
 const EMPTY_FORM: ReceiptForm = {
@@ -144,6 +145,7 @@ const EMPTY_FORM: ReceiptForm = {
   subtotal: "",
   lineItems: [],
   receiptImagePath: "",
+  isReimbursement: false,
 };
 
 function catLabel(value: string) {
@@ -207,9 +209,15 @@ export default function ExpensesPage() {
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
+  const sendRemindersMutation = useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/approval-reminders/send", {})).json(),
+    onSuccess: (data: any) => { toast({ title: "Reminders sent", description: data.message }); },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
   const approveMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) =>
-      (await apiRequest("PATCH", `/api/receipts/${id}`, { status })).json(),
+      (await apiRequest("PATCH", `/api/receipts/${id}`, { status, approvedAt: status === "approved" ? new Date().toISOString() : null })).json(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       toast({ title: "Status updated" });
@@ -258,6 +266,7 @@ export default function ExpensesPage() {
       subtotal:        (r as any).subtotal?.toString() || "",
       lineItems:       parsedLineItems,
       receiptImagePath: r.receiptImagePath || "",
+      isReimbursement: (r as any).isReimbursement || false,
     });
   }
 
@@ -326,6 +335,7 @@ export default function ExpensesPage() {
       lineItems:    form.lineItems.length > 0 ? JSON.stringify(form.lineItems) : null,
       receiptImagePath: form.receiptImagePath || null,
       includeInJobCost: !!form.jobId,
+      isReimbursement: form.isReimbursement,
     };
     delete data.lineItems_parsed;
     if (editingReceipt) updateMutation.mutate({ id: editingReceipt.id, data });
@@ -532,6 +542,18 @@ export default function ExpensesPage() {
           <Input type="number" step="0.01" value={form.taxAmount} onChange={e => setForm(f => ({ ...f, taxAmount: e.target.value }))} placeholder="0.00" data-testid="input-tax" />
         </div>
       </div>
+      <div className="flex items-center gap-2 rounded-md border p-3 bg-muted/30">
+        <Checkbox
+          id="isReimbursement"
+          checked={form.isReimbursement}
+          onCheckedChange={v => setForm(f => ({ ...f, isReimbursement: !!v }))}
+          data-testid="checkbox-reimbursement"
+        />
+        <div className="grid gap-0.5">
+          <Label htmlFor="isReimbursement" className="cursor-pointer font-medium text-sm">Employee Reimbursement</Label>
+          <p className="text-xs text-muted-foreground">If checked, requires manager approval and will be added to the employee's next payroll</p>
+        </div>
+      </div>
       <div className="grid gap-1">
         <Label>Notes</Label>
         <Textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Additional notes" rows={2} data-testid="input-notes" />
@@ -596,6 +618,15 @@ export default function ExpensesPage() {
               </Button>
             </Link>
           )}
+          <Button
+            variant="outline"
+            onClick={() => sendRemindersMutation.mutate()}
+            disabled={sendRemindersMutation.isPending}
+            data-testid="button-send-reminders"
+          >
+            {sendRemindersMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ReceiptIcon className="h-4 w-4 mr-2" />}
+            Send Approval Reminders
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" data-testid="button-export">
@@ -609,6 +640,17 @@ export default function ExpensesPage() {
               </DropdownMenuItem>
               <DropdownMenuItem onClick={exportExcel} data-testid="button-export-excel">
                 <FileText className="mr-2 h-4 w-4 text-green-600" />Export as Excel (.xlsx)
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => {
+                const params = new URLSearchParams();
+                if (filterCompany !== "all") params.set("companyId", filterCompany);
+                if (filterStatus !== "all") params.set("status", filterStatus);
+                if (filterDateFrom) params.set("dateFrom", filterDateFrom);
+                if (filterDateTo) params.set("dateTo", filterDateTo);
+                window.open(`/api/receipts/export-pdf?${params.toString()}`, "_blank");
+              }} data-testid="button-export-pdf">
+                <FileText className="mr-2 h-4 w-4 text-red-600" />Export as PDF (Branded)
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -745,6 +787,7 @@ export default function ExpensesPage() {
                         <TableHead>Job Cost</TableHead>
                         <TableHead>Employee</TableHead>
                         <TableHead className="text-right">Amount</TableHead>
+                        <TableHead>Type</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Receipt</TableHead>
                         <TableHead></TableHead>
@@ -770,6 +813,13 @@ export default function ExpensesPage() {
                           <TableCell className="text-sm">{r.jobId ? getJobName(r.jobId) : "—"}</TableCell>
                           <TableCell className="text-sm">{r.workerId ? getWorkerName(r.workerId) : "—"}</TableCell>
                           <TableCell className="text-right font-medium text-sm whitespace-nowrap">${parseFloat(r.amount?.toString() || "0").toFixed(2)}</TableCell>
+                          <TableCell>
+                            {(r as any).isReimbursement ? (
+                              <Badge variant="secondary" className="bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" data-testid={`badge-reimb-${r.id}`}>Reimbursement</Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">Expense</span>
+                            )}
+                          </TableCell>
                           <TableCell>
                             <Badge variant={STATUS_COLORS[r.status || "pending"] as any} data-testid={`badge-status-${r.id}`}>
                               {r.status || "pending"}

@@ -150,6 +150,94 @@ export async function sendShiftMarketplaceSms(payload: ShiftMarketplaceNotificat
   }
 }
 
+export interface ApprovalReminderPayload {
+  recipientName: string;
+  email?: string | null;
+  phone?: string | null;
+  companyName: string;
+  pendingPunches: number;
+  pendingTimecards: number;
+  pendingAmendments: number;
+  pendingExpenses: number;
+  dashboardUrl: string;
+}
+
+export async function sendApprovalReminderEmail(payload: ApprovalReminderPayload): Promise<{ sent: boolean; error?: string }> {
+  if (!payload.email) return { sent: false, error: "No email address" };
+  const smtp = getTransporter();
+  if (!smtp) return { sent: false, error: "SMTP not configured" };
+
+  const items: string[] = [];
+  if (payload.pendingPunches > 0) items.push(`${payload.pendingPunches} time punch${payload.pendingPunches > 1 ? "es" : ""}`);
+  if (payload.pendingTimecards > 0) items.push(`${payload.pendingTimecards} timecard${payload.pendingTimecards > 1 ? "s" : ""}`);
+  if (payload.pendingAmendments > 0) items.push(`${payload.pendingAmendments} pay stub amendment${payload.pendingAmendments > 1 ? "s" : ""}`);
+  if (payload.pendingExpenses > 0) items.push(`${payload.pendingExpenses} employee expense${payload.pendingExpenses > 1 ? "s" : ""}`);
+
+  if (items.length === 0) return { sent: false, error: "No pending items" };
+
+  const itemList = items.join(", ");
+  const subject = `Action Required: ${items.length} type${items.length > 1 ? "s" : ""} of items pending your approval — ${payload.companyName}`;
+  const text = `Hi ${payload.recipientName},\n\nYou have items pending your approval at ${payload.companyName}:\n\n${items.map(i => `  • ${i}`).join("\n")}\n\nPlease review and approve or reject these items before payroll is processed.\n\nView pending items: ${payload.dashboardUrl}\n\nThank you,\n${payload.companyName} via PayLink`;
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <div style="background: linear-gradient(135deg, #0d9488, #2563eb); padding: 20px; border-radius: 8px 8px 0 0;">
+        <h1 style="color: white; margin: 0; font-size: 22px;">⏰ Approval Reminder</h1>
+        <p style="color: rgba(255,255,255,0.85); margin: 4px 0 0;">${payload.companyName}</p>
+      </div>
+      <div style="background: #f9fafb; padding: 24px; border-radius: 0 0 8px 8px; border: 1px solid #e5e7eb; border-top: none;">
+        <p style="font-size: 16px; color: #111827;">Hi <strong>${payload.recipientName}</strong>,</p>
+        <p style="color: #374151;">You have items that need your approval before payroll is processed:</p>
+        <div style="background: white; border: 1px solid #e5e7eb; border-radius: 6px; padding: 16px; margin: 16px 0;">
+          ${items.map(i => `<div style="padding: 8px 0; border-bottom: 1px solid #f3f4f6; display: flex; align-items: center;">
+            <span style="color: #dc2626; font-size: 18px; margin-right: 10px;">●</span>
+            <span style="color: #111827; font-size: 15px;">${i}</span>
+          </div>`).join("")}
+        </div>
+        <a href="${payload.dashboardUrl}" style="display: inline-block; background: linear-gradient(135deg, #0d9488, #2563eb); color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; margin-top: 8px;">Review Pending Items</a>
+        <p style="color: #9ca3af; font-size: 13px; margin-top: 24px;">This reminder was sent by ${payload.companyName} via PayLink.</p>
+      </div>
+    </div>
+  `;
+
+  try {
+    await smtp.transporter.sendMail({ from: smtp.fromAddress, to: payload.email, subject, text, html });
+    console.log(`[Email] Approval reminder sent to ${payload.email}`);
+    return { sent: true };
+  } catch (err: any) {
+    console.error(`[Email] Failed approval reminder to ${payload.email}:`, err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
+export async function sendApprovalReminderSms(payload: ApprovalReminderPayload): Promise<{ sent: boolean; error?: string }> {
+  if (!payload.phone) return { sent: false, error: "No phone number" };
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+  if (!accountSid || !authToken || !fromNumber) return { sent: false, error: "Twilio not configured" };
+
+  const items: string[] = [];
+  if (payload.pendingPunches > 0) items.push(`${payload.pendingPunches} punches`);
+  if (payload.pendingTimecards > 0) items.push(`${payload.pendingTimecards} timecards`);
+  if (payload.pendingAmendments > 0) items.push(`${payload.pendingAmendments} amendments`);
+  if (payload.pendingExpenses > 0) items.push(`${payload.pendingExpenses} expenses`);
+  if (items.length === 0) return { sent: false, error: "No pending items" };
+
+  const message = `PayLink Reminder: ${payload.recipientName}, you have pending approvals at ${payload.companyName}: ${items.join(", ")}. Please review before payroll runs. ${payload.dashboardUrl}`;
+
+  try {
+    const twilio = (await import("twilio")).default;
+    const client = twilio(accountSid, authToken);
+    await client.messages.create({ body: message, from: fromNumber, to: payload.phone });
+    console.log(`[SMS] Approval reminder sent to ${payload.phone}`);
+    return { sent: true };
+  } catch (err: any) {
+    console.error(`[SMS] Failed approval reminder to ${payload.phone}:`, err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
 export async function sendScheduleSmsNotification(payload: ScheduleNotificationPayload): Promise<{ sent: boolean; error?: string }> {
   const phone = payload.phone;
   if (!phone) return { sent: false, error: "No phone number" };

@@ -2848,7 +2848,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/receipts/:id", requireAuth, async (req, res) => {
+  app.patch("/api/receipts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const item = await storage.updateReceipt(req.params.id as string, req.body);
       if (!item) return res.status(404).json({ message: "Receipt not found" });
@@ -2859,7 +2859,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/receipts/:id", requireAuth, async (req, res) => {
+  app.delete("/api/receipts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteReceipt(req.params.id as string);
       res.json({ message: "Receipt deleted" });
@@ -2939,6 +2939,141 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (error: any) {
       console.error("AI scan error:", error);
       res.status(500).json({ message: "Failed to process receipt image", error: error.message });
+    }
+  });
+
+  app.post("/api/approval-reminders/send", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { sendApprovalReminderEmail, sendApprovalReminderSms } = await import("./notifications.js");
+      const { companyId } = req.body;
+
+      const punches = await storage.getTimePunches();
+      const pendingPunches = punches.filter(p => p.approvalStatus === "pending" && (!companyId || p.companyId === companyId));
+
+      const amendments = await storage.getPayStubAmendments();
+      const pendingAmendments = amendments.filter((a: any) => (a.approvalStatus === "pending") && (!companyId || a.companyId === companyId));
+
+      const allReceipts = await storage.getReceipts();
+      const pendingExpenses = allReceipts.filter(r => r.status === "pending" && (!companyId || r.companyId === companyId));
+
+      const users = await storage.getUsers();
+      const managers = users.filter(u => (u.role === "admin" || u.role === "manager") && u.isActive);
+
+      const results: any[] = [];
+      for (const mgr of managers) {
+        let mgrWorker = mgr.workerId ? await storage.getWorker(mgr.workerId) : null;
+        const mgrCompany = mgrWorker?.companyId ? (await storage.getCompanies()).find(c => c.id === mgrWorker!.companyId) : null;
+        if (companyId && mgrWorker?.companyId !== companyId) continue;
+
+        const payload = {
+          recipientName: mgrWorker ? `${mgrWorker.firstName} ${mgrWorker.lastName}` : mgr.username,
+          email: mgrWorker?.email || null,
+          phone: mgrWorker?.phone || null,
+          companyName: mgrCompany?.name || "Your Company",
+          pendingPunches: pendingPunches.length,
+          pendingTimecards: 0,
+          pendingAmendments: pendingAmendments.length,
+          pendingExpenses: pendingExpenses.length,
+          dashboardUrl: `${req.protocol}://${req.get("host")}/attendance?tab=pending-approvals`,
+        };
+
+        let emailSent = false, smsSent = false;
+        try { await sendApprovalReminderEmail(payload); emailSent = true; } catch (e) { console.warn(`Reminder email failed for ${mgr.username}:`, e); }
+        try { await sendApprovalReminderSms(payload); smsSent = true; } catch (e) { console.warn(`Reminder SMS failed for ${mgr.username}:`, e); }
+        results.push({ user: mgr.username, emailSent, smsSent });
+      }
+
+      res.json({ message: `Reminders sent to ${results.length} manager(s)`, results });
+    } catch (error) {
+      console.error("Approval reminder error:", error);
+      res.status(500).json({ message: "Failed to send reminders" });
+    }
+  });
+
+  app.get("/api/receipts/export-pdf", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { jsPDF } = await import("jspdf");
+      const autoTable = (await import("jspdf-autotable")).default;
+
+      const allReceipts = await storage.getReceipts();
+      const companies = await storage.getCompanies();
+      const workers = await storage.getWorkers();
+      const jobs = await storage.getJobs();
+      const costCenters = await storage.getCostCenters();
+
+      const { companyId, status, dateFrom, dateTo, type } = req.query as Record<string, string>;
+      let filtered = allReceipts;
+      if (companyId && companyId !== "all") filtered = filtered.filter(r => r.companyId === companyId);
+      if (status && status !== "all") filtered = filtered.filter(r => r.status === status);
+      if (dateFrom) filtered = filtered.filter(r => r.receiptDate >= dateFrom);
+      if (dateTo) filtered = filtered.filter(r => r.receiptDate <= dateTo);
+      if (type === "reimbursement") filtered = filtered.filter(r => (r as any).isReimbursement);
+
+      const getWorkerName = (id: string | null) => { if (!id) return "—"; const w = workers.find(w => w.id === id); return w ? `${w.firstName} ${w.lastName}` : "—"; };
+      const getCompanyName = (id: string | null) => { if (!id) return "—"; return companies.find(c => c.id === id)?.name || "—"; };
+      const getJobName = (id: string | null) => { if (!id) return "—"; return (jobs as any[]).find(j => j.id === id)?.name || "—"; };
+
+      const doc = new jsPDF({ orientation: "landscape" });
+      const pageWidth = doc.internal.pageSize.getWidth();
+
+      doc.setFillColor(13, 148, 136);
+      doc.rect(0, 0, pageWidth, 28, "F");
+      doc.setFillColor(37, 99, 235);
+      doc.rect(pageWidth * 0.6, 0, pageWidth * 0.4, 28, "F");
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(20);
+      doc.setFont("helvetica", "bold");
+      doc.text("PayLink", 14, 12);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      doc.text("Expense & Receipt Report", 14, 20);
+
+      const reportDate = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+      doc.setFontSize(9);
+      doc.text(reportDate, pageWidth - 14, 12, { align: "right" });
+      const total = filtered.reduce((s, r) => s + parseFloat(r.amount?.toString() || "0"), 0);
+      doc.text(`${filtered.length} receipts | Total: $${total.toFixed(2)}`, pageWidth - 14, 20, { align: "right" });
+
+      doc.setTextColor(0, 0, 0);
+
+      const tableData = filtered.map(r => [
+        r.receiptDate,
+        r.vendor || "—",
+        (r.category || "general").replace(/-/g, " "),
+        getCompanyName(r.companyId),
+        getWorkerName(r.workerId),
+        getJobName(r.jobId),
+        (r as any).paymentMethod ? (r as any).paymentMethod.replace(/_/g, " ") : "—",
+        `$${parseFloat(r.amount?.toString() || "0").toFixed(2)}`,
+        r.status || "pending",
+        (r as any).isReimbursement ? "Yes" : "No",
+      ]);
+
+      (autoTable as any)(doc, {
+        startY: 34,
+        head: [["Date", "Vendor", "Category", "Company", "Employee", "Job Cost", "Payment", "Amount", "Status", "Reimb."]],
+        body: tableData,
+        styles: { fontSize: 8, cellPadding: 2 },
+        headStyles: { fillColor: [13, 148, 136], textColor: [255, 255, 255], fontStyle: "bold" },
+        alternateRowStyles: { fillColor: [249, 250, 251] },
+        columnStyles: { 7: { halign: "right" } },
+        didDrawPage: (data: any) => {
+          const pageH = doc.internal.pageSize.getHeight();
+          doc.setFontSize(7);
+          doc.setTextColor(156, 163, 175);
+          doc.text(`Generated by PayLink — ${reportDate}`, 14, pageH - 8);
+          doc.text(`Page ${doc.getCurrentPageInfo().pageNumber}`, pageWidth - 14, pageH - 8, { align: "right" });
+        },
+      });
+
+      const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="expense-report-${new Date().toISOString().split("T")[0]}.pdf"`);
+      res.send(pdfBuffer);
+    } catch (error: any) {
+      console.error("PDF export error:", error);
+      res.status(500).json({ message: "Failed to generate PDF", error: error.message });
     }
   });
 

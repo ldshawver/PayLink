@@ -563,6 +563,9 @@ export const payStubAmendments = pgTable("pay_stub_amendments", {
   description: text("description"),
   publicNote: text("public_note"),
   effectiveDate: date("effective_date"),
+  approvalStatus: text("approval_status").default("pending"),
+  approvedBy: varchar("approved_by"),
+  approvedAt: timestamp("approved_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -1241,6 +1244,8 @@ export const receipts = pgTable("receipts", {
   taxAmount: numeric("tax_amount"),
   subtotal: numeric("subtotal"),
   lineItems: text("line_items"),
+  isReimbursement: boolean("is_reimbursement").default(false),
+  approvedAt: timestamp("approved_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

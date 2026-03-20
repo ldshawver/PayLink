@@ -2579,72 +2579,77 @@ function JobCostReportSection() {
 function ExpenseReportSection() {
   const { data: receipts = [], isLoading } = useQuery<ExpenseReceipt[]>({ queryKey: ["/api/receipts"] });
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
   const { data: costCenters = [] } = useQuery<any[]>({ queryKey: ["/api/cost-centers"] });
   const { data: jobs = [] } = useQuery<any[]>({ queryKey: ["/api/jobs"] });
-  const [groupBy, setGroupBy] = useState<"cost-center" | "job" | "category" | "company">("cost-center");
+  const [reportView, setReportView] = useState<"company" | "reimbursement">("company");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterCompany, setFilterCompany] = useState("all");
 
-  const filtered = receipts.filter(r => {
+  const getWorkerName = (id: string | null) => { if (!id) return "—"; const w = workers.find(w => w.id === id); return w ? `${w.firstName} ${w.lastName}` : "—"; };
+  const getCompanyName = (id: string | null) => { if (!id) return "—"; return companies.find(c => c.id === id)?.name || "—"; };
+  const getJobName = (id: string | null) => { if (!id) return "—"; return (jobs as any[]).find(j => j.id === id)?.name || "—"; };
+
+  const allFiltered = receipts.filter(r => {
     if (filterStatus !== "all" && r.status !== filterStatus) return false;
     if (filterCompany !== "all" && r.companyId !== filterCompany) return false;
     return true;
   });
 
-  const groups = (() => {
-    const map: Record<string, { label: string; receipts: ExpenseReceipt[]; total: number }> = {};
-    filtered.forEach(r => {
-      let key = "none";
-      let label = "Unassigned";
-      if (groupBy === "cost-center") {
-        key = r.costCenterId || "none";
-        label = key !== "none" ? ((costCenters as any[]).find(c => c.id === key)?.name || key) : "No Cost Center";
-      } else if (groupBy === "job") {
-        key = r.jobId || "none";
-        label = key !== "none" ? ((jobs as any[]).find(j => j.id === key)?.title || key) : "No Job";
-      } else if (groupBy === "category") {
-        key = r.category || "general";
-        label = key.charAt(0).toUpperCase() + key.slice(1).replace(/-/g, " ");
-      } else if (groupBy === "company") {
-        key = r.companyId || "none";
-        label = key !== "none" ? (companies.find(c => c.id === key)?.name || key) : "No Company";
-      }
-      if (!map[key]) map[key] = { label, receipts: [], total: 0 };
+  const companyGroups = (() => {
+    const map: Record<string, { label: string; receipts: ExpenseReceipt[]; total: number; approved: number; pending: number }> = {};
+    allFiltered.forEach(r => {
+      const key = r.companyId || "none";
+      const label = key !== "none" ? getCompanyName(key) : "No Company";
+      if (!map[key]) map[key] = { label, receipts: [], total: 0, approved: 0, pending: 0 };
+      const amt = parseFloat(r.amount?.toString() || "0");
       map[key].receipts.push(r);
-      map[key].total += parseFloat(r.amount?.toString() || "0");
+      map[key].total += amt;
+      if (r.status === "approved") map[key].approved += amt;
+      if (r.status === "pending") map[key].pending += amt;
+    });
+    return Object.values(map).sort((a, b) => b.total - a.total);
+  })();
+
+  const reimbursements = allFiltered.filter(r => (r as any).isReimbursement);
+  const reimbursementsByEmployee = (() => {
+    const map: Record<string, { name: string; company: string; receipts: ExpenseReceipt[]; total: number; approved: number; pending: number }> = {};
+    reimbursements.forEach(r => {
+      const key = r.workerId || "none";
+      const name = key !== "none" ? getWorkerName(key) : "Unassigned";
+      const co = r.companyId ? getCompanyName(r.companyId) : "";
+      if (!map[key]) map[key] = { name, company: co, receipts: [], total: 0, approved: 0, pending: 0 };
+      const amt = parseFloat(r.amount?.toString() || "0");
+      map[key].receipts.push(r);
+      map[key].total += amt;
+      if (r.status === "approved") map[key].approved += amt;
+      if (r.status === "pending") map[key].pending += amt;
     });
     return Object.values(map).sort((a, b) => b.total - a.total);
   })();
 
   function exportCSV() {
-    const rows = [["Date", "Vendor", "Description", "Category", "Cost Center", "Job", "Company", "Amount", "Status"]];
-    filtered.forEach(r => {
-      const cc = (costCenters as any[]).find(c => c.id === r.costCenterId)?.name || "";
-      const job = (jobs as any[]).find(j => j.id === r.jobId)?.title || "";
-      const co = companies.find(c => c.id === r.companyId)?.name || "";
-      rows.push([r.receiptDate, r.vendor || "", r.description || "", r.category || "", cc, job, co, r.amount?.toString() || "0", r.status || ""]);
+    const rows = [["Date", "Vendor", "Description", "Category", "Company", "Employee", "Job Cost", "Amount", "Status", "Reimbursement", "Payment Method"]];
+    allFiltered.forEach(r => {
+      rows.push([r.receiptDate, r.vendor || "", r.description || "", r.category || "", getCompanyName(r.companyId), getWorkerName(r.workerId), getJobName(r.jobId), r.amount?.toString() || "0", r.status || "", (r as any).isReimbursement ? "Yes" : "No", (r as any).paymentMethod || ""]);
     });
     const csv = rows.map(r => r.map(v => `"${v}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
+    const a = document.createElement("a"); a.href = url;
     a.download = `expense-report-${new Date().toISOString().split("T")[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    a.click(); URL.revokeObjectURL(url);
   }
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-3 items-center justify-between">
         <div className="flex flex-wrap gap-3 items-center">
-          <Select value={groupBy} onValueChange={(v: any) => setGroupBy(v)}>
-            <SelectTrigger className="w-44" data-testid="select-group-by"><SelectValue /></SelectTrigger>
+          <Select value={reportView} onValueChange={(v: any) => setReportView(v)}>
+            <SelectTrigger className="w-56" data-testid="select-expense-report-view"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="cost-center">Group by Cost Center</SelectItem>
-              <SelectItem value="job">Group by Job</SelectItem>
-              <SelectItem value="category">Group by Category</SelectItem>
-              <SelectItem value="company">Group by Company</SelectItem>
+              <SelectItem value="company">Company Expense Summary</SelectItem>
+              <SelectItem value="reimbursement">Employee Reimbursements</SelectItem>
             </SelectContent>
           </Select>
           <Select value={filterCompany} onValueChange={setFilterCompany}>
@@ -2664,70 +2669,134 @@ function ExpenseReportSection() {
             </SelectContent>
           </Select>
         </div>
-        <Button variant="outline" onClick={exportCSV} data-testid="button-export-expenses">
-          <Download className="h-4 w-4 mr-2" />
-          Export CSV
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={exportCSV} data-testid="button-export-expenses">
+            <Download className="h-4 w-4 mr-2" />Export CSV
+          </Button>
+          <Button variant="outline" onClick={() => {
+            const params = new URLSearchParams();
+            if (filterCompany !== "all") params.set("companyId", filterCompany);
+            if (filterStatus !== "all") params.set("status", filterStatus);
+            if (reportView === "reimbursement") params.set("type", "reimbursement");
+            window.open(`/api/receipts/export-pdf?${params.toString()}`, "_blank");
+          }} data-testid="button-export-expense-pdf">
+            <Download className="h-4 w-4 mr-2" />Export PDF
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
         <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}</div>
-      ) : groups.length === 0 ? (
-        <Card>
-          <CardContent className="py-16 text-center text-muted-foreground">
+      ) : reportView === "company" ? (
+        companyGroups.length === 0 ? (
+          <Card><CardContent className="py-16 text-center text-muted-foreground">
             <Receipt className="h-10 w-10 mx-auto mb-3 opacity-30" />
             <p className="font-medium">No expense receipts found</p>
-            <p className="text-sm mt-1">Add receipts in Expenses & Receipts to see them here.</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-4">
-          {groups.map(group => (
-            <Card key={group.label} data-testid={`expense-group-${group.label}`}>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">{group.label}</CardTitle>
-                  <div className="text-right">
+          </CardContent></Card>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Total Expenses</CardTitle></CardHeader>
+                <CardContent><p className="text-2xl font-bold">${allFiltered.reduce((s, r) => s + parseFloat(r.amount?.toString() || "0"), 0).toFixed(2)}</p>
+                <p className="text-xs text-muted-foreground">{allFiltered.length} receipts</p></CardContent></Card>
+              <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Approved</CardTitle></CardHeader>
+                <CardContent><p className="text-2xl font-bold text-green-600">${allFiltered.filter(r => r.status === "approved").reduce((s, r) => s + parseFloat(r.amount?.toString() || "0"), 0).toFixed(2)}</p></CardContent></Card>
+              <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Pending Approval</CardTitle></CardHeader>
+                <CardContent><p className="text-2xl font-bold text-amber-600">${allFiltered.filter(r => r.status === "pending").reduce((s, r) => s + parseFloat(r.amount?.toString() || "0"), 0).toFixed(2)}</p></CardContent></Card>
+            </div>
+            {companyGroups.map(group => (
+              <Card key={group.label} data-testid={`expense-group-${group.label}`}>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-base">{group.label}</CardTitle>
+                      <p className="text-xs text-muted-foreground mt-1">{group.receipts.length} receipts | Approved: ${group.approved.toFixed(2)} | Pending: ${group.pending.toFixed(2)}</p>
+                    </div>
                     <p className="font-bold text-lg">${group.total.toFixed(2)}</p>
-                    <p className="text-xs text-muted-foreground">{group.receipts.length} receipt{group.receipts.length !== 1 ? "s" : ""}</p>
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Vendor</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {group.receipts.map(r => (
-                      <TableRow key={r.id}>
-                        <TableCell className="text-sm">{r.receiptDate}</TableCell>
-                        <TableCell className="text-sm font-medium">{r.vendor || "—"}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="capitalize text-xs">
-                            {(r.category || "general").replace(/-/g, " ")}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={r.status === "approved" ? "default" : r.status === "rejected" ? "destructive" : "secondary"}>
-                            {r.status || "pending"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right font-medium">${parseFloat(r.amount?.toString() || "0").toFixed(2)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader><TableRow>
+                      <TableHead>Date</TableHead><TableHead>Vendor</TableHead><TableHead>Employee</TableHead>
+                      <TableHead>Category</TableHead><TableHead>Job Cost</TableHead><TableHead>Type</TableHead>
+                      <TableHead>Status</TableHead><TableHead className="text-right">Amount</TableHead>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {group.receipts.map(r => (
+                        <TableRow key={r.id}>
+                          <TableCell className="text-sm">{r.receiptDate}</TableCell>
+                          <TableCell className="text-sm font-medium">{r.vendor || "—"}</TableCell>
+                          <TableCell className="text-sm">{getWorkerName(r.workerId)}</TableCell>
+                          <TableCell><Badge variant="outline" className="capitalize text-xs">{(r.category || "general").replace(/-/g, " ")}</Badge></TableCell>
+                          <TableCell className="text-sm">{getJobName(r.jobId)}</TableCell>
+                          <TableCell>{(r as any).isReimbursement ? <Badge variant="secondary" className="bg-amber-100 text-amber-800 text-xs">Reimb.</Badge> : <span className="text-xs text-muted-foreground">Expense</span>}</TableCell>
+                          <TableCell><Badge variant={r.status === "approved" ? "default" : r.status === "rejected" ? "destructive" : "secondary"}>{r.status || "pending"}</Badge></TableCell>
+                          <TableCell className="text-right font-medium">${parseFloat(r.amount?.toString() || "0").toFixed(2)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )
+      ) : (
+        reimbursementsByEmployee.length === 0 ? (
+          <Card><CardContent className="py-16 text-center text-muted-foreground">
+            <Receipt className="h-10 w-10 mx-auto mb-3 opacity-30" />
+            <p className="font-medium">No employee reimbursements found</p>
+            <p className="text-sm mt-1">Mark receipts as "Employee Reimbursement" in Expenses & Receipts.</p>
+          </CardContent></Card>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Total Reimbursements</CardTitle></CardHeader>
+                <CardContent><p className="text-2xl font-bold">${reimbursements.reduce((s, r) => s + parseFloat(r.amount?.toString() || "0"), 0).toFixed(2)}</p>
+                <p className="text-xs text-muted-foreground">{reimbursements.length} claims from {reimbursementsByEmployee.length} employees</p></CardContent></Card>
+              <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Approved</CardTitle></CardHeader>
+                <CardContent><p className="text-2xl font-bold text-green-600">${reimbursements.filter(r => r.status === "approved").reduce((s, r) => s + parseFloat(r.amount?.toString() || "0"), 0).toFixed(2)}</p></CardContent></Card>
+              <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Awaiting Approval</CardTitle></CardHeader>
+                <CardContent><p className="text-2xl font-bold text-amber-600">${reimbursements.filter(r => r.status === "pending").reduce((s, r) => s + parseFloat(r.amount?.toString() || "0"), 0).toFixed(2)}</p></CardContent></Card>
+            </div>
+            {reimbursementsByEmployee.map(group => (
+              <Card key={group.name} data-testid={`reimb-group-${group.name}`}>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-base">{group.name}</CardTitle>
+                      <p className="text-xs text-muted-foreground mt-1">{group.company} | {group.receipts.length} claims | Approved: ${group.approved.toFixed(2)} | Pending: ${group.pending.toFixed(2)}</p>
+                    </div>
+                    <p className="font-bold text-lg">${group.total.toFixed(2)}</p>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader><TableRow>
+                      <TableHead>Date</TableHead><TableHead>Vendor</TableHead><TableHead>Description</TableHead>
+                      <TableHead>Category</TableHead><TableHead>Payment</TableHead>
+                      <TableHead>Status</TableHead><TableHead className="text-right">Amount</TableHead>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {group.receipts.map(r => (
+                        <TableRow key={r.id}>
+                          <TableCell className="text-sm">{r.receiptDate}</TableCell>
+                          <TableCell className="text-sm font-medium">{r.vendor || "—"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{r.description || "—"}</TableCell>
+                          <TableCell><Badge variant="outline" className="capitalize text-xs">{(r.category || "general").replace(/-/g, " ")}</Badge></TableCell>
+                          <TableCell className="text-sm capitalize">{((r as any).paymentMethod || "—").replace(/_/g, " ")}</TableCell>
+                          <TableCell><Badge variant={r.status === "approved" ? "default" : r.status === "rejected" ? "destructive" : "secondary"}>{r.status || "pending"}</Badge></TableCell>
+                          <TableCell className="text-right font-medium">${parseFloat(r.amount?.toString() || "0").toFixed(2)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )
       )}
     </div>
   );
