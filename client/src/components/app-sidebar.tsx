@@ -247,6 +247,7 @@ const navSections: NavSection[] = [
       { title: "Payroll Reports", url: "/reports?tab=payroll", icon: DollarSign },
       { title: "Tax Reports", url: "/reports?tab=tax", icon: Calculator },
       { title: "HR Reports", url: "/reports?tab=hr", icon: PieChart },
+      { title: "Expense Reports", url: "/reports?tab=expense", icon: Receipt },
     ],
   },
   {
