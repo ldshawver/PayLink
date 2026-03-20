@@ -2872,11 +2872,73 @@ export async function registerRoutes(
   app.post("/api/receipts/upload", requireAuth, upload.single("file"), async (req: any, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-      const url = `/uploads/${req.file.filename}`;
-      res.json({ url });
+      const filePath = `/uploads/${req.file.filename}`;
+      res.json({ filePath, url: filePath });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Upload failed" });
+    }
+  });
+
+  app.post("/api/receipts/ai-scan", requireAuth, upload.single("file"), async (req: any, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No receipt image provided" });
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) return res.status(500).json({ message: "OpenAI API key not configured" });
+
+      const fs = await import("fs");
+      const imageBuffer = fs.readFileSync(req.file.path);
+      const base64Image = imageBuffer.toString("base64");
+      const mimeType = req.file.mimetype || "image/jpeg";
+
+      const OpenAI = (await import("openai")).default;
+      const openai = new OpenAI({ apiKey });
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: `You are a receipt data extraction assistant. Extract data from receipt images and return ONLY valid JSON with these fields:
+{
+  "vendor": "store/merchant name",
+  "description": "brief description of purchase",
+  "amount": "total amount as number (including tax)",
+  "subtotal": "subtotal before tax as number",
+  "taxAmount": "tax amount as number",
+  "receiptDate": "date in YYYY-MM-DD format",
+  "category": "one of: general, raw-materials, overhead, reimbursement, meals, travel, supplies, equipment, software, utilities, professional-services, repairs, other",
+  "paymentMethod": "one of: cash, credit_card, debit_card, check, bank_transfer, other",
+  "lineItems": [
+    { "description": "item name", "quantity": 1, "unitPrice": 0.00, "total": 0.00 }
+  ]
+}
+If a field cannot be determined, use null. Always return valid JSON only, no markdown formatting.`
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Extract all data from this receipt image." },
+              { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } }
+            ]
+          }
+        ],
+        max_tokens: 2000,
+      });
+
+      const content = response.choices[0]?.message?.content || "{}";
+      const cleaned = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+
+      const filePath = `/uploads/${req.file.filename}`;
+
+      res.json({
+        ...parsed,
+        receiptImagePath: filePath,
+      });
+    } catch (error: any) {
+      console.error("AI scan error:", error);
+      res.status(500).json({ message: "Failed to process receipt image", error: error.message });
     }
   });
 

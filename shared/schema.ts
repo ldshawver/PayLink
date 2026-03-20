@@ -1237,6 +1237,10 @@ export const receipts = pgTable("receipts", {
   notes: text("notes"),
   includeInJobCost: boolean("include_in_job_cost").default(false),
   checkNumber: text("check_number"),
+  paymentMethod: text("payment_method"),
+  taxAmount: numeric("tax_amount"),
+  subtotal: numeric("subtotal"),
+  lineItems: text("line_items"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

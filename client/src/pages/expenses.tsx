@@ -52,10 +52,13 @@ import {
   Download,
   BarChart3,
   ChevronDown,
+  Camera,
+  Loader2,
 } from "lucide-react";
 import { Link } from "wouter";
 import { Checkbox } from "@/components/ui/checkbox";
 import * as XLSX from "xlsx";
+import { Textarea } from "@/components/ui/textarea";
 
 const CATEGORIES = [
   { value: "general",              label: "General" },
@@ -89,6 +92,22 @@ const STATUS_COLORS: Record<string, string> = {
   rejected: "destructive",
 };
 
+const PAYMENT_METHODS = [
+  { value: "cash", label: "Cash" },
+  { value: "credit_card", label: "Credit Card" },
+  { value: "debit_card", label: "Debit Card" },
+  { value: "check", label: "Check" },
+  { value: "bank_transfer", label: "Bank Transfer" },
+  { value: "other", label: "Other" },
+];
+
+type LineItem = {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+};
+
 type ReceiptForm = {
   companyId: string;
   workerId: string;
@@ -101,6 +120,11 @@ type ReceiptForm = {
   category: string;
   notes: string;
   includeInJobCost: boolean;
+  paymentMethod: string;
+  taxAmount: string;
+  subtotal: string;
+  lineItems: LineItem[];
+  receiptImagePath: string;
 };
 
 const EMPTY_FORM: ReceiptForm = {
@@ -115,6 +139,11 @@ const EMPTY_FORM: ReceiptForm = {
   category: "general",
   notes: "",
   includeInJobCost: false,
+  paymentMethod: "",
+  taxAmount: "",
+  subtotal: "",
+  lineItems: [],
+  receiptImagePath: "",
 };
 
 function catLabel(value: string) {
@@ -138,6 +167,8 @@ export default function ExpensesPage() {
   const [filterDateTo, setFilterDateTo] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [uploadingFor, setUploadingFor] = useState<string | null>(null);
+  const [aiScanning, setAiScanning] = useState(false);
+  const [aiScanOpen, setAiScanOpen] = useState(false);
 
   const { data: receipts = [], isLoading } = useQuery<Receipt[]>({ queryKey: ["/api/receipts"] });
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
@@ -206,6 +237,10 @@ export default function ExpensesPage() {
 
   function openEdit(r: Receipt) {
     setEditingReceipt(r);
+    let parsedLineItems: LineItem[] = [];
+    try {
+      if ((r as any).lineItems) parsedLineItems = JSON.parse((r as any).lineItems);
+    } catch {}
     setForm({
       companyId:       r.companyId || "",
       workerId:        r.workerId || "",
@@ -218,6 +253,11 @@ export default function ExpensesPage() {
       category:        r.category || "general",
       notes:           r.notes || "",
       includeInJobCost:(r as any).includeInJobCost || false,
+      paymentMethod:   (r as any).paymentMethod || "",
+      taxAmount:       (r as any).taxAmount?.toString() || "",
+      subtotal:        (r as any).subtotal?.toString() || "",
+      lineItems:       parsedLineItems,
+      receiptImagePath: r.receiptImagePath || "",
     });
   }
 
@@ -234,15 +274,60 @@ export default function ExpensesPage() {
     else setSelectedIds(new Set(filtered.map(r => r.id)));
   }
 
+  async function handleAiScan(file: File) {
+    setAiScanning(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/receipts/ai-scan", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || "AI scan failed");
+      }
+      const data = await res.json();
+      setForm(prev => ({
+        ...prev,
+        vendor: data.vendor || prev.vendor,
+        description: data.description || prev.description,
+        amount: data.amount?.toString() || prev.amount,
+        subtotal: data.subtotal?.toString() || "",
+        taxAmount: data.taxAmount?.toString() || "",
+        receiptDate: data.receiptDate || prev.receiptDate,
+        category: data.category || prev.category,
+        paymentMethod: data.paymentMethod || "",
+        lineItems: Array.isArray(data.lineItems) ? data.lineItems : [],
+        receiptImagePath: data.receiptImagePath || "",
+      }));
+      setAiScanOpen(false);
+      setAddOpen(true);
+      toast({ title: "Receipt scanned", description: "AI extracted the receipt data. Review and adjust before saving." });
+    } catch (err: any) {
+      toast({ title: "AI scan failed", description: err.message, variant: "destructive" });
+    } finally {
+      setAiScanning(false);
+    }
+  }
+
   function handleSubmit() {
-    const data = {
+    const data: any = {
       ...form,
       amount:       parseFloat(form.amount) || 0,
       companyId:    form.companyId    || null,
       workerId:     form.workerId     || null,
       costCenterId: form.costCenterId || null,
       jobId:        form.jobId        || null,
+      paymentMethod: form.paymentMethod || null,
+      taxAmount:    form.taxAmount ? parseFloat(form.taxAmount) : null,
+      subtotal:     form.subtotal ? parseFloat(form.subtotal) : null,
+      lineItems:    form.lineItems.length > 0 ? JSON.stringify(form.lineItems) : null,
+      receiptImagePath: form.receiptImagePath || null,
+      includeInJobCost: !!form.jobId,
     };
+    delete data.lineItems_parsed;
     if (editingReceipt) updateMutation.mutate({ id: editingReceipt.id, data });
     else createMutation.mutate(data);
   }
@@ -253,7 +338,7 @@ export default function ExpensesPage() {
   }
   function getCompanyName(id: string) { return companies.find(c => c.id === id)?.name || id; }
   function getCostCenterName(id: string) { return (costCenters as any[]).find(c => c.id === id)?.name || id; }
-  function getJobName(id: string) { return (jobs as any[]).find(j => j.id === id)?.title || id; }
+  function getJobName(id: string) { return (jobs as any[]).find(j => j.id === id)?.name || id; }
 
   const filtered = receipts.filter(r => {
     if (filterCompany !== "all" && r.companyId !== filterCompany) return false;
@@ -274,18 +359,20 @@ export default function ExpensesPage() {
 
   function buildExportRows() {
     return filtered.map(r => ({
-      Date:          r.receiptDate,
-      Vendor:        r.vendor || "",
-      Description:   r.description || "",
-      Category:      catLabel(r.category || "general"),
-      Amount:        parseFloat(r.amount?.toString() || "0"),
-      Status:        r.status || "pending",
-      Company:       r.companyId ? getCompanyName(r.companyId) : "",
-      Employee:      r.workerId ? getWorkerName(r.workerId) : "",
-      "Cost Center": r.costCenterId ? getCostCenterName(r.costCenterId) : "",
-      Job:           r.jobId ? getJobName(r.jobId) : "",
-      "Job Cost":    (r as any).includeInJobCost ? "Yes" : "No",
-      Notes:         r.notes || "",
+      Date:           r.receiptDate,
+      Vendor:         r.vendor || "",
+      Description:    r.description || "",
+      Category:       catLabel(r.category || "general"),
+      Subtotal:       (r as any).subtotal ? parseFloat((r as any).subtotal) : "",
+      Tax:            (r as any).taxAmount ? parseFloat((r as any).taxAmount) : "",
+      Amount:         parseFloat(r.amount?.toString() || "0"),
+      "Payment Method": PAYMENT_METHODS.find(p => p.value === (r as any).paymentMethod)?.label || (r as any).paymentMethod || "",
+      Status:         r.status || "pending",
+      Company:        r.companyId ? getCompanyName(r.companyId) : "",
+      Employee:       r.workerId ? getWorkerName(r.workerId) : "",
+      "Cost Center":  r.costCenterId ? getCostCenterName(r.costCenterId) : "",
+      "Job Cost":     r.jobId ? getJobName(r.jobId) : "—",
+      Notes:          r.notes || "",
     }));
   }
 
@@ -376,27 +463,15 @@ export default function ExpensesPage() {
           </Select>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="grid gap-1">
-          <Label>Cost Center</Label>
-          <Select value={form.costCenterId || "__none__"} onValueChange={v => setForm(f => ({ ...f, costCenterId: v === "__none__" ? "" : v }))}>
-            <SelectTrigger data-testid="select-cost-center"><SelectValue placeholder="Select cost center" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__">None</SelectItem>
-              {(costCenters as any[]).map(cc => <SelectItem key={cc.id} value={cc.id}>{cc.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="grid gap-1">
-          <Label>Job</Label>
-          <Select value={form.jobId || "__none__"} onValueChange={v => setForm(f => ({ ...f, jobId: v === "__none__" ? "" : v }))}>
-            <SelectTrigger data-testid="select-job"><SelectValue placeholder="Select job" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__">None</SelectItem>
-              {(jobs as any[]).map(j => <SelectItem key={j.id} value={j.id}>{j.title}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
+      <div className="grid gap-1">
+        <Label>Cost Center</Label>
+        <Select value={form.costCenterId || "__none__"} onValueChange={v => setForm(f => ({ ...f, costCenterId: v === "__none__" ? "" : v }))}>
+          <SelectTrigger data-testid="select-cost-center"><SelectValue placeholder="Select cost center" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">None</SelectItem>
+            {(costCenters as any[]).map(cc => <SelectItem key={cc.id} value={cc.id}>{cc.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
       </div>
       <div className="grid gap-1">
         <Label>Vendor / Merchant <span className="text-destructive">*</span></Label>
@@ -425,19 +500,75 @@ export default function ExpensesPage() {
           </SelectContent>
         </Select>
       </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="grid gap-1">
+          <Label>Payment Method</Label>
+          <Select value={form.paymentMethod || "__none__"} onValueChange={v => setForm(f => ({ ...f, paymentMethod: v === "__none__" ? "" : v }))}>
+            <SelectTrigger data-testid="select-payment-method"><SelectValue placeholder="Select method" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">None</SelectItem>
+              {PAYMENT_METHODS.map(pm => <SelectItem key={pm.value} value={pm.value}>{pm.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-1">
+          <Label>Job Cost</Label>
+          <Select value={form.jobId || "__none__"} onValueChange={v => setForm(f => ({ ...f, jobId: v === "__none__" ? "" : v }))}>
+            <SelectTrigger data-testid="select-job-cost"><SelectValue placeholder="Select job" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">No Job Cost</SelectItem>
+              {(jobs as any[]).map(j => <SelectItem key={j.id} value={j.id}>{j.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="grid gap-1">
+          <Label>Subtotal</Label>
+          <Input type="number" step="0.01" value={form.subtotal} onChange={e => setForm(f => ({ ...f, subtotal: e.target.value }))} placeholder="0.00" data-testid="input-subtotal" />
+        </div>
+        <div className="grid gap-1">
+          <Label>Tax</Label>
+          <Input type="number" step="0.01" value={form.taxAmount} onChange={e => setForm(f => ({ ...f, taxAmount: e.target.value }))} placeholder="0.00" data-testid="input-tax" />
+        </div>
+      </div>
       <div className="grid gap-1">
         <Label>Notes</Label>
-        <Input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Additional notes" data-testid="input-notes" />
+        <Textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Additional notes" rows={2} data-testid="input-notes" />
       </div>
-      <div className="flex items-center gap-2">
-        <Checkbox
-          id="includeInJobCost"
-          checked={form.includeInJobCost}
-          onCheckedChange={v => setForm(f => ({ ...f, includeInJobCost: !!v }))}
-          data-testid="checkbox-includeInJobCost"
-        />
-        <Label htmlFor="includeInJobCost" className="cursor-pointer">Include in Job Costs</Label>
-      </div>
+      {form.lineItems.length > 0 && (
+        <div className="grid gap-1">
+          <Label className="text-sm font-medium">Line Items (from AI scan)</Label>
+          <div className="border rounded-md overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/50">
+                  <TableHead className="text-xs py-1">Item</TableHead>
+                  <TableHead className="text-xs py-1 text-center">Qty</TableHead>
+                  <TableHead className="text-xs py-1 text-right">Unit Price</TableHead>
+                  <TableHead className="text-xs py-1 text-right">Total</TableHead>
+                  <TableHead className="text-xs py-1 w-8"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {form.lineItems.map((item, idx) => (
+                  <TableRow key={idx}>
+                    <TableCell className="text-xs py-1">{item.description}</TableCell>
+                    <TableCell className="text-xs py-1 text-center">{item.quantity}</TableCell>
+                    <TableCell className="text-xs py-1 text-right">${item.unitPrice?.toFixed(2)}</TableCell>
+                    <TableCell className="text-xs py-1 text-right">${item.total?.toFixed(2)}</TableCell>
+                    <TableCell className="text-xs py-1">
+                      <Button type="button" variant="ghost" size="icon" className="h-5 w-5" onClick={() => setForm(f => ({ ...f, lineItems: f.lineItems.filter((_, i) => i !== idx) }))} data-testid={`button-remove-line-item-${idx}`}>
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      )}
       <Button
         className="w-full"
         onClick={handleSubmit}
@@ -481,6 +612,9 @@ export default function ExpensesPage() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <Button variant="outline" onClick={() => { setEditingReceipt(null); setForm(EMPTY_FORM); setAiScanOpen(true); }} data-testid="button-ai-input">
+            <Camera className="h-4 w-4 mr-2" />AI Input
+          </Button>
           <Button onClick={() => { setEditingReceipt(null); setForm(EMPTY_FORM); setAddOpen(true); }} data-testid="button-add-receipt">
             <Plus className="h-4 w-4 mr-2" />Add Receipt
           </Button>
@@ -608,7 +742,7 @@ export default function ExpensesPage() {
                         <TableHead>Vendor</TableHead>
                         <TableHead>Category</TableHead>
                         <TableHead>Cost Center</TableHead>
-                        <TableHead>Job</TableHead>
+                        <TableHead>Job Cost</TableHead>
                         <TableHead>Employee</TableHead>
                         <TableHead className="text-right">Amount</TableHead>
                         <TableHead>Status</TableHead>
@@ -791,6 +925,45 @@ export default function ExpensesPage() {
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>Edit Receipt</DialogTitle></DialogHeader>
           {receiptFormContent}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={aiScanOpen} onOpenChange={setAiScanOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><Camera className="h-5 w-5" />AI Receipt Scanner</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Take a photo or upload an image of your receipt. AI will extract the vendor, items, quantities, costs, tax, total, and payment method automatically.
+            </p>
+            <div className="border-2 border-dashed rounded-lg p-8 text-center">
+              {aiScanning ? (
+                <div className="flex flex-col items-center gap-3">
+                  <Loader2 className="h-10 w-10 animate-spin text-primary" />
+                  <p className="text-sm font-medium">Scanning receipt...</p>
+                  <p className="text-xs text-muted-foreground">AI is extracting data from your receipt image</p>
+                </div>
+              ) : (
+                <label className="cursor-pointer flex flex-col items-center gap-3">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (file) handleAiScan(file);
+                    }}
+                    data-testid="input-ai-receipt-image"
+                  />
+                  <Camera className="h-12 w-12 text-muted-foreground" />
+                  <div>
+                    <p className="text-sm font-medium">Tap to take a photo or choose an image</p>
+                    <p className="text-xs text-muted-foreground mt-1">Supports JPG, PNG, HEIC</p>
+                  </div>
+                </label>
+              )}
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
