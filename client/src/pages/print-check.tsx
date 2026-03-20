@@ -74,9 +74,9 @@ function CheckPortion({
     : "";
 
   return (
-    <div style={{ height: "3.667in", boxSizing: "border-box", padding: "0.4in 0.6in 0.25in", display: "flex", flexDirection: "column" }}>
+    <div style={{ height: "3.667in", boxSizing: "border-box", padding: "0.3in 0.6in 0.25in", display: "flex", flexDirection: "column" }}>
       {/* Company header + check number / date / void notice */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.3in" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.15in" }}>
         <CompanyHeader company={company} config={config} />
         <div style={{ textAlign: "right" }}>
           {config.showCheckNumber && <div style={{ fontSize: "14px", fontWeight: "bold" }}>CHECK #{item.checkNumber || "—"}</div>}
@@ -86,7 +86,7 @@ function CheckPortion({
       </div>
 
       {/* Pay-to / amount */}
-      <div style={{ marginBottom: "0.15in" }}>
+      <div style={{ marginBottom: "0.1in" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
           <div style={{ fontSize: "13px" }}>
             <span style={{ fontWeight: "bold" }}>PAY TO THE ORDER OF: </span>
@@ -202,10 +202,10 @@ function StubSummarySection({
         flexDirection: "row",
         padding: "0.1in 0.35in",
       }}>
-        {/* LEFT SECTION: Addresses (company at top, employee indented below) */}
+        {/* LEFT SECTION: Addresses positioned for #10 double-window envelope */}
         <div style={{ position: "absolute", left: "0.35in", top: "0.1in", width: "3.95in" }}>
-          {/* TOP WINDOW: Company return address */}
-          <div style={{ fontSize: "9px", marginBottom: "0.5in" }}>
+          {/* TOP WINDOW: Company return address — down 5mm, right 1cm from edge */}
+          <div style={{ fontSize: "9px", marginTop: "5mm", marginLeft: "1cm", marginBottom: "0.3in" }}>
             <div style={{ fontWeight: "bold", fontSize: "10px", marginBottom: "2px" }}>{company.name}</div>
             {company.address && <div style={{ fontSize: "8px", lineHeight: "1.1" }}>{company.address}</div>}
             {(company.city || company.state || company.zip) && (
@@ -213,8 +213,8 @@ function StubSummarySection({
             )}
           </div>
 
-          {/* BOTTOM WINDOW: Employee mailing address (indented 0.5" from left) */}
-          <div style={{ marginLeft: "0.5in", fontSize: "10px" }}>
+          {/* BOTTOM WINDOW: Employee mailing address — down 23mm from top, right 1cm */}
+          <div style={{ marginTop: "23mm", marginLeft: "1cm", fontSize: "10px" }}>
             <div style={{ fontWeight: "bold", fontSize: "11px", marginBottom: "3px" }}>{worker.firstName} {worker.lastName}</div>
             {worker.address && <div style={{ fontSize: "9px", lineHeight: "1.1" }}>{worker.address}</div>}
             {(worker.city || worker.state || worker.zip) && (
@@ -225,14 +225,22 @@ function StubSummarySection({
 
         {/* RIGHT: PAYSTUB DETAIL — starts at 4.3", larger fonts */}
         <div style={{ marginLeft: "4.3in", flex: 1, fontSize: "8px", display: "flex", flexDirection: "column", justifyContent: "flex-start", paddingRight: "0.2in" }}>
-          {/* Header and pay period info */}
+          {/* Header: company name, EIN, pay period */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "2px" }}>
-            <div style={{ fontWeight: "bold", fontSize: "10px" }}>PAYSTUB</div>
+            <div>
+              <div style={{ fontWeight: "bold", fontSize: "10px" }}>PAYSTUB</div>
+              <div style={{ fontSize: "7px", color: "#333" }}>{company.name}{company.ein ? ` — EIN: ${company.ein}` : ""}</div>
+            </div>
             <div style={{ textAlign: "right", fontSize: "6px" }}>
               {config.showPayPeriod && <div>Pay Period: {run.periodStart.slice(0, 10)} – {run.periodEnd.slice(0, 10)}</div>}
               {run.processedAt && <div>Pay Date: {new Date(run.processedAt).toLocaleDateString()}</div>}
             </div>
           </div>
+          {isContractor && (
+            <div style={{ fontSize: "6px", color: "#666", marginBottom: "2px", fontStyle: "italic", borderBottom: "1px solid #ddd", paddingBottom: "1px" }}>
+              Independent contractor — responsible for self-employment tax (15.3% SE tax: 12.4% SS + 2.9% Medicare)
+            </div>
+          )}
 
           {/* Earnings table */}
           <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "2px", fontSize: "8px" }}>
