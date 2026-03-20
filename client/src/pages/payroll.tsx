@@ -3188,7 +3188,7 @@ function CheckPreview({ templateType, config, company }: {
           <p className="text-[8px] text-muted-foreground/60">Void after 90 days</p>
         </div>
       </div>
-      <div className="flex justify-between items-end pt-1">
+      <div className="flex justify-between items-end pt-0">
         <div>
           <p className="text-[9px] text-muted-foreground">Pay to the order of:</p>
           <p className="text-[11px] font-bold">John Doe</p>
@@ -3206,31 +3206,35 @@ function CheckPreview({ templateType, config, company }: {
 
   const mailingStub = (
     <div className="border border-dashed border-muted-foreground/30 rounded overflow-hidden">
-      <div className="flex h-24 relative">
-        {/* LEFT: Stacked addresses */}
-        <div className="absolute left-0 top-0 p-2 w-1/2 space-y-3 text-[9px]">
-          {/* Top: Company address */}
-          <div>
+      <div className="flex h-28 relative">
+        {/* LEFT: Stacked addresses — positioned for envelope windows */}
+        <div className="absolute left-0 top-0 w-1/2 text-[9px]">
+          {/* Company address: down 5mm (~4px scaled), right 1cm (~8px scaled) */}
+          <div className="mt-2 ml-3">
             <p className="text-[9px] font-semibold">{coName}</p>
             <p className="text-[8px] text-muted-foreground leading-tight">{coAddr}</p>
           </div>
-          {/* Bottom: Employee address (indented) */}
-          <div className="ml-2 border border-muted-foreground/20 rounded p-1 bg-white/50">
+          {/* Employee address: down 23mm (~18px scaled), right 1cm */}
+          <div className="mt-5 ml-3 border border-muted-foreground/20 rounded p-1 bg-white/50">
             <p className="text-[9px] font-bold">John Doe</p>
             <p className="text-[8px] text-muted-foreground leading-tight">456 Employee St</p>
             <p className="text-[8px] text-muted-foreground">City, ST 11111</p>
           </div>
         </div>
 
-        {/* RIGHT: Paystub (starting ~55% left) */}
+        {/* RIGHT: Paystub with company name + EIN */}
         <div className="absolute left-1/2 top-0 p-2 flex-1 space-y-1">
           <div className="flex justify-between items-start">
-            <p className="text-[10px] font-bold">PAYSTUB</p>
+            <div>
+              <p className="text-[10px] font-bold">PAYSTUB</p>
+              <p className="text-[6px] text-muted-foreground">{coName} — EIN: 12-3456789</p>
+            </div>
             <div className="text-[6px] text-muted-foreground text-right">
               {config.showPayPeriod && <div>Period: Mar 1 – Mar 15, 2026</div>}
               <div>Pay Date: Mar 20, 2026</div>
             </div>
           </div>
+          <p className="text-[5px] text-muted-foreground/70 italic border-b border-muted-foreground/20 pb-0.5">Independent contractor — responsible for self-employment tax</p>
           
           {/* Earnings table */}
           <table className="w-full border-collapse text-[7px]">
