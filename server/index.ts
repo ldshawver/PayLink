@@ -326,6 +326,173 @@ app.use((req, res, next) => {
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    await run("expense_categories table", sql`CREATE TABLE IF NOT EXISTS expense_categories (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      description TEXT,
+      accounting_code TEXT,
+      payroll_reimbursement_code TEXT,
+      reimbursable_default BOOLEAN NOT NULL DEFAULT FALSE,
+      receipt_required BOOLEAN NOT NULL DEFAULT TRUE,
+      preapproval_required BOOLEAN NOT NULL DEFAULT FALSE,
+      project_required BOOLEAN NOT NULL DEFAULT FALSE,
+      cost_center_required BOOLEAN NOT NULL DEFAULT FALSE,
+      allowed_worker_groups TEXT,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      sort_order INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("expenses table", sql`CREATE TABLE IF NOT EXISTS expenses (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id),
+      submitter_id VARCHAR NOT NULL REFERENCES workers(id),
+      category_id VARCHAR,
+      category_name TEXT,
+      expense_date TEXT NOT NULL,
+      amount NUMERIC NOT NULL,
+      tax_amount NUMERIC,
+      subtotal NUMERIC,
+      vendor TEXT,
+      description TEXT,
+      business_purpose TEXT,
+      reimbursement_requested BOOLEAN NOT NULL DEFAULT FALSE,
+      payment_method_used TEXT,
+      project_id VARCHAR,
+      job_id VARCHAR,
+      cost_center_id VARCHAR,
+      preapproval_status TEXT,
+      preapproval_reference TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      approved_by VARCHAR,
+      approved_at TIMESTAMP,
+      rejected_by VARCHAR,
+      rejected_at TIMESTAMP,
+      rejection_reason TEXT,
+      reimbursement_status TEXT,
+      payroll_run_id VARCHAR,
+      export_status TEXT DEFAULT 'pending',
+      exported_at TIMESTAMP,
+      line_items TEXT,
+      ai_extracted_json TEXT,
+      ai_confidence_score NUMERIC,
+      duplicate_hash TEXT,
+      recurring_template_id VARCHAR,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("expense_attachments table", sql`CREATE TABLE IF NOT EXISTS expense_attachments (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      expense_id VARCHAR NOT NULL,
+      file_path TEXT NOT NULL,
+      file_name TEXT,
+      file_type TEXT,
+      file_size INTEGER,
+      is_receipt BOOLEAN NOT NULL DEFAULT TRUE,
+      uploaded_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("contractor_invoices table", sql`CREATE TABLE IF NOT EXISTS contractor_invoices (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id),
+      contractor_id VARCHAR NOT NULL REFERENCES workers(id),
+      invoice_number TEXT,
+      invoice_date TEXT NOT NULL,
+      due_date TEXT,
+      amount NUMERIC NOT NULL,
+      tax_amount NUMERIC,
+      description TEXT,
+      proposal_id VARCHAR,
+      proposal_reference TEXT,
+      project_id VARCHAR,
+      job_id VARCHAR,
+      cost_center_id VARCHAR,
+      payment_terms TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      approved_by VARCHAR,
+      approved_at TIMESTAMP,
+      rejected_by VARCHAR,
+      rejected_at TIMESTAMP,
+      rejection_reason TEXT,
+      paid_at TIMESTAMP,
+      paid_amount NUMERIC,
+      payment_reference TEXT,
+      payment_method TEXT,
+      export_status TEXT DEFAULT 'pending',
+      exported_at TIMESTAMP,
+      is_1099_reportable BOOLEAN NOT NULL DEFAULT TRUE,
+      line_items TEXT,
+      ai_extracted_json TEXT,
+      ai_confidence_score NUMERIC,
+      duplicate_hash TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("contractor_invoice_attachments table", sql`CREATE TABLE IF NOT EXISTS contractor_invoice_attachments (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      invoice_id VARCHAR NOT NULL,
+      file_path TEXT NOT NULL,
+      file_name TEXT,
+      file_type TEXT,
+      file_size INTEGER,
+      uploaded_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("recurring_expense_templates table", sql`CREATE TABLE IF NOT EXISTS recurring_expense_templates (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id),
+      submitter_id VARCHAR NOT NULL REFERENCES workers(id),
+      category_id VARCHAR,
+      category_name TEXT,
+      vendor TEXT,
+      description TEXT,
+      amount NUMERIC NOT NULL,
+      reimbursement_requested BOOLEAN NOT NULL DEFAULT FALSE,
+      project_id VARCHAR,
+      job_id VARCHAR,
+      cost_center_id VARCHAR,
+      frequency TEXT NOT NULL DEFAULT 'monthly',
+      start_date TEXT NOT NULL,
+      end_date TEXT,
+      next_due_date TEXT,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      last_generated_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("expense_approval_actions table", sql`CREATE TABLE IF NOT EXISTS expense_approval_actions (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      object_type TEXT NOT NULL,
+      object_id VARCHAR NOT NULL,
+      action_type TEXT NOT NULL,
+      actor_user_id VARCHAR,
+      actor_worker_id VARCHAR,
+      company_id VARCHAR,
+      previous_status TEXT,
+      new_status TEXT,
+      notes TEXT,
+      metadata_json TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("payroll_reimbursement_items table", sql`CREATE TABLE IF NOT EXISTS payroll_reimbursement_items (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      expense_id VARCHAR NOT NULL,
+      payroll_run_id VARCHAR,
+      worker_id VARCHAR NOT NULL REFERENCES workers(id),
+      company_id VARCHAR REFERENCES companies(id),
+      amount NUMERIC NOT NULL,
+      is_taxable BOOLEAN NOT NULL DEFAULT FALSE,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      included_in_payroll_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");

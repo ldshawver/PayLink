@@ -2,1018 +2,882 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Receipt, Worker, Company } from "@shared/schema";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import {
-  Receipt as ReceiptIcon,
-  Plus,
-  Pencil,
-  Trash2,
-  MoreHorizontal,
-  Upload,
-  FileText,
-  DollarSign,
-  Filter,
-  Printer,
-  Download,
-  BarChart3,
-  ChevronDown,
-  Camera,
-  Loader2,
+  Receipt as ReceiptIcon, Plus, Trash2, Upload, FileText, DollarSign, Download,
+  Camera, Loader2, CheckCircle2, XCircle, Clock, AlertTriangle, Send,
+  CreditCard, BarChart3, RefreshCw, Eye, Building2,
 } from "lucide-react";
 import { Link } from "wouter";
-import { Checkbox } from "@/components/ui/checkbox";
-import * as XLSX from "xlsx";
-import { Textarea } from "@/components/ui/textarea";
 
-const CATEGORIES = [
-  { value: "general",              label: "General" },
-  { value: "raw-materials",        label: "Raw Materials" },
-  { value: "overhead",             label: "Overhead" },
-  { value: "reimbursement",        label: "Reimbursement" },
-  { value: "meals",                label: "Meals" },
-  { value: "travel",               label: "Travel" },
-  { value: "supplies",             label: "Supplies" },
-  { value: "equipment",            label: "Equipment" },
-  { value: "software",             label: "Software" },
-  { value: "utilities",            label: "Utilities" },
-  { value: "professional-services",label: "Professional Services" },
-  { value: "repairs",              label: "Repairs" },
-  { value: "other",                label: "Other" },
-];
+const EXPENSE_POLICY = "All expenses must be approved by a supervisor or manager before they are incurred, or they will not be reimbursed.";
+const INVOICE_POLICY = "A proposal must be approved before the invoice will be accepted. No work should be performed by an independent contractor unless proposal has been approved.";
 
-const CATEGORY_COLORS: Record<string, string> = {
-  "raw-materials":        "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
-  "overhead":             "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300",
-  "reimbursement":        "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
-  "meals":                "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300",
-  "travel":               "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
-  "supplies":             "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300",
-  "equipment":            "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300",
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  pending:  "outline",
-  approved: "default",
-  rejected: "destructive",
-};
-
-const PAYMENT_METHODS = [
-  { value: "cash", label: "Cash" },
-  { value: "credit_card", label: "Credit Card" },
-  { value: "debit_card", label: "Debit Card" },
-  { value: "check", label: "Check" },
-  { value: "bank_transfer", label: "Bank Transfer" },
-  { value: "other", label: "Other" },
-];
-
-type LineItem = {
-  description: string;
-  quantity: number;
-  unitPrice: number;
-  total: number;
-};
-
-type ReceiptForm = {
-  companyId: string;
-  workerId: string;
-  costCenterId: string;
-  jobId: string;
-  vendor: string;
-  description: string;
-  amount: string;
-  receiptDate: string;
-  category: string;
-  notes: string;
-  includeInJobCost: boolean;
-  paymentMethod: string;
-  taxAmount: string;
-  subtotal: string;
-  lineItems: LineItem[];
-  receiptImagePath: string;
-  isReimbursement: boolean;
-};
-
-const EMPTY_FORM: ReceiptForm = {
-  companyId: "",
-  workerId: "",
-  costCenterId: "",
-  jobId: "",
-  vendor: "",
-  description: "",
-  amount: "",
-  receiptDate: new Date().toISOString().split("T")[0],
-  category: "general",
-  notes: "",
-  includeInJobCost: false,
-  paymentMethod: "",
-  taxAmount: "",
-  subtotal: "",
-  lineItems: [],
-  receiptImagePath: "",
-  isReimbursement: false,
-};
-
-function catLabel(value: string) {
-  return CATEGORIES.find(c => c.value === value)?.label ?? value.replace(/-/g, " ");
+function statusBadge(status: string) {
+  const map: Record<string, "default" | "outline" | "secondary" | "destructive"> = {
+    draft: "outline", submitted: "secondary", approved: "default", rejected: "destructive",
+    paid: "default", queued: "secondary", exported: "default", closed: "default",
+  };
+  return <Badge variant={map[status] || "outline"}>{status}</Badge>;
 }
 
-function catClass(value: string) {
-  return CATEGORY_COLORS[value] ?? "bg-muted text-muted-foreground";
+function formatCurrency(v: string | number | null | undefined) {
+  if (v == null) return "$0.00";
+  return `$${parseFloat(String(v)).toFixed(2)}`;
+}
+
+function ExpenseSubmitForm({ categories, companies, jobs, costCenters, onClose }: any) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({
+    companyId: "", categoryId: "", expenseDate: new Date().toISOString().split("T")[0],
+    amount: "", vendor: "", description: "", businessPurpose: "", reimbursementRequested: false,
+    paymentMethodUsed: "", jobId: "", costCenterId: "", preapprovalReference: "", notes: "",
+  });
+  const [file, setFile] = useState<File | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState<any>(null);
+
+  const createMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await fetch("/api/expenses", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        credentials: "include", body: JSON.stringify(data),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.message); }
+      return res.json();
+    },
+    onSuccess: async (expense) => {
+      if (file) {
+        const fd = new FormData();
+        fd.append("file", file);
+        await fetch(`/api/expenses/${expense.id}/attachments`, { method: "POST", credentials: "include", body: fd });
+      }
+      toast({ title: "Expense created" });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      onClose();
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const handleAiScan = async () => {
+    if (!file) return;
+    setAiLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/expenses/ai-scan", { method: "POST", credentials: "include", body: fd });
+      if (!res.ok) throw new Error("AI scan failed");
+      const data = await res.json();
+      setAiResult(data.extracted);
+      if (data.extracted) {
+        setForm(f => ({
+          ...f,
+          vendor: data.extracted.vendor || f.vendor,
+          amount: data.extracted.totalAmount?.toString() || data.extracted.amount?.toString() || f.amount,
+          expenseDate: data.extracted.date || f.expenseDate,
+        }));
+        const matchCat = categories.find((c: any) => c.name.toLowerCase() === data.extracted.category?.toLowerCase());
+        if (matchCat) setForm(f => ({ ...f, categoryId: matchCat.id }));
+      }
+      toast({ title: "AI extraction complete" });
+    } catch { toast({ title: "AI scan failed", variant: "destructive" }); }
+    setAiLoading(false);
+  };
+
+  const selectedCat = categories.find((c: any) => c.id === form.categoryId);
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded p-3">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+          <p className="text-xs text-amber-700 dark:text-amber-400">{EXPENSE_POLICY}</p>
+        </div>
+      </div>
+
+      <div className="border border-dashed rounded-lg p-4 text-center space-y-2">
+        <div className="flex items-center justify-center gap-3">
+          <label className="cursor-pointer">
+            <input type="file" accept="image/*,application/pdf" className="hidden" onChange={e => setFile(e.target.files?.[0] || null)} data-testid="input-expense-file" />
+            <div className="flex items-center gap-2 px-4 py-2 rounded-md border hover:bg-muted transition">
+              <Upload className="h-4 w-4" /> Upload Receipt
+            </div>
+          </label>
+          <label className="cursor-pointer">
+            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => setFile(e.target.files?.[0] || null)} data-testid="input-expense-camera" />
+            <div className="flex items-center gap-2 px-4 py-2 rounded-md border hover:bg-muted transition">
+              <Camera className="h-4 w-4" /> Take Photo
+            </div>
+          </label>
+        </div>
+        {file && (
+          <div className="flex items-center justify-center gap-2">
+            <FileText className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm">{file.name}</span>
+            <Button size="sm" variant="outline" onClick={handleAiScan} disabled={aiLoading} data-testid="button-ai-scan">
+              {aiLoading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <BarChart3 className="h-3 w-3 mr-1" />}
+              {aiLoading ? "Scanning..." : "AI Extract"}
+            </Button>
+          </div>
+        )}
+        {aiResult && (
+          <div className="text-xs text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-950/30 rounded p-2">
+            AI extracted: {aiResult.vendor} | {formatCurrency(aiResult.totalAmount || aiResult.amount)} | {aiResult.date}
+            {aiResult.confidence && ` (${Math.round(aiResult.confidence * 100)}% confidence)`}
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label>Company</Label>
+          <Select value={form.companyId} onValueChange={v => setForm(f => ({ ...f, companyId: v }))}>
+            <SelectTrigger data-testid="select-expense-company"><SelectValue placeholder="Select" /></SelectTrigger>
+            <SelectContent>{companies.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>Category</Label>
+          <Select value={form.categoryId} onValueChange={v => setForm(f => ({ ...f, categoryId: v }))}>
+            <SelectTrigger data-testid="select-expense-category"><SelectValue placeholder="Select" /></SelectTrigger>
+            <SelectContent>{categories.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {selectedCat?.preapprovalRequired && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 rounded p-2 text-xs text-amber-700 dark:text-amber-400 flex items-center gap-2">
+          <AlertTriangle className="h-3 w-3" /> This category requires preapproval.
+          <Input placeholder="Preapproval reference" value={form.preapprovalReference} onChange={e => setForm(f => ({ ...f, preapprovalReference: e.target.value }))} className="h-7 text-xs" data-testid="input-preapproval-ref" />
+        </div>
+      )}
+
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <Label>Date</Label>
+          <Input type="date" value={form.expenseDate} onChange={e => setForm(f => ({ ...f, expenseDate: e.target.value }))} data-testid="input-expense-date" />
+        </div>
+        <div>
+          <Label>Amount</Label>
+          <Input type="number" step="0.01" min="0.01" placeholder="0.00" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} data-testid="input-expense-amount" />
+        </div>
+        <div>
+          <Label>Vendor</Label>
+          <Input placeholder="Merchant name" value={form.vendor} onChange={e => setForm(f => ({ ...f, vendor: e.target.value }))} data-testid="input-expense-vendor" />
+        </div>
+      </div>
+
+      <div>
+        <Label>Description</Label>
+        <Input placeholder="What was purchased?" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} data-testid="input-expense-description" />
+      </div>
+      <div>
+        <Label>Business Purpose</Label>
+        <Textarea placeholder="Why is this expense needed?" rows={2} value={form.businessPurpose} onChange={e => setForm(f => ({ ...f, businessPurpose: e.target.value }))} data-testid="input-expense-purpose" />
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <Label>Payment Method</Label>
+          <Select value={form.paymentMethodUsed || "__none__"} onValueChange={v => setForm(f => ({ ...f, paymentMethodUsed: v === "__none__" ? "" : v }))}>
+            <SelectTrigger data-testid="select-payment-method"><SelectValue placeholder="Select" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">Not specified</SelectItem>
+              <SelectItem value="company_card">Company Card</SelectItem>
+              <SelectItem value="personal_card">Personal Card</SelectItem>
+              <SelectItem value="cash">Cash</SelectItem>
+              <SelectItem value="check">Check</SelectItem>
+              <SelectItem value="other">Other</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>Job</Label>
+          <Select value={form.jobId || "__none__"} onValueChange={v => setForm(f => ({ ...f, jobId: v === "__none__" ? "" : v }))}>
+            <SelectTrigger data-testid="select-expense-job"><SelectValue placeholder="None" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">None</SelectItem>
+              {jobs.map((j: any) => <SelectItem key={j.id} value={j.id}>{j.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>Cost Center</Label>
+          <Select value={form.costCenterId || "__none__"} onValueChange={v => setForm(f => ({ ...f, costCenterId: v === "__none__" ? "" : v }))}>
+            <SelectTrigger data-testid="select-expense-cost-center"><SelectValue placeholder="None" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">None</SelectItem>
+              {costCenters.map((cc: any) => <SelectItem key={cc.id} value={cc.id}>{cc.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input type="checkbox" checked={form.reimbursementRequested} onChange={e => setForm(f => ({ ...f, reimbursementRequested: e.target.checked }))} data-testid="checkbox-reimbursement" />
+        <CreditCard className="h-4 w-4" /> Request reimbursement for this expense
+      </label>
+
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button onClick={() => createMutation.mutate({ ...form, status: "draft" })} disabled={createMutation.isPending || !form.amount || !form.expenseDate} data-testid="button-save-draft">
+          Save as Draft
+        </Button>
+        <Button onClick={() => createMutation.mutate({ ...form, status: "submitted" })} disabled={createMutation.isPending || !form.amount || !form.expenseDate || !form.companyId} data-testid="button-submit-expense">
+          {createMutation.isPending ? "Submitting..." : "Submit for Approval"}
+        </Button>
+      </DialogFooter>
+    </div>
+  );
+}
+
+function InvoiceSubmitForm({ companies, jobs, costCenters, onClose }: any) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({
+    companyId: "", invoiceNumber: "", invoiceDate: new Date().toISOString().split("T")[0],
+    dueDate: "", amount: "", description: "", proposalReference: "", jobId: "", costCenterId: "",
+    paymentTerms: "net30", notes: "",
+  });
+  const [file, setFile] = useState<File | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+
+  const createMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await fetch("/api/contractor-invoices", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        credentials: "include", body: JSON.stringify(data),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.message); }
+      return res.json();
+    },
+    onSuccess: async (inv) => {
+      if (file) {
+        const fd = new FormData();
+        fd.append("file", file);
+        await fetch(`/api/contractor-invoices/${inv.id}/attachments`, { method: "POST", credentials: "include", body: fd });
+      }
+      toast({ title: "Invoice created" });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+      onClose();
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const handleAiScan = async () => {
+    if (!file) return;
+    setAiLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/expenses/ai-scan", { method: "POST", credentials: "include", body: fd });
+      if (!res.ok) throw new Error("Failed");
+      const data = await res.json();
+      if (data.extracted) {
+        setForm(f => ({
+          ...f, amount: data.extracted.totalAmount?.toString() || f.amount,
+          invoiceDate: data.extracted.date || f.invoiceDate,
+          description: data.extracted.vendor || f.description,
+        }));
+      }
+      toast({ title: "AI extraction complete" });
+    } catch { toast({ title: "AI scan failed", variant: "destructive" }); }
+    setAiLoading(false);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded p-3">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 text-blue-600 mt-0.5 shrink-0" />
+          <p className="text-xs text-blue-700 dark:text-blue-400">{INVOICE_POLICY}</p>
+        </div>
+      </div>
+
+      <div className="border border-dashed rounded-lg p-4 text-center space-y-2">
+        <div className="flex items-center justify-center gap-3">
+          <label className="cursor-pointer">
+            <input type="file" accept="image/*,application/pdf" className="hidden" onChange={e => setFile(e.target.files?.[0] || null)} data-testid="input-invoice-file" />
+            <div className="flex items-center gap-2 px-4 py-2 rounded-md border hover:bg-muted transition">
+              <Upload className="h-4 w-4" /> Upload Invoice
+            </div>
+          </label>
+          <label className="cursor-pointer">
+            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => setFile(e.target.files?.[0] || null)} data-testid="input-invoice-camera" />
+            <div className="flex items-center gap-2 px-4 py-2 rounded-md border hover:bg-muted transition">
+              <Camera className="h-4 w-4" /> Take Photo
+            </div>
+          </label>
+        </div>
+        {file && (
+          <div className="flex items-center justify-center gap-2">
+            <FileText className="h-4 w-4" /><span className="text-sm">{file.name}</span>
+            <Button size="sm" variant="outline" onClick={handleAiScan} disabled={aiLoading} data-testid="button-invoice-ai-scan">
+              {aiLoading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <BarChart3 className="h-3 w-3 mr-1" />}
+              AI Extract
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div><Label>Company</Label>
+          <Select value={form.companyId} onValueChange={v => setForm(f => ({ ...f, companyId: v }))}>
+            <SelectTrigger data-testid="select-invoice-company"><SelectValue placeholder="Select" /></SelectTrigger>
+            <SelectContent>{companies.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div><Label>Invoice Number</Label>
+          <Input placeholder="INV-001" value={form.invoiceNumber} onChange={e => setForm(f => ({ ...f, invoiceNumber: e.target.value }))} data-testid="input-invoice-number" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        <div><Label>Invoice Date</Label>
+          <Input type="date" value={form.invoiceDate} onChange={e => setForm(f => ({ ...f, invoiceDate: e.target.value }))} data-testid="input-invoice-date" />
+        </div>
+        <div><Label>Due Date</Label>
+          <Input type="date" value={form.dueDate} onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))} data-testid="input-invoice-due-date" />
+        </div>
+        <div><Label>Amount</Label>
+          <Input type="number" step="0.01" min="0.01" placeholder="0.00" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} data-testid="input-invoice-amount" />
+        </div>
+      </div>
+
+      <div><Label>Description of Work</Label>
+        <Textarea rows={2} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} data-testid="input-invoice-description" />
+      </div>
+      <div><Label>Approved Proposal Reference</Label>
+        <Input placeholder="Proposal # or reference" value={form.proposalReference} onChange={e => setForm(f => ({ ...f, proposalReference: e.target.value }))} data-testid="input-proposal-ref" />
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        <div><Label>Payment Terms</Label>
+          <Select value={form.paymentTerms} onValueChange={v => setForm(f => ({ ...f, paymentTerms: v }))}>
+            <SelectTrigger data-testid="select-payment-terms"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="net15">Net 15</SelectItem>
+              <SelectItem value="net30">Net 30</SelectItem>
+              <SelectItem value="net60">Net 60</SelectItem>
+              <SelectItem value="due_on_receipt">Due on Receipt</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div><Label>Job</Label>
+          <Select value={form.jobId || "__none__"} onValueChange={v => setForm(f => ({ ...f, jobId: v === "__none__" ? "" : v }))}>
+            <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
+            <SelectContent><SelectItem value="__none__">None</SelectItem>{jobs.map((j: any) => <SelectItem key={j.id} value={j.id}>{j.name}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div><Label>Cost Center</Label>
+          <Select value={form.costCenterId || "__none__"} onValueChange={v => setForm(f => ({ ...f, costCenterId: v === "__none__" ? "" : v }))}>
+            <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
+            <SelectContent><SelectItem value="__none__">None</SelectItem>{costCenters.map((cc: any) => <SelectItem key={cc.id} value={cc.id}>{cc.name}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button onClick={() => createMutation.mutate({ ...form, status: "draft" })} disabled={createMutation.isPending || !form.amount || !form.invoiceDate} data-testid="button-save-invoice-draft">
+          Save Draft
+        </Button>
+        <Button onClick={() => createMutation.mutate({ ...form, status: "submitted" })} disabled={createMutation.isPending || !form.amount || !form.companyId} data-testid="button-submit-invoice">
+          {createMutation.isPending ? "Submitting..." : "Submit Invoice"}
+        </Button>
+      </DialogFooter>
+    </div>
+  );
 }
 
 export default function ExpensesPage() {
   const { toast } = useToast();
-  const [addOpen, setAddOpen] = useState(false);
-  const [editingReceipt, setEditingReceipt] = useState<Receipt | null>(null);
-  const [form, setForm] = useState<ReceiptForm>(EMPTY_FORM);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [filterCompany, setFilterCompany] = useState("all");
-  const [filterCategory, setFilterCategory] = useState("all");
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [filterDateFrom, setFilterDateFrom] = useState("");
-  const [filterDateTo, setFilterDateTo] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [uploadingFor, setUploadingFor] = useState<string | null>(null);
-  const [aiScanning, setAiScanning] = useState(false);
-  const [aiScanOpen, setAiScanOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("my-expenses");
+  const [expenseDialogOpen, setExpenseDialogOpen] = useState(false);
+  const [invoiceDialogOpen, setInvoiceDialogOpen] = useState(false);
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState<{ type: string; id: string } | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
 
-  const { data: receipts = [], isLoading } = useQuery<Receipt[]>({ queryKey: ["/api/receipts"] });
-  const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
-  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
-  const { data: costCenters = [] } = useQuery<any[]>({ queryKey: ["/api/cost-centers"] });
+  const { data: currentUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
+  const { data: allExpenses = [], isLoading: loadingExpenses } = useQuery<any[]>({ queryKey: ["/api/expenses"], queryFn: async () => { const r = await fetch("/api/expenses", { credentials: "include" }); return r.ok ? r.json() : []; } });
+  const { data: invoices = [], isLoading: loadingInvoices } = useQuery<any[]>({ queryKey: ["/api/contractor-invoices"], queryFn: async () => { const r = await fetch("/api/contractor-invoices", { credentials: "include" }); return r.ok ? r.json() : []; } });
+  const { data: categories = [] } = useQuery<any[]>({ queryKey: ["/api/expense-categories"], queryFn: async () => { const r = await fetch("/api/expense-categories", { credentials: "include" }); return r.ok ? r.json() : []; } });
+  const { data: companies = [] } = useQuery<any[]>({ queryKey: ["/api/companies"] });
+  const { data: workers = [] } = useQuery<any[]>({ queryKey: ["/api/workers"] });
   const { data: jobs = [] } = useQuery<any[]>({ queryKey: ["/api/jobs"] });
+  const { data: costCenters = [] } = useQuery<any[]>({ queryKey: ["/api/cost-centers"] });
+  const { data: reimbursements = [] } = useQuery<any[]>({ queryKey: ["/api/payroll-reimbursements"], queryFn: async () => { const r = await fetch("/api/payroll-reimbursements", { credentials: "include" }); return r.ok ? r.json() : []; } });
+  const { data: recurringTemplates = [] } = useQuery<any[]>({ queryKey: ["/api/recurring-expenses"], queryFn: async () => { const r = await fetch("/api/recurring-expenses", { credentials: "include" }); return r.ok ? r.json() : []; } });
 
-  const createMutation = useMutation({
-    mutationFn: async (data: any) => (await apiRequest("POST", "/api/receipts", data)).json(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
-      setAddOpen(false);
-      setForm(EMPTY_FORM);
-      toast({ title: "Receipt added" });
-    },
-    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
-  });
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "manager";
+  const myWorkerId = currentUser?.workerId;
+  const isContractor = currentUser?.workerType === "contractor";
 
-  const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: any }) =>
-      (await apiRequest("PATCH", `/api/receipts/${id}`, data)).json(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
-      setEditingReceipt(null);
-      toast({ title: "Receipt updated" });
-    },
-    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
-  });
+  const myExpenses = allExpenses.filter(e => e.submitterId === myWorkerId);
+  const pendingExpenseApprovals = allExpenses.filter(e => e.status === "submitted");
+  const pendingInvoiceApprovals = invoices.filter(i => i.status === "submitted");
+  const approvedInvoices = invoices.filter(i => i.status === "approved");
 
-  const deleteMutation = useMutation({
-    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/receipts/${id}`); },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
-      toast({ title: "Receipt deleted" });
-    },
-    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
-  });
-
-  const sendRemindersMutation = useMutation({
-    mutationFn: async () => (await apiRequest("POST", "/api/approval-reminders/send", {})).json(),
-    onSuccess: (data: any) => { toast({ title: "Reminders sent", description: data.message }); },
-    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
-  });
+  const getWorkerName = (id: string) => { const w = workers.find((w: any) => w.id === id); return w ? `${w.firstName} ${w.lastName}` : "—"; };
 
   const approveMutation = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: string }) =>
-      (await apiRequest("PATCH", `/api/receipts/${id}`, { status, approvedAt: status === "approved" ? new Date().toISOString() : null })).json(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
-      toast({ title: "Status updated" });
+    mutationFn: async ({ type, id }: { type: string; id: string }) => {
+      const url = type === "expense" ? `/api/expenses/${id}/approve` : `/api/contractor-invoices/${id}/approve`;
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({}) });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.message); }
+      return res.json();
     },
-    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onSuccess: () => {
+      toast({ title: "Approved" });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-reimbursements"] });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
-  async function handleUpload(receiptId: string, file: File) {
-    setUploadingFor(receiptId);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/receipts/upload", { method: "POST", body: fd, credentials: "include" });
-      if (!res.ok) throw new Error("Upload failed");
-      const { filePath } = await res.json();
-      await apiRequest("PATCH", `/api/receipts/${receiptId}`, { receiptImagePath: filePath });
-      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
-      toast({ title: "Receipt image uploaded" });
-    } catch (err: any) {
-      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
-    } finally {
-      setUploadingFor(null);
-    }
-  }
-
-  function openEdit(r: Receipt) {
-    setEditingReceipt(r);
-    let parsedLineItems: LineItem[] = [];
-    try {
-      if ((r as any).lineItems) parsedLineItems = JSON.parse((r as any).lineItems);
-    } catch {}
-    setForm({
-      companyId:       r.companyId || "",
-      workerId:        r.workerId || "",
-      costCenterId:    r.costCenterId || "",
-      jobId:           r.jobId || "",
-      vendor:          r.vendor || "",
-      description:     r.description || "",
-      amount:          r.amount?.toString() || "",
-      receiptDate:     r.receiptDate || new Date().toISOString().split("T")[0],
-      category:        r.category || "general",
-      notes:           r.notes || "",
-      includeInJobCost:(r as any).includeInJobCost || false,
-      paymentMethod:   (r as any).paymentMethod || "",
-      taxAmount:       (r as any).taxAmount?.toString() || "",
-      subtotal:        (r as any).subtotal?.toString() || "",
-      lineItems:       parsedLineItems,
-      receiptImagePath: r.receiptImagePath || "",
-      isReimbursement: (r as any).isReimbursement || false,
-    });
-  }
-
-  function toggleSelect(id: string) {
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleSelectAll() {
-    if (selectedIds.size === filtered.length) setSelectedIds(new Set());
-    else setSelectedIds(new Set(filtered.map(r => r.id)));
-  }
-
-  async function handleAiScan(file: File) {
-    setAiScanning(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await fetch("/api/receipts/ai-scan", {
-        method: "POST",
-        body: formData,
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || "AI scan failed");
-      }
-      const data = await res.json();
-      setForm(prev => ({
-        ...prev,
-        vendor: data.vendor || prev.vendor,
-        description: data.description || prev.description,
-        amount: data.amount?.toString() || prev.amount,
-        subtotal: data.subtotal?.toString() || "",
-        taxAmount: data.taxAmount?.toString() || "",
-        receiptDate: data.receiptDate || prev.receiptDate,
-        category: data.category || prev.category,
-        paymentMethod: data.paymentMethod || "",
-        lineItems: Array.isArray(data.lineItems) ? data.lineItems : [],
-        receiptImagePath: data.receiptImagePath || "",
-      }));
-      setAiScanOpen(false);
-      setAddOpen(true);
-      toast({ title: "Receipt scanned", description: "AI extracted the receipt data. Review and adjust before saving." });
-    } catch (err: any) {
-      toast({ title: "AI scan failed", description: err.message, variant: "destructive" });
-    } finally {
-      setAiScanning(false);
-    }
-  }
-
-  function handleSubmit() {
-    const data: any = {
-      ...form,
-      amount:       parseFloat(form.amount) || 0,
-      companyId:    form.companyId    || null,
-      workerId:     form.workerId     || null,
-      costCenterId: form.costCenterId || null,
-      jobId:        form.jobId        || null,
-      paymentMethod: form.paymentMethod || null,
-      taxAmount:    form.taxAmount ? parseFloat(form.taxAmount) : null,
-      subtotal:     form.subtotal ? parseFloat(form.subtotal) : null,
-      lineItems:    form.lineItems.length > 0 ? JSON.stringify(form.lineItems) : null,
-      receiptImagePath: form.receiptImagePath || null,
-      includeInJobCost: !!form.jobId,
-      isReimbursement: form.isReimbursement,
-    };
-    delete data.lineItems_parsed;
-    if (editingReceipt) updateMutation.mutate({ id: editingReceipt.id, data });
-    else createMutation.mutate(data);
-  }
-
-  function getWorkerName(id: string) {
-    const w = workers.find(w => w.id === id);
-    return w ? `${w.firstName} ${w.lastName}` : id;
-  }
-  function getCompanyName(id: string) { return companies.find(c => c.id === id)?.name || id; }
-  function getCostCenterName(id: string) { return (costCenters as any[]).find(c => c.id === id)?.name || id; }
-  function getJobName(id: string) { return (jobs as any[]).find(j => j.id === id)?.name || id; }
-
-  const filtered = receipts.filter(r => {
-    if (filterCompany !== "all" && r.companyId !== filterCompany) return false;
-    if (filterCategory !== "all" && r.category !== filterCategory) return false;
-    if (filterStatus !== "all" && r.status !== filterStatus) return false;
-    if (filterDateFrom && r.receiptDate < filterDateFrom) return false;
-    if (filterDateTo && r.receiptDate > filterDateTo) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      if (!r.vendor?.toLowerCase().includes(q) && !r.description?.toLowerCase().includes(q) && !r.notes?.toLowerCase().includes(q)) return false;
-    }
-    return true;
+  const rejectMutation = useMutation({
+    mutationFn: async ({ type, id, reason }: { type: string; id: string; reason: string }) => {
+      const url = type === "expense" ? `/api/expenses/${id}/reject` : `/api/contractor-invoices/${id}/reject`;
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ reason }) });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Rejected" });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+      setRejectDialogOpen(false);
+    },
   });
 
-  const totalAmount    = filtered.reduce((s, r) => s + parseFloat(r.amount?.toString() || "0"), 0);
-  const pendingAmount  = filtered.filter(r => r.status === "pending").reduce((s, r) => s + parseFloat(r.amount?.toString() || "0"), 0);
-  const approvedAmount = filtered.filter(r => r.status === "approved").reduce((s, r) => s + parseFloat(r.amount?.toString() || "0"), 0);
+  const submitMutation = useMutation({
+    mutationFn: async ({ type, id }: { type: string; id: string }) => {
+      const url = type === "expense" ? `/api/expenses/${id}/submit` : `/api/contractor-invoices/${id}/submit`;
+      const res = await fetch(url, { method: "POST", credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Submitted for approval" });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+    },
+  });
 
-  function buildExportRows() {
-    return filtered.map(r => ({
-      Date:           r.receiptDate,
-      Vendor:         r.vendor || "",
-      Description:    r.description || "",
-      Category:       catLabel(r.category || "general"),
-      Subtotal:       (r as any).subtotal ? parseFloat((r as any).subtotal) : "",
-      Tax:            (r as any).taxAmount ? parseFloat((r as any).taxAmount) : "",
-      Amount:         parseFloat(r.amount?.toString() || "0"),
-      "Payment Method": PAYMENT_METHODS.find(p => p.value === (r as any).paymentMethod)?.label || (r as any).paymentMethod || "",
-      Status:         r.status || "pending",
-      Company:        r.companyId ? getCompanyName(r.companyId) : "",
-      Employee:       r.workerId ? getWorkerName(r.workerId) : "",
-      "Cost Center":  r.costCenterId ? getCostCenterName(r.costCenterId) : "",
-      "Job Cost":     r.jobId ? getJobName(r.jobId) : "—",
-      Notes:          r.notes || "",
-    }));
-  }
+  const markPaidMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/contractor-invoices/${id}/mark-paid`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({}) });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Invoice marked as paid" });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+    },
+  });
 
-  function exportCSV() {
-    const rows = buildExportRows();
-    if (rows.length === 0) { toast({ title: "No data to export" }); return; }
-    const headers = Object.keys(rows[0]);
-    const lines = [
-      headers.join(","),
-      ...rows.map(r =>
-        headers.map(h => {
-          const v = String((r as any)[h] ?? "");
-          return v.includes(",") || v.includes('"') || v.includes("\n") ? `"${v.replace(/"/g, '""')}"` : v;
-        }).join(",")
-      ),
-    ];
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `expenses_${new Date().toISOString().split("T")[0]}.csv`;
-    a.click(); URL.revokeObjectURL(url);
-  }
+  const totalExpenses = allExpenses.reduce((s: number, e: any) => s + parseFloat(e.amount || "0"), 0);
+  const totalPendingReimb = reimbursements.filter((r: any) => r.status === "pending").reduce((s: number, r: any) => s + parseFloat(r.amount || "0"), 0);
+  const totalInvoices = invoices.reduce((s: number, i: any) => s + parseFloat(i.amount || "0"), 0);
 
-  function exportExcel() {
-    const rows = buildExportRows();
-    if (rows.length === 0) { toast({ title: "No data to export" }); return; }
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Expenses");
+  if (loadingExpenses) return <div className="p-8"><Skeleton className="h-[500px] w-full" /></div>;
 
-    const colWidths = Object.keys(rows[0]).map(key => ({
-      wch: Math.max(key.length, ...rows.map(r => String((r as any)[key] ?? "").length)) + 2,
-    }));
-    ws["!cols"] = colWidths;
-
-    XLSX.writeFile(wb, `expenses_${new Date().toISOString().split("T")[0]}.xlsx`);
-  }
-
-  const budgetByCostCenter: Record<string, { name: string; total: number; approved: number; pending: number; items: number }> = {};
-  const budgetByJob: Record<string, { name: string; total: number; approved: number; pending: number; items: number }> = {};
-
-  for (const r of filtered) {
-    const amt = parseFloat(r.amount?.toString() || "0");
-    if (r.costCenterId) {
-      if (!budgetByCostCenter[r.costCenterId]) budgetByCostCenter[r.costCenterId] = { name: getCostCenterName(r.costCenterId), total: 0, approved: 0, pending: 0, items: 0 };
-      budgetByCostCenter[r.costCenterId].total   += amt;
-      budgetByCostCenter[r.costCenterId].items   += 1;
-      if (r.status === "approved") budgetByCostCenter[r.costCenterId].approved += amt;
-      if (r.status === "pending")  budgetByCostCenter[r.costCenterId].pending  += amt;
-    }
-    if (r.jobId) {
-      if (!budgetByJob[r.jobId]) budgetByJob[r.jobId] = { name: getJobName(r.jobId), total: 0, approved: 0, pending: 0, items: 0 };
-      budgetByJob[r.jobId].total   += amt;
-      budgetByJob[r.jobId].items   += 1;
-      if (r.status === "approved") budgetByJob[r.jobId].approved += amt;
-      if (r.status === "pending")  budgetByJob[r.jobId].pending  += amt;
-    }
-  }
-
-  const budgetByCategory: Record<string, number> = {};
-  for (const r of filtered) {
-    const cat = r.category || "general";
-    budgetByCategory[cat] = (budgetByCategory[cat] || 0) + parseFloat(r.amount?.toString() || "0");
-  }
-  const sortedCatBudget = Object.entries(budgetByCategory).sort((a, b) => b[1] - a[1]);
-
-  const receiptFormContent = (
-    <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
-      <div className="grid grid-cols-2 gap-3">
-        <div className="grid gap-1">
-          <Label>Company</Label>
-          <Select value={form.companyId || "__none__"} onValueChange={v => setForm(f => ({ ...f, companyId: v === "__none__" ? "" : v }))}>
-            <SelectTrigger data-testid="select-company"><SelectValue placeholder="Select company" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__">None</SelectItem>
-              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
+  return (
+    <div className="p-6 max-w-[1400px] mx-auto space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-page-title">
+            <ReceiptIcon className="h-6 w-6" /> Expenses & Invoices
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">Manage expenses, reimbursements, and contractor invoices</p>
         </div>
-        <div className="grid gap-1">
-          <Label>Employee</Label>
-          <Select value={form.workerId || "__none__"} onValueChange={v => setForm(f => ({ ...f, workerId: v === "__none__" ? "" : v }))}>
-            <SelectTrigger data-testid="select-worker"><SelectValue placeholder="Select employee" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__">None</SelectItem>
-              {workers.filter(w => w.isActive).map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}
-            </SelectContent>
-          </Select>
+        <div className="flex gap-2">
+          <Button onClick={() => setExpenseDialogOpen(true)} data-testid="button-new-expense">
+            <Plus className="h-4 w-4 mr-1" /> New Expense
+          </Button>
+          {isContractor && (
+            <Button variant="outline" onClick={() => setInvoiceDialogOpen(true)} data-testid="button-new-invoice">
+              <FileText className="h-4 w-4 mr-1" /> New Invoice
+            </Button>
+          )}
+          {isAdmin && (
+            <Button variant="outline" onClick={() => setInvoiceDialogOpen(true)} data-testid="button-new-invoice-admin">
+              <FileText className="h-4 w-4 mr-1" /> New Invoice
+            </Button>
+          )}
         </div>
       </div>
-      <div className="grid gap-1">
-        <Label>Cost Center</Label>
-        <Select value={form.costCenterId || "__none__"} onValueChange={v => setForm(f => ({ ...f, costCenterId: v === "__none__" ? "" : v }))}>
-          <SelectTrigger data-testid="select-cost-center"><SelectValue placeholder="Select cost center" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__none__">None</SelectItem>
-            {(costCenters as any[]).map(cc => <SelectItem key={cc.id} value={cc.id}>{cc.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card data-testid="card-total-expenses"><CardContent className="pt-4">
+          <div className="flex items-center gap-2"><DollarSign className="h-5 w-5 text-green-600" /><div>
+            <p className="text-xs text-muted-foreground">Total Expenses</p>
+            <p className="text-xl font-bold">{formatCurrency(totalExpenses)}</p>
+          </div></div>
+        </CardContent></Card>
+        <Card data-testid="card-pending-approvals"><CardContent className="pt-4">
+          <div className="flex items-center gap-2"><Clock className="h-5 w-5 text-amber-600" /><div>
+            <p className="text-xs text-muted-foreground">Pending Approvals</p>
+            <p className="text-xl font-bold">{pendingExpenseApprovals.length + pendingInvoiceApprovals.length}</p>
+          </div></div>
+        </CardContent></Card>
+        <Card data-testid="card-reimbursements"><CardContent className="pt-4">
+          <div className="flex items-center gap-2"><CreditCard className="h-5 w-5 text-blue-600" /><div>
+            <p className="text-xs text-muted-foreground">Pending Reimbursements</p>
+            <p className="text-xl font-bold">{formatCurrency(totalPendingReimb)}</p>
+          </div></div>
+        </CardContent></Card>
+        <Card data-testid="card-total-invoices"><CardContent className="pt-4">
+          <div className="flex items-center gap-2"><Building2 className="h-5 w-5 text-purple-600" /><div>
+            <p className="text-xs text-muted-foreground">Total Invoices</p>
+            <p className="text-xl font-bold">{formatCurrency(totalInvoices)}</p>
+          </div></div>
+        </CardContent></Card>
       </div>
-      <div className="grid gap-1">
-        <Label>Vendor / Merchant <span className="text-destructive">*</span></Label>
-        <Input value={form.vendor} onChange={e => setForm(f => ({ ...f, vendor: e.target.value }))} placeholder="e.g. Home Depot" data-testid="input-vendor" />
-      </div>
-      <div className="grid gap-1">
-        <Label>Description</Label>
-        <Input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Brief description" data-testid="input-description" />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="grid gap-1">
-          <Label>Amount <span className="text-destructive">*</span></Label>
-          <Input type="number" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0.00" data-testid="input-amount" />
-        </div>
-        <div className="grid gap-1">
-          <Label>Date <span className="text-destructive">*</span></Label>
-          <Input type="date" value={form.receiptDate} onChange={e => setForm(f => ({ ...f, receiptDate: e.target.value }))} data-testid="input-date" />
-        </div>
-      </div>
-      <div className="grid gap-1">
-        <Label>Category</Label>
-        <Select value={form.category} onValueChange={v => setForm(f => ({ ...f, category: v }))}>
-          <SelectTrigger data-testid="select-category"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {CATEGORIES.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="grid gap-1">
-          <Label>Payment Method</Label>
-          <Select value={form.paymentMethod || "__none__"} onValueChange={v => setForm(f => ({ ...f, paymentMethod: v === "__none__" ? "" : v }))}>
-            <SelectTrigger data-testid="select-payment-method"><SelectValue placeholder="Select method" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__">None</SelectItem>
-              {PAYMENT_METHODS.map(pm => <SelectItem key={pm.value} value={pm.value}>{pm.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="grid gap-1">
-          <Label>Job Cost</Label>
-          <Select value={form.jobId || "__none__"} onValueChange={v => setForm(f => ({ ...f, jobId: v === "__none__" ? "" : v }))}>
-            <SelectTrigger data-testid="select-job-cost"><SelectValue placeholder="Select job" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__">No Job Cost</SelectItem>
-              {(jobs as any[]).map(j => <SelectItem key={j.id} value={j.id}>{j.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="grid gap-1">
-          <Label>Subtotal</Label>
-          <Input type="number" step="0.01" value={form.subtotal} onChange={e => setForm(f => ({ ...f, subtotal: e.target.value }))} placeholder="0.00" data-testid="input-subtotal" />
-        </div>
-        <div className="grid gap-1">
-          <Label>Tax</Label>
-          <Input type="number" step="0.01" value={form.taxAmount} onChange={e => setForm(f => ({ ...f, taxAmount: e.target.value }))} placeholder="0.00" data-testid="input-tax" />
-        </div>
-      </div>
-      <div className="flex items-center gap-2 rounded-md border p-3 bg-muted/30">
-        <Checkbox
-          id="isReimbursement"
-          checked={form.isReimbursement}
-          onCheckedChange={v => setForm(f => ({ ...f, isReimbursement: !!v }))}
-          data-testid="checkbox-reimbursement"
-        />
-        <div className="grid gap-0.5">
-          <Label htmlFor="isReimbursement" className="cursor-pointer font-medium text-sm">Employee Reimbursement</Label>
-          <p className="text-xs text-muted-foreground">If checked, requires manager approval and will be added to the employee's next payroll</p>
-        </div>
-      </div>
-      <div className="grid gap-1">
-        <Label>Notes</Label>
-        <Textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Additional notes" rows={2} data-testid="input-notes" />
-      </div>
-      {form.lineItems.length > 0 && (
-        <div className="grid gap-1">
-          <Label className="text-sm font-medium">Line Items (from AI scan)</Label>
-          <div className="border rounded-md overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/50">
-                  <TableHead className="text-xs py-1">Item</TableHead>
-                  <TableHead className="text-xs py-1 text-center">Qty</TableHead>
-                  <TableHead className="text-xs py-1 text-right">Unit Price</TableHead>
-                  <TableHead className="text-xs py-1 text-right">Total</TableHead>
-                  <TableHead className="text-xs py-1 w-8"></TableHead>
-                </TableRow>
-              </TableHeader>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="flex-wrap">
+          <TabsTrigger value="my-expenses" data-testid="tab-my-expenses">My Expenses</TabsTrigger>
+          {isAdmin && <TabsTrigger value="all-expenses" data-testid="tab-all-expenses">All Expenses</TabsTrigger>}
+          {isAdmin && <TabsTrigger value="pending-approvals" data-testid="tab-pending-approvals">
+            Pending Approvals {(pendingExpenseApprovals.length + pendingInvoiceApprovals.length) > 0 && <Badge className="ml-1" variant="destructive">{pendingExpenseApprovals.length + pendingInvoiceApprovals.length}</Badge>}
+          </TabsTrigger>}
+          <TabsTrigger value="invoices" data-testid="tab-invoices">Contractor Invoices</TabsTrigger>
+          {isAdmin && <TabsTrigger value="reimbursements" data-testid="tab-reimbursements">Reimbursement Queue</TabsTrigger>}
+          {isAdmin && <TabsTrigger value="ap-queue" data-testid="tab-ap-queue">AP Queue</TabsTrigger>}
+          {isAdmin && <TabsTrigger value="recurring" data-testid="tab-recurring">Recurring</TabsTrigger>}
+          {isAdmin && <TabsTrigger value="export" data-testid="tab-export">Export</TabsTrigger>}
+        </TabsList>
+
+        <TabsContent value="my-expenses" className="space-y-4">
+          <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 mb-2">
+            <p className="text-xs text-amber-700 dark:text-amber-400 flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" /> {EXPENSE_POLICY}
+            </p>
+          </div>
+          {myExpenses.length === 0 ? (
+            <Card><CardContent className="text-center py-12 text-muted-foreground">
+              <ReceiptIcon className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <p className="font-medium">No expenses yet</p>
+              <p className="text-sm mt-1">Click "New Expense" to submit your first expense.</p>
+            </CardContent></Card>
+          ) : (
+            <Table data-testid="table-my-expenses">
+              <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Vendor</TableHead><TableHead>Category</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead><TableHead>Reimb.</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>
               <TableBody>
-                {form.lineItems.map((item, idx) => (
-                  <TableRow key={idx}>
-                    <TableCell className="text-xs py-1">{item.description}</TableCell>
-                    <TableCell className="text-xs py-1 text-center">{item.quantity}</TableCell>
-                    <TableCell className="text-xs py-1 text-right">${item.unitPrice?.toFixed(2)}</TableCell>
-                    <TableCell className="text-xs py-1 text-right">${item.total?.toFixed(2)}</TableCell>
-                    <TableCell className="text-xs py-1">
-                      <Button type="button" variant="ghost" size="icon" className="h-5 w-5" onClick={() => setForm(f => ({ ...f, lineItems: f.lineItems.filter((_, i) => i !== idx) }))} data-testid={`button-remove-line-item-${idx}`}>
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
+                {myExpenses.map((e: any) => (
+                  <TableRow key={e.id} data-testid={`row-expense-${e.id}`}>
+                    <TableCell>{e.expenseDate}</TableCell>
+                    <TableCell className="font-medium">{e.vendor || "—"}</TableCell>
+                    <TableCell>{e.categoryName || "—"}</TableCell>
+                    <TableCell className="font-mono">{formatCurrency(e.amount)}</TableCell>
+                    <TableCell>{statusBadge(e.status)}</TableCell>
+                    <TableCell>{e.reimbursementRequested ? <Badge variant="secondary">Yes</Badge> : "—"}</TableCell>
+                    <TableCell>
+                      {e.status === "draft" && (
+                        <Button size="sm" variant="outline" onClick={() => submitMutation.mutate({ type: "expense", id: e.id })} data-testid={`button-submit-${e.id}`}>
+                          <Send className="h-3 w-3 mr-1" /> Submit
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
-          </div>
-        </div>
-      )}
-      <Button
-        className="w-full"
-        onClick={handleSubmit}
-        disabled={createMutation.isPending || updateMutation.isPending || !form.vendor || !form.amount || !form.receiptDate}
-        data-testid="button-submit-receipt"
-      >
-        {(createMutation.isPending || updateMutation.isPending) ? "Saving..." : editingReceipt ? "Update Receipt" : "Add Receipt"}
-      </Button>
-    </div>
-  );
-
-  return (
-    <div className="p-4 md:p-6 space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-expenses-title">
-          <ReceiptIcon className="h-6 w-6 text-teal-accent" />
-          Expenses & Receipts
-        </h1>
-        <div className="flex items-center gap-2 flex-wrap">
-          {selectedIds.size > 0 && (
-            <Link href={`/print-expense-check?ids=${Array.from(selectedIds).join(",")}`}>
-              <Button variant="outline" data-testid="button-print-selected">
-                <Printer className="h-4 w-4 mr-2" />
-                Print {selectedIds.size} Check{selectedIds.size !== 1 ? "s" : ""}
-              </Button>
-            </Link>
           )}
-          <Button
-            variant="outline"
-            onClick={() => sendRemindersMutation.mutate()}
-            disabled={sendRemindersMutation.isPending}
-            data-testid="button-send-reminders"
-          >
-            {sendRemindersMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ReceiptIcon className="h-4 w-4 mr-2" />}
-            Send Approval Reminders
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" data-testid="button-export">
-                <Download className="h-4 w-4 mr-2" />Export
-                <ChevronDown className="h-3 w-3 ml-1 opacity-60" />
+        </TabsContent>
+
+        {isAdmin && (
+          <TabsContent value="all-expenses" className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold">All Expenses</h3>
+              <Button variant="outline" size="sm" onClick={() => window.open("/api/expenses/export/csv", "_blank")} data-testid="button-export-expenses-csv">
+                <Download className="h-4 w-4 mr-1" /> Export CSV
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={exportCSV} data-testid="button-export-csv">
-                <FileText className="mr-2 h-4 w-4" />Export as CSV
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={exportExcel} data-testid="button-export-excel">
-                <FileText className="mr-2 h-4 w-4 text-green-600" />Export as Excel (.xlsx)
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => {
-                const params = new URLSearchParams();
-                if (filterCompany !== "all") params.set("companyId", filterCompany);
-                if (filterStatus !== "all") params.set("status", filterStatus);
-                if (filterDateFrom) params.set("dateFrom", filterDateFrom);
-                if (filterDateTo) params.set("dateTo", filterDateTo);
-                window.open(`/api/receipts/export-pdf?${params.toString()}`, "_blank");
-              }} data-testid="button-export-pdf">
-                <FileText className="mr-2 h-4 w-4 text-red-600" />Export as PDF (Branded)
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button variant="outline" onClick={() => { setEditingReceipt(null); setForm(EMPTY_FORM); setAiScanOpen(true); }} data-testid="button-ai-input">
-            <Camera className="h-4 w-4 mr-2" />AI Input
-          </Button>
-          <Button onClick={() => { setEditingReceipt(null); setForm(EMPTY_FORM); setAddOpen(true); }} data-testid="button-add-receipt">
-            <Plus className="h-4 w-4 mr-2" />Add Receipt
-          </Button>
-        </div>
-      </div>
+            </div>
+            <Table data-testid="table-all-expenses">
+              <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Submitter</TableHead><TableHead>Vendor</TableHead><TableHead>Category</TableHead><TableHead>Company</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+              <TableBody>
+                {allExpenses.map((e: any) => (
+                  <TableRow key={e.id} data-testid={`row-all-expense-${e.id}`}>
+                    <TableCell>{e.expenseDate}</TableCell>
+                    <TableCell>{getWorkerName(e.submitterId)}</TableCell>
+                    <TableCell>{e.vendor || "—"}</TableCell>
+                    <TableCell>{e.categoryName || "—"}</TableCell>
+                    <TableCell>{companies.find((c: any) => c.id === e.companyId)?.name || "—"}</TableCell>
+                    <TableCell className="font-mono">{formatCurrency(e.amount)}</TableCell>
+                    <TableCell>{statusBadge(e.status)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TabsContent>
+        )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground flex items-center gap-2">
-              <DollarSign className="h-4 w-4" />Total Expenses
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold" data-testid="text-total-amount">${totalAmount.toFixed(2)}</p>
-            <p className="text-xs text-muted-foreground">{filtered.length} receipt{filtered.length !== 1 ? "s" : ""}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground flex items-center gap-2">
-              <FileText className="h-4 w-4" />Pending
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold text-amber-600" data-testid="text-pending-amount">${pendingAmount.toFixed(2)}</p>
-            <p className="text-xs text-muted-foreground">{filtered.filter(r => r.status === "pending").length} pending</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground flex items-center gap-2">
-              <ReceiptIcon className="h-4 w-4" />Approved
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold text-emerald-600" data-testid="text-approved-amount">${approvedAmount.toFixed(2)}</p>
-            <p className="text-xs text-muted-foreground">{filtered.filter(r => r.status === "approved").length} approved</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Tabs defaultValue="receipts">
-        <TabsList>
-          <TabsTrigger value="receipts" data-testid="tab-receipts">
-            <ReceiptIcon className="h-4 w-4 mr-1.5" />Receipts
-          </TabsTrigger>
-          <TabsTrigger value="budget" data-testid="tab-budget">
-            <BarChart3 className="h-4 w-4 mr-1.5" />Budget Summary
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="receipts" className="mt-4">
-          <Card>
-            <CardHeader>
-              <div className="flex flex-wrap gap-3 items-end">
-                <div className="flex items-center gap-2 flex-wrap flex-1">
-                  <Filter className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <Input
-                    placeholder="Search vendor, description..."
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    className="max-w-[200px]"
-                    data-testid="input-search-receipts"
-                  />
-                  <Select value={filterCompany} onValueChange={setFilterCompany}>
-                    <SelectTrigger className="w-36" data-testid="select-filter-company"><SelectValue placeholder="Company" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Companies</SelectItem>
-                      {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <Select value={filterCategory} onValueChange={setFilterCategory}>
-                    <SelectTrigger className="w-44" data-testid="select-filter-category"><SelectValue placeholder="Category" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Categories</SelectItem>
-                      {CATEGORIES.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <Select value={filterStatus} onValueChange={setFilterStatus}>
-                    <SelectTrigger className="w-32" data-testid="select-filter-status"><SelectValue placeholder="Status" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Statuses</SelectItem>
-                      <SelectItem value="pending">Pending</SelectItem>
-                      <SelectItem value="approved">Approved</SelectItem>
-                      <SelectItem value="rejected">Rejected</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="grid gap-0.5">
-                    <Label className="text-xs text-muted-foreground">From</Label>
-                    <Input type="date" value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} className="w-36 h-8 text-sm" data-testid="input-date-from" />
-                  </div>
-                  <div className="grid gap-0.5">
-                    <Label className="text-xs text-muted-foreground">To</Label>
-                    <Input type="date" value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} className="w-36 h-8 text-sm" data-testid="input-date-to" />
-                  </div>
-                  {(filterDateFrom || filterDateTo) && (
-                    <Button size="sm" variant="ghost" className="mt-4" onClick={() => { setFilterDateFrom(""); setFilterDateTo(""); }} data-testid="button-clear-dates">
-                      Clear
-                    </Button>
-                  )}
+        {isAdmin && (
+          <TabsContent value="pending-approvals" className="space-y-6">
+            {pendingExpenseApprovals.length > 0 && (
+              <div>
+                <h3 className="text-lg font-semibold mb-3">Pending Expense Approvals</h3>
+                <div className="space-y-3">
+                  {pendingExpenseApprovals.map((e: any) => (
+                    <Card key={e.id} data-testid={`card-approval-expense-${e.id}`}>
+                      <CardContent className="pt-4">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <p className="font-medium">{getWorkerName(e.submitterId)} — {formatCurrency(e.amount)}</p>
+                            <p className="text-sm text-muted-foreground">{e.expenseDate} | {e.vendor || "No vendor"} | {e.categoryName || "Uncategorized"}</p>
+                            {e.businessPurpose && <p className="text-sm mt-1">{e.businessPurpose}</p>}
+                            {e.reimbursementRequested && <Badge variant="secondary" className="mt-1">Reimbursement Requested</Badge>}
+                            {e.preapprovalStatus === "required" && !e.preapprovalReference && (
+                              <div className="mt-1 flex items-center gap-1 text-amber-600 text-xs"><AlertTriangle className="h-3 w-3" /> Missing preapproval</div>
+                            )}
+                          </div>
+                          <div className="flex gap-2">
+                            <Button size="sm" onClick={() => approveMutation.mutate({ type: "expense", id: e.id })} data-testid={`button-approve-expense-${e.id}`}>
+                              <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Approve
+                            </Button>
+                            <Button size="sm" variant="destructive" onClick={() => { setRejectTarget({ type: "expense", id: e.id }); setRejectReason(""); setRejectDialogOpen(true); }} data-testid={`button-reject-expense-${e.id}`}>
+                              <XCircle className="h-3.5 w-3.5 mr-1" /> Reject
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
                 </div>
               </div>
-            </CardHeader>
-            <CardContent className="p-0">
-              {isLoading ? (
-                <div className="p-4 space-y-3">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
-              ) : filtered.length === 0 ? (
-                <div className="text-center py-16 text-muted-foreground">
-                  <ReceiptIcon className="h-10 w-10 mx-auto mb-3 opacity-30" />
-                  <p className="font-medium">No receipts found</p>
-                  <p className="text-sm mt-1">Add expense receipts to track costs by cost center and job.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <Table data-testid="table-receipts">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-10">
-                          <Checkbox checked={filtered.length > 0 && selectedIds.size === filtered.length} onCheckedChange={toggleSelectAll} data-testid="checkbox-select-all" />
-                        </TableHead>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Vendor</TableHead>
-                        <TableHead>Category</TableHead>
-                        <TableHead>Cost Center</TableHead>
-                        <TableHead>Job Cost</TableHead>
-                        <TableHead>Employee</TableHead>
-                        <TableHead className="text-right">Amount</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Receipt</TableHead>
-                        <TableHead></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filtered.map(r => (
-                        <TableRow key={r.id} data-testid={`row-receipt-${r.id}`} className={selectedIds.has(r.id) ? "bg-muted/50" : ""}>
-                          <TableCell>
-                            <Checkbox checked={selectedIds.has(r.id)} onCheckedChange={() => toggleSelect(r.id)} data-testid={`checkbox-select-${r.id}`} />
-                          </TableCell>
-                          <TableCell className="text-sm whitespace-nowrap">{r.receiptDate}</TableCell>
-                          <TableCell>
-                            <div className="font-medium text-sm">{r.vendor || "—"}</div>
-                            {r.description && <div className="text-xs text-muted-foreground">{r.description}</div>}
-                          </TableCell>
-                          <TableCell>
-                            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${catClass(r.category || "general")}`}>
-                              {catLabel(r.category || "general")}
-                            </span>
-                          </TableCell>
-                          <TableCell className="text-sm">{r.costCenterId ? getCostCenterName(r.costCenterId) : "—"}</TableCell>
-                          <TableCell className="text-sm">{r.jobId ? getJobName(r.jobId) : "—"}</TableCell>
-                          <TableCell className="text-sm">{r.workerId ? getWorkerName(r.workerId) : "—"}</TableCell>
-                          <TableCell className="text-right font-medium text-sm whitespace-nowrap">${parseFloat(r.amount?.toString() || "0").toFixed(2)}</TableCell>
-                          <TableCell>
-                            {(r as any).isReimbursement ? (
-                              <Badge variant="secondary" className="bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" data-testid={`badge-reimb-${r.id}`}>Reimbursement</Badge>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">Expense</span>
+            )}
+
+            {pendingInvoiceApprovals.length > 0 && (
+              <div>
+                <h3 className="text-lg font-semibold mb-3">Pending Invoice Approvals</h3>
+                <div className="space-y-3">
+                  {pendingInvoiceApprovals.map((inv: any) => (
+                    <Card key={inv.id} data-testid={`card-approval-invoice-${inv.id}`}>
+                      <CardContent className="pt-4">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <p className="font-medium">{getWorkerName(inv.contractorId)} — {formatCurrency(inv.amount)}</p>
+                            <p className="text-sm text-muted-foreground">Invoice #{inv.invoiceNumber || "—"} | {inv.invoiceDate}</p>
+                            {inv.description && <p className="text-sm mt-1">{inv.description}</p>}
+                            {!inv.proposalReference && (
+                              <div className="mt-1 flex items-center gap-1 text-amber-600 text-xs"><AlertTriangle className="h-3 w-3" /> No proposal reference</div>
                             )}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={STATUS_COLORS[r.status || "pending"] as any} data-testid={`badge-status-${r.id}`}>
-                              {r.status || "pending"}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            {r.receiptImagePath ? (
-                              <a href={r.receiptImagePath} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline" data-testid={`link-receipt-image-${r.id}`}>View</a>
-                            ) : (
-                              <label className="cursor-pointer">
-                                <input type="file" accept="image/*,application/pdf" className="hidden" onChange={e => e.target.files?.[0] && handleUpload(r.id, e.target.files[0])} data-testid={`input-upload-${r.id}`} />
-                                <span className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
-                                  <Upload className="h-3 w-3" />
-                                  {uploadingFor === r.id ? "Uploading..." : "Upload"}
-                                </span>
-                              </label>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button size="icon" variant="ghost" data-testid={`button-menu-${r.id}`}><MoreHorizontal className="h-4 w-4" /></Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => openEdit(r)} data-testid={`button-edit-${r.id}`}><Pencil className="mr-2 h-4 w-4" />Edit</DropdownMenuItem>
-                                <DropdownMenuItem asChild data-testid={`button-print-check-${r.id}`}>
-                                  <Link href={`/print-expense-check?ids=${r.id}`}><Printer className="mr-2 h-4 w-4" />Print Check</Link>
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                {r.status === "pending" && (
-                                  <DropdownMenuItem onClick={() => approveMutation.mutate({ id: r.id, status: "approved" })} data-testid={`button-approve-${r.id}`}>Approve</DropdownMenuItem>
-                                )}
-                                {r.status === "pending" && (
-                                  <DropdownMenuItem onClick={() => approveMutation.mutate({ id: r.id, status: "rejected" })} className="text-destructive" data-testid={`button-reject-${r.id}`}>Reject</DropdownMenuItem>
-                                )}
-                                <DropdownMenuItem onClick={() => confirm("Delete this receipt?") && deleteMutation.mutate(r.id)} className="text-destructive" data-testid={`button-delete-${r.id}`}>
-                                  <Trash2 className="mr-2 h-4 w-4" />Delete
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button size="sm" onClick={() => approveMutation.mutate({ type: "contractor_invoice", id: inv.id })} data-testid={`button-approve-invoice-${inv.id}`}>
+                              <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Approve
+                            </Button>
+                            <Button size="sm" variant="destructive" onClick={() => { setRejectTarget({ type: "contractor_invoice", id: inv.id }); setRejectReason(""); setRejectDialogOpen(true); }} data-testid={`button-reject-invoice-${inv.id}`}>
+                              <XCircle className="h-3.5 w-3.5 mr-1" /> Reject
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
+              </div>
+            )}
 
-        <TabsContent value="budget" className="mt-4 space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card className="md:col-span-1">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold">By Category</CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                {sortedCatBudget.length === 0 ? (
-                  <p className="text-sm text-muted-foreground p-4">No data</p>
-                ) : (
-                  <div className="divide-y">
-                    {sortedCatBudget.map(([cat, amt]) => (
-                      <div key={cat} className="flex items-center justify-between px-4 py-2">
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${catClass(cat)}`}>{catLabel(cat)}</span>
-                        <span className="text-sm font-semibold tabular-nums">${amt.toFixed(2)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            {pendingExpenseApprovals.length === 0 && pendingInvoiceApprovals.length === 0 && (
+              <Card><CardContent className="text-center py-12 text-muted-foreground">
+                <CheckCircle2 className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">No pending approvals</p>
+              </CardContent></Card>
+            )}
+          </TabsContent>
+        )}
 
-            <Card className="md:col-span-2">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold">By Cost Center</CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                {Object.keys(budgetByCostCenter).length === 0 ? (
-                  <p className="text-sm text-muted-foreground p-4">No receipts assigned to a cost center yet.</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Cost Center</TableHead>
-                        <TableHead className="text-right">Items</TableHead>
-                        <TableHead className="text-right">Approved</TableHead>
-                        <TableHead className="text-right">Pending</TableHead>
-                        <TableHead className="text-right font-semibold">Total</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {Object.values(budgetByCostCenter).sort((a, b) => b.total - a.total).map(cc => (
-                        <TableRow key={cc.name}>
-                          <TableCell className="font-medium text-sm">{cc.name}</TableCell>
-                          <TableCell className="text-right text-sm text-muted-foreground">{cc.items}</TableCell>
-                          <TableCell className="text-right text-sm text-emerald-600">${cc.approved.toFixed(2)}</TableCell>
-                          <TableCell className="text-right text-sm text-amber-600">${cc.pending.toFixed(2)}</TableCell>
-                          <TableCell className="text-right font-semibold text-sm">${cc.total.toFixed(2)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="md:col-span-3">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold">By Job</CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                {Object.keys(budgetByJob).length === 0 ? (
-                  <p className="text-sm text-muted-foreground p-4">No receipts assigned to a job yet.</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Job</TableHead>
-                        <TableHead className="text-right">Items</TableHead>
-                        <TableHead className="text-right">Approved</TableHead>
-                        <TableHead className="text-right">Pending</TableHead>
-                        <TableHead className="text-right font-semibold">Total</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {Object.values(budgetByJob).sort((a, b) => b.total - a.total).map(job => (
-                        <TableRow key={job.name}>
-                          <TableCell className="font-medium text-sm">{job.name}</TableCell>
-                          <TableCell className="text-right text-sm text-muted-foreground">{job.items}</TableCell>
-                          <TableCell className="text-right text-sm text-emerald-600">${job.approved.toFixed(2)}</TableCell>
-                          <TableCell className="text-right text-sm text-amber-600">${job.pending.toFixed(2)}</TableCell>
-                          <TableCell className="text-right font-semibold text-sm">${job.total.toFixed(2)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+        <TabsContent value="invoices" className="space-y-4">
+          <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 mb-2">
+            <p className="text-xs text-blue-700 dark:text-blue-400 flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" /> {INVOICE_POLICY}
+            </p>
           </div>
+          {invoices.length === 0 ? (
+            <Card><CardContent className="text-center py-12 text-muted-foreground">
+              <FileText className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <p className="font-medium">No contractor invoices</p>
+            </CardContent></Card>
+          ) : (
+            <Table data-testid="table-invoices">
+              <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Invoice #</TableHead><TableHead>Contractor</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead><TableHead>Proposal</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>
+              <TableBody>
+                {invoices.map((inv: any) => (
+                  <TableRow key={inv.id} data-testid={`row-invoice-${inv.id}`}>
+                    <TableCell>{inv.invoiceDate}</TableCell>
+                    <TableCell>{inv.invoiceNumber || "—"}</TableCell>
+                    <TableCell>{getWorkerName(inv.contractorId)}</TableCell>
+                    <TableCell className="font-mono">{formatCurrency(inv.amount)}</TableCell>
+                    <TableCell>{statusBadge(inv.status)}</TableCell>
+                    <TableCell>{inv.proposalReference || "—"}</TableCell>
+                    <TableCell>
+                      {inv.status === "draft" && (
+                        <Button size="sm" variant="outline" onClick={() => submitMutation.mutate({ type: "contractor_invoice", id: inv.id })} data-testid={`button-submit-invoice-${inv.id}`}>
+                          <Send className="h-3 w-3 mr-1" /> Submit
+                        </Button>
+                      )}
+                      {inv.status === "approved" && isAdmin && (
+                        <Button size="sm" variant="outline" onClick={() => markPaidMutation.mutate(inv.id)} data-testid={`button-mark-paid-${inv.id}`}>
+                          <DollarSign className="h-3 w-3 mr-1" /> Mark Paid
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </TabsContent>
+
+        {isAdmin && (
+          <TabsContent value="reimbursements" className="space-y-4">
+            <h3 className="text-lg font-semibold">Payroll Reimbursement Queue</h3>
+            {reimbursements.length === 0 ? (
+              <Card><CardContent className="text-center py-12 text-muted-foreground">No reimbursement items.</CardContent></Card>
+            ) : (
+              <Table data-testid="table-reimbursements">
+                <TableHeader><TableRow><TableHead>Worker</TableHead><TableHead>Amount</TableHead><TableHead>Description</TableHead><TableHead>Taxable</TableHead><TableHead>Status</TableHead><TableHead>Payroll Run</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {reimbursements.map((r: any) => (
+                    <TableRow key={r.id} data-testid={`row-reimb-${r.id}`}>
+                      <TableCell>{getWorkerName(r.workerId)}</TableCell>
+                      <TableCell className="font-mono">{formatCurrency(r.amount)}</TableCell>
+                      <TableCell className="text-sm">{r.description || "—"}</TableCell>
+                      <TableCell>{r.isTaxable ? <Badge variant="destructive">Taxable</Badge> : <Badge variant="outline">Non-taxable</Badge>}</TableCell>
+                      <TableCell>{statusBadge(r.status)}</TableCell>
+                      <TableCell>{r.payrollRunId || "Not assigned"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </TabsContent>
+        )}
+
+        {isAdmin && (
+          <TabsContent value="ap-queue" className="space-y-4">
+            <h3 className="text-lg font-semibold">Accounts Payable Queue</h3>
+            {approvedInvoices.length === 0 ? (
+              <Card><CardContent className="text-center py-12 text-muted-foreground">No approved invoices awaiting payment.</CardContent></Card>
+            ) : (
+              <Table data-testid="table-ap-queue">
+                <TableHeader><TableRow><TableHead>Invoice #</TableHead><TableHead>Contractor</TableHead><TableHead>Amount</TableHead><TableHead>Due Date</TableHead><TableHead>Terms</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {approvedInvoices.map((inv: any) => (
+                    <TableRow key={inv.id} data-testid={`row-ap-${inv.id}`}>
+                      <TableCell>{inv.invoiceNumber || "—"}</TableCell>
+                      <TableCell>{getWorkerName(inv.contractorId)}</TableCell>
+                      <TableCell className="font-mono">{formatCurrency(inv.amount)}</TableCell>
+                      <TableCell>{inv.dueDate || "—"}</TableCell>
+                      <TableCell>{inv.paymentTerms || "—"}</TableCell>
+                      <TableCell>
+                        <Button size="sm" onClick={() => markPaidMutation.mutate(inv.id)} data-testid={`button-pay-${inv.id}`}>
+                          <DollarSign className="h-3 w-3 mr-1" /> Mark Paid
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </TabsContent>
+        )}
+
+        {isAdmin && (
+          <TabsContent value="recurring" className="space-y-4">
+            <h3 className="text-lg font-semibold">Recurring Expense Templates</h3>
+            {recurringTemplates.length === 0 ? (
+              <Card><CardContent className="text-center py-12 text-muted-foreground">
+                <RefreshCw className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">No recurring expenses configured</p>
+              </CardContent></Card>
+            ) : (
+              <Table data-testid="table-recurring">
+                <TableHeader><TableRow><TableHead>Vendor</TableHead><TableHead>Amount</TableHead><TableHead>Frequency</TableHead><TableHead>Next Due</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {recurringTemplates.map((t: any) => (
+                    <TableRow key={t.id} data-testid={`row-recurring-${t.id}`}>
+                      <TableCell>{t.vendor || t.description || "—"}</TableCell>
+                      <TableCell className="font-mono">{formatCurrency(t.amount)}</TableCell>
+                      <TableCell><Badge variant="outline">{t.frequency}</Badge></TableCell>
+                      <TableCell>{t.nextDueDate || "—"}</TableCell>
+                      <TableCell>{t.isActive ? <Badge variant="default">Active</Badge> : <Badge variant="secondary">Inactive</Badge>}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </TabsContent>
+        )}
+
+        {isAdmin && (
+          <TabsContent value="export" className="space-y-4">
+            <h3 className="text-lg font-semibold">Accounting Export</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <Card>
+                <CardHeader><CardTitle className="text-sm flex items-center gap-2"><DollarSign className="h-4 w-4" /> Expense Export</CardTitle></CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground mb-3">Export all expenses to CSV for accounting import.</p>
+                  <Button onClick={() => window.open("/api/expenses/export/csv", "_blank")} data-testid="button-export-expenses">
+                    <Download className="h-4 w-4 mr-1" /> Download Expenses CSV
+                  </Button>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader><CardTitle className="text-sm flex items-center gap-2"><FileText className="h-4 w-4" /> Invoice Export</CardTitle></CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground mb-3">Export all contractor invoices to CSV.</p>
+                  <Button onClick={() => window.open("/api/contractor-invoices/export/csv", "_blank")} data-testid="button-export-invoices">
+                    <Download className="h-4 w-4 mr-1" /> Download Invoices CSV
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+        )}
       </Tabs>
 
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Add Expense Receipt</DialogTitle></DialogHeader>
-          {receiptFormContent}
+      <Dialog open={expenseDialogOpen} onOpenChange={setExpenseDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Submit Expense</DialogTitle></DialogHeader>
+          <ExpenseSubmitForm categories={categories} companies={companies} jobs={jobs} costCenters={costCenters} onClose={() => setExpenseDialogOpen(false)} />
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!editingReceipt} onOpenChange={v => !v && setEditingReceipt(null)}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Edit Receipt</DialogTitle></DialogHeader>
-          {receiptFormContent}
+      <Dialog open={invoiceDialogOpen} onOpenChange={setInvoiceDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Submit Contractor Invoice</DialogTitle></DialogHeader>
+          <InvoiceSubmitForm companies={companies} jobs={jobs} costCenters={costCenters} onClose={() => setInvoiceDialogOpen(false)} />
         </DialogContent>
       </Dialog>
 
-      <Dialog open={aiScanOpen} onOpenChange={setAiScanOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle className="flex items-center gap-2"><Camera className="h-5 w-5" />AI Receipt Scanner</DialogTitle></DialogHeader>
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Take a photo or upload an image of your receipt. AI will extract the vendor, items, quantities, costs, tax, total, and payment method automatically.
-            </p>
-            <div className="border-2 border-dashed rounded-lg p-8 text-center">
-              {aiScanning ? (
-                <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="h-10 w-10 animate-spin text-primary" />
-                  <p className="text-sm font-medium">Scanning receipt...</p>
-                  <p className="text-xs text-muted-foreground">AI is extracting data from your receipt image</p>
-                </div>
-              ) : (
-                <label className="cursor-pointer flex flex-col items-center gap-3">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className="hidden"
-                    onChange={e => {
-                      const file = e.target.files?.[0];
-                      if (file) handleAiScan(file);
-                    }}
-                    data-testid="input-ai-receipt-image"
-                  />
-                  <Camera className="h-12 w-12 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium">Tap to take a photo or choose an image</p>
-                    <p className="text-xs text-muted-foreground mt-1">Supports JPG, PNG, HEIC</p>
-                  </div>
-                </label>
-              )}
-            </div>
+      <Dialog open={rejectDialogOpen} onOpenChange={(v) => { setRejectDialogOpen(v); if (!v) setRejectTarget(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Reject {rejectTarget?.type === "expense" ? "Expense" : "Invoice"}</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <Label>Reason for Rejection</Label>
+            <Textarea value={rejectReason} onChange={e => setRejectReason(e.target.value)} placeholder="Provide a reason..." data-testid="input-reject-reason" rows={3} />
           </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectDialogOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => { if (rejectTarget) rejectMutation.mutate({ ...rejectTarget, reason: rejectReason }); }} data-testid="button-confirm-reject">
+              {rejectMutation.isPending ? "Rejecting..." : "Reject"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

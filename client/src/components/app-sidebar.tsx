@@ -115,7 +115,7 @@ const navSections: NavSection[] = [
       { title: "Pending Approvals", url: "/attendance?tab=pending-approvals", icon: AlertTriangle, roles: ["admin", "manager"] },
       { title: "Time Off", url: "/attendance?tab=time-off", icon: CalendarOff },
       { title: "Schedule Preferences", url: "/attendance?tab=schedule-preferences", icon: SlidersHorizontal },
-      { title: "Expenses & Receipts", url: "/expenses", icon: Receipt },
+      { title: "Expenses & Invoices", url: "/expenses", icon: Receipt },
     ],
   },
   {
@@ -190,7 +190,7 @@ const navSections: NavSection[] = [
       { title: "Taxes & Deductions", url: "/payroll?tab=taxes-deductions", icon: Landmark },
       { title: "Remittance Agencies", url: "/payroll?tab=remittance-agencies", icon: Building },
       { title: "Remittance Sources", url: "/payroll?tab=remittance-sources", icon: Globe },
-      { title: "Expenses & Receipts", url: "/expenses", icon: Receipt },
+      { title: "Expenses & Invoices", url: "/expenses", icon: Receipt },
       { title: "Payroll Audit", url: "/payroll-audit", icon: ShieldCheck },
     ],
   },

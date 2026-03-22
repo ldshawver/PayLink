@@ -1560,3 +1560,210 @@ export const notificationPreferences = pgTable("notification_preferences", {
 export const insertNotificationPreferenceSchema = createInsertSchema(notificationPreferences).omit({ id: true, createdAt: true, updatedAt: true });
 export type NotificationPreference = typeof notificationPreferences.$inferSelect;
 export type InsertNotificationPreference = z.infer<typeof insertNotificationPreferenceSchema>;
+
+// ── Expense Categories ───────────────────────────────────────────────────
+export const expenseCategories = pgTable("expense_categories", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  accountingCode: text("accounting_code"),
+  payrollReimbursementCode: text("payroll_reimbursement_code"),
+  reimbursableDefault: boolean("reimbursable_default").notNull().default(false),
+  receiptRequired: boolean("receipt_required").notNull().default(true),
+  preapprovalRequired: boolean("preapproval_required").notNull().default(false),
+  projectRequired: boolean("project_required").notNull().default(false),
+  costCenterRequired: boolean("cost_center_required").notNull().default(false),
+  allowedWorkerGroups: text("allowed_worker_groups"),
+  isActive: boolean("is_active").notNull().default(true),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertExpenseCategorySchema = createInsertSchema(expenseCategories).omit({ id: true, createdAt: true });
+export type ExpenseCategory = typeof expenseCategories.$inferSelect;
+export type InsertExpenseCategory = z.infer<typeof insertExpenseCategorySchema>;
+
+// ── Expenses ─────────────────────────────────────────────────────────────
+export const expenses = pgTable("expenses", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  submitterId: varchar("submitter_id").notNull().references(() => workers.id),
+  categoryId: varchar("category_id"),
+  categoryName: text("category_name"),
+  expenseDate: text("expense_date").notNull(),
+  amount: numeric("amount").notNull(),
+  taxAmount: numeric("tax_amount"),
+  subtotal: numeric("subtotal"),
+  vendor: text("vendor"),
+  description: text("description"),
+  businessPurpose: text("business_purpose"),
+  reimbursementRequested: boolean("reimbursement_requested").notNull().default(false),
+  paymentMethodUsed: text("payment_method_used"),
+  projectId: varchar("project_id"),
+  jobId: varchar("job_id"),
+  costCenterId: varchar("cost_center_id"),
+  preapprovalStatus: text("preapproval_status"),
+  preapprovalReference: text("preapproval_reference"),
+  status: text("status").notNull().default("draft"),
+  approvedBy: varchar("approved_by"),
+  approvedAt: timestamp("approved_at"),
+  rejectedBy: varchar("rejected_by"),
+  rejectedAt: timestamp("rejected_at"),
+  rejectionReason: text("rejection_reason"),
+  reimbursementStatus: text("reimbursement_status"),
+  payrollRunId: varchar("payroll_run_id"),
+  exportStatus: text("export_status").default("pending"),
+  exportedAt: timestamp("exported_at"),
+  lineItems: text("line_items"),
+  aiExtractedJson: text("ai_extracted_json"),
+  aiConfidenceScore: numeric("ai_confidence_score"),
+  duplicateHash: text("duplicate_hash"),
+  recurringTemplateId: varchar("recurring_template_id"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertExpenseSchema = createInsertSchema(expenses).omit({ id: true, createdAt: true, updatedAt: true });
+export type Expense = typeof expenses.$inferSelect;
+export type InsertExpense = z.infer<typeof insertExpenseSchema>;
+
+// ── Expense Attachments ──────────────────────────────────────────────────
+export const expenseAttachments = pgTable("expense_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  expenseId: varchar("expense_id").notNull(),
+  filePath: text("file_path").notNull(),
+  fileName: text("file_name"),
+  fileType: text("file_type"),
+  fileSize: integer("file_size"),
+  isReceipt: boolean("is_receipt").notNull().default(true),
+  uploadedAt: timestamp("uploaded_at").defaultNow(),
+});
+
+export const insertExpenseAttachmentSchema = createInsertSchema(expenseAttachments).omit({ id: true, uploadedAt: true });
+export type ExpenseAttachment = typeof expenseAttachments.$inferSelect;
+export type InsertExpenseAttachment = z.infer<typeof insertExpenseAttachmentSchema>;
+
+// ── Contractor Invoices ──────────────────────────────────────────────────
+export const contractorInvoices = pgTable("contractor_invoices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  contractorId: varchar("contractor_id").notNull().references(() => workers.id),
+  invoiceNumber: text("invoice_number"),
+  invoiceDate: text("invoice_date").notNull(),
+  dueDate: text("due_date"),
+  amount: numeric("amount").notNull(),
+  taxAmount: numeric("tax_amount"),
+  description: text("description"),
+  proposalId: varchar("proposal_id"),
+  proposalReference: text("proposal_reference"),
+  projectId: varchar("project_id"),
+  jobId: varchar("job_id"),
+  costCenterId: varchar("cost_center_id"),
+  paymentTerms: text("payment_terms"),
+  status: text("status").notNull().default("draft"),
+  approvedBy: varchar("approved_by"),
+  approvedAt: timestamp("approved_at"),
+  rejectedBy: varchar("rejected_by"),
+  rejectedAt: timestamp("rejected_at"),
+  rejectionReason: text("rejection_reason"),
+  paidAt: timestamp("paid_at"),
+  paidAmount: numeric("paid_amount"),
+  paymentReference: text("payment_reference"),
+  paymentMethod: text("payment_method"),
+  exportStatus: text("export_status").default("pending"),
+  exportedAt: timestamp("exported_at"),
+  is1099Reportable: boolean("is_1099_reportable").notNull().default(true),
+  lineItems: text("line_items"),
+  aiExtractedJson: text("ai_extracted_json"),
+  aiConfidenceScore: numeric("ai_confidence_score"),
+  duplicateHash: text("duplicate_hash"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertContractorInvoiceSchema = createInsertSchema(contractorInvoices).omit({ id: true, createdAt: true, updatedAt: true });
+export type ContractorInvoice = typeof contractorInvoices.$inferSelect;
+export type InsertContractorInvoice = z.infer<typeof insertContractorInvoiceSchema>;
+
+// ── Contractor Invoice Attachments ───────────────────────────────────────
+export const contractorInvoiceAttachments = pgTable("contractor_invoice_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceId: varchar("invoice_id").notNull(),
+  filePath: text("file_path").notNull(),
+  fileName: text("file_name"),
+  fileType: text("file_type"),
+  fileSize: integer("file_size"),
+  uploadedAt: timestamp("uploaded_at").defaultNow(),
+});
+
+export const insertContractorInvoiceAttachmentSchema = createInsertSchema(contractorInvoiceAttachments).omit({ id: true, uploadedAt: true });
+export type ContractorInvoiceAttachment = typeof contractorInvoiceAttachments.$inferSelect;
+export type InsertContractorInvoiceAttachment = z.infer<typeof insertContractorInvoiceAttachmentSchema>;
+
+// ── Recurring Expense Templates ──────────────────────────────────────────
+export const recurringExpenseTemplates = pgTable("recurring_expense_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  submitterId: varchar("submitter_id").notNull().references(() => workers.id),
+  categoryId: varchar("category_id"),
+  categoryName: text("category_name"),
+  vendor: text("vendor"),
+  description: text("description"),
+  amount: numeric("amount").notNull(),
+  reimbursementRequested: boolean("reimbursement_requested").notNull().default(false),
+  projectId: varchar("project_id"),
+  jobId: varchar("job_id"),
+  costCenterId: varchar("cost_center_id"),
+  frequency: text("frequency").notNull().default("monthly"),
+  startDate: text("start_date").notNull(),
+  endDate: text("end_date"),
+  nextDueDate: text("next_due_date"),
+  isActive: boolean("is_active").notNull().default(true),
+  lastGeneratedAt: timestamp("last_generated_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertRecurringExpenseTemplateSchema = createInsertSchema(recurringExpenseTemplates).omit({ id: true, createdAt: true });
+export type RecurringExpenseTemplate = typeof recurringExpenseTemplates.$inferSelect;
+export type InsertRecurringExpenseTemplate = z.infer<typeof insertRecurringExpenseTemplateSchema>;
+
+// ── Expense Approval Actions (immutable audit log) ───────────────────────
+export const expenseApprovalActions = pgTable("expense_approval_actions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  objectType: text("object_type").notNull(),
+  objectId: varchar("object_id").notNull(),
+  actionType: text("action_type").notNull(),
+  actorUserId: varchar("actor_user_id"),
+  actorWorkerId: varchar("actor_worker_id"),
+  companyId: varchar("company_id"),
+  previousStatus: text("previous_status"),
+  newStatus: text("new_status"),
+  notes: text("notes"),
+  metadataJson: text("metadata_json"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertExpenseApprovalActionSchema = createInsertSchema(expenseApprovalActions).omit({ id: true, createdAt: true });
+export type ExpenseApprovalAction = typeof expenseApprovalActions.$inferSelect;
+export type InsertExpenseApprovalAction = z.infer<typeof insertExpenseApprovalActionSchema>;
+
+// ── Payroll Reimbursement Items ──────────────────────────────────────────
+export const payrollReimbursementItems = pgTable("payroll_reimbursement_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  expenseId: varchar("expense_id").notNull(),
+  payrollRunId: varchar("payroll_run_id"),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  companyId: varchar("company_id").references(() => companies.id),
+  amount: numeric("amount").notNull(),
+  isTaxable: boolean("is_taxable").notNull().default(false),
+  description: text("description"),
+  status: text("status").notNull().default("pending"),
+  includedInPayrollAt: timestamp("included_in_payroll_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertPayrollReimbursementItemSchema = createInsertSchema(payrollReimbursementItems).omit({ id: true, createdAt: true });
+export type PayrollReimbursementItem = typeof payrollReimbursementItems.$inferSelect;
+export type InsertPayrollReimbursementItem = z.infer<typeof insertPayrollReimbursementItemSchema>;
