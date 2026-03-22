@@ -27,7 +27,7 @@ export default function PayrollAuditPage() {
     ? `/api/payroll-audit?companyId=${companyId}`
     : "/api/payroll-audit";
 
-  const { data: audit, isLoading, refetch, isFetching } = useQuery<AuditResult>({
+  const { data: audit, isLoading, isError, refetch, isFetching } = useQuery<AuditResult>({
     queryKey: ["/api/payroll-audit", companyId],
     queryFn: async () => {
       const res = await fetch(queryUrl, { credentials: "include" });
@@ -76,6 +76,15 @@ export default function PayrollAuditPage() {
 
       {isLoading ? (
         <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin" /></div>
+      ) : isError ? (
+        <Card data-testid="card-error">
+          <CardContent className="flex flex-col items-center justify-center py-12">
+            <AlertTriangle className="h-16 w-16 text-red-500 mb-4" />
+            <h2 className="text-xl font-semibold text-red-600">Audit Failed</h2>
+            <p className="text-muted-foreground mt-1">Could not run payroll audit. Please try again.</p>
+            <Button variant="outline" className="mt-4" onClick={() => refetch()} data-testid="button-retry-audit">Retry</Button>
+          </CardContent>
+        </Card>
       ) : audit ? (
         <>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

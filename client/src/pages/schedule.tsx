@@ -1122,7 +1122,7 @@ export default function SchedulePage() {
                                     <span className="text-xs text-muted-foreground">-</span>
                                   ) : cellSchedules.length > 0 ? (
                                     <div className="space-y-1">
-                                      {cellSchedules.map((s) => (
+                                      {cellSchedules.map((s: any) => (
                                         <div
                                           key={s.id}
                                           className={`group relative rounded px-1 py-0.5 text-xs cursor-pointer hover-elevate ${
@@ -1197,7 +1197,7 @@ export default function SchedulePage() {
                                         </div>
                                       ))}
                                     </div>
-                                  )}
+                                  ) : null}
                                 </TableCell>
                               );
                             })}

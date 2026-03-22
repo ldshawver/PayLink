@@ -5986,30 +5986,27 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           const email = worker.workEmail || worker.email || worker.homeEmail;
           const phone = worker.mobilePhone || worker.phone || worker.homePhone;
           const statusText = decision === "approved" ? "APPROVED" : "DENIED";
-          const noteText = reviewNote ? ` Note: ${reviewNote}` : "";
-          const { sendScheduleEmailNotification, sendScheduleSmsNotification } = await import("./notifications.js");
+          const noteText = reviewNote ? `\nNote: ${reviewNote}` : "";
+          const subject = `Time-Off Request ${statusText}`;
+          const bodyText = `Hi ${worker.firstName},\n\nYour time-off request from ${item.startDate} to ${item.endDate} has been ${statusText}.${noteText}\n\nRegards,\nPayLink`;
+          const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
           if (email) {
-            await sendScheduleEmailNotification({
-              workerName: `${worker.firstName} ${worker.lastName}`,
+            await sendShiftMarketplaceEmail({
+              recipientName: `${worker.firstName} ${worker.lastName}`,
               email,
               phone: null,
-              companyName: "Your employer",
-              shifts: [],
-              scheduleViewUrl: "",
-              customSubject: `Time-Off Request ${statusText}`,
-              customBody: `Your time-off request from ${item.startDate} to ${item.endDate} has been ${statusText}.${noteText}`,
-            } as any);
+              subject,
+              bodyText,
+            });
           }
           if (phone) {
-            await sendScheduleSmsNotification({
-              workerName: `${worker.firstName} ${worker.lastName}`,
+            await sendShiftMarketplaceSms({
+              recipientName: `${worker.firstName} ${worker.lastName}`,
               email: null,
               phone,
-              companyName: "Your employer",
-              shifts: [],
-              scheduleViewUrl: "",
-              customMessage: `Time-off request ${item.startDate}–${item.endDate}: ${statusText}.${noteText}`,
-            } as any);
+              subject,
+              bodyText: `Time-off ${item.startDate}–${item.endDate}: ${statusText}.${noteText}`,
+            });
           }
         }
       } catch (notifyErr) {
@@ -6114,7 +6111,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             const items = await storage.getPayrollItems(run.id);
             for (const item of items) {
               const worker = workers.find(wk => wk.id === item.workerId);
-              if (worker && worker.workerType === "contractor" && parseFloat(item.totalDeductions || "0") > 0) {
+              if (worker && worker.workerType === "contractor" && parseFloat(item.deductions || "0") > 0) {
                 issues.push({ severity: "error", category: "Contractor Deductions", message: `Contractor ${worker.firstName} ${worker.lastName} has deductions in payroll run ${run.periodStart}–${run.periodEnd}`, entity: `${worker.firstName} ${worker.lastName}` });
               }
             }
