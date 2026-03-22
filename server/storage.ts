@@ -76,7 +76,7 @@ import {
   workerDocuments, savedReports,
   kpiGroups, qualificationGroups, workerLanguages, workerMemberships,
   stations, secondaryWageGroups, currencies, employeeWageGroups,
-  receipts, shiftOffers,
+  receipts, shiftOffers, employeeGroupConfigs,
   payrollPaymentMethods, fundingAccounts, payrollPaymentRecords,
   type WorkerDocument, type InsertWorkerDocument,
   type SavedReport, type InsertSavedReport,
@@ -95,6 +95,7 @@ import {
   type PayrollPaymentMethod, type InsertPayrollPaymentMethod,
   type FundingAccount, type InsertFundingAccount,
   type PayrollPaymentRecord, type InsertPayrollPaymentRecord,
+  type EmployeeGroupConfig,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -458,6 +459,8 @@ export interface IStorage {
   getEmployeeWageGroups(workerId?: string): Promise<EmployeeWageGroup[]>;
   createEmployeeWageGroup(data: InsertEmployeeWageGroup): Promise<EmployeeWageGroup>;
   deleteEmployeeWageGroup(id: string): Promise<void>;
+
+  getEmployeeGroupConfigs(): Promise<EmployeeGroupConfig[]>;
 
   getSavedReports(): Promise<SavedReport[]>;
   getSavedReport(id: string): Promise<SavedReport | undefined>;
@@ -880,7 +883,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getBranches(companyId?: string): Promise<Branch[]> {
-    if (companyId) return db.select().from(branches).where(eq(branches.companyId, companyId)).orderBy(branches.name);
+    if (companyId) return db.select().from(branches).where(or(eq(branches.companyId, companyId), isNull(branches.companyId))).orderBy(branches.name);
     return db.select().from(branches).orderBy(branches.name);
   }
   async createBranch(data: InsertBranch): Promise<Branch> {
@@ -1292,7 +1295,9 @@ export class DatabaseStorage implements IStorage {
 
   async getEmployeeTitles(companyId?: string): Promise<EmployeeTitle[]> {
     if (companyId) {
-      return db.select().from(employeeTitles).where(eq(employeeTitles.companyId, companyId)).orderBy(employeeTitles.name);
+      return db.select().from(employeeTitles).where(
+        or(eq(employeeTitles.companyId, companyId), isNull(employeeTitles.companyId))
+      ).orderBy(employeeTitles.name);
     }
     return db.select().from(employeeTitles).orderBy(employeeTitles.name);
   }
@@ -1631,7 +1636,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getDivisions(companyId?: string): Promise<Division[]> {
-    if (companyId) return db.select().from(divisions).where(eq(divisions.companyId, companyId)).orderBy(divisions.name);
+    if (companyId) return db.select().from(divisions).where(or(eq(divisions.companyId, companyId), isNull(divisions.companyId))).orderBy(divisions.name);
     return db.select().from(divisions).orderBy(divisions.name);
   }
   async createDivision(data: InsertDivision): Promise<Division> {
@@ -1663,7 +1668,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getCostCenters(companyId?: string): Promise<CostCenter[]> {
-    if (companyId) return db.select().from(costCenters).where(eq(costCenters.companyId, companyId)).orderBy(costCenters.name);
+    if (companyId) return db.select().from(costCenters).where(or(eq(costCenters.companyId, companyId), isNull(costCenters.companyId))).orderBy(costCenters.name);
     return db.select().from(costCenters).orderBy(costCenters.name);
   }
   async createCostCenter(data: InsertCostCenter): Promise<CostCenter> {
@@ -1937,7 +1942,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getSecondaryWageGroups(companyId?: string): Promise<SecondaryWageGroup[]> {
-    if (companyId) return db.select().from(secondaryWageGroups).where(eq(secondaryWageGroups.companyId, companyId)).orderBy(secondaryWageGroups.name);
+    if (companyId) return db.select().from(secondaryWageGroups).where(or(eq(secondaryWageGroups.companyId, companyId), isNull(secondaryWageGroups.companyId))).orderBy(secondaryWageGroups.name);
     return db.select().from(secondaryWageGroups).orderBy(secondaryWageGroups.name);
   }
   async createSecondaryWageGroup(data: InsertSecondaryWageGroup): Promise<SecondaryWageGroup> {
@@ -1953,7 +1958,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getCurrencies(companyId?: string): Promise<Currency[]> {
-    if (companyId) return db.select().from(currencies).where(eq(currencies.companyId, companyId)).orderBy(currencies.currencyCode);
+    if (companyId) return db.select().from(currencies).where(or(eq(currencies.companyId, companyId), isNull(currencies.companyId))).orderBy(currencies.currencyCode);
     return db.select().from(currencies).orderBy(currencies.currencyCode);
   }
   async createCurrency(data: InsertCurrency): Promise<Currency> {
@@ -2077,6 +2082,10 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteSchedulePreference(id: string): Promise<void> {
     await db.delete(schedulePreferences).where(eq(schedulePreferences.id, id));
+  }
+
+  async getEmployeeGroupConfigs(): Promise<EmployeeGroupConfig[]> {
+    return db.select().from(employeeGroupConfigs).orderBy(employeeGroupConfigs.label);
   }
 }
 

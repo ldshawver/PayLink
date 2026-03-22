@@ -1,0 +1,262 @@
+I need a full audit and upgrade of the scheduling and shift marketplace system so it functions more like Schedulefly / HotSchedules style workforce scheduling, while still being scalable from small business to enterprise.
+
+Primary goal:
+Build a rules-based shift marketplace where workers only see and can request shifts they are actually eligible to pick up. The marketplace must support schedule publishing, shift exchange, approvals, alerts, permissions, and auditability.
+
+Core business rules:
+1. A marketplace shift should only be visible to an employee or contractor if they match the required eligibility rules.
+2. Minimum default eligibility rules:
+   - same company
+   - same department
+   - same branch
+   - same employee group
+3. The system should be extensible to also support:
+   - same position/role
+   - same pay class
+   - certifications/licenses
+   - no schedule conflict
+   - no leave conflict
+   - no overtime/max hours violation
+   - minimum rest-period rules
+4. A scheduled shift remains the responsibility of the originally assigned employee/contractor until:
+   - another eligible worker has requested or accepted it,
+   - all required approvals are completed,
+   - the schedule is officially updated in the system.
+5. The UI must clearly display that responsibility warning wherever a shift is listed or offered.
+
+First task: audit the current system
+Please audit the current scheduling module and provide a gap report that includes:
+- existing database tables/models related to schedules, shifts, departments, branches, worker assignments, permissions, notifications, and approvals
+- current routes/endpoints/services
+- current UI views for workers and managers
+- whether marketplace logic exists now
+- whether approval routing exists now
+- whether SMS/email alerts exist now
+- whether audit logging exists now
+- whether timekeeping/payroll sync exists now
+- current constraints and missing validation rules
+- technical debt or architecture risks
+- backward compatibility concerns
+
+Then implement the upgraded architecture below.
+
+Required features:
+
+A. Marketplace architecture
+Create a shift marketplace system with:
+- personalized eligible marketplace feed
+- posted shifts tab for original worker
+- request/claim workflow
+- shift swap workflow
+- partial coverage option
+- manager-posted open shifts
+- emergency coverage flag
+- urgent/critical priority support
+
+B. Eligibility engine
+Build a reusable eligibility engine that determines both:
+1. whether a worker can SEE a marketplace shift
+2. whether a worker can REQUEST or CLAIM it
+
+Minimum hard filters:
+- same company required
+- same department required
+- same branch required
+- same employee group required
+- active worker only
+- no overlapping schedule conflict
+- not on leave
+- no disqualifying status
+- no absolute hours cap violation
+
+Optional extensible filters:
+- same position required
+- role equivalency allowed
+- certification/license required
+- overtime threshold handling
+- minimum rest-hours
+- cost center restrictions
+- pay-grade restrictions
+
+Add an explanation output for eligibility, e.g.:
+- eligible because same company/department/branch/group and no conflicts
+- blocked because wrong branch or would exceed max hours
+
+C. Approval workflow
+Build approval workflows for shift claims and swaps with configurable routing.
+Support approval by:
+- supervisor
+- manager
+- branch manager
+- scheduler
+- company admin
+
+Allow multi-step approvals based on exception rules such as:
+- cross-branch pickup
+- overtime risk
+- role mismatch override
+- approaching start time
+- contractor/employee edge cases
+
+D. Permissions
+Implement granular permissions, not just broad roles.
+At minimum support:
+- post own shift to marketplace
+- request open shift
+- offer swap
+- approve in own department
+- approve in own branch
+- override eligibility rules
+- view all marketplace shifts in managed scope
+- edit published schedule
+- lock/unlock schedule
+- send alerts
+- view audit logs
+
+E. Alerts and communications
+Implement event-driven notifications with:
+- in-app alerts
+- email alerts
+- SMS/text alerts
+
+Events should include:
+- schedule published
+- shift posted to marketplace
+- eligible worker notified
+- request submitted
+- approval needed
+- approval granted
+- approval denied
+- shift filled
+- shift still unfilled near start time
+- original worker responsibility reminder
+- urgent coverage escalation
+
+Support user notification preferences and template management.
+
+F. UI/UX
+Build views for:
+1. worker
+   - my schedule
+   - eligible marketplace shifts
+   - my posted shifts
+   - my requests
+2. manager
+   - pending approvals
+   - open marketplace
+   - critical coverage
+   - exceptions queue
+   - audit/activity log
+
+Marketplace cards should show:
+- date/time
+- branch
+- department
+- role
+- listing type
+- urgency
+- notes
+- approval status
+- responsibility warning
+
+G. Policy language
+Display this policy in the UI when posting or requesting coverage:
+“Scheduled shifts remain the responsibility of the originally assigned employee or contractor unless and until the shift has been accepted by an eligible replacement and fully approved by an authorized supervisor or manager.”
+
+Require acknowledgment when posting a shift.
+
+H. Data model
+Add or update models/tables for:
+- shifts
+- shift_marketplace_listings
+- shift_marketplace_requests
+- eligibility_rule_sets
+- approval_workflows
+- approval_steps
+- notification_preferences
+- schedule_audit_logs
+
+Recommended fields:
+shift_marketplace_listings
+- shift_id
+- listed_by_worker_id
+- listing_type
+- eligibility_rule_set_id
+- reason
+- employee_acknowledged_responsibility
+- status
+- expires_at
+
+shift_marketplace_requests
+- listing_id
+- requesting_worker_id
+- request_type
+- proposed_shift_id nullable
+- note
+- eligibility_snapshot_json
+- conflict_snapshot_json
+- status
+
+schedule_audit_logs
+- actor_user_id
+- action_type
+- object_type
+- object_id
+- before_json
+- after_json
+- metadata_json
+
+I. Audit logging
+Create immutable logging for:
+- shift posted
+- request made
+- approval granted/denied
+- schedule changed
+- listing withdrawn
+- eligibility override
+- alert sent
+
+J. Timekeeping/payroll sync
+Ensure approved schedule changes sync cleanly to:
+- assigned shift record
+- attendance/timekeeping
+- payroll company/entity separation
+- labor costing if applicable
+
+K. Enterprise-readiness
+Architect the module so it can scale to:
+- multi-location companies
+- large branch counts
+- multiple departments
+- different employee groups
+- custom approval hierarchies
+- high notification volume
+- strong permission isolation
+
+L. Deliverables
+Please provide:
+1. audit report of current scheduling setup
+2. proposed architecture diagram or written architecture summary
+3. database migrations
+4. backend services and rule engine
+5. UI pages/components
+6. notification/event system changes
+7. permission matrix
+8. test plan and automated tests
+9. sample seed data
+10. route/API endpoint list
+11. release notes / backward compatibility notes
+
+M. Tests
+Add tests for:
+- ineligible worker cannot see shift
+- eligible worker can see and request shift
+- wrong company cannot claim shift
+- wrong department cannot claim shift
+- wrong branch cannot claim shift
+- wrong employee group cannot claim shift
+- overlapping shift blocks request
+- approval required before exchange completes
+- original worker remains responsible until approval
+- urgent alert sent near shift start
+- audit log created for every marketplace action

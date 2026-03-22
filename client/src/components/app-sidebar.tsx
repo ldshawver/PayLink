@@ -54,6 +54,7 @@ import {
   UserCircle,
   CalendarOff,
   SlidersHorizontal,
+  ShieldCheck,
 } from "lucide-react";
 import {
   Sidebar,
@@ -190,6 +191,7 @@ const navSections: NavSection[] = [
       { title: "Remittance Agencies", url: "/payroll?tab=remittance-agencies", icon: Building },
       { title: "Remittance Sources", url: "/payroll?tab=remittance-sources", icon: Globe },
       { title: "Expenses & Receipts", url: "/expenses", icon: Receipt },
+      { title: "Payroll Audit", url: "/payroll-audit", icon: ShieldCheck },
     ],
   },
   {

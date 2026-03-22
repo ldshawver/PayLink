@@ -201,6 +201,31 @@ app.use((req, res, next) => {
     await run("pay_stub_amendments.approval_status", sql`ALTER TABLE pay_stub_amendments ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'pending'`);
     await run("pay_stub_amendments.approved_by", sql`ALTER TABLE pay_stub_amendments ADD COLUMN IF NOT EXISTS approved_by VARCHAR`);
     await run("pay_stub_amendments.approved_at", sql`ALTER TABLE pay_stub_amendments ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP`);
+    await run("divisions.company_id nullable", sql`ALTER TABLE divisions ALTER COLUMN company_id DROP NOT NULL`);
+    await run("cost_centers.company_id nullable", sql`ALTER TABLE cost_centers ALTER COLUMN company_id DROP NOT NULL`);
+    await run("secondary_wage_groups.company_id nullable", sql`ALTER TABLE secondary_wage_groups ALTER COLUMN company_id DROP NOT NULL`);
+
+    await run("employee_group_configs table", sql`CREATE TABLE IF NOT EXISTS employee_group_configs (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      group_key TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL,
+      tax_form TEXT NOT NULL DEFAULT 'W-2',
+      payroll_taxes_withheld BOOLEAN NOT NULL DEFAULT TRUE,
+      employer_taxes_apply BOOLEAN NOT NULL DEFAULT TRUE,
+      time_tracking TEXT NOT NULL DEFAULT 'required',
+      overtime_eligible BOOLEAN NOT NULL DEFAULT TRUE,
+      invoice_workflow BOOLEAN NOT NULL DEFAULT FALSE,
+      distributions BOOLEAN NOT NULL DEFAULT FALSE,
+      volunteer_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+      payroll_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      year_end_doc_type TEXT NOT NULL DEFAULT 'W-2',
+      description TEXT,
+      is_active BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("workers.worker_group", sql`ALTER TABLE workers ADD COLUMN IF NOT EXISTS worker_group TEXT DEFAULT 'hourly_employee'`);
+
     await run("schedule_preferences table", sql`CREATE TABLE IF NOT EXISTS schedule_preferences (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       worker_id VARCHAR NOT NULL REFERENCES workers(id),

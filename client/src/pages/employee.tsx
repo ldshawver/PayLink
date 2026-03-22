@@ -48,6 +48,16 @@ function cleanFormData(data: Record<string, any>) {
   return cleaned;
 }
 
+const WORKER_GROUP_LABELS: Record<string, string> = {
+  hourly_employee: "Hourly Employee (W-2)",
+  salaried_employee: "Salaried Employee (W-2)",
+  hourly_contractor: "Hourly Contractor (1099)",
+  invoiced_contractor: "Invoiced Contractor (1099)",
+  shareholder_employee: "S-Corp Shareholder (W-2)",
+  owner_distribution: "Owner Distribution (K-1)",
+  volunteer: "Volunteer",
+};
+
 function getStatusBadgeVariant(status: string | null | undefined): "default" | "destructive" | "secondary" | "outline" {
   if (status === "active") return "default";
   if (status === "terminated") return "destructive";
@@ -65,6 +75,7 @@ function EmployeeTab() {
     firstName: "", middleName: "", lastName: "", email: "", phone: "",
     workerType: "employee" as "employee" | "contractor",
     contractorType: "hourly",
+    workerGroup: "hourly_employee",
     jobTitle: "", department: "", payRate: "", payType: "hourly",
     hireDate: "", companyId: "",
     status: "active", gender: "unspecified", birthDate: "", terminationDate: "",
@@ -135,6 +146,7 @@ function EmployeeTab() {
       phone: worker.phone || "",
       workerType: worker.workerType,
       contractorType: worker.contractorType || "hourly",
+      workerGroup: (worker as any).workerGroup || "hourly_employee",
       jobTitle: worker.jobTitle || "",
       department: worker.department || "",
       payRate: worker.payRate || "0",
@@ -221,27 +233,25 @@ function EmployeeTab() {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Worker Type</Label>
-              <Select value={form.workerType} onValueChange={v => setForm(f => ({ ...f, workerType: v as "employee" | "contractor", ...(v === "employee" ? { contractorType: "hourly" } : {}) }))}>
-                <SelectTrigger data-testid="select-workerType"><SelectValue /></SelectTrigger>
+              <Label>Worker Group</Label>
+              <Select value={form.workerGroup || "hourly_employee"} onValueChange={v => {
+                const isContractor = v === "hourly_contractor" || v === "invoiced_contractor";
+                const wType = isContractor ? "contractor" as const : "employee" as const;
+                const cType = v === "invoiced_contractor" ? "invoice" : "hourly";
+                setForm(f => ({ ...f, workerGroup: v, workerType: wType, contractorType: cType }));
+              }}>
+                <SelectTrigger data-testid="select-workerGroup"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="employee">Employee</SelectItem>
-                  <SelectItem value="contractor">Contractor</SelectItem>
+                  <SelectItem value="hourly_employee">Hourly Employee (W-2)</SelectItem>
+                  <SelectItem value="salaried_employee">Salaried Employee (W-2)</SelectItem>
+                  <SelectItem value="hourly_contractor">Hourly Contractor (1099)</SelectItem>
+                  <SelectItem value="invoiced_contractor">Invoiced Contractor (1099)</SelectItem>
+                  <SelectItem value="shareholder_employee">Shareholder-Employee (S-Corp W-2)</SelectItem>
+                  <SelectItem value="owner_distribution">Owner Distribution (K-1)</SelectItem>
+                  <SelectItem value="volunteer">Volunteer</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            {form.workerType === "contractor" && (
-              <div className="space-y-2">
-                <Label>Contractor Type</Label>
-                <Select value={form.contractorType || "hourly"} onValueChange={v => setForm(f => ({ ...f, contractorType: v }))}>
-                  <SelectTrigger data-testid="select-contractorType"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="hourly">Hourly (Clocks In/Out)</SelectItem>
-                    <SelectItem value="invoice">Invoice-Based</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
             <div className="space-y-2">
               <Label>Employee Number</Label>
               <Input data-testid="input-employeeNumber" value={form.employeeNumber}
@@ -630,8 +640,7 @@ function EmployeeTab() {
                     </TableCell>
                     <TableCell>
                       <Badge variant="secondary" className="text-xs" data-testid={`badge-type-${w.id}`}>
-                        {w.workerType === "employee" ? "Employee" :
-                         w.contractorType === "invoice" ? "Contractor (Invoice)" : "Contractor (Hourly)"}
+                        {WORKER_GROUP_LABELS[(w as any).workerGroup] || (w.workerType === "employee" ? "Hourly Employee" : "Hourly Contractor")}
                       </Badge>
                     </TableCell>
                     <TableCell>{w.jobTitle || "—"}</TableCell>
@@ -2862,7 +2871,7 @@ export default function EmployeePage() {
             <Users className="mr-2 h-4 w-4" />Employee
           </TabsTrigger>
           <TabsTrigger value="contacts" data-testid="tab-contacts">
-            <UserPlus className="mr-2 h-4 w-4" />Employee Contacts
+            <UserPlus className="mr-2 h-4 w-4" />Emergency Contacts
           </TabsTrigger>
           <TabsTrigger value="preferences" data-testid="tab-preferences">
             <Settings className="mr-2 h-4 w-4" />Preferences
