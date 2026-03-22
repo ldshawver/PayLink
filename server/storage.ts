@@ -78,6 +78,7 @@ import {
   stations, secondaryWageGroups, currencies, employeeWageGroups,
   receipts, shiftOffers, employeeGroupConfigs,
   payrollPaymentMethods, fundingAccounts, payrollPaymentRecords,
+  shiftMarketplaceListings, shiftMarketplaceRequests, eligibilityRuleSets, scheduleAuditLogs, notificationPreferences,
   type WorkerDocument, type InsertWorkerDocument,
   type SavedReport, type InsertSavedReport,
   type Station, type InsertStation,
@@ -96,6 +97,11 @@ import {
   type FundingAccount, type InsertFundingAccount,
   type PayrollPaymentRecord, type InsertPayrollPaymentRecord,
   type EmployeeGroupConfig,
+  type ShiftMarketplaceListing, type InsertShiftMarketplaceListing,
+  type ShiftMarketplaceRequest, type InsertShiftMarketplaceRequest,
+  type EligibilityRuleSet, type InsertEligibilityRuleSet,
+  type ScheduleAuditLog, type InsertScheduleAuditLog,
+  type NotificationPreference, type InsertNotificationPreference,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -769,6 +775,20 @@ export class DatabaseStorage implements IStorage {
           department: r.department, jobId: null, status: r.status,
           note: r.note, createdAt: r.created_at,
         })) as Schedule[];
+      }
+      throw e;
+    }
+  }
+  async getSchedule(id: string): Promise<Schedule | undefined> {
+    try {
+      const [r] = await db.select().from(schedules).where(eq(schedules.id, id));
+      return r;
+    } catch (e: any) {
+      if (e.code === "42703" || String(e.message).includes("does not exist")) {
+        const result = await db.execute(sql`SELECT id, worker_id, company_id, date, start_time, end_time, department, status, note, created_at, NULL::varchar as job_id FROM schedules WHERE id = ${id} LIMIT 1`);
+        if (result.rows.length === 0) return undefined;
+        const r: any = result.rows[0];
+        return { id: r.id, workerId: r.worker_id, companyId: r.company_id, date: r.date, startTime: r.start_time, endTime: r.end_time, department: r.department, jobId: null, status: r.status, note: r.note, createdAt: r.created_at } as Schedule;
       }
       throw e;
     }
@@ -2086,6 +2106,97 @@ export class DatabaseStorage implements IStorage {
 
   async getEmployeeGroupConfigs(): Promise<EmployeeGroupConfig[]> {
     return db.select().from(employeeGroupConfigs).orderBy(employeeGroupConfigs.label);
+  }
+
+  async getMarketplaceListings(companyId?: string, status?: string): Promise<ShiftMarketplaceListing[]> {
+    const conditions: any[] = [];
+    if (companyId) conditions.push(eq(shiftMarketplaceListings.companyId, companyId));
+    if (status) conditions.push(eq(shiftMarketplaceListings.status, status));
+    if (conditions.length > 0) return db.select().from(shiftMarketplaceListings).where(and(...conditions)).orderBy(desc(shiftMarketplaceListings.createdAt));
+    return db.select().from(shiftMarketplaceListings).orderBy(desc(shiftMarketplaceListings.createdAt));
+  }
+  async getMarketplaceListing(id: string): Promise<ShiftMarketplaceListing | undefined> {
+    const [r] = await db.select().from(shiftMarketplaceListings).where(eq(shiftMarketplaceListings.id, id));
+    return r;
+  }
+  async createMarketplaceListing(data: InsertShiftMarketplaceListing): Promise<ShiftMarketplaceListing> {
+    const [r] = await db.insert(shiftMarketplaceListings).values(data).returning();
+    return r;
+  }
+  async updateMarketplaceListing(id: string, data: Partial<ShiftMarketplaceListing>): Promise<ShiftMarketplaceListing | undefined> {
+    const [r] = await db.update(shiftMarketplaceListings).set({ ...data, updatedAt: new Date() }).where(eq(shiftMarketplaceListings.id, id)).returning();
+    return r;
+  }
+
+  async getMarketplaceRequests(listingId?: string, workerId?: string): Promise<ShiftMarketplaceRequest[]> {
+    const conditions: any[] = [];
+    if (listingId) conditions.push(eq(shiftMarketplaceRequests.listingId, listingId));
+    if (workerId) conditions.push(eq(shiftMarketplaceRequests.requestingWorkerId, workerId));
+    if (conditions.length > 0) return db.select().from(shiftMarketplaceRequests).where(and(...conditions)).orderBy(desc(shiftMarketplaceRequests.createdAt));
+    return db.select().from(shiftMarketplaceRequests).orderBy(desc(shiftMarketplaceRequests.createdAt));
+  }
+  async getMarketplaceRequest(id: string): Promise<ShiftMarketplaceRequest | undefined> {
+    const [r] = await db.select().from(shiftMarketplaceRequests).where(eq(shiftMarketplaceRequests.id, id));
+    return r;
+  }
+  async createMarketplaceRequest(data: InsertShiftMarketplaceRequest): Promise<ShiftMarketplaceRequest> {
+    const [r] = await db.insert(shiftMarketplaceRequests).values(data).returning();
+    return r;
+  }
+  async updateMarketplaceRequest(id: string, data: Partial<ShiftMarketplaceRequest>): Promise<ShiftMarketplaceRequest | undefined> {
+    const [r] = await db.update(shiftMarketplaceRequests).set({ ...data, updatedAt: new Date() }).where(eq(shiftMarketplaceRequests.id, id)).returning();
+    return r;
+  }
+
+  async getEligibilityRuleSets(companyId?: string): Promise<EligibilityRuleSet[]> {
+    const conditions: any[] = [];
+    if (companyId) conditions.push(or(eq(eligibilityRuleSets.companyId, companyId), isNull(eligibilityRuleSets.companyId)));
+    if (conditions.length > 0) return db.select().from(eligibilityRuleSets).where(and(...conditions));
+    return db.select().from(eligibilityRuleSets);
+  }
+  async getEligibilityRuleSet(id: string): Promise<EligibilityRuleSet | undefined> {
+    const [r] = await db.select().from(eligibilityRuleSets).where(eq(eligibilityRuleSets.id, id));
+    return r;
+  }
+  async createEligibilityRuleSet(data: InsertEligibilityRuleSet): Promise<EligibilityRuleSet> {
+    const [r] = await db.insert(eligibilityRuleSets).values(data).returning();
+    return r;
+  }
+  async updateEligibilityRuleSet(id: string, data: Partial<EligibilityRuleSet>): Promise<EligibilityRuleSet | undefined> {
+    const [r] = await db.update(eligibilityRuleSets).set(data).where(eq(eligibilityRuleSets.id, id)).returning();
+    return r;
+  }
+  async deleteEligibilityRuleSet(id: string): Promise<void> {
+    await db.delete(eligibilityRuleSets).where(eq(eligibilityRuleSets.id, id));
+  }
+
+  async getScheduleAuditLogs(companyId?: string, limit?: number): Promise<ScheduleAuditLog[]> {
+    const conditions: any[] = [];
+    if (companyId) conditions.push(eq(scheduleAuditLogs.companyId, companyId));
+    const query = conditions.length > 0
+      ? db.select().from(scheduleAuditLogs).where(and(...conditions)).orderBy(desc(scheduleAuditLogs.createdAt))
+      : db.select().from(scheduleAuditLogs).orderBy(desc(scheduleAuditLogs.createdAt));
+    if (limit) return query.limit(limit);
+    return query.limit(500);
+  }
+  async createScheduleAuditLog(data: InsertScheduleAuditLog): Promise<ScheduleAuditLog> {
+    const [r] = await db.insert(scheduleAuditLogs).values(data).returning();
+    return r;
+  }
+
+  async getNotificationPreferences(workerId: string): Promise<NotificationPreference[]> {
+    return db.select().from(notificationPreferences).where(eq(notificationPreferences.workerId, workerId));
+  }
+  async upsertNotificationPreference(data: InsertNotificationPreference): Promise<NotificationPreference> {
+    const existing = await db.select().from(notificationPreferences).where(
+      and(eq(notificationPreferences.workerId, data.workerId), eq(notificationPreferences.eventType, data.eventType))
+    );
+    if (existing.length > 0) {
+      const [r] = await db.update(notificationPreferences).set({ ...data, updatedAt: new Date() }).where(eq(notificationPreferences.id, existing[0].id)).returning();
+      return r;
+    }
+    const [r] = await db.insert(notificationPreferences).values(data).returning();
+    return r;
   }
 }
 

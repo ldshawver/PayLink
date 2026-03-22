@@ -35,6 +35,22 @@ const documentUpload = multer({
   },
 });
 
+function getWeekStart(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  const day = dt.getDay();
+  dt.setDate(dt.getDate() - day);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+
+function getWeekEnd(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  const day = dt.getDay();
+  dt.setDate(dt.getDate() + (6 - day));
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.session?.userId) {
     return res.status(401).json({ message: "Not authenticated" });
@@ -6131,6 +6147,324 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       console.error("Payroll audit error:", error);
       res.status(500).json({ message: "Failed to run payroll audit" });
     }
+  });
+
+  // ── Shift Marketplace Listings ────────────────────────────────────────────
+  app.get("/api/marketplace/listings", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const status = req.query.status as string | undefined;
+      const listings = await storage.getMarketplaceListings(companyId, status);
+      res.json(listings);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch marketplace listings" }); }
+  });
+
+  app.get("/api/marketplace/listings/:id", requireAuth, async (req, res) => {
+    try {
+      const listing = await storage.getMarketplaceListing(req.params.id);
+      if (!listing) return res.status(404).json({ message: "Not found" });
+      res.json(listing);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch listing" }); }
+  });
+
+  app.post("/api/marketplace/listings", requireAuth, async (req, res) => {
+    try {
+      const data = req.body;
+      if (!data.scheduleId || !data.companyId) {
+        return res.status(400).json({ message: "scheduleId and companyId required" });
+      }
+      if (!data.employeeAcknowledgedResponsibility) {
+        return res.status(400).json({ message: "Employee must acknowledge responsibility before posting" });
+      }
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
+      data.listedByWorkerId = user.workerId;
+      const listing = await storage.createMarketplaceListing(data);
+
+      await storage.createScheduleAuditLog({
+        companyId: listing.companyId,
+        actorUserId: req.session.userId,
+        actionType: "listing_created",
+        objectType: "marketplace_listing",
+        objectId: listing.id,
+        afterJson: JSON.stringify(listing),
+      });
+
+      res.status(201).json(listing);
+    } catch (e) { res.status(500).json({ message: "Failed to create listing" }); }
+  });
+
+  app.patch("/api/marketplace/listings/:id", requireAuth, async (req, res) => {
+    try {
+      const existing = await storage.getMarketplaceListing(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const isOwner = user?.workerId === existing.listedByWorkerId;
+      const isManager = user?.role === "admin" || user?.role === "manager";
+      if (!isOwner && !isManager) return res.status(403).json({ message: "Not authorized" });
+      const listing = await storage.updateMarketplaceListing(req.params.id, req.body);
+      if (!listing) return res.status(404).json({ message: "Not found" });
+
+      await storage.createScheduleAuditLog({
+        companyId: listing.companyId,
+        actorUserId: req.session.userId,
+        actionType: req.body.status === "withdrawn" ? "listing_withdrawn" : "listing_updated",
+        objectType: "marketplace_listing",
+        objectId: listing.id,
+        afterJson: JSON.stringify(listing),
+      });
+
+      res.json(listing);
+    } catch (e) { res.status(500).json({ message: "Failed to update listing" }); }
+  });
+
+  // ── Shift Marketplace Requests ──────────────────────────────────────────
+  app.get("/api/marketplace/requests", requireAuth, async (req, res) => {
+    try {
+      const listingId = req.query.listingId as string | undefined;
+      const workerId = req.query.workerId as string | undefined;
+      const requests = await storage.getMarketplaceRequests(listingId, workerId);
+      res.json(requests);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch marketplace requests" }); }
+  });
+
+  app.post("/api/marketplace/requests", requireAuth, async (req, res) => {
+    try {
+      const data = req.body;
+      if (!data.listingId) {
+        return res.status(400).json({ message: "listingId required" });
+      }
+      const reqUser = await storage.getUser(req.session.userId!);
+      if (!reqUser?.workerId) return res.status(403).json({ message: "No linked worker" });
+      data.requestingWorkerId = reqUser.workerId;
+
+      const listing = await storage.getMarketplaceListing(data.listingId);
+      if (!listing) return res.status(404).json({ message: "Listing not found" });
+      if (listing.status !== "open") return res.status(400).json({ message: "Listing is no longer open" });
+      if (listing.listedByWorkerId === data.requestingWorkerId) return res.status(400).json({ message: "Cannot request your own listing" });
+
+      const { evaluateEligibility } = await import("./eligibility.js");
+      const candidate = await storage.getWorker(data.requestingWorkerId);
+      const lister = await storage.getWorker(listing.listedByWorkerId);
+      const schedule = await storage.getSchedule(listing.scheduleId);
+      if (!candidate || !lister || !schedule) return res.status(404).json({ message: "Related data not found" });
+
+      const candidateSchedules = (await storage.getSchedules(candidate.companyId || undefined)).filter(
+        s => s.workerId === candidate.id
+      );
+      const candidateTimeOff = await storage.getTimeOffRequests(candidate.companyId || undefined, candidate.id);
+
+      const weekStart = getWeekStart(schedule.date);
+      const weekEnd = getWeekEnd(schedule.date);
+      const weekSchedules = candidateSchedules.filter(s => s.date >= weekStart && s.date <= weekEnd);
+      const weeklyHours = weekSchedules.reduce((sum, s) => {
+        const [sh, sm] = s.startTime.split(":").map(Number);
+        const [eh, em] = s.endTime.split(":").map(Number);
+        let h = (eh * 60 + em - sh * 60 - sm) / 60;
+        if (h < 0) h += 24;
+        return sum + h;
+      }, 0);
+
+      let ruleSet = null;
+      if (listing.eligibilityRuleSetId) {
+        ruleSet = await storage.getEligibilityRuleSet(listing.eligibilityRuleSetId) ?? null;
+      }
+
+      const eligibility = evaluateEligibility({
+        candidateWorker: candidate,
+        listingWorker: lister,
+        schedule,
+        ruleSet,
+        candidateSchedules,
+        candidateTimeOff: candidateTimeOff.map(t => ({ startDate: t.startDate, endDate: t.endDate, status: t.status })),
+        candidateWeeklyHours: weeklyHours,
+      });
+
+      if (!eligibility.eligible) {
+        return res.status(403).json({
+          message: "Not eligible for this shift",
+          eligibility,
+        });
+      }
+
+      const request = await storage.createMarketplaceRequest({
+        ...data,
+        eligibilitySnapshotJson: JSON.stringify(eligibility),
+        status: "pending",
+      });
+
+      await storage.createScheduleAuditLog({
+        companyId: listing.companyId,
+        actorUserId: req.session.userId,
+        actionType: "request_created",
+        objectType: "marketplace_request",
+        objectId: request.id,
+        afterJson: JSON.stringify(request),
+        metadataJson: JSON.stringify(eligibility),
+      });
+
+      res.status(201).json({ request, eligibility });
+    } catch (e) {
+      console.error("Marketplace request error:", e);
+      res.status(500).json({ message: "Failed to create request" });
+    }
+  });
+
+  app.patch("/api/marketplace/requests/:id/review", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { decision, reviewNote } = req.body;
+      if (!decision || !["approved", "denied"].includes(decision)) return res.status(400).json({ message: "decision must be 'approved' or 'denied'" });
+
+      const request = await storage.getMarketplaceRequest(req.params.id);
+      if (!request) return res.status(404).json({ message: "Not found" });
+      if (request.status !== "pending") return res.status(409).json({ message: "Request already reviewed" });
+
+      const listing = await storage.getMarketplaceListing(request.listingId);
+      if (!listing) return res.status(404).json({ message: "Listing not found" });
+      if (decision === "approved" && listing.status !== "open") return res.status(409).json({ message: "Listing is no longer open" });
+
+      const updated = await storage.updateMarketplaceRequest(req.params.id, {
+        status: decision,
+        reviewedBy: req.session.userId,
+        reviewedAt: new Date(),
+        reviewNote: reviewNote ?? null,
+      });
+
+      if (decision === "approved") {
+        await storage.updateMarketplaceListing(listing.id, {
+          status: "filled",
+          filledByWorkerId: request.requestingWorkerId,
+          filledAt: new Date(),
+          approvedBy: req.session.userId,
+          approvedAt: new Date(),
+        });
+
+        const schedule = await storage.getSchedule(listing.scheduleId);
+        if (schedule) {
+          await storage.updateSchedule(listing.scheduleId, {
+            workerId: request.requestingWorkerId,
+          });
+        }
+      }
+
+      await storage.createScheduleAuditLog({
+        companyId: listing.companyId,
+        actorUserId: req.session.userId,
+        actionType: decision === "approved" ? "request_approved" : "request_denied",
+        objectType: "marketplace_request",
+        objectId: req.params.id,
+        afterJson: JSON.stringify(updated),
+        metadataJson: JSON.stringify({ reviewNote }),
+      });
+
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to review request" }); }
+  });
+
+  // ── Eligibility Check (preview) ─────────────────────────────────────────
+  app.post("/api/marketplace/eligibility-check", requireAuth, async (req, res) => {
+    try {
+      const { listingId, workerId } = req.body;
+      if (!listingId || !workerId) return res.status(400).json({ message: "listingId and workerId required" });
+
+      const listing = await storage.getMarketplaceListing(listingId);
+      if (!listing) return res.status(404).json({ message: "Listing not found" });
+
+      const { evaluateEligibility } = await import("./eligibility.js");
+      const candidate = await storage.getWorker(workerId);
+      const lister = await storage.getWorker(listing.listedByWorkerId);
+      const schedule = await storage.getSchedule(listing.scheduleId);
+      if (!candidate || !lister || !schedule) return res.status(404).json({ message: "Related data not found" });
+
+      const candidateSchedules = (await storage.getSchedules(candidate.companyId || undefined)).filter(
+        s => s.workerId === candidate.id
+      );
+      const candidateTimeOff = await storage.getTimeOffRequests(candidate.companyId || undefined, candidate.id);
+
+      const weekStart = getWeekStart(schedule.date);
+      const weekEnd = getWeekEnd(schedule.date);
+      const weekSchedules = candidateSchedules.filter(s => s.date >= weekStart && s.date <= weekEnd);
+      const weeklyHours = weekSchedules.reduce((sum, s) => {
+        const [sh, sm] = s.startTime.split(":").map(Number);
+        const [eh, em] = s.endTime.split(":").map(Number);
+        let h = (eh * 60 + em - sh * 60 - sm) / 60;
+        if (h < 0) h += 24;
+        return sum + h;
+      }, 0);
+
+      let ruleSet = null;
+      if (listing.eligibilityRuleSetId) {
+        ruleSet = await storage.getEligibilityRuleSet(listing.eligibilityRuleSetId) ?? null;
+      }
+
+      const eligibility = evaluateEligibility({
+        candidateWorker: candidate,
+        listingWorker: lister,
+        schedule,
+        ruleSet,
+        candidateSchedules,
+        candidateTimeOff: candidateTimeOff.map(t => ({ startDate: t.startDate, endDate: t.endDate, status: t.status })),
+        candidateWeeklyHours: weeklyHours,
+      });
+
+      res.json(eligibility);
+    } catch (e) { res.status(500).json({ message: "Failed to check eligibility" }); }
+  });
+
+  // ── Eligibility Rule Sets ───────────────────────────────────────────────
+  app.get("/api/eligibility-rule-sets", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const sets = await storage.getEligibilityRuleSets(companyId);
+      res.json(sets);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch eligibility rule sets" }); }
+  });
+
+  app.post("/api/eligibility-rule-sets", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const set = await storage.createEligibilityRuleSet(req.body);
+      res.status(201).json(set);
+    } catch (e) { res.status(500).json({ message: "Failed to create eligibility rule set" }); }
+  });
+
+  app.patch("/api/eligibility-rule-sets/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const set = await storage.updateEligibilityRuleSet(req.params.id, req.body);
+      if (!set) return res.status(404).json({ message: "Not found" });
+      res.json(set);
+    } catch (e) { res.status(500).json({ message: "Failed to update eligibility rule set" }); }
+  });
+
+  app.delete("/api/eligibility-rule-sets/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      await storage.deleteEligibilityRuleSet(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete eligibility rule set" }); }
+  });
+
+  // ── Schedule Audit Logs ─────────────────────────────────────────────────
+  app.get("/api/schedule-audit-logs", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+      const logs = await storage.getScheduleAuditLogs(companyId, limit);
+      res.json(logs);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch audit logs" }); }
+  });
+
+  // ── Notification Preferences ────────────────────────────────────────────
+  app.get("/api/notification-preferences/:workerId", requireAuth, async (req, res) => {
+    try {
+      const prefs = await storage.getNotificationPreferences(req.params.workerId);
+      res.json(prefs);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch notification preferences" }); }
+  });
+
+  app.post("/api/notification-preferences", requireAuth, async (req, res) => {
+    try {
+      const pref = await storage.upsertNotificationPreference(req.body);
+      res.json(pref);
+    } catch (e) { res.status(500).json({ message: "Failed to save notification preference" }); }
   });
 
   return httpServer;
