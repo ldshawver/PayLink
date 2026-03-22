@@ -203,9 +203,9 @@ function StubSummarySection({
         padding: "0.1in 0.35in",
       }}>
         {/* LEFT SECTION: Addresses positioned for #10 double-window envelope */}
-        <div style={{ position: "absolute", left: "0.35in", top: "0.1in", width: "3.95in" }}>
-          {/* TOP WINDOW: Company return address — down 5mm, right 1cm from edge */}
-          <div style={{ fontSize: "9px", marginTop: "5mm", marginLeft: "1cm", marginBottom: "0.3in" }}>
+        <div style={{ position: "absolute", left: "0.35in", top: "0", width: "3.95in", height: "100%" }}>
+          {/* TOP WINDOW: Company return address — 22mm from top of section, 9mm from left */}
+          <div style={{ position: "absolute", top: "22mm", left: "9mm", fontSize: "9px" }}>
             <div style={{ fontWeight: "bold", fontSize: "10px", marginBottom: "2px" }}>{company.name}</div>
             {company.address && <div style={{ fontSize: "8px", lineHeight: "1.1" }}>{company.address}</div>}
             {(company.city || company.state || company.zip) && (
@@ -213,8 +213,8 @@ function StubSummarySection({
             )}
           </div>
 
-          {/* BOTTOM WINDOW: Employee mailing address — down 23mm from top, right 1cm */}
-          <div style={{ marginTop: "23mm", marginLeft: "1cm", fontSize: "10px" }}>
+          {/* BOTTOM WINDOW: Employee mailing address — 55mm from top, 15mm from left */}
+          <div style={{ position: "absolute", top: "55mm", left: "15mm", fontSize: "10px" }}>
             <div style={{ fontWeight: "bold", fontSize: "11px", marginBottom: "3px" }}>{worker.firstName} {worker.lastName}</div>
             {worker.address && <div style={{ fontSize: "9px", lineHeight: "1.1" }}>{worker.address}</div>}
             {(worker.city || worker.state || worker.zip) && (

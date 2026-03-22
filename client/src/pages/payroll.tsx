@@ -3208,14 +3208,14 @@ function CheckPreview({ templateType, config, company }: {
     <div className="border border-dashed border-muted-foreground/30 rounded overflow-hidden">
       <div className="flex h-28 relative">
         {/* LEFT: Stacked addresses — positioned for envelope windows */}
-        <div className="absolute left-0 top-0 w-1/2 text-[9px]">
-          {/* Company address: down 5mm (~4px scaled), right 1cm (~8px scaled) */}
-          <div className="mt-2 ml-3">
+        <div className="absolute left-0 top-0 w-1/2 h-full text-[9px]">
+          {/* Company address: 22mm from top, 9mm from left (scaled ~20%, so ~4px top, ~2px left) */}
+          <div className="absolute" style={{ top: "16%", left: "8px" }}>
             <p className="text-[9px] font-semibold">{coName}</p>
             <p className="text-[8px] text-muted-foreground leading-tight">{coAddr}</p>
           </div>
-          {/* Employee address: down 23mm (~18px scaled), right 1cm */}
-          <div className="mt-5 ml-3 border border-muted-foreground/20 rounded p-1 bg-white/50">
+          {/* Employee address: 55mm from top, 15mm from left (scaled) */}
+          <div className="absolute border border-muted-foreground/20 rounded p-1 bg-white/50" style={{ top: "52%", left: "14px" }}>
             <p className="text-[9px] font-bold">John Doe</p>
             <p className="text-[8px] text-muted-foreground leading-tight">456 Employee St</p>
             <p className="text-[8px] text-muted-foreground">City, ST 11111</p>
