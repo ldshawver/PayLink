@@ -238,6 +238,94 @@ app.use((req, res, next) => {
       note TEXT,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    await run("shift_marketplace_listings table", sql`CREATE TABLE IF NOT EXISTS shift_marketplace_listings (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      schedule_id VARCHAR NOT NULL REFERENCES schedules(id),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      listed_by_worker_id VARCHAR NOT NULL REFERENCES workers(id),
+      listing_type TEXT NOT NULL DEFAULT 'offer',
+      reason TEXT,
+      urgency TEXT NOT NULL DEFAULT 'normal',
+      emergency_coverage BOOLEAN NOT NULL DEFAULT FALSE,
+      employee_acknowledged_responsibility BOOLEAN NOT NULL DEFAULT FALSE,
+      eligibility_rule_set_id VARCHAR,
+      status TEXT NOT NULL DEFAULT 'open',
+      expires_at TIMESTAMP,
+      filled_by_worker_id VARCHAR,
+      filled_at TIMESTAMP,
+      approved_by VARCHAR,
+      approved_at TIMESTAMP,
+      withdrawn_at TIMESTAMP,
+      withdrawn_reason TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("shift_marketplace_requests table", sql`CREATE TABLE IF NOT EXISTS shift_marketplace_requests (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      listing_id VARCHAR NOT NULL REFERENCES shift_marketplace_listings(id),
+      requesting_worker_id VARCHAR NOT NULL REFERENCES workers(id),
+      request_type TEXT NOT NULL DEFAULT 'pickup',
+      proposed_shift_id VARCHAR,
+      note TEXT,
+      eligibility_snapshot_json TEXT,
+      conflict_snapshot_json TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      reviewed_by VARCHAR,
+      reviewed_at TIMESTAMP,
+      review_note TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("eligibility_rule_sets table", sql`CREATE TABLE IF NOT EXISTS eligibility_rule_sets (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id),
+      name TEXT NOT NULL,
+      description TEXT,
+      require_same_company BOOLEAN NOT NULL DEFAULT TRUE,
+      require_same_department BOOLEAN NOT NULL DEFAULT TRUE,
+      require_same_branch BOOLEAN NOT NULL DEFAULT TRUE,
+      require_same_employee_group BOOLEAN NOT NULL DEFAULT TRUE,
+      require_same_position BOOLEAN NOT NULL DEFAULT FALSE,
+      require_no_schedule_conflict BOOLEAN NOT NULL DEFAULT TRUE,
+      require_no_leave_conflict BOOLEAN NOT NULL DEFAULT TRUE,
+      require_active_status BOOLEAN NOT NULL DEFAULT TRUE,
+      max_weekly_hours NUMERIC,
+      min_rest_hours NUMERIC,
+      require_certifications BOOLEAN NOT NULL DEFAULT FALSE,
+      allow_overtime_pickup BOOLEAN NOT NULL DEFAULT FALSE,
+      is_default BOOLEAN NOT NULL DEFAULT FALSE,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("schedule_audit_logs table", sql`CREATE TABLE IF NOT EXISTS schedule_audit_logs (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id),
+      actor_user_id VARCHAR,
+      actor_worker_id VARCHAR,
+      action_type TEXT NOT NULL,
+      object_type TEXT NOT NULL,
+      object_id VARCHAR,
+      before_json TEXT,
+      after_json TEXT,
+      metadata_json TEXT,
+      ip_address TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("notification_preferences table", sql`CREATE TABLE IF NOT EXISTS notification_preferences (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      worker_id VARCHAR NOT NULL REFERENCES workers(id),
+      event_type TEXT NOT NULL,
+      email_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      sms_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      in_app_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");

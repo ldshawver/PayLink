@@ -136,6 +136,513 @@ function useTabParam(defaultTab: string): [string, (tab: string) => void] {
 
 type ViewMode = "day" | "week" | "month";
 
+const RESPONSIBILITY_POLICY = "Scheduled shifts remain the responsibility of the originally assigned employee or contractor unless and until the shift has been accepted by an eligible replacement and fully approved by an authorized supervisor or manager.";
+
+function MarketplaceSection({ workers, schedules, companies, departments, currentUser, isAdminOrManager, shiftOffers, claimOfferMutation, approveOfferMutation, rejectOfferMutation, withdrawOfferMutation, setRejectOfferId, setRejectNote, setRejectDialogOpen }: any) {
+  const [marketplaceSubTab, setMarketplaceSubTab] = useState("available");
+  const [postDialogOpen, setPostDialogOpen] = useState(false);
+  const [ackResponsibility, setAckResponsibility] = useState(false);
+  const [postForm, setPostForm] = useState({ scheduleId: "", reason: "", urgency: "normal", emergencyCoverage: false, listingType: "offer" });
+  const [requestDialogOpen, setRequestDialogOpen] = useState(false);
+  const [requestListingId, setRequestListingId] = useState<string | null>(null);
+  const [requestNote, setRequestNote] = useState("");
+  const { toast } = useToast();
+
+  const { data: marketplaceListings = [], refetch: refetchListings } = useQuery<any[]>({
+    queryKey: ["/api/marketplace/listings"],
+    queryFn: async () => {
+      const res = await fetch("/api/marketplace/listings", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const { data: marketplaceRequests = [] } = useQuery<any[]>({
+    queryKey: ["/api/marketplace/requests"],
+    queryFn: async () => {
+      const res = await fetch("/api/marketplace/requests", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const { data: auditLogs = [] } = useQuery<any[]>({
+    queryKey: ["/api/schedule-audit-logs"],
+    queryFn: async () => {
+      const res = await fetch("/api/schedule-audit-logs?limit=50", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: isAdminOrManager,
+  });
+
+  const postListingMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await fetch("/api/marketplace/listings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || "Failed to post");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Shift posted to marketplace" });
+      queryClient.invalidateQueries({ queryKey: ["/api/marketplace/listings"] });
+      setPostDialogOpen(false);
+      setAckResponsibility(false);
+      setPostForm({ scheduleId: "", reason: "", urgency: "normal", emergencyCoverage: false, listingType: "offer" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const requestShiftMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await fetch("/api/marketplace/requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || "Failed to request");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Shift request submitted for approval" });
+      queryClient.invalidateQueries({ queryKey: ["/api/marketplace/requests"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/marketplace/listings"] });
+      setRequestDialogOpen(false);
+      setRequestNote("");
+    },
+    onError: (e: any) => toast({ title: "Not Eligible", description: e.message, variant: "destructive" }),
+  });
+
+  const reviewRequestMutation = useMutation({
+    mutationFn: async ({ requestId, decision, reviewNote }: { requestId: string; decision: string; reviewNote?: string }) => {
+      const res = await fetch(`/api/marketplace/requests/${requestId}/review`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ decision, reviewNote }),
+      });
+      if (!res.ok) throw new Error("Failed to review");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Request reviewed" });
+      queryClient.invalidateQueries({ queryKey: ["/api/marketplace/requests"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/marketplace/listings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
+    },
+    onError: (e: any) => toast({ title: "Review failed", description: e.message, variant: "destructive" }),
+  });
+
+  const withdrawListingMutation = useMutation({
+    mutationFn: async (listingId: string) => {
+      const res = await fetch(`/api/marketplace/listings/${listingId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ status: "withdrawn", withdrawnAt: new Date().toISOString(), withdrawnReason: "Withdrawn by user" }),
+      });
+      if (!res.ok) throw new Error("Failed to withdraw");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Listing withdrawn" });
+      queryClient.invalidateQueries({ queryKey: ["/api/marketplace/listings"] });
+    },
+  });
+
+  const myWorkerSchedules = currentUser?.workerId
+    ? schedules.filter((s: any) => s.workerId === currentUser.workerId && s.status === "published" && s.date >= new Date().toISOString().split("T")[0])
+    : [];
+
+  const openListings = marketplaceListings.filter((l: any) => l.status === "open");
+  const myListings = currentUser?.workerId ? marketplaceListings.filter((l: any) => l.listedByWorkerId === currentUser.workerId) : [];
+  const myRequests = currentUser?.workerId ? marketplaceRequests.filter((r: any) => r.requestingWorkerId === currentUser.workerId) : [];
+  const pendingApprovals = marketplaceRequests.filter((r: any) => r.status === "pending");
+
+  const urgencyBadge = (u: string) => {
+    if (u === "critical") return <Badge variant="destructive">Critical</Badge>;
+    if (u === "urgent") return <Badge className="bg-orange-500 text-white">Urgent</Badge>;
+    return <Badge variant="outline">Normal</Badge>;
+  };
+
+  return (
+    <>
+      <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-4 mb-4" data-testid="marketplace-responsibility-policy">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Shift Responsibility Policy</p>
+            <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">{RESPONSIBILITY_POLICY}</p>
+          </div>
+        </div>
+      </div>
+
+      <Tabs value={marketplaceSubTab} onValueChange={setMarketplaceSubTab}>
+        <TabsList>
+          <TabsTrigger value="available" data-testid="subtab-available">
+            Available Shifts {openListings.length > 0 && <Badge className="ml-1" variant="secondary">{openListings.length}</Badge>}
+          </TabsTrigger>
+          <TabsTrigger value="my-posted" data-testid="subtab-my-posted">My Posted</TabsTrigger>
+          <TabsTrigger value="my-requests" data-testid="subtab-my-requests">My Requests</TabsTrigger>
+          {isAdminOrManager && <TabsTrigger value="approvals" data-testid="subtab-approvals">
+            Approvals {pendingApprovals.length > 0 && <Badge className="ml-1" variant="destructive">{pendingApprovals.length}</Badge>}
+          </TabsTrigger>}
+          {isAdminOrManager && <TabsTrigger value="legacy" data-testid="subtab-legacy">Legacy Offers</TabsTrigger>}
+          {isAdminOrManager && <TabsTrigger value="audit-log" data-testid="subtab-audit-log">Audit Log</TabsTrigger>}
+        </TabsList>
+
+        <TabsContent value="available" className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold">Available Marketplace Shifts</h3>
+            <Button onClick={() => setPostDialogOpen(true)} data-testid="button-post-shift">
+              <Plus className="h-4 w-4 mr-1" /> Post a Shift
+            </Button>
+          </div>
+          {openListings.length === 0 ? (
+            <Card><CardContent className="text-center py-12 text-muted-foreground">
+              <RefreshCw className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <p className="font-medium">No available marketplace shifts</p>
+              <p className="text-sm mt-1">When employees post shifts for pickup, they will appear here.</p>
+            </CardContent></Card>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {openListings.map((listing: any) => {
+                const sched = schedules.find((s: any) => s.id === listing.scheduleId);
+                const lister = workers.find((w: any) => w.id === listing.listedByWorkerId);
+                const co = companies.find((c: any) => c.id === listing.companyId);
+                return (
+                  <Card key={listing.id} className={`${listing.emergencyCoverage ? "border-red-300 dark:border-red-700" : ""}`} data-testid={`card-listing-${listing.id}`}>
+                    <CardHeader className="pb-2">
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="text-sm">{sched?.date || "—"}</CardTitle>
+                        {urgencyBadge(listing.urgency)}
+                      </div>
+                      {listing.emergencyCoverage && <Badge variant="destructive" className="w-fit text-xs">Emergency Coverage</Badge>}
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      <div className="text-sm">
+                        <span className="font-medium">{sched ? `${sched.startTime} – ${sched.endTime}` : "—"}</span>
+                        <span className="text-muted-foreground ml-2">({sched ? parseTimeToHours(sched.startTime, sched.endTime) : 0}h)</span>
+                      </div>
+                      <div className="text-xs text-muted-foreground space-y-0.5">
+                        <div>Posted by: {lister ? `${lister.firstName} ${lister.lastName}` : "—"}</div>
+                        <div>Company: {co?.name || "—"}</div>
+                        {sched?.department && <div>Department: {sched.department}</div>}
+                        {listing.reason && <div>Reason: {listing.reason}</div>}
+                      </div>
+                      <div className="bg-amber-50 dark:bg-amber-950/30 rounded p-2 text-[10px] text-amber-700 dark:text-amber-400">
+                        This shift remains the responsibility of {lister?.firstName || "the original worker"} until approved.
+                      </div>
+                      {currentUser?.workerId && currentUser.workerId !== listing.listedByWorkerId && (
+                        <Button size="sm" className="w-full" onClick={() => { setRequestListingId(listing.id); setRequestNote(""); setRequestDialogOpen(true); }} data-testid={`button-request-${listing.id}`}>
+                          Request This Shift
+                        </Button>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="my-posted" className="space-y-4">
+          <h3 className="text-lg font-semibold">My Posted Shifts</h3>
+          {myListings.length === 0 ? (
+            <Card><CardContent className="text-center py-8 text-muted-foreground">No posted shifts.</CardContent></Card>
+          ) : (
+            <Table data-testid="table-my-listings">
+              <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Time</TableHead><TableHead>Status</TableHead><TableHead>Urgency</TableHead><TableHead>Requests</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>
+              <TableBody>
+                {myListings.map((listing: any) => {
+                  const sched = schedules.find((s: any) => s.id === listing.scheduleId);
+                  const reqCount = marketplaceRequests.filter((r: any) => r.listingId === listing.id).length;
+                  return (
+                    <TableRow key={listing.id} data-testid={`row-my-listing-${listing.id}`}>
+                      <TableCell>{sched?.date || "—"}</TableCell>
+                      <TableCell>{sched ? `${sched.startTime} – ${sched.endTime}` : "—"}</TableCell>
+                      <TableCell><Badge variant={listing.status === "open" ? "outline" : listing.status === "filled" ? "default" : "secondary"}>{listing.status}</Badge></TableCell>
+                      <TableCell>{urgencyBadge(listing.urgency)}</TableCell>
+                      <TableCell>{reqCount} request(s)</TableCell>
+                      <TableCell>
+                        {listing.status === "open" && (
+                          <Button size="sm" variant="ghost" className="text-destructive" onClick={() => withdrawListingMutation.mutate(listing.id)} data-testid={`button-withdraw-listing-${listing.id}`}>
+                            Withdraw
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </TabsContent>
+
+        <TabsContent value="my-requests" className="space-y-4">
+          <h3 className="text-lg font-semibold">My Requests</h3>
+          {myRequests.length === 0 ? (
+            <Card><CardContent className="text-center py-8 text-muted-foreground">No shift requests.</CardContent></Card>
+          ) : (
+            <Table data-testid="table-my-requests">
+              <TableHeader><TableRow><TableHead>Listing</TableHead><TableHead>Status</TableHead><TableHead>Note</TableHead><TableHead>Reviewed By</TableHead></TableRow></TableHeader>
+              <TableBody>
+                {myRequests.map((req: any) => {
+                  const listing = marketplaceListings.find((l: any) => l.id === req.listingId);
+                  const sched = listing ? schedules.find((s: any) => s.id === listing.scheduleId) : null;
+                  return (
+                    <TableRow key={req.id} data-testid={`row-my-request-${req.id}`}>
+                      <TableCell>{sched ? `${sched.date} ${sched.startTime}–${sched.endTime}` : req.listingId}</TableCell>
+                      <TableCell><Badge variant={req.status === "pending" ? "outline" : req.status === "approved" ? "default" : "destructive"}>{req.status}</Badge></TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{req.note || "—"}</TableCell>
+                      <TableCell className="text-sm">{req.reviewNote || "—"}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </TabsContent>
+
+        {isAdminOrManager && (
+          <TabsContent value="approvals" className="space-y-4">
+            <h3 className="text-lg font-semibold">Pending Approvals</h3>
+            {pendingApprovals.length === 0 ? (
+              <Card><CardContent className="text-center py-8 text-muted-foreground">No pending approvals.</CardContent></Card>
+            ) : (
+              <div className="space-y-3">
+                {pendingApprovals.map((req: any) => {
+                  const listing = marketplaceListings.find((l: any) => l.id === req.listingId);
+                  const sched = listing ? schedules.find((s: any) => s.id === listing.scheduleId) : null;
+                  const requester = workers.find((w: any) => w.id === req.requestingWorkerId);
+                  const original = listing ? workers.find((w: any) => w.id === listing.listedByWorkerId) : null;
+                  let eligibility: any = null;
+                  try { eligibility = req.eligibilitySnapshotJson ? JSON.parse(req.eligibilitySnapshotJson) : null; } catch {}
+
+                  return (
+                    <Card key={req.id} data-testid={`card-approval-${req.id}`}>
+                      <CardContent className="pt-4">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <p className="font-medium">{requester ? `${requester.firstName} ${requester.lastName}` : "Unknown"} wants to pick up shift</p>
+                            <p className="text-sm text-muted-foreground">
+                              {sched ? `${sched.date} ${sched.startTime}–${sched.endTime}` : "—"} — originally assigned to {original ? `${original.firstName} ${original.lastName}` : "—"}
+                            </p>
+                            {req.note && <p className="text-sm mt-1">Note: {req.note}</p>}
+                            {eligibility && (
+                              <div className="mt-2 text-xs space-y-0.5">
+                                {eligibility.reasons?.map((r: string, i: number) => (
+                                  <div key={i} className="text-green-600 dark:text-green-400">✓ {r}</div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex gap-2">
+                            <Button size="sm" onClick={() => reviewRequestMutation.mutate({ requestId: req.id, decision: "approved" })} data-testid={`button-approve-request-${req.id}`}>
+                              <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Approve
+                            </Button>
+                            <Button size="sm" variant="destructive" onClick={() => reviewRequestMutation.mutate({ requestId: req.id, decision: "denied" })} data-testid={`button-deny-request-${req.id}`}>
+                              <XCircle className="h-3.5 w-3.5 mr-1" /> Deny
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </TabsContent>
+        )}
+
+        {isAdminOrManager && (
+          <TabsContent value="legacy" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Legacy Shift Offers</CardTitle>
+                <p className="text-xs text-muted-foreground">These are from the original shift_offers table (pre-marketplace).</p>
+              </CardHeader>
+              <CardContent>
+                {shiftOffers.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-4">No legacy offers.</p>
+                ) : (
+                  <Table data-testid="table-legacy-offers">
+                    <TableHeader><TableRow><TableHead>Offered By</TableHead><TableHead>Date</TableHead><TableHead>Time</TableHead><TableHead>Status</TableHead><TableHead>Claimed By</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      {shiftOffers.map((offer: any) => {
+                        const sched = schedules.find((s: any) => s.id === offer.scheduleId);
+                        return (
+                          <TableRow key={offer.id} data-testid={`row-legacy-${offer.id}`}>
+                            <TableCell>{getWorkerName(workers, offer.offeredByWorkerId)}</TableCell>
+                            <TableCell>{sched?.date || "—"}</TableCell>
+                            <TableCell>{sched ? `${sched.startTime}–${sched.endTime}` : "—"}</TableCell>
+                            <TableCell><Badge variant={offer.status === "open" ? "outline" : offer.status === "approved" ? "default" : "secondary"}>{offer.status}</Badge></TableCell>
+                            <TableCell>{offer.claimedByWorkerId ? getWorkerName(workers, offer.claimedByWorkerId) : "—"}</TableCell>
+                            <TableCell>
+                              <div className="flex gap-1">
+                                {offer.status === "open" && currentUser?.workerId !== offer.offeredByWorkerId && (
+                                  <Button size="sm" variant="outline" onClick={() => currentUser?.workerId && claimOfferMutation.mutate({ offerId: offer.id, workerId: currentUser.workerId })} data-testid={`button-claim-${offer.id}`}>Claim</Button>
+                                )}
+                                {offer.status === "claimed" && isAdminOrManager && (
+                                  <>
+                                    <Button size="sm" onClick={() => approveOfferMutation.mutate(offer.id)} data-testid={`button-approve-${offer.id}`}>Approve</Button>
+                                    <Button size="sm" variant="destructive" onClick={() => { setRejectOfferId(offer.id); setRejectNote(""); setRejectDialogOpen(true); }} data-testid={`button-reject-${offer.id}`}>Reject</Button>
+                                  </>
+                                )}
+                                {(offer.status === "open" || offer.status === "claimed") && (
+                                  <Button size="sm" variant="ghost" className="text-destructive" onClick={() => withdrawOfferMutation.mutate(offer.id)} data-testid={`button-withdraw-${offer.id}`}>Withdraw</Button>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+
+        {isAdminOrManager && (
+          <TabsContent value="audit-log" className="space-y-4">
+            <h3 className="text-lg font-semibold">Schedule Audit Log</h3>
+            {auditLogs.length === 0 ? (
+              <Card><CardContent className="text-center py-8 text-muted-foreground">No audit entries yet.</CardContent></Card>
+            ) : (
+              <Table data-testid="table-audit-log">
+                <TableHeader><TableRow><TableHead>Time</TableHead><TableHead>Action</TableHead><TableHead>Object</TableHead><TableHead>Actor</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {auditLogs.map((log: any) => (
+                    <TableRow key={log.id} data-testid={`row-audit-${log.id}`}>
+                      <TableCell className="text-xs">{log.createdAt ? new Date(log.createdAt).toLocaleString() : "—"}</TableCell>
+                      <TableCell><Badge variant="outline">{log.actionType}</Badge></TableCell>
+                      <TableCell className="text-xs">{log.objectType} {log.objectId?.substring(0, 8)}</TableCell>
+                      <TableCell className="text-xs">{log.actorUserId?.substring(0, 8) || "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </TabsContent>
+        )}
+      </Tabs>
+
+      <Dialog open={postDialogOpen} onOpenChange={(v) => { setPostDialogOpen(v); if (!v) { setAckResponsibility(false); setPostForm({ scheduleId: "", reason: "", urgency: "normal", emergencyCoverage: false, listingType: "offer" }); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Post Shift to Marketplace</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded p-3">
+              <p className="text-xs text-amber-700 dark:text-amber-400">{RESPONSIBILITY_POLICY}</p>
+              <label className="flex items-center gap-2 mt-3 text-sm cursor-pointer">
+                <input type="checkbox" checked={ackResponsibility} onChange={e => setAckResponsibility(e.target.checked)} data-testid="checkbox-acknowledge" />
+                I acknowledge and understand this policy
+              </label>
+            </div>
+            <div>
+              <Label>Select Shift</Label>
+              <Select value={postForm.scheduleId} onValueChange={v => setPostForm(f => ({ ...f, scheduleId: v }))}>
+                <SelectTrigger data-testid="select-post-shift"><SelectValue placeholder="Choose a shift" /></SelectTrigger>
+                <SelectContent>
+                  {myWorkerSchedules.map((s: any) => (
+                    <SelectItem key={s.id} value={s.id}>{s.date} {s.startTime}–{s.endTime}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Urgency</Label>
+              <Select value={postForm.urgency} onValueChange={v => setPostForm(f => ({ ...f, urgency: v }))}>
+                <SelectTrigger data-testid="select-post-urgency"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="normal">Normal</SelectItem>
+                  <SelectItem value="urgent">Urgent</SelectItem>
+                  <SelectItem value="critical">Critical</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Reason (optional)</Label>
+              <Textarea value={postForm.reason} onChange={e => setPostForm(f => ({ ...f, reason: e.target.value }))} placeholder="Why are you posting this shift?" data-testid="input-post-reason" rows={2} />
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={postForm.emergencyCoverage} onChange={e => setPostForm(f => ({ ...f, emergencyCoverage: e.target.checked }))} data-testid="checkbox-emergency" />
+              Emergency coverage needed
+            </label>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPostDialogOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!ackResponsibility || !postForm.scheduleId || postListingMutation.isPending}
+              data-testid="button-confirm-post"
+              onClick={() => {
+                const sched = schedules.find((s: any) => s.id === postForm.scheduleId);
+                if (!sched || !currentUser?.workerId) return;
+                postListingMutation.mutate({
+                  scheduleId: postForm.scheduleId,
+                  companyId: sched.companyId,
+                  listedByWorkerId: currentUser.workerId,
+                  listingType: postForm.listingType,
+                  reason: postForm.reason || null,
+                  urgency: postForm.urgency,
+                  emergencyCoverage: postForm.emergencyCoverage,
+                  employeeAcknowledgedResponsibility: true,
+                });
+              }}
+            >
+              {postListingMutation.isPending ? "Posting..." : "Post to Marketplace"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={requestDialogOpen} onOpenChange={(v) => { setRequestDialogOpen(v); if (!v) { setRequestListingId(null); setRequestNote(""); } }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Request Shift Pickup</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">Your eligibility will be checked automatically. A manager must approve the exchange before it is final.</p>
+            <div>
+              <Label>Note (optional)</Label>
+              <Textarea value={requestNote} onChange={e => setRequestNote(e.target.value)} placeholder="Add a note for the manager..." data-testid="input-request-note" rows={2} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRequestDialogOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!requestListingId || !currentUser?.workerId || requestShiftMutation.isPending}
+              data-testid="button-confirm-request"
+              onClick={() => {
+                if (requestListingId && currentUser?.workerId) {
+                  requestShiftMutation.mutate({
+                    listingId: requestListingId,
+                    requestingWorkerId: currentUser.workerId,
+                    requestType: "pickup",
+                    note: requestNote || null,
+                  });
+                }
+              }}
+            >
+              {requestShiftMutation.isPending ? "Checking Eligibility..." : "Submit Request"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 export default function SchedulePage() {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -1975,93 +2482,22 @@ export default function SchedulePage() {
         </TabsContent>
 
         <TabsContent value="marketplace" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <RefreshCw className="h-5 w-5" />
-                Shift Marketplace
-              </CardTitle>
-              <p className="text-sm text-muted-foreground">Employees can offer shifts for others to pick up. Managers approve swap requests here.</p>
-            </CardHeader>
-            <CardContent>
-              {shiftOffers.length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  <RefreshCw className="h-10 w-10 mx-auto mb-3 opacity-30" />
-                  <p className="font-medium">No open shift offers</p>
-                  <p className="text-sm mt-1">Employees can offer their shifts for pickup from the schedule view.</p>
-                </div>
-              ) : (
-                <Table data-testid="table-shift-offers">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Offered By</TableHead>
-                      <TableHead>Shift Date</TableHead>
-                      <TableHead>Times</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Claimed By</TableHead>
-                      <TableHead>Notes / Manager Note</TableHead>
-                      <TableHead>Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {shiftOffers.map(offer => {
-                      const schedule = schedules.find(s => s.id === offer.scheduleId);
-                      return (
-                        <TableRow key={offer.id} data-testid={`row-offer-${offer.id}`}>
-                          <TableCell className="font-medium">{getWorkerName(workers, offer.offeredByWorkerId)}</TableCell>
-                          <TableCell>{schedule?.date || "—"}</TableCell>
-                          <TableCell>{schedule ? `${schedule.startTime} – ${schedule.endTime}` : "—"}</TableCell>
-                          <TableCell>
-                            <Badge variant={
-                              offer.status === "open" ? "outline" :
-                              offer.status === "claimed" ? "secondary" :
-                              offer.status === "approved" ? "default" :
-                              offer.status === "rejected" ? "destructive" :
-                              offer.status === "withdrawn" ? "secondary" : "outline"
-                            } data-testid={`badge-offer-${offer.id}`}>
-                              {offer.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>{offer.claimedByWorkerId ? getWorkerName(workers, offer.claimedByWorkerId) : "—"}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground max-w-[200px]">
-                            {offer.notes && <div>{offer.notes}</div>}
-                            {offer.managerNote && <div className="mt-1 text-amber-600 dark:text-amber-400 font-medium">Manager: {offer.managerNote}</div>}
-                            {!offer.notes && !offer.managerNote && "—"}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex gap-1 flex-wrap">
-                              {offer.status === "open" && currentUser?.workerId !== offer.offeredByWorkerId && (
-                                <Button size="sm" variant="outline" onClick={() => currentUser?.workerId && claimOfferMutation.mutate({ offerId: offer.id, workerId: currentUser.workerId })} data-testid={`button-claim-${offer.id}`}>
-                                  Claim Shift
-                                </Button>
-                              )}
-                              {offer.status === "claimed" && (
-                                <>
-                                  <Button size="sm" onClick={() => approveOfferMutation.mutate(offer.id)} disabled={approveOfferMutation.isPending} data-testid={`button-approve-${offer.id}`}>
-                                    <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
-                                    Approve
-                                  </Button>
-                                  <Button size="sm" variant="destructive" onClick={() => { setRejectOfferId(offer.id); setRejectNote(""); setRejectDialogOpen(true); }} data-testid={`button-reject-${offer.id}`}>
-                                    <XCircle className="h-3.5 w-3.5 mr-1" />
-                                    Reject
-                                  </Button>
-                                </>
-                              )}
-                              {(offer.status === "open" || offer.status === "claimed") && (
-                                <Button size="sm" variant="ghost" className="text-destructive" onClick={() => withdrawOfferMutation.mutate(offer.id)} data-testid={`button-withdraw-${offer.id}`}>
-                                  Withdraw
-                                </Button>
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
+          <MarketplaceSection
+            workers={workers}
+            schedules={schedules}
+            companies={companies}
+            departments={departments}
+            currentUser={currentUser}
+            isAdminOrManager={isAdminOrManager}
+            shiftOffers={shiftOffers}
+            claimOfferMutation={claimOfferMutation}
+            approveOfferMutation={approveOfferMutation}
+            rejectOfferMutation={rejectOfferMutation}
+            withdrawOfferMutation={withdrawOfferMutation}
+            setRejectOfferId={setRejectOfferId}
+            setRejectNote={setRejectNote}
+            setRejectDialogOpen={setRejectDialogOpen}
+          />
         </TabsContent>
       </Tabs>
 

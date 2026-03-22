@@ -1447,3 +1447,116 @@ export const schedulePreferences = pgTable("schedule_preferences", {
 export const insertSchedulePreferenceSchema = createInsertSchema(schedulePreferences).omit({ id: true, createdAt: true });
 export type SchedulePreference = typeof schedulePreferences.$inferSelect;
 export type InsertSchedulePreference = z.infer<typeof insertSchedulePreferenceSchema>;
+
+// ── Shift Marketplace Listings ────────────────────────────────────────────
+export const shiftMarketplaceListings = pgTable("shift_marketplace_listings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  scheduleId: varchar("schedule_id").notNull().references(() => schedules.id),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  listedByWorkerId: varchar("listed_by_worker_id").notNull().references(() => workers.id),
+  listingType: text("listing_type").notNull().default("offer"),
+  reason: text("reason"),
+  urgency: text("urgency").notNull().default("normal"),
+  emergencyCoverage: boolean("emergency_coverage").notNull().default(false),
+  employeeAcknowledgedResponsibility: boolean("employee_acknowledged_responsibility").notNull().default(false),
+  eligibilityRuleSetId: varchar("eligibility_rule_set_id"),
+  status: text("status").notNull().default("open"),
+  expiresAt: timestamp("expires_at"),
+  filledByWorkerId: varchar("filled_by_worker_id"),
+  filledAt: timestamp("filled_at"),
+  approvedBy: varchar("approved_by"),
+  approvedAt: timestamp("approved_at"),
+  withdrawnAt: timestamp("withdrawn_at"),
+  withdrawnReason: text("withdrawn_reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertShiftMarketplaceListingSchema = createInsertSchema(shiftMarketplaceListings).omit({ id: true, createdAt: true, updatedAt: true, filledAt: true, approvedAt: true, withdrawnAt: true });
+export type ShiftMarketplaceListing = typeof shiftMarketplaceListings.$inferSelect;
+export type InsertShiftMarketplaceListing = z.infer<typeof insertShiftMarketplaceListingSchema>;
+
+// ── Shift Marketplace Requests ────────────────────────────────────────────
+export const shiftMarketplaceRequests = pgTable("shift_marketplace_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  listingId: varchar("listing_id").notNull().references(() => shiftMarketplaceListings.id),
+  requestingWorkerId: varchar("requesting_worker_id").notNull().references(() => workers.id),
+  requestType: text("request_type").notNull().default("pickup"),
+  proposedShiftId: varchar("proposed_shift_id"),
+  note: text("note"),
+  eligibilitySnapshotJson: text("eligibility_snapshot_json"),
+  conflictSnapshotJson: text("conflict_snapshot_json"),
+  status: text("status").notNull().default("pending"),
+  reviewedBy: varchar("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewNote: text("review_note"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertShiftMarketplaceRequestSchema = createInsertSchema(shiftMarketplaceRequests).omit({ id: true, createdAt: true, updatedAt: true, reviewedAt: true });
+export type ShiftMarketplaceRequest = typeof shiftMarketplaceRequests.$inferSelect;
+export type InsertShiftMarketplaceRequest = z.infer<typeof insertShiftMarketplaceRequestSchema>;
+
+// ── Eligibility Rule Sets ─────────────────────────────────────────────────
+export const eligibilityRuleSets = pgTable("eligibility_rule_sets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  requireSameCompany: boolean("require_same_company").notNull().default(true),
+  requireSameDepartment: boolean("require_same_department").notNull().default(true),
+  requireSameBranch: boolean("require_same_branch").notNull().default(true),
+  requireSameEmployeeGroup: boolean("require_same_employee_group").notNull().default(true),
+  requireSamePosition: boolean("require_same_position").notNull().default(false),
+  requireNoScheduleConflict: boolean("require_no_schedule_conflict").notNull().default(true),
+  requireNoLeaveConflict: boolean("require_no_leave_conflict").notNull().default(true),
+  requireActiveStatus: boolean("require_active_status").notNull().default(true),
+  maxWeeklyHours: numeric("max_weekly_hours"),
+  minRestHours: numeric("min_rest_hours"),
+  requireCertifications: boolean("require_certifications").notNull().default(false),
+  allowOvertimePickup: boolean("allow_overtime_pickup").notNull().default(false),
+  isDefault: boolean("is_default").notNull().default(false),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertEligibilityRuleSetSchema = createInsertSchema(eligibilityRuleSets).omit({ id: true, createdAt: true });
+export type EligibilityRuleSet = typeof eligibilityRuleSets.$inferSelect;
+export type InsertEligibilityRuleSet = z.infer<typeof insertEligibilityRuleSetSchema>;
+
+// ── Schedule Audit Logs ───────────────────────────────────────────────────
+export const scheduleAuditLogs = pgTable("schedule_audit_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  actorUserId: varchar("actor_user_id"),
+  actorWorkerId: varchar("actor_worker_id"),
+  actionType: text("action_type").notNull(),
+  objectType: text("object_type").notNull(),
+  objectId: varchar("object_id"),
+  beforeJson: text("before_json"),
+  afterJson: text("after_json"),
+  metadataJson: text("metadata_json"),
+  ipAddress: text("ip_address"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertScheduleAuditLogSchema = createInsertSchema(scheduleAuditLogs).omit({ id: true, createdAt: true });
+export type ScheduleAuditLog = typeof scheduleAuditLogs.$inferSelect;
+export type InsertScheduleAuditLog = z.infer<typeof insertScheduleAuditLogSchema>;
+
+// ── Notification Preferences ──────────────────────────────────────────────
+export const notificationPreferences = pgTable("notification_preferences", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  eventType: text("event_type").notNull(),
+  emailEnabled: boolean("email_enabled").notNull().default(true),
+  smsEnabled: boolean("sms_enabled").notNull().default(true),
+  inAppEnabled: boolean("in_app_enabled").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertNotificationPreferenceSchema = createInsertSchema(notificationPreferences).omit({ id: true, createdAt: true, updatedAt: true });
+export type NotificationPreference = typeof notificationPreferences.$inferSelect;
+export type InsertNotificationPreference = z.infer<typeof insertNotificationPreferenceSchema>;
