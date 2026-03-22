@@ -748,9 +748,14 @@ export async function registerRoutes(
         const rate = defaultRate;
 
         const isContractor = worker.workerType === "contractor";
-        // Contractors have NO withholding deductions — SE tax is informational only on their stub.
-        // Only employees have deductions applied.
-        const workerDeductions = isContractor ? [] : companyDeductions.filter(d => {
+        const workerGroup = (worker as any).workerGroup || (isContractor ? "hourly_contractor" : "hourly_employee");
+        const isContractorGroup = workerGroup === "hourly_contractor" || workerGroup === "invoiced_contractor";
+        const isVolunteer = workerGroup === "volunteer";
+        const isOwnerDist = workerGroup === "owner_distribution";
+
+        if (isVolunteer) continue;
+
+        const workerDeductions = (isContractor || isContractorGroup) ? [] : companyDeductions.filter(d => {
           if (!d.isActive || d.isEmployerPaid) return false;
           if (d.isReferenceOnly) return false;
           const appliesTo = d.appliesTo || "all";
@@ -1325,6 +1330,27 @@ export async function registerRoutes(
         return res.json({ published: 0, notified: 0, message: "No draft schedules found to publish" });
       }
 
+      const approvedTimeOff = await storage.getTimeOffRequests(companyId);
+      const approvedOff = approvedTimeOff.filter((r: any) => r.status === "approved");
+      const conflicts: string[] = [];
+      const allWorkersForCheck = await storage.getWorkers();
+      for (const s of targetSchedules) {
+        const schedDate = s.date;
+        for (const off of approvedOff) {
+          if (off.workerId === s.workerId && schedDate >= off.startDate && schedDate <= off.endDate) {
+            const w = allWorkersForCheck.find((x: any) => x.id === s.workerId);
+            const name = w ? `${w.firstName} ${w.lastName}` : s.workerId;
+            conflicts.push(`${name} has approved time-off on ${schedDate}`);
+          }
+        }
+      }
+      if (conflicts.length > 0) {
+        return res.status(409).json({
+          message: "Cannot publish: employees have approved time-off during scheduled shifts",
+          conflicts,
+        });
+      }
+
       // Mark all as published
       await Promise.all(targetSchedules.map((s: any) => storage.updateSchedule(s.id, { status: "published" })));
 
@@ -1513,8 +1539,13 @@ export async function registerRoutes(
         if (totalHrs === 0 && worker.payType !== "salary") continue;
 
         const isContractor = worker.workerType === "contractor";
-        // Contractors have NO withholding deductions — SE tax is informational only on their stub.
-        const workerDeds = isContractor ? [] : companyDeductions.filter(d => {
+        const workerGroup2 = (worker as any).workerGroup || (isContractor ? "hourly_contractor" : "hourly_employee");
+        const isContractorGroup2 = workerGroup2 === "hourly_contractor" || workerGroup2 === "invoiced_contractor";
+        const isVolunteer2 = workerGroup2 === "volunteer";
+
+        if (isVolunteer2) continue;
+
+        const workerDeds = (isContractor || isContractorGroup2) ? [] : companyDeductions.filter(d => {
           if (!d.isActive || d.isEmployerPaid || d.isReferenceOnly) return false;
           const appliesTo = d.appliesTo || "all";
           if (appliesTo === "contractor") return false;
@@ -4047,6 +4078,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  app.get("/api/employee-group-configs", async (req, res) => {
+    try {
+      const configs = await storage.getEmployeeGroupConfigs();
+      res.json(configs);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch employee group configs" });
+    }
+  });
+
   // Wage History
   app.get("/api/wage-history", async (req, res) => {
     try {
@@ -5938,6 +5979,43 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         reviewedAt: new Date(),
       });
       if (!item) return res.status(404).json({ message: "Not found" });
+
+      try {
+        const worker = await storage.getWorker(item.workerId);
+        if (worker) {
+          const email = worker.workEmail || worker.email || worker.homeEmail;
+          const phone = worker.mobilePhone || worker.phone || worker.homePhone;
+          const statusText = decision === "approved" ? "APPROVED" : "DENIED";
+          const noteText = reviewNote ? ` Note: ${reviewNote}` : "";
+          const { sendScheduleEmailNotification, sendScheduleSmsNotification } = await import("./notifications.js");
+          if (email) {
+            await sendScheduleEmailNotification({
+              workerName: `${worker.firstName} ${worker.lastName}`,
+              email,
+              phone: null,
+              companyName: "Your employer",
+              shifts: [],
+              scheduleViewUrl: "",
+              customSubject: `Time-Off Request ${statusText}`,
+              customBody: `Your time-off request from ${item.startDate} to ${item.endDate} has been ${statusText}.${noteText}`,
+            } as any);
+          }
+          if (phone) {
+            await sendScheduleSmsNotification({
+              workerName: `${worker.firstName} ${worker.lastName}`,
+              email: null,
+              phone,
+              companyName: "Your employer",
+              shifts: [],
+              scheduleViewUrl: "",
+              customMessage: `Time-off request ${item.startDate}–${item.endDate}: ${statusText}.${noteText}`,
+            } as any);
+          }
+        }
+      } catch (notifyErr) {
+        console.warn("Time-off review notification error:", notifyErr);
+      }
+
       res.json(item);
     } catch (e) { res.status(500).json({ message: "Failed to review time-off request" }); }
   });
@@ -5980,6 +6058,82 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await storage.deleteSchedulePreference(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete schedule preference" }); }
+  });
+
+  app.get("/api/payroll-audit", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const issues: { severity: "error" | "warning" | "info"; category: string; message: string; entity?: string }[] = [];
+
+      const companies = await storage.getCompanies();
+      const targetCompanies = companyId ? companies.filter(c => c.id === companyId) : companies;
+
+      for (const company of targetCompanies) {
+        const legalEntities = await storage.getLegalEntities(company.id);
+        if (legalEntities.length === 0) {
+          issues.push({ severity: "warning", category: "Legal Entity", message: `${company.name} has no legal entity configured`, entity: company.name });
+        }
+        for (const le of legalEntities) {
+          if (!le.ein) {
+            issues.push({ severity: "error", category: "EIN Missing", message: `Legal entity "${le.name}" under ${company.name} has no EIN`, entity: le.name });
+          }
+        }
+
+        const workers = await storage.getWorkers(company.id);
+        for (const w of workers) {
+          if (!w.ssn && w.workerType === "employee") {
+            issues.push({ severity: "warning", category: "SSN Missing", message: `Employee ${w.firstName} ${w.lastName} has no SSN on file`, entity: `${w.firstName} ${w.lastName}` });
+          }
+
+          const wg = (w as any).workerGroup || "hourly_employee";
+          const isContractorGroup = wg === "hourly_contractor" || wg === "invoiced_contractor";
+          if (w.workerType === "contractor" && !isContractorGroup) {
+            issues.push({ severity: "warning", category: "Classification Mismatch", message: `${w.firstName} ${w.lastName} is type "contractor" but group "${wg}" is not a contractor group`, entity: `${w.firstName} ${w.lastName}` });
+          }
+          if (w.workerType === "employee" && isContractorGroup) {
+            issues.push({ severity: "warning", category: "Classification Mismatch", message: `${w.firstName} ${w.lastName} is type "employee" but group "${wg}" is a contractor group`, entity: `${w.firstName} ${w.lastName}` });
+          }
+
+          if (wg === "volunteer" && w.isActive) {
+            const timeEntries = await storage.getTimeEntries(company.id);
+            const volEntries = timeEntries.filter(te => te.workerId === w.id);
+            if (volEntries.length > 0) {
+              issues.push({ severity: "info", category: "Volunteer Time", message: `Volunteer ${w.firstName} ${w.lastName} has ${volEntries.length} time entries — ensure these are not included in taxable payroll`, entity: `${w.firstName} ${w.lastName}` });
+            }
+          }
+        }
+
+        const taxes = await storage.getTaxesDeductions(company.id);
+        if (taxes.length === 0) {
+          issues.push({ severity: "error", category: "Tax Setup", message: `${company.name} has no taxes/deductions configured`, entity: company.name });
+        }
+
+        const payrollRuns = await storage.getPayrollRuns(company.id);
+        for (const run of payrollRuns) {
+          if (run.status === "processed") {
+            const items = await storage.getPayrollItems(run.id);
+            for (const item of items) {
+              const worker = workers.find(wk => wk.id === item.workerId);
+              if (worker && worker.workerType === "contractor" && parseFloat(item.totalDeductions || "0") > 0) {
+                issues.push({ severity: "error", category: "Contractor Deductions", message: `Contractor ${worker.firstName} ${worker.lastName} has deductions in payroll run ${run.periodStart}–${run.periodEnd}`, entity: `${worker.firstName} ${worker.lastName}` });
+              }
+            }
+          }
+        }
+      }
+
+      const summary = {
+        errors: issues.filter(i => i.severity === "error").length,
+        warnings: issues.filter(i => i.severity === "warning").length,
+        info: issues.filter(i => i.severity === "info").length,
+        total: issues.length,
+      };
+
+      res.json({ summary, issues });
+    } catch (error) {
+      console.error("Payroll audit error:", error);
+      res.status(500).json({ message: "Failed to run payroll audit" });
+    }
   });
 
   return httpServer;

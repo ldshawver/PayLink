@@ -2019,6 +2019,9 @@ export default function AttendancePage() {
               <CardTitle className="text-lg">Time Entries</CardTitle>
             </CardHeader>
             <CardContent className="p-0">
+              <div className="px-4 py-2 bg-blue-50 dark:bg-blue-950/30 border-b border-blue-200 dark:border-blue-800 text-sm text-blue-800 dark:text-blue-200" data-testid="text-schedule-disclaimer">
+                Employees are responsible for reporting to their scheduled shifts on time. Unapproved absences or tardiness may result in disciplinary action per company policy.
+              </div>
               <TimesheetTab />
             </CardContent>
           </Card>
@@ -2080,6 +2083,9 @@ export default function AttendancePage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
+              <div className="px-4 py-2 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800 text-sm text-amber-800 dark:text-amber-200" data-testid="text-time-off-disclaimer">
+                Submitting a time-off request does not guarantee approval. All requests are subject to manager review based on business needs and staffing requirements.
+              </div>
               <TimeOffRequestsTab />
             </CardContent>
           </Card>

@@ -302,6 +302,15 @@ export default function SchedulePage() {
     queryKey: ["/api/shift-offers"],
   });
 
+  const { data: timeOffRequests = [] } = useQuery<any[]>({
+    queryKey: ["/api/time-off-requests"],
+    queryFn: async () => {
+      const res = await fetch("/api/time-off-requests", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
   const { data: currentUser } = useQuery<any>({
     queryKey: ["/api/auth/me"],
   });
@@ -1091,9 +1100,27 @@ export default function SchedulePage() {
                                   className={`text-center p-1 ${isToday ? "bg-primary/5" : ""}`}
                                   data-testid={`cell-${worker.id}-${ds}`}
                                 >
-                                  {cellSchedules.length === 0 ? (
+                                  {(() => {
+                                    const approvedTimeOff = timeOffRequests.filter((tor: any) =>
+                                      tor.workerId === worker.id &&
+                                      tor.status === "approved" &&
+                                      ds >= tor.startDate && ds <= tor.endDate
+                                    );
+                                    if (approvedTimeOff.length > 0) {
+                                      return (
+                                        <div className="rounded px-1 py-0.5 text-xs bg-orange-100 dark:bg-orange-900/30 border border-orange-300 dark:border-orange-700" data-testid={`timeoff-${worker.id}-${ds}`}>
+                                          <div className="font-medium text-orange-700 dark:text-orange-300">TIME OFF</div>
+                                          <div className="text-[10px] text-orange-600 dark:text-orange-400">{approvedTimeOff[0].requestType || "PTO"}</div>
+                                        </div>
+                                      );
+                                    }
+                                    return null;
+                                  })()}
+                                  {cellSchedules.length === 0 && !timeOffRequests.some((tor: any) =>
+                                    tor.workerId === worker.id && tor.status === "approved" && ds >= tor.startDate && ds <= tor.endDate
+                                  ) ? (
                                     <span className="text-xs text-muted-foreground">-</span>
-                                  ) : (
+                                  ) : cellSchedules.length > 0 ? (
                                     <div className="space-y-1">
                                       {cellSchedules.map((s) => (
                                         <div

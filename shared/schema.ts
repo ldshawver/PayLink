@@ -126,6 +126,7 @@ export const workers = pgTable("workers", {
   emergencyContactName: text("emergency_contact_name"),
   emergencyContactPhone: text("emergency_contact_phone"),
   contractorType: text("contractor_type").default("hourly"),
+  workerGroup: text("worker_group").default("hourly_employee"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -236,7 +237,7 @@ export const users = pgTable("users", {
 
 export const divisions = pgTable("divisions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   description: text("description"),
   isActive: boolean("is_active").default(true),
@@ -285,7 +286,7 @@ export const positions = pgTable("positions", {
 
 export const costCenters = pgTable("cost_centers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   code: text("code"),
   description: text("description"),
@@ -1194,7 +1195,7 @@ export const stations = pgTable("stations", {
 
 export const secondaryWageGroups = pgTable("secondary_wage_groups", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: varchar("company_id").notNull().references(() => companies.id),
+  companyId: varchar("company_id").references(() => companies.id),
   name: text("name").notNull(),
   hourlyRate: numeric("hourly_rate").default("0"),
   overtimeRate: numeric("overtime_rate").default("0"),
@@ -1261,6 +1262,29 @@ export const shiftOffers = pgTable("shift_offers", {
   offeredAt: timestamp("offered_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+export const employeeGroupConfigs = pgTable("employee_group_configs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  groupKey: text("group_key").notNull().unique(),
+  label: text("label").notNull(),
+  taxForm: text("tax_form").notNull().default("W-2"),
+  payrollTaxesWithheld: boolean("payroll_taxes_withheld").notNull().default(true),
+  employerTaxesApply: boolean("employer_taxes_apply").notNull().default(true),
+  timeTracking: text("time_tracking").notNull().default("required"),
+  overtimeEligible: boolean("overtime_eligible").notNull().default(true),
+  invoiceWorkflow: boolean("invoice_workflow").notNull().default(false),
+  distributions: boolean("distributions").notNull().default(false),
+  volunteerEligible: boolean("volunteer_eligible").notNull().default(false),
+  payrollEnabled: boolean("payroll_enabled").notNull().default(true),
+  yearEndDocType: text("year_end_doc_type").notNull().default("W-2"),
+  description: text("description"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertEmployeeGroupConfigSchema = createInsertSchema(employeeGroupConfigs).omit({ id: true, createdAt: true });
+export type EmployeeGroupConfig = typeof employeeGroupConfigs.$inferSelect;
+export type InsertEmployeeGroupConfig = z.infer<typeof insertEmployeeGroupConfigSchema>;
 
 export const insertStationSchema = createInsertSchema(stations).omit({ id: true, createdAt: true });
 export const insertSecondaryWageGroupSchema = createInsertSchema(secondaryWageGroups).omit({ id: true, createdAt: true });

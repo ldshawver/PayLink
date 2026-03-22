@@ -5,7 +5,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Company, Worker, Review, Qualification, KpiGroup, QualificationGroup, WorkerLanguage, WorkerMembership } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,6 +39,10 @@ import {
   Plus,
   Trash2,
   ClipboardList,
+  Award,
+  Languages,
+  Users,
+  Briefcase,
 } from "lucide-react";
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -1568,13 +1572,9 @@ export default function HRPage() {
         <TabsList className="flex-wrap" data-testid="tabs-hr">
           <TabsTrigger value="reviews" data-testid="tab-reviews">Reviews</TabsTrigger>
           <TabsTrigger value="kpi-groups" data-testid="tab-kpi-groups">KPI Groups</TabsTrigger>
-          <TabsTrigger value="qualifications" data-testid="tab-qualifications">Qualifications</TabsTrigger>
-          <TabsTrigger value="qualification-groups" data-testid="tab-qualification-groups">Qualification Groups</TabsTrigger>
-          <TabsTrigger value="skills" data-testid="tab-skills">Skills</TabsTrigger>
+          <TabsTrigger value="skills-qualifications" data-testid="tab-skills-qualifications">Skills & Qualifications</TabsTrigger>
           <TabsTrigger value="education" data-testid="tab-education">Education</TabsTrigger>
-          <TabsTrigger value="memberships" data-testid="tab-memberships">Memberships</TabsTrigger>
           <TabsTrigger value="licenses" data-testid="tab-licenses">Licenses</TabsTrigger>
-          <TabsTrigger value="languages" data-testid="tab-languages">Languages</TabsTrigger>
         </TabsList>
 
         <TabsContent value="reviews">
@@ -1585,32 +1585,76 @@ export default function HRPage() {
           <KpiGroupsTab />
         </TabsContent>
 
-        <TabsContent value="qualifications">
-          <QualificationsTab />
-        </TabsContent>
+        <TabsContent value="skills-qualifications">
+          <div className="space-y-6">
+            <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-sm text-blue-800 dark:text-blue-200" data-testid="text-skills-instructions">
+              <p className="font-medium mb-1">Employee Skills & Qualifications</p>
+              <p>This section combines qualifications, certifications, languages, and professional memberships into a unified skills profile. Add entries for each employee to maintain a complete professional record for compliance, scheduling, and career development.</p>
+            </div>
 
-        <TabsContent value="qualification-groups">
-          <QualificationGroupsTab />
-        </TabsContent>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Award className="h-4 w-4 text-teal-600" />
+                    Qualifications & Certifications
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <QualificationsTab />
+                </CardContent>
+              </Card>
 
-        <TabsContent value="skills">
-          <SkillsTab />
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Languages className="h-4 w-4 text-teal-600" />
+                    Languages
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <LanguagesTab />
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Users className="h-4 w-4 text-teal-600" />
+                    Professional Memberships
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <MembershipsTab />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Briefcase className="h-4 w-4 text-teal-600" />
+                    Qualification Groups & Skills
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <QualificationGroupsTab />
+                  <div className="border-t">
+                    <SkillsTab />
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
         </TabsContent>
 
         <TabsContent value="education">
           <EducationTab />
         </TabsContent>
 
-        <TabsContent value="memberships">
-          <MembershipsTab />
-        </TabsContent>
-
         <TabsContent value="licenses">
           <LicensesTab />
-        </TabsContent>
-
-        <TabsContent value="languages">
-          <LanguagesTab />
         </TabsContent>
       </Tabs>
     </div>

@@ -1,6 +1,6 @@
 import { db } from "./db";
 import { eq } from "drizzle-orm";
-import { companies, workers, timeEntries, schedules, taxesDeductions, users, roles, rolePermissions, userRoles } from "@shared/schema";
+import { companies, workers, timeEntries, schedules, taxesDeductions, users, roles, rolePermissions, userRoles, employeeGroupConfigs } from "@shared/schema";
 import bcrypt from "bcrypt";
 
 const PERMISSION_RESOURCES = [
@@ -39,10 +39,13 @@ async function seedRolesAndPermissions() {
 
     const roleDefinitions = [
       { name: "System Administrator", description: "Full access to everything across the entire system", level: 1, isSystem: true },
+      { name: "Owner", description: "Company owner with full operational access", level: 1, isSystem: true },
       { name: "HR Manager", description: "Handles employee records and HR compliance", level: 2, isSystem: true },
       { name: "Payroll Manager", description: "Handles payroll processing and tax configuration", level: 2, isSystem: true },
       { name: "Department Manager", description: "Manages employees within their department", level: 3, isSystem: true },
+      { name: "Supervisor", description: "Team lead with limited management access", level: 4, isSystem: true },
       { name: "Employee", description: "Self-service access to own data", level: 5, isSystem: true },
+      { name: "Contractor", description: "External contractor with limited access", level: 6, isSystem: true },
     ];
 
     const createdRoles: Record<string, string> = {};
@@ -116,6 +119,26 @@ async function seedRolesAndPermissions() {
         permissions: none,
         system_admin: none,
       },
+      "Owner": Object.fromEntries(PERMISSION_RESOURCES.map(r => [r, r === "system_admin" ? none : full])),
+      "Supervisor": {
+        dashboard: viewOnly,
+        companies: viewOnly,
+        workers: { canView: true, canCreate: false, canEdit: false, canDelete: false, canExport: false, canApprove: false },
+        schedules: { canView: true, canCreate: true, canEdit: true, canDelete: false, canExport: false, canApprove: true },
+        payroll: viewOnly,
+        timesheets: { canView: true, canCreate: false, canEdit: false, canDelete: false, canExport: false, canApprove: true },
+        departments: viewOnly,
+        branches: viewOnly,
+        divisions: viewOnly,
+        positions: viewOnly,
+        policies: viewOnly,
+        hr: viewOnly,
+        reports: viewOnly,
+        timeclock: { canView: true, canCreate: true, canEdit: false, canDelete: false, canExport: false, canApprove: false },
+        settings: none,
+        permissions: none,
+        system_admin: none,
+      },
       "Employee": {
         dashboard: viewOnly,
         companies: none,
@@ -130,6 +153,25 @@ async function seedRolesAndPermissions() {
         policies: viewOnly,
         hr: none,
         reports: viewOnly,
+        timeclock: { canView: true, canCreate: true, canEdit: false, canDelete: false, canExport: false, canApprove: false },
+        settings: none,
+        permissions: none,
+        system_admin: none,
+      },
+      "Contractor": {
+        dashboard: viewOnly,
+        companies: none,
+        workers: none,
+        schedules: viewOnly,
+        payroll: viewOnly,
+        timesheets: viewOnly,
+        departments: none,
+        branches: none,
+        divisions: none,
+        positions: none,
+        policies: none,
+        hr: none,
+        reports: none,
         timeclock: { canView: true, canCreate: true, canEdit: false, canDelete: false, canExport: false, canApprove: false },
         settings: none,
         permissions: none,
@@ -473,5 +515,128 @@ export async function seedDatabase() {
     },
   ]);
 
+  await seedEmployeeGroupConfigs();
+
   console.log("Database seeded successfully");
+}
+
+async function seedEmployeeGroupConfigs() {
+  try {
+    const existing = await db.select().from(employeeGroupConfigs);
+    if (existing.length > 0) {
+      console.log("Employee group configs already seeded, skipping");
+      return;
+    }
+
+    await db.insert(employeeGroupConfigs).values([
+      {
+        groupKey: "hourly_employee",
+        label: "Hourly Employee (W-2)",
+        taxForm: "W-2",
+        payrollTaxesWithheld: true,
+        employerTaxesApply: true,
+        timeTracking: "required",
+        overtimeEligible: true,
+        invoiceWorkflow: false,
+        distributions: false,
+        volunteerEligible: false,
+        payrollEnabled: true,
+        yearEndDocType: "W-2",
+        description: "Standard hourly W-2 employee with time tracking and overtime",
+      },
+      {
+        groupKey: "salaried_employee",
+        label: "Salaried Employee (W-2)",
+        taxForm: "W-2",
+        payrollTaxesWithheld: true,
+        employerTaxesApply: true,
+        timeTracking: "optional",
+        overtimeEligible: false,
+        invoiceWorkflow: false,
+        distributions: false,
+        volunteerEligible: false,
+        payrollEnabled: true,
+        yearEndDocType: "W-2",
+        description: "Salaried W-2 employee, exempt from overtime",
+      },
+      {
+        groupKey: "hourly_contractor",
+        label: "Hourly Contractor (1099)",
+        taxForm: "1099-NEC",
+        payrollTaxesWithheld: false,
+        employerTaxesApply: false,
+        timeTracking: "required",
+        overtimeEligible: false,
+        invoiceWorkflow: false,
+        distributions: false,
+        volunteerEligible: false,
+        payrollEnabled: true,
+        yearEndDocType: "1099-NEC",
+        description: "Hourly contractor paid by time tracked, no tax withholding",
+      },
+      {
+        groupKey: "invoiced_contractor",
+        label: "Invoiced Contractor (1099)",
+        taxForm: "1099-NEC",
+        payrollTaxesWithheld: false,
+        employerTaxesApply: false,
+        timeTracking: "optional",
+        overtimeEligible: false,
+        invoiceWorkflow: true,
+        distributions: false,
+        volunteerEligible: false,
+        payrollEnabled: true,
+        yearEndDocType: "1099-NEC",
+        description: "Contractor paid by invoice, no tax withholding",
+      },
+      {
+        groupKey: "shareholder_employee",
+        label: "Shareholder-Employee (S-Corp W-2)",
+        taxForm: "W-2",
+        payrollTaxesWithheld: true,
+        employerTaxesApply: true,
+        timeTracking: "optional",
+        overtimeEligible: false,
+        invoiceWorkflow: false,
+        distributions: true,
+        volunteerEligible: false,
+        payrollEnabled: true,
+        yearEndDocType: "W-2",
+        description: "S-Corp shareholder receiving reasonable salary plus distributions",
+      },
+      {
+        groupKey: "owner_distribution",
+        label: "Owner Distribution (K-1)",
+        taxForm: "K-1",
+        payrollTaxesWithheld: false,
+        employerTaxesApply: false,
+        timeTracking: "optional",
+        overtimeEligible: false,
+        invoiceWorkflow: false,
+        distributions: true,
+        volunteerEligible: false,
+        payrollEnabled: false,
+        yearEndDocType: "K-1",
+        description: "Owner receiving distributions only, not on payroll",
+      },
+      {
+        groupKey: "volunteer",
+        label: "Volunteer",
+        taxForm: "none",
+        payrollTaxesWithheld: false,
+        employerTaxesApply: false,
+        timeTracking: "optional",
+        overtimeEligible: false,
+        invoiceWorkflow: false,
+        distributions: false,
+        volunteerEligible: true,
+        payrollEnabled: false,
+        yearEndDocType: "none",
+        description: "Unpaid volunteer, time tracked for reporting only",
+      },
+    ]);
+    console.log("Employee group configs seeded");
+  } catch (e) {
+    console.log("Could not seed employee group configs:", e);
+  }
 }
