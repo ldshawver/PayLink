@@ -127,11 +127,15 @@ export async function registerRoutes(
       return res.status(401).json({ message: "User not found" });
     }
     let workerInfo = null;
+    let workerType = null;
     if (user.workerId) {
       const w = await storage.getWorker(user.workerId);
-      if (w) workerInfo = { id: w.id, firstName: w.firstName, lastName: w.lastName, companyId: w.companyId };
+      if (w) {
+        workerInfo = { id: w.id, firstName: w.firstName, lastName: w.lastName, companyId: w.companyId };
+        workerType = w.workerType;
+      }
     }
-    res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
+    res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, workerType, worker: workerInfo });
   });
 
   app.post("/api/auth/pin-login", async (req, res) => {
@@ -3122,6 +3126,606 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       console.error("PDF export error:", error);
       res.status(500).json({ message: "Failed to generate PDF", error: error.message });
     }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // EXPENSE MANAGEMENT MODULE
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── Expense Categories ────────────────────────────────────────────────
+  app.get("/api/expense-categories", requireAuth, async (_req, res) => {
+    try { res.json(await storage.getExpenseCategories()); }
+    catch (e) { res.status(500).json({ message: "Failed to fetch categories" }); }
+  });
+
+  app.post("/api/expense-categories", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try { res.status(201).json(await storage.createExpenseCategory(req.body)); }
+    catch (e) { res.status(500).json({ message: "Failed to create category" }); }
+  });
+
+  app.patch("/api/expense-categories/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const r = await storage.updateExpenseCategory(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: "Failed to update category" }); }
+  });
+
+  // ── Expenses CRUD ─────────────────────────────────────────────────────
+  app.get("/api/expenses", requireAuth, async (req, res) => {
+    try {
+      const { companyId, submitterId, status } = req.query as Record<string, string>;
+      const user = await storage.getUser(req.session.userId!);
+      const isManager = user?.role === "admin" || user?.role === "manager";
+      if (isManager) {
+        res.json(await storage.getExpenses(companyId, submitterId, status));
+      } else {
+        res.json(await storage.getExpenses(companyId, user?.workerId || "none", status));
+      }
+    } catch (e) { res.status(500).json({ message: "Failed to fetch expenses" }); }
+  });
+
+  app.get("/api/expenses/:id", requireAuth, async (req, res) => {
+    try {
+      const r = await storage.getExpense(req.params.id);
+      if (!r) return res.status(404).json({ message: "Not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const isManager = user?.role === "admin" || user?.role === "manager";
+      if (!isManager && user?.workerId !== r.submitterId) return res.status(403).json({ message: "Not authorized" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch expense" }); }
+  });
+
+  app.post("/api/expenses", requireAuth, async (req, res) => {
+    try {
+      const data = req.body;
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
+      data.submitterId = user.workerId;
+
+      if (!data.amount || parseFloat(data.amount) <= 0) {
+        return res.status(400).json({ message: "Positive amount required" });
+      }
+      if (!data.expenseDate) return res.status(400).json({ message: "Expense date required" });
+
+      if (data.categoryId) {
+        const cat = await storage.getExpenseCategory(data.categoryId);
+        if (cat) {
+          data.categoryName = cat.name;
+          if (cat.preapprovalRequired && !data.preapprovalReference) {
+            data.preapprovalStatus = "required";
+          }
+        }
+      }
+
+      if (data.amount && data.vendor && data.expenseDate) {
+        const crypto = await import("crypto");
+        data.duplicateHash = crypto.createHash("md5").update(`${data.submitterId}-${data.vendor}-${data.amount}-${data.expenseDate}`).digest("hex");
+      }
+
+      const expense = await storage.createExpense(data);
+
+      await storage.createExpenseApprovalAction({
+        objectType: "expense",
+        objectId: expense.id,
+        actionType: "submitted",
+        actorUserId: req.session.userId,
+        companyId: expense.companyId,
+        newStatus: expense.status,
+      });
+
+      res.status(201).json(expense);
+    } catch (e) {
+      console.error("Create expense error:", e);
+      res.status(500).json({ message: "Failed to create expense" });
+    }
+  });
+
+  app.patch("/api/expenses/:id", requireAuth, async (req, res) => {
+    try {
+      const existing = await storage.getExpense(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+
+      const user = await storage.getUser(req.session.userId!);
+      const isOwner = user?.workerId === existing.submitterId;
+      const isManager = user?.role === "admin" || user?.role === "manager";
+      if (!isOwner && !isManager) return res.status(403).json({ message: "Not authorized" });
+
+      if (existing.status === "approved" && !isManager) {
+        return res.status(403).json({ message: "Cannot edit approved expense" });
+      }
+
+      const allowedFields = ["vendor", "amount", "description", "businessPurpose", "categoryId", "categoryName",
+        "expenseDate", "paymentMethodUsed", "jobId", "costCenterId", "reimbursementRequested",
+        "preapprovalReference", "notes", "companyId"];
+      const sanitized: Record<string, any> = {};
+      for (const key of allowedFields) { if (req.body[key] !== undefined) sanitized[key] = req.body[key]; }
+
+      const r = await storage.updateExpense(req.params.id, sanitized);
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: "Failed to update expense" }); }
+  });
+
+  app.delete("/api/expenses/:id", requireAuth, async (req, res) => {
+    try {
+      const existing = await storage.getExpense(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+
+      const user = await storage.getUser(req.session.userId!);
+      const isOwner = user?.workerId === existing.submitterId;
+      if (!isOwner && user?.role !== "admin") return res.status(403).json({ message: "Not authorized" });
+      if (existing.status === "approved") return res.status(403).json({ message: "Cannot delete approved expense" });
+
+      await storage.deleteExpense(req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: "Failed to delete expense" }); }
+  });
+
+  // ── Expense Approval ──────────────────────────────────────────────────
+  app.post("/api/expenses/:id/submit", requireAuth, async (req, res) => {
+    try {
+      const expense = await storage.getExpense(req.params.id);
+      if (!expense) return res.status(404).json({ message: "Not found" });
+      if (expense.status !== "draft") return res.status(400).json({ message: "Only draft expenses can be submitted" });
+
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.workerId !== expense.submitterId) return res.status(403).json({ message: "Not your expense" });
+
+      const updated = await storage.updateExpense(req.params.id, { status: "submitted" });
+      await storage.createExpenseApprovalAction({
+        objectType: "expense", objectId: req.params.id, actionType: "submitted",
+        actorUserId: req.session.userId, companyId: expense.companyId,
+        previousStatus: "draft", newStatus: "submitted",
+      });
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to submit expense" }); }
+  });
+
+  app.post("/api/expenses/:id/approve", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const expense = await storage.getExpense(req.params.id);
+      if (!expense) return res.status(404).json({ message: "Not found" });
+      if (expense.status !== "submitted") return res.status(400).json({ message: "Only submitted expenses can be approved" });
+
+      const updated = await storage.updateExpense(req.params.id, {
+        status: "approved",
+        approvedBy: req.session.userId,
+        approvedAt: new Date(),
+      });
+
+      await storage.createExpenseApprovalAction({
+        objectType: "expense", objectId: req.params.id, actionType: "approved",
+        actorUserId: req.session.userId, companyId: expense.companyId,
+        previousStatus: "submitted", newStatus: "approved",
+        notes: req.body.notes,
+      });
+
+      if (expense.reimbursementRequested) {
+        await storage.createPayrollReimbursementItem({
+          expenseId: expense.id,
+          workerId: expense.submitterId,
+          companyId: expense.companyId,
+          amount: expense.amount,
+          isTaxable: false,
+          description: `Reimbursement: ${expense.vendor || expense.categoryName || "Expense"} - ${expense.expenseDate}`,
+          status: "pending",
+        });
+        await storage.updateExpense(req.params.id, { reimbursementStatus: "queued" });
+      }
+
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to approve expense" }); }
+  });
+
+  app.post("/api/expenses/:id/reject", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const expense = await storage.getExpense(req.params.id);
+      if (!expense) return res.status(404).json({ message: "Not found" });
+      if (expense.status !== "submitted") return res.status(400).json({ message: "Only submitted expenses can be rejected" });
+
+      const updated = await storage.updateExpense(req.params.id, {
+        status: "rejected",
+        rejectedBy: req.session.userId,
+        rejectedAt: new Date(),
+        rejectionReason: req.body.reason || null,
+      });
+
+      await storage.createExpenseApprovalAction({
+        objectType: "expense", objectId: req.params.id, actionType: "rejected",
+        actorUserId: req.session.userId, companyId: expense.companyId,
+        previousStatus: "submitted", newStatus: "rejected",
+        notes: req.body.reason,
+      });
+
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to reject expense" }); }
+  });
+
+  // ── Expense Attachments ───────────────────────────────────────────────
+  app.get("/api/expenses/:id/attachments", requireAuth, async (req, res) => {
+    try {
+      const expense = await storage.getExpense(req.params.id);
+      if (!expense) return res.status(404).json({ message: "Not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const isManager = user?.role === "admin" || user?.role === "manager";
+      if (!isManager && user?.workerId !== expense.submitterId) return res.status(403).json({ message: "Not authorized" });
+      res.json(await storage.getExpenseAttachments(req.params.id));
+    } catch (e) { res.status(500).json({ message: "Failed to fetch attachments" }); }
+  });
+
+  app.post("/api/expenses/:id/attachments", requireAuth, upload.single("file"), async (req: any, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const expense = await storage.getExpense(req.params.id);
+      if (!expense) return res.status(404).json({ message: "Not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const isManager = user?.role === "admin" || user?.role === "manager";
+      if (!isManager && user?.workerId !== expense.submitterId) return res.status(403).json({ message: "Not authorized" });
+      const attachment = await storage.createExpenseAttachment({
+        expenseId: req.params.id,
+        filePath: `/uploads/${req.file.filename}`,
+        fileName: req.file.originalname,
+        fileType: req.file.mimetype,
+        fileSize: req.file.size,
+      });
+
+      await storage.createExpenseApprovalAction({
+        objectType: "expense", objectId: req.params.id, actionType: "file_uploaded",
+        actorUserId: req.session?.userId, metadataJson: JSON.stringify({ fileName: req.file.originalname }),
+      });
+
+      res.status(201).json(attachment);
+    } catch (e) { res.status(500).json({ message: "Failed to upload attachment" }); }
+  });
+
+  // ── AI Extraction for Expenses ────────────────────────────────────────
+  app.post("/api/expenses/ai-scan", requireAuth, upload.single("file"), async (req: any, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const filePath = `/uploads/${req.file.filename}`;
+      const openaiKey = process.env.OPENAI_API_KEY;
+      if (!openaiKey) return res.status(500).json({ message: "AI not configured" });
+
+      const fs = await import("fs");
+      const base64 = fs.readFileSync(req.file.path).toString("base64");
+      const mimeType = req.file.mimetype || "image/jpeg";
+
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${openaiKey}` },
+        body: JSON.stringify({
+          model: "gpt-4o",
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: "Extract from this receipt/invoice: vendor name, date (YYYY-MM-DD), subtotal, tax amount, total amount, payment method, individual line items (description, quantity, unit price, total). Also suggest a category from: Office Supplies, Materials, Tools & Equipment, Travel, Lodging, Meals, Mileage, Fuel, Software & Subscriptions, Marketing & Advertising, Professional Services, Permits & Fees, Shipping & Postage, Utilities, Phone & Internet, Training & Education, Client Expense, Project Expense, Repair & Maintenance, Other. Return JSON: { vendor, date, subtotal, taxAmount, totalAmount, paymentMethod, category, lineItems: [{ description, quantity, unitPrice, total }], confidence }." },
+              { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
+            ],
+          }],
+          max_tokens: 1500,
+        }),
+      });
+
+      const result: any = await response.json();
+      const content = result.choices?.[0]?.message?.content || "{}";
+      let extracted;
+      try {
+        const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/) || content.match(/\{[\s\S]*\}/);
+        extracted = JSON.parse(jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : content);
+      } catch { extracted = { raw: content }; }
+
+      await storage.createExpenseApprovalAction({
+        objectType: "expense", objectId: "ai_scan", actionType: "ai_extraction",
+        actorUserId: req.session?.userId, metadataJson: JSON.stringify({ filePath, confidence: extracted.confidence }),
+      });
+
+      res.json({ extracted, filePath });
+    } catch (e) {
+      console.error("AI scan error:", e);
+      res.status(500).json({ message: "AI extraction failed" });
+    }
+  });
+
+  // ── Expense Approval Actions (audit trail) ────────────────────────────
+  app.get("/api/expenses/:id/audit", requireAuth, async (req, res) => {
+    try { res.json(await storage.getExpenseApprovalActions("expense", req.params.id)); }
+    catch (e) { res.status(500).json({ message: "Failed to fetch audit trail" }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // CONTRACTOR INVOICE MODULE
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.get("/api/contractor-invoices", requireAuth, async (req, res) => {
+    try {
+      const { companyId, contractorId, status } = req.query as Record<string, string>;
+      const user = await storage.getUser(req.session.userId!);
+      const isManager = user?.role === "admin" || user?.role === "manager";
+      if (isManager) {
+        res.json(await storage.getContractorInvoices(companyId, contractorId, status));
+      } else {
+        res.json(await storage.getContractorInvoices(companyId, user?.workerId || "none", status));
+      }
+    } catch (e) { res.status(500).json({ message: "Failed to fetch invoices" }); }
+  });
+
+  app.get("/api/contractor-invoices/:id", requireAuth, async (req, res) => {
+    try {
+      const r = await storage.getContractorInvoice(req.params.id);
+      if (!r) return res.status(404).json({ message: "Not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const isManager = user?.role === "admin" || user?.role === "manager";
+      if (!isManager && user?.workerId !== r.contractorId) return res.status(403).json({ message: "Not authorized" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch invoice" }); }
+  });
+
+  app.post("/api/contractor-invoices", requireAuth, async (req, res) => {
+    try {
+      const data = req.body;
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
+
+      const worker = await storage.getWorker(user.workerId);
+      if (!worker) return res.status(404).json({ message: "Worker not found" });
+      if (worker.workerType !== "contractor") return res.status(403).json({ message: "Only contractors can submit invoices" });
+
+      data.contractorId = user.workerId;
+
+      if (!data.amount || parseFloat(data.amount) <= 0) return res.status(400).json({ message: "Positive amount required" });
+      if (!data.invoiceDate) return res.status(400).json({ message: "Invoice date required" });
+
+      if (data.amount && data.invoiceNumber && data.invoiceDate) {
+        const crypto = await import("crypto");
+        data.duplicateHash = crypto.createHash("md5").update(`${data.contractorId}-${data.invoiceNumber}-${data.amount}-${data.invoiceDate}`).digest("hex");
+      }
+
+      const invoice = await storage.createContractorInvoice(data);
+
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_invoice", objectId: invoice.id, actionType: "submitted",
+        actorUserId: req.session.userId, companyId: invoice.companyId,
+        newStatus: invoice.status,
+      });
+
+      res.status(201).json(invoice);
+    } catch (e) {
+      console.error("Create invoice error:", e);
+      res.status(500).json({ message: "Failed to create invoice" });
+    }
+  });
+
+  app.patch("/api/contractor-invoices/:id", requireAuth, async (req, res) => {
+    try {
+      const existing = await storage.getContractorInvoice(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+
+      const user = await storage.getUser(req.session.userId!);
+      const isOwner = user?.workerId === existing.contractorId;
+      const isManager = user?.role === "admin" || user?.role === "manager";
+      if (!isOwner && !isManager) return res.status(403).json({ message: "Not authorized" });
+
+      const allowedFields = ["invoiceNumber", "invoiceDate", "dueDate", "amount", "description",
+        "proposalReference", "jobId", "costCenterId", "paymentTerms", "notes", "companyId"];
+      const sanitized: Record<string, any> = {};
+      for (const key of allowedFields) { if (req.body[key] !== undefined) sanitized[key] = req.body[key]; }
+
+      const r = await storage.updateContractorInvoice(req.params.id, sanitized);
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: "Failed to update invoice" }); }
+  });
+
+  app.post("/api/contractor-invoices/:id/submit", requireAuth, async (req, res) => {
+    try {
+      const inv = await storage.getContractorInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Not found" });
+      if (inv.status !== "draft") return res.status(400).json({ message: "Only draft invoices can be submitted" });
+
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.workerId !== inv.contractorId) return res.status(403).json({ message: "Not your invoice" });
+
+      const updated = await storage.updateContractorInvoice(req.params.id, { status: "submitted" });
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_invoice", objectId: req.params.id, actionType: "submitted",
+        actorUserId: req.session.userId, companyId: inv.companyId,
+        previousStatus: "draft", newStatus: "submitted",
+      });
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to submit invoice" }); }
+  });
+
+  app.post("/api/contractor-invoices/:id/approve", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const inv = await storage.getContractorInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Not found" });
+      if (inv.status !== "submitted") return res.status(400).json({ message: "Only submitted invoices can be approved" });
+
+      if (!inv.proposalReference && !req.body.managerOverride) {
+        return res.status(400).json({ message: "No approved proposal reference. Manager override required." });
+      }
+
+      const updated = await storage.updateContractorInvoice(req.params.id, {
+        status: "approved", approvedBy: req.session.userId, approvedAt: new Date(),
+      });
+
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_invoice", objectId: req.params.id, actionType: "approved",
+        actorUserId: req.session.userId, companyId: inv.companyId,
+        previousStatus: "submitted", newStatus: "approved",
+      });
+
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to approve invoice" }); }
+  });
+
+  app.post("/api/contractor-invoices/:id/reject", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const inv = await storage.getContractorInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Not found" });
+      if (inv.status !== "submitted") return res.status(400).json({ message: "Only submitted invoices can be rejected" });
+
+      const updated = await storage.updateContractorInvoice(req.params.id, {
+        status: "rejected", rejectedBy: req.session.userId, rejectedAt: new Date(),
+        rejectionReason: req.body.reason || null,
+      });
+
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_invoice", objectId: req.params.id, actionType: "rejected",
+        actorUserId: req.session.userId, companyId: inv.companyId,
+        previousStatus: "submitted", newStatus: "rejected",
+        notes: req.body.reason,
+      });
+
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to reject invoice" }); }
+  });
+
+  app.post("/api/contractor-invoices/:id/mark-paid", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const inv = await storage.getContractorInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Not found" });
+      if (inv.status !== "approved") return res.status(400).json({ message: "Only approved invoices can be marked paid" });
+
+      const updated = await storage.updateContractorInvoice(req.params.id, {
+        status: "paid", paidAt: new Date(), paidAmount: req.body.paidAmount || inv.amount,
+        paymentReference: req.body.paymentReference, paymentMethod: req.body.paymentMethod,
+      });
+
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_invoice", objectId: req.params.id, actionType: "paid",
+        actorUserId: req.session.userId, companyId: inv.companyId,
+        previousStatus: "approved", newStatus: "paid",
+        metadataJson: JSON.stringify({ paymentReference: req.body.paymentReference }),
+      });
+
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to mark invoice paid" }); }
+  });
+
+  // ── Contractor Invoice Attachments ────────────────────────────────────
+  app.get("/api/contractor-invoices/:id/attachments", requireAuth, async (req, res) => {
+    try {
+      const inv = await storage.getContractorInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const isManager = user?.role === "admin" || user?.role === "manager";
+      if (!isManager && user?.workerId !== inv.contractorId) return res.status(403).json({ message: "Not authorized" });
+      res.json(await storage.getContractorInvoiceAttachments(req.params.id));
+    } catch (e) { res.status(500).json({ message: "Failed" }); }
+  });
+
+  app.post("/api/contractor-invoices/:id/attachments", requireAuth, upload.single("file"), async (req: any, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file" });
+      const inv = await storage.getContractorInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const isManager = user?.role === "admin" || user?.role === "manager";
+      if (!isManager && user?.workerId !== inv.contractorId) return res.status(403).json({ message: "Not authorized" });
+      const r = await storage.createContractorInvoiceAttachment({
+        invoiceId: req.params.id, filePath: `/uploads/${req.file.filename}`,
+        fileName: req.file.originalname, fileType: req.file.mimetype, fileSize: req.file.size,
+      });
+      res.status(201).json(r);
+    } catch (e) { res.status(500).json({ message: "Failed" }); }
+  });
+
+  app.get("/api/contractor-invoices/:id/audit", requireAuth, async (req, res) => {
+    try { res.json(await storage.getExpenseApprovalActions("contractor_invoice", req.params.id)); }
+    catch (e) { res.status(500).json({ message: "Failed" }); }
+  });
+
+  // ── Recurring Expense Templates ───────────────────────────────────────
+  app.get("/api/recurring-expenses", requireAuth, async (req, res) => {
+    try { res.json(await storage.getRecurringExpenseTemplates(req.query.companyId as string)); }
+    catch (e) { res.status(500).json({ message: "Failed" }); }
+  });
+
+  app.post("/api/recurring-expenses", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker" });
+      req.body.submitterId = user.workerId;
+      res.status(201).json(await storage.createRecurringExpenseTemplate(req.body));
+    } catch (e) { res.status(500).json({ message: "Failed" }); }
+  });
+
+  app.patch("/api/recurring-expenses/:id", requireAuth, async (req, res) => {
+    try {
+      const r = await storage.updateRecurringExpenseTemplate(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: "Failed" }); }
+  });
+
+  // ── Payroll Reimbursement Items ───────────────────────────────────────
+  app.get("/api/payroll-reimbursements", requireAuth, async (req, res) => {
+    try {
+      const { workerId, payrollRunId, status } = req.query as Record<string, string>;
+      const user = await storage.getUser(req.session.userId!);
+      const isManager = user?.role === "admin" || user?.role === "manager";
+      if (isManager) {
+        res.json(await storage.getPayrollReimbursementItems(workerId, payrollRunId, status));
+      } else {
+        res.json(await storage.getPayrollReimbursementItems(user?.workerId || "none", payrollRunId, status));
+      }
+    } catch (e) { res.status(500).json({ message: "Failed" }); }
+  });
+
+  app.patch("/api/payroll-reimbursements/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const r = await storage.updatePayrollReimbursementItem(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: "Failed" }); }
+  });
+
+  // ── Accounting Export ─────────────────────────────────────────────────
+  app.get("/api/expenses/export/csv", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const allExpenses = await storage.getExpenses(req.query.companyId as string);
+      const allWorkers = await storage.getWorkers();
+      const allCompanies = await storage.getCompanies();
+
+      const rows = allExpenses.map(e => {
+        const w = allWorkers.find(w => w.id === e.submitterId);
+        const c = allCompanies.find(c => c.id === e.companyId);
+        return [
+          c?.legalName || c?.name || "", c?.name || "", e.expenseDate, e.categoryName || "",
+          e.vendor || "", e.amount, e.jobId || "", e.costCenterId || "",
+          w ? `${w.firstName} ${w.lastName}` : "", e.reimbursementRequested ? "Reimbursement" : "Company",
+          e.status, "", "", e.id,
+        ].join(",");
+      });
+
+      const csv = "Legal Entity,Company,Date,Category,Vendor,Amount,Job,Cost Center,Employee,Type,Status,Accounting Code,Reference,ID\n" + rows.join("\n");
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="expenses-export-${new Date().toISOString().split("T")[0]}.csv"`);
+      res.send(csv);
+    } catch (e) { res.status(500).json({ message: "Failed to export" }); }
+  });
+
+  app.get("/api/contractor-invoices/export/csv", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const allInvs = await storage.getContractorInvoices(req.query.companyId as string);
+      const allWorkers = await storage.getWorkers();
+      const allCompanies = await storage.getCompanies();
+
+      const rows = allInvs.map(inv => {
+        const w = allWorkers.find(w => w.id === inv.contractorId);
+        const c = allCompanies.find(c => c.id === inv.companyId);
+        return [
+          c?.legalName || c?.name || "", c?.name || "", inv.invoiceDate, inv.invoiceNumber || "",
+          w ? `${w.firstName} ${w.lastName}` : "", inv.amount, inv.jobId || "", inv.costCenterId || "",
+          inv.status, inv.is1099Reportable ? "Yes" : "No", inv.paymentReference || "", inv.id,
+        ].join(",");
+      });
+
+      const csv = "Legal Entity,Company,Date,Invoice #,Contractor,Amount,Job,Cost Center,Status,1099 Reportable,Payment Ref,ID\n" + rows.join("\n");
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="invoices-export-${new Date().toISOString().split("T")[0]}.csv"`);
+      res.send(csv);
+    } catch (e) { res.status(500).json({ message: "Failed to export" }); }
   });
 
   app.get("/api/shift-offers", requireAuth, async (req, res) => {

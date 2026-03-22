@@ -79,6 +79,8 @@ import {
   receipts, shiftOffers, employeeGroupConfigs,
   payrollPaymentMethods, fundingAccounts, payrollPaymentRecords,
   shiftMarketplaceListings, shiftMarketplaceRequests, eligibilityRuleSets, scheduleAuditLogs, notificationPreferences,
+  expenseCategories, expenses, expenseAttachments, contractorInvoices, contractorInvoiceAttachments,
+  recurringExpenseTemplates, expenseApprovalActions, payrollReimbursementItems,
   type WorkerDocument, type InsertWorkerDocument,
   type SavedReport, type InsertSavedReport,
   type Station, type InsertStation,
@@ -102,6 +104,14 @@ import {
   type EligibilityRuleSet, type InsertEligibilityRuleSet,
   type ScheduleAuditLog, type InsertScheduleAuditLog,
   type NotificationPreference, type InsertNotificationPreference,
+  type ExpenseCategory, type InsertExpenseCategory,
+  type Expense, type InsertExpense,
+  type ExpenseAttachment, type InsertExpenseAttachment,
+  type ContractorInvoice, type InsertContractorInvoice,
+  type ContractorInvoiceAttachment, type InsertContractorInvoiceAttachment,
+  type RecurringExpenseTemplate, type InsertRecurringExpenseTemplate,
+  type ExpenseApprovalAction, type InsertExpenseApprovalAction,
+  type PayrollReimbursementItem, type InsertPayrollReimbursementItem,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -2196,6 +2206,137 @@ export class DatabaseStorage implements IStorage {
       return r;
     }
     const [r] = await db.insert(notificationPreferences).values(data).returning();
+    return r;
+  }
+  // ── Expense Categories ─────────────────────────────────────────────────
+  async getExpenseCategories(): Promise<ExpenseCategory[]> {
+    return db.select().from(expenseCategories).orderBy(expenseCategories.sortOrder);
+  }
+  async getExpenseCategory(id: string): Promise<ExpenseCategory | undefined> {
+    const [r] = await db.select().from(expenseCategories).where(eq(expenseCategories.id, id));
+    return r;
+  }
+  async createExpenseCategory(data: InsertExpenseCategory): Promise<ExpenseCategory> {
+    const [r] = await db.insert(expenseCategories).values(data).returning();
+    return r;
+  }
+  async updateExpenseCategory(id: string, data: Partial<ExpenseCategory>): Promise<ExpenseCategory | undefined> {
+    const [r] = await db.update(expenseCategories).set(data).where(eq(expenseCategories.id, id)).returning();
+    return r;
+  }
+
+  // ── Expenses ──────────────────────────────────────────────────────────
+  async getExpenses(companyId?: string, submitterId?: string, status?: string): Promise<Expense[]> {
+    const conds: any[] = [];
+    if (companyId) conds.push(eq(expenses.companyId, companyId));
+    if (submitterId) conds.push(eq(expenses.submitterId, submitterId));
+    if (status) conds.push(eq(expenses.status, status));
+    const q = conds.length > 0 ? db.select().from(expenses).where(and(...conds)) : db.select().from(expenses);
+    return q.orderBy(desc(expenses.createdAt));
+  }
+  async getExpense(id: string): Promise<Expense | undefined> {
+    const [r] = await db.select().from(expenses).where(eq(expenses.id, id));
+    return r;
+  }
+  async createExpense(data: InsertExpense): Promise<Expense> {
+    const [r] = await db.insert(expenses).values(data).returning();
+    return r;
+  }
+  async updateExpense(id: string, data: Partial<Expense>): Promise<Expense | undefined> {
+    const [r] = await db.update(expenses).set({ ...data, updatedAt: new Date() }).where(eq(expenses.id, id)).returning();
+    return r;
+  }
+  async deleteExpense(id: string): Promise<void> {
+    await db.delete(expenses).where(eq(expenses.id, id));
+  }
+
+  // ── Expense Attachments ───────────────────────────────────────────────
+  async getExpenseAttachments(expenseId: string): Promise<ExpenseAttachment[]> {
+    return db.select().from(expenseAttachments).where(eq(expenseAttachments.expenseId, expenseId));
+  }
+  async createExpenseAttachment(data: InsertExpenseAttachment): Promise<ExpenseAttachment> {
+    const [r] = await db.insert(expenseAttachments).values(data).returning();
+    return r;
+  }
+  async deleteExpenseAttachment(id: string): Promise<void> {
+    await db.delete(expenseAttachments).where(eq(expenseAttachments.id, id));
+  }
+
+  // ── Contractor Invoices ───────────────────────────────────────────────
+  async getContractorInvoices(companyId?: string, contractorId?: string, status?: string): Promise<ContractorInvoice[]> {
+    const conds: any[] = [];
+    if (companyId) conds.push(eq(contractorInvoices.companyId, companyId));
+    if (contractorId) conds.push(eq(contractorInvoices.contractorId, contractorId));
+    if (status) conds.push(eq(contractorInvoices.status, status));
+    const q = conds.length > 0 ? db.select().from(contractorInvoices).where(and(...conds)) : db.select().from(contractorInvoices);
+    return q.orderBy(desc(contractorInvoices.createdAt));
+  }
+  async getContractorInvoice(id: string): Promise<ContractorInvoice | undefined> {
+    const [r] = await db.select().from(contractorInvoices).where(eq(contractorInvoices.id, id));
+    return r;
+  }
+  async createContractorInvoice(data: InsertContractorInvoice): Promise<ContractorInvoice> {
+    const [r] = await db.insert(contractorInvoices).values(data).returning();
+    return r;
+  }
+  async updateContractorInvoice(id: string, data: Partial<ContractorInvoice>): Promise<ContractorInvoice | undefined> {
+    const [r] = await db.update(contractorInvoices).set({ ...data, updatedAt: new Date() }).where(eq(contractorInvoices.id, id)).returning();
+    return r;
+  }
+
+  // ── Contractor Invoice Attachments ────────────────────────────────────
+  async getContractorInvoiceAttachments(invoiceId: string): Promise<ContractorInvoiceAttachment[]> {
+    return db.select().from(contractorInvoiceAttachments).where(eq(contractorInvoiceAttachments.invoiceId, invoiceId));
+  }
+  async createContractorInvoiceAttachment(data: InsertContractorInvoiceAttachment): Promise<ContractorInvoiceAttachment> {
+    const [r] = await db.insert(contractorInvoiceAttachments).values(data).returning();
+    return r;
+  }
+
+  // ── Recurring Expense Templates ───────────────────────────────────────
+  async getRecurringExpenseTemplates(companyId?: string): Promise<RecurringExpenseTemplate[]> {
+    if (companyId) return db.select().from(recurringExpenseTemplates).where(eq(recurringExpenseTemplates.companyId, companyId));
+    return db.select().from(recurringExpenseTemplates);
+  }
+  async getRecurringExpenseTemplate(id: string): Promise<RecurringExpenseTemplate | undefined> {
+    const [r] = await db.select().from(recurringExpenseTemplates).where(eq(recurringExpenseTemplates.id, id));
+    return r;
+  }
+  async createRecurringExpenseTemplate(data: InsertRecurringExpenseTemplate): Promise<RecurringExpenseTemplate> {
+    const [r] = await db.insert(recurringExpenseTemplates).values(data).returning();
+    return r;
+  }
+  async updateRecurringExpenseTemplate(id: string, data: Partial<RecurringExpenseTemplate>): Promise<RecurringExpenseTemplate | undefined> {
+    const [r] = await db.update(recurringExpenseTemplates).set(data).where(eq(recurringExpenseTemplates.id, id)).returning();
+    return r;
+  }
+
+  // ── Expense Approval Actions (immutable) ──────────────────────────────
+  async getExpenseApprovalActions(objectType: string, objectId: string): Promise<ExpenseApprovalAction[]> {
+    return db.select().from(expenseApprovalActions).where(
+      and(eq(expenseApprovalActions.objectType, objectType), eq(expenseApprovalActions.objectId, objectId))
+    ).orderBy(desc(expenseApprovalActions.createdAt));
+  }
+  async createExpenseApprovalAction(data: InsertExpenseApprovalAction): Promise<ExpenseApprovalAction> {
+    const [r] = await db.insert(expenseApprovalActions).values(data).returning();
+    return r;
+  }
+
+  // ── Payroll Reimbursement Items ───────────────────────────────────────
+  async getPayrollReimbursementItems(workerId?: string, payrollRunId?: string, status?: string): Promise<PayrollReimbursementItem[]> {
+    const conds: any[] = [];
+    if (workerId) conds.push(eq(payrollReimbursementItems.workerId, workerId));
+    if (payrollRunId) conds.push(eq(payrollReimbursementItems.payrollRunId, payrollRunId));
+    if (status) conds.push(eq(payrollReimbursementItems.status, status));
+    const q = conds.length > 0 ? db.select().from(payrollReimbursementItems).where(and(...conds)) : db.select().from(payrollReimbursementItems);
+    return q.orderBy(desc(payrollReimbursementItems.createdAt));
+  }
+  async createPayrollReimbursementItem(data: InsertPayrollReimbursementItem): Promise<PayrollReimbursementItem> {
+    const [r] = await db.insert(payrollReimbursementItems).values(data).returning();
+    return r;
+  }
+  async updatePayrollReimbursementItem(id: string, data: Partial<PayrollReimbursementItem>): Promise<PayrollReimbursementItem | undefined> {
+    const [r] = await db.update(payrollReimbursementItems).set(data).where(eq(payrollReimbursementItems.id, id)).returning();
     return r;
   }
 }

@@ -208,9 +208,49 @@ async function seedRolesAndPermissions() {
   }
 }
 
+async function seedExpenseCategories() {
+  try {
+    const existing = await db.execute(sql`SELECT COUNT(*) as cnt FROM expense_categories`);
+    if (Number((existing.rows[0] as any).cnt) > 0) {
+      console.log("Expense categories already seeded, skipping");
+      return;
+    }
+  } catch { return; }
+
+  const cats = [
+    { name: "Office Supplies", accountingCode: "6100", reimbursableDefault: true, receiptRequired: true },
+    { name: "Materials", accountingCode: "5100", reimbursableDefault: true, receiptRequired: true },
+    { name: "Tools & Equipment", accountingCode: "5200", reimbursableDefault: true, receiptRequired: true, preapprovalRequired: true },
+    { name: "Travel", accountingCode: "6200", reimbursableDefault: true, receiptRequired: true },
+    { name: "Lodging", accountingCode: "6210", reimbursableDefault: true, receiptRequired: true },
+    { name: "Meals", accountingCode: "6220", reimbursableDefault: true, receiptRequired: true },
+    { name: "Mileage", accountingCode: "6230", reimbursableDefault: true, receiptRequired: false },
+    { name: "Fuel", accountingCode: "6240", reimbursableDefault: true, receiptRequired: true },
+    { name: "Software & Subscriptions", accountingCode: "6300", reimbursableDefault: false, receiptRequired: true, preapprovalRequired: true },
+    { name: "Marketing & Advertising", accountingCode: "6400", reimbursableDefault: false, receiptRequired: true, preapprovalRequired: true },
+    { name: "Professional Services", accountingCode: "6500", reimbursableDefault: false, receiptRequired: true, preapprovalRequired: true },
+    { name: "Permits & Fees", accountingCode: "6600", reimbursableDefault: false, receiptRequired: true },
+    { name: "Shipping & Postage", accountingCode: "6700", reimbursableDefault: true, receiptRequired: true },
+    { name: "Utilities", accountingCode: "6800", reimbursableDefault: false, receiptRequired: true },
+    { name: "Phone & Internet", accountingCode: "6810", reimbursableDefault: false, receiptRequired: true },
+    { name: "Training & Education", accountingCode: "6900", reimbursableDefault: true, receiptRequired: true, preapprovalRequired: true },
+    { name: "Client Expense", accountingCode: "7100", reimbursableDefault: true, receiptRequired: true, projectRequired: true },
+    { name: "Project Expense", accountingCode: "7200", reimbursableDefault: false, receiptRequired: true, projectRequired: true },
+    { name: "Repair & Maintenance", accountingCode: "7300", reimbursableDefault: false, receiptRequired: true },
+    { name: "Other", accountingCode: "9900", reimbursableDefault: false, receiptRequired: false },
+  ];
+
+  for (let i = 0; i < cats.length; i++) {
+    const c = cats[i];
+    await db.execute(sql`INSERT INTO expense_categories (name, accounting_code, reimbursable_default, receipt_required, preapproval_required, project_required, sort_order) VALUES (${c.name}, ${c.accountingCode}, ${c.reimbursableDefault}, ${c.receiptRequired}, ${c.preapprovalRequired || false}, ${c.projectRequired || false}, ${i + 1})`);
+  }
+  console.log("Seeded expense categories");
+}
+
 export async function seedDatabase() {
   await ensureAdminUser();
   await seedRolesAndPermissions();
+  await seedExpenseCategories();
 
   try {
     const existingCompanies = await db.select().from(companies);
