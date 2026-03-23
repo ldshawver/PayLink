@@ -1,0 +1,225 @@
+root@paylink:~# cd /home/paylinkssh/paylink-app/PayLink
+pm2 start "npm run start" --name paylink
+pm2 save
+pm2 list
+[PM2] Starting /usr/bin/bash in fork_mode (1 instance)
+[PM2] Done.
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ N/A     │ fork    │ 160503   │ 0s     │ 0    │ online    │ 0%       │ 27.1mb   │ root     │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[PM2] Saving current process list...
+[PM2] Successfully saved in /root/.pm2/dump.pm2
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ N/A     │ fork    │ 160503   │ 1s     │ 0    │ online    │ 0%       │ 55.0mb   │ root     │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+root@paylink:/home/paylinkssh/paylink-app/PayLink# pm2 logs paylink --lines 100
+[TAILING] Tailing last 100 lines for [paylink] process (change the value with --lines option)
+/root/.pm2/logs/paylink-error.log last 100 lines:
+0|paylink  |   detail: undefined,
+0|paylink  |   hint: undefined,
+0|paylink  |   position: '159',
+0|paylink  |   internalPosition: undefined,
+0|paylink  |   internalQuery: undefined,
+0|paylink  |   where: undefined,
+0|paylink  |   schema: undefined,
+0|paylink  |   table: undefined,
+0|paylink  |   column: undefined,
+0|paylink  |   dataType: undefined,
+0|paylink  |   constraint: undefined,
+0|paylink  |   file: 'parse_relation.c',
+0|paylink  |   line: '1449',
+0|paylink  |   routine: 'parserOpenTable'
+0|paylink  | }
+0|paylink  | error: relation "shift_offers" does not exist
+0|paylink  |     at /root/PayLink/dist/index.cjs:68:13330
+0|paylink  |     at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+0|paylink  |     at async /root/PayLink/dist/index.cjs:74:37979
+0|paylink  |     at async /root/PayLink/dist/index.cjs:250:305 {
+0|paylink  |   length: 112,
+0|paylink  |   severity: 'ERROR',
+0|paylink  |   code: '42P01',
+0|paylink  |   detail: undefined,
+0|paylink  |   hint: undefined,
+0|paylink  |   position: '159',
+0|paylink  |   internalPosition: undefined,
+0|paylink  |   internalQuery: undefined,
+0|paylink  |   where: undefined,
+0|paylink  |   schema: undefined,
+0|paylink  |   table: undefined,
+0|paylink  |   column: undefined,
+0|paylink  |   dataType: undefined,
+0|paylink  |   constraint: undefined,
+0|paylink  |   file: 'parse_relation.c',
+0|paylink  |   line: '1449',
+0|paylink  |   routine: 'parserOpenTable'
+0|paylink  | }
+0|paylink  | error: relation "shift_offers" does not exist
+0|paylink  |     at /root/PayLink/dist/index.cjs:68:13330
+0|paylink  |     at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+0|paylink  |     at async /root/PayLink/dist/index.cjs:74:37979
+0|paylink  |     at async /root/PayLink/dist/index.cjs:250:305 {
+0|paylink  |   length: 112,
+0|paylink  |   severity: 'ERROR',
+0|paylink  |   code: '42P01',
+0|paylink  |   detail: undefined,
+0|paylink  |   hint: undefined,
+0|paylink  |   position: '159',
+0|paylink  |   internalPosition: undefined,
+0|paylink  |   internalQuery: undefined,
+0|paylink  |   where: undefined,
+0|paylink  |   schema: undefined,
+0|paylink  |   table: undefined,
+0|paylink  |   column: undefined,
+0|paylink  |   dataType: undefined,
+0|paylink  |   constraint: undefined,
+0|paylink  |   file: 'parse_relation.c',
+0|paylink  |   line: '1449',
+0|paylink  |   routine: 'parserOpenTable'
+0|paylink  | }
+0|paylink  | error: relation "shift_offers" does not exist
+0|paylink  |     at /root/PayLink/dist/index.cjs:68:13330
+0|paylink  |     at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+0|paylink  |     at async /root/PayLink/dist/index.cjs:74:37979
+0|paylink  |     at async /root/PayLink/dist/index.cjs:250:305 {
+0|paylink  |   length: 112,
+0|paylink  |   severity: 'ERROR',
+0|paylink  |   code: '42P01',
+0|paylink  |   detail: undefined,
+0|paylink  |   hint: undefined,
+0|paylink  |   position: '159',
+0|paylink  |   internalPosition: undefined,
+0|paylink  |   internalQuery: undefined,
+0|paylink  |   where: undefined,
+0|paylink  |   schema: undefined,
+0|paylink  |   table: undefined,
+0|paylink  |   column: undefined,
+0|paylink  |   dataType: undefined,
+0|paylink  |   constraint: undefined,
+0|paylink  |   file: 'parse_relation.c',
+0|paylink  |   line: '1449',
+0|paylink  |   routine: 'parserOpenTable'
+0|paylink  | }
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+
+/root/.pm2/logs/paylink-out.log last 100 lines:
+0|paylink  | Auto-migration skipped (receipts.tax_amount): relation "receipts" does not exist
+0|paylink  | Auto-migration skipped (receipts.subtotal): relation "receipts" does not exist
+0|paylink  | Auto-migration skipped (receipts.line_items): relation "receipts" does not exist
+0|paylink  | Auto-migration skipped (receipts.is_reimbursement): relation "receipts" does not exist
+0|paylink  | Auto-migration skipped (receipts.approved_at): relation "receipts" does not exist
+0|paylink  | Auto-migration skipped (pay_stub_amendments.approval_status): relation "pay_stub_amendments" does not exist
+0|paylink  | Auto-migration skipped (pay_stub_amendments.approved_by): relation "pay_stub_amendments" does not exist
+0|paylink  | Auto-migration skipped (pay_stub_amendments.approved_at): relation "pay_stub_amendments" does not exist
+0|paylink  | Auto-migration skipped (divisions.company_id nullable): relation "divisions" does not exist
+0|paylink  | Auto-migration skipped (cost_centers.company_id nullable): relation "cost_centers" does not exist
+0|paylink  | Auto-migration skipped (secondary_wage_groups.company_id nullable): relation "secondary_wage_groups" does not exist
+0|paylink  | Auto-migration OK: employee_group_configs table
+0|paylink  | Auto-migration skipped (workers.worker_group): relation "workers" does not exist
+0|paylink  | Auto-migration skipped (schedule_preferences table): relation "workers" does not exist
+0|paylink  | Auto-migration skipped (shift_marketplace_listings table): relation "schedules" does not exist
+0|paylink  | Auto-migration skipped (shift_marketplace_requests table): relation "shift_marketplace_listings" does not exist
+0|paylink  | Auto-migration skipped (eligibility_rule_sets table): relation "companies" does not exist
+0|paylink  | Auto-migration skipped (schedule_audit_logs table): relation "companies" does not exist
+0|paylink  | Auto-migration skipped (notification_preferences table): relation "workers" does not exist
+0|paylink  | Auto-migration OK: expense_categories table
+0|paylink  | Auto-migration skipped (expenses table): relation "companies" does not exist
+0|paylink  | Auto-migration OK: expense_attachments table
+0|paylink  | Auto-migration skipped (contractor_invoices table): relation "companies" does not exist
+0|paylink  | Auto-migration OK: contractor_invoice_attachments table
+0|paylink  | Auto-migration skipped (recurring_expense_templates table): relation "companies" does not exist
+0|paylink  | Auto-migration OK: expense_approval_actions table
+0|paylink  | Auto-migration skipped (payroll_reimbursement_items table): relation "workers" does not exist
+0|paylink  | Could not ensure admin user (tables may not exist yet)
+0|paylink  | Could not seed roles: relation "roles" does not exist
+0|paylink  | Tables may not exist yet, will try to seed anyway
+0|paylink  | Seed skipped or failed: relation "companies" does not exist
+0|paylink  | 3:48:38 PM [express] serving on port 8000
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+0|paylink  | 
+0|paylink  | > rest-express@1.0.0 start
+0|paylink  | > NODE_ENV=production node dist/index.cjs
+0|paylink  | 
+
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
