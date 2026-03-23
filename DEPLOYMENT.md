@@ -278,7 +278,55 @@ chmod 755 /home/paylinkssh/paylink-app/PayLink/uploads
 | /ready returns 503 | Database connection failed | Check `DATABASE_URL` and PostgreSQL status |
 | Uploads return 404 | `UPLOAD_DIR` mismatch between `.env` and actual directory | Verify paths match |
 
-## 9. Deploy Checklist
+## 9. Automated Deployment (CI/CD)
+
+Pushing to `main` triggers a GitHub Actions workflow (`.github/workflows/deploy.yml`) that SSHs into the VPS and runs the full deploy sequence automatically.
+
+### GitHub Secrets Required
+
+| Secret | Value |
+|--------|-------|
+| `VPS_HOST` | `82.180.131.220` |
+| `VPS_USER` | `root` (or `paylinkssh`) |
+| `VPS_SSH_KEY` | Private SSH key for the VPS user |
+
+The deploy workflow:
+1. Backs up the database
+2. Pulls latest code
+3. Installs dependencies
+4. Builds the app
+5. Copies session table SQL
+6. Restarts via PM2 (creates `ecosystem.config.cjs` if missing)
+7. Runs health checks — **fails the deploy** if `/health` or `/ready` return non-200
+8. Cleans up old backups (keeps last 10)
+
+### Manual Deploy Script
+
+A standalone deploy script is also available at `scripts/deploy-paylink.sh`. To use it on the VPS:
+
+```bash
+cp /home/paylinkssh/paylink-app/PayLink/scripts/deploy-paylink.sh /var/www/deploy-paylink.sh
+chmod +x /var/www/deploy-paylink.sh
+```
+
+### PM2 Ecosystem Config
+
+The app uses `ecosystem.config.cjs` to load `.env` via Node's `--env-file` flag:
+
+```javascript
+module.exports = {
+  apps: [{
+    name: "paylink",
+    script: "dist/index.cjs",
+    cwd: "/home/paylinkssh/paylink-app/PayLink",
+    node_args: "--env-file=.env"
+  }]
+};
+```
+
+This ensures all environment variables from `.env` are loaded correctly, including values with special characters.
+
+## 10. Manual Deploy Checklist
 
 ```bash
 # 1. Backup database FIRST
@@ -300,14 +348,14 @@ cp node_modules/connect-pg-simple/table.sql dist/
 
 # 6. Restart
 pm2 restart paylink
-# or: sudo systemctl restart paylink
 
-# 7. Verify
+# 7. Verify (wait 10 seconds for startup)
+sleep 10
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/ready
 ```
 
-## 10. Rollback Procedure
+## 11. Rollback Procedure
 
 If a deploy goes wrong:
 
@@ -335,7 +383,7 @@ curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/ready
 ```
 
-## 11. Security Summary
+## 12. Security Summary
 
 ### App-Layer (implemented)
 
@@ -357,7 +405,7 @@ curl http://127.0.0.1:8000/ready
 - `client_max_body_size` for upload limits
 - IP-based access control if needed
 
-## 12. Transition from paylink.adiken.org
+## 13. Transition from paylink.adiken.org
 
 1. Deploy to VPS with new Nginx config for `app.mypaylink.app`
 2. Keep `paylink.adiken.org` config active temporarily
@@ -370,7 +418,7 @@ curl http://127.0.0.1:8000/ready
    ```
 4. After confirming everything works, remove old config
 
-## 13. Database Notes
+## 14. Database Notes
 
 PayLink uses **PostgreSQL** (not MySQL). The `DATABASE_URL` format is:
 ```
