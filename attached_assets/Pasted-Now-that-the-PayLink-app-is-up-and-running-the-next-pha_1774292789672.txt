@@ -1,0 +1,71 @@
+Now that the PayLink app is up and running, the next phase is to build an impressive public-facing website for mypaylink.app while keeping the secure application at app.mypaylink.app.
+
+Goal:
+Create a premium SaaS marketing website that helps sell PayLink as a licensable workforce/payroll platform, while preserving the secure internal app separately.
+
+Brand positioning:
+PayLink is a secure workforce operations platform that combines payroll, scheduling, time tracking, contractor invoices, expense reimbursements, approvals, and multi-company management in one system.
+
+Top priorities:
+1. Build a polished marketing website at mypaylink.app
+2. Keep app.mypaylink.app as the secure logged-in application
+3. Create a premium SaaS design with strong trust and conversion
+4. Add clear entry points for Login, Vendor/Contractor Portal, and Quick Clock In/Out
+5. Reuse existing infrastructure and keep implementation cost-conscious
+
+Please build the public website with these pages:
+- Home
+- Features
+- Pricing
+- Security
+- Contact / Demo
+- Vendor & Contractor Portal
+- Quick Clock In / Out
+- Login
+- Terms
+- Privacy
+
+Homepage requirements:
+- Hero section with headline, supporting copy, and CTAs
+- Product overview
+- Why PayLink is different
+- Feature cards/modules
+- Security/compliance section
+- Dashboard/mockup previews
+- Pricing preview
+- FAQ
+- Footer
+
+Design requirements:
+- premium modern SaaS aesthetic
+- dark/clean UI
+- strong typography
+- subtle animation
+- responsive/mobile-first
+- clean calls-to-action
+- dashboard-style product visuals
+- trust-building layout
+
+Navigation should include:
+- Features
+- Pricing
+- Security
+- Login
+- Book Demo
+
+The public site should publicly expose:
+- marketing pages
+- login page
+- vendor/contractor portal landing page
+- quick clock-in landing page
+
+Sensitive actions must remain behind authentication.
+
+Please provide:
+1. site map
+2. page wireframe/content structure
+3. design direction
+4. recommended implementation plan
+5. exact code changes
+6. deployment plan for mypaylink.app vs app.mypaylink.app
+7. any reuse opportunities from the current app frontend
