@@ -1,0 +1,46 @@
+paylinkssh@paylink:~/paylink-app/PayLink$ sudo ufw status
+[sudo] password for paylinkssh: 
+Sorry, user paylinkssh is not allowed to execute '/usr/sbin/ufw status' as root on paylink.adiken.org.
+paylinkssh@paylink:~/paylink-app/PayLink$ cd /home/paylinkssh/paylink-app/PayLink
+git pull origin main
+npm install --production=false
+npm run build
+cp node_modules/connect-pg-simple/table.sql dist/
+pm2 delete paylink 2>/dev/null; pm2 start "node -r dotenv/config dist/index.cjs" --name paylink
+pm2 save
+Username for 'https://github.com': ldshawver
+Password for 'https://ldshawver@github.com': 
+remote: Invalid username or token. Password authentication is not supported for Git operations.
+fatal: Authentication failed for 'https://github.com/ldshawver/PayLink.git/'
+npm warn config production Use `--omit=dev` instead.
+
+up to date, audited 572 packages in 3s
+
+81 packages are looking for funding
+  run `npm fund` for details
+
+5 vulnerabilities (1 low, 1 moderate, 3 high)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+Some issues need review, and may require choosing
+a different dependency.
+
+Run `npm audit` for details.
+
+> rest-express@1.0.0 build
+> tsx script/build.ts
+
+sh: 1: tsx: Permission denied
+[PM2] Starting /usr/bin/bash in fork_mode (1 instance)
+[PM2] Done.
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ N/A     │ fork    │ 237675   │ 0s     │ 0    │ online    │ 0%       │ 27.3mb   │ pay… │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[PM2] Saving current process list...
+[PM2] Successfully saved in /home/paylinkssh/.pm2/dump.pm2
+paylinkssh@paylink:~/paylink-app/PayLink$ git remote set-url origin https://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@github.com/ldshawver/PayLink.git
+paylinkssh@paylink:~/paylink-app/PayLink$ 
