@@ -1,0 +1,148 @@
+Project: Build a public marketing website for PayLink at mypaylink.app and separate the secure application into app.mypaylink.app.
+
+Goal:
+Create an impressive public-facing SaaS website that helps sell PayLink, while keeping the internal application secure, tenant-isolated, and aligned with strong security practices. The public site should be accessible to all visitors. The login page, contractor/vendor invoice portal landing page, and quick clock-in/out landing page should also be publicly reachable. All sensitive actions and all internal app pages must require authentication and authorization.
+
+Architecture requirements:
+1. Public site on mypaylink.app
+2. Secure app on app.mypaylink.app
+3. Shared branding, but separate route groups and security boundaries
+4. Public pages indexable and optimized for performance/SEO
+5. Internal app locked behind authentication and permission checks
+
+Public site pages to create:
+- Home
+- Features
+- Solutions / Industries
+- Pricing
+- Security & Compliance
+- Contact / Demo
+- Vendor & Contractor Portal
+- Quick Clock In / Out
+- Login
+- Terms
+- Privacy
+
+Public website design requirements:
+- modern SaaS design
+- polished and premium look
+- responsive/mobile friendly
+- strong CTA placement
+- dashboard visuals/mockups
+- trust/security section
+- clean pricing table
+- footer with legal/help links
+
+Homepage content requirements:
+- hero section
+- feature overview
+- why PayLink is different
+- screenshots/mockups
+- security/compliance section
+- pricing summary
+- testimonials/proof placeholders
+- FAQ
+- call to action blocks
+
+Public portal requirements:
+- vendor/contractor invoice landing page visible to all
+- quick clock-in/out landing page visible to all
+- login page visible to all
+- sensitive actions behind auth
+- if unauthenticated, redirect to login or show gated workflow
+
+Internal secure app requirements:
+- all app routes require auth
+- role-based and permission-based authorization
+- tenant isolation by company
+- legal entity separation where applicable
+- deny-by-default route guards
+- backend permission enforcement on every sensitive endpoint
+
+Security hardening requirements:
+- implement MFA for admins, optional MFA for others
+- strong password policy
+- secure password reset flow
+- short-lived access tokens
+- refresh token rotation
+- session revocation
+- secure cookies
+- CSRF protection where applicable
+- HSTS
+- rate limiting
+- input validation and output encoding
+- audit logs for auth, payroll, approvals, uploads, permission changes, exports, billing changes
+- secrets only in environment variables
+- attachment/file access via protected endpoints or signed URLs
+- upload validation for invoices/receipts (type allowlist, size limits, safe storage)
+- no public exposure of internal APIs without auth
+
+Compliance/security page requirements:
+Create a page that explains PayLink’s security posture without making unsupported certification claims.
+Include:
+- MFA support
+- role-based access
+- audit logs
+- tenant isolation
+- encrypted transport
+- secure file handling
+- approval workflows
+- environment separation
+- backup/recovery approach
+- privacy/legal pages
+
+App/public split implementation:
+- public site should be accessible to all visitors
+- internal app should move to app subdomain
+- preserve current functionality as much as possible
+- minimize disruption to current routes by adding redirects where appropriate
+- create a migration/transition plan for existing users
+
+Vendor/contractor portal:
+- public landing page
+- authenticated invoice upload
+- invoice status tracking
+- support for upload and mobile camera capture
+- policy notices visible before submission
+
+Quick clock-in/out:
+- public landing page
+- authenticated time clock flow
+- mobile-first UX
+- geolocation/device rules configurable if already supported or planned
+
+Deliverables:
+1. audit current route structure and security posture
+2. propose final route map for public site vs secure app
+3. build public marketing website
+4. implement app subdomain split
+5. harden auth and session flows
+6. add/update role and permission middleware
+7. add audit log coverage where missing
+8. harden file upload flow
+9. add legal/privacy/security pages
+10. provide deployment checklist and transition plan
+11. provide test checklist
+12. provide screenshots or route inventory
+
+Audit checklist:
+- current public routes
+- current authenticated routes
+- missing auth guards
+- missing permission checks
+- current session/token model
+- current tenant isolation approach
+- current upload handling
+- current audit logging coverage
+- missing HTTPS/security headers
+- missing rate limits
+- missing environment separation
+- current contractor/vendor invoice access flow
+- current clock-in/out access flow
+
+Transition constraints:
+- keep implementation cost-conscious
+- reuse as much current UI/component structure as possible
+- avoid full rewrite unless necessary
+- stage changes in phases
+- preserve backward compatibility where possible
