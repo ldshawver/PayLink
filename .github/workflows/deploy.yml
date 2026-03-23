@@ -20,6 +20,7 @@ jobs:
           script_stop: true
           script: |
             set -e
+
             APP_DIR="/home/paylinkssh/paylink-app/PayLink"
             BACKUP_DIR="/home/paylinkssh/backups"
 
@@ -27,38 +28,32 @@ jobs:
             echo "PayLink Deploy - $(date)"
             echo "=========================================="
 
-            # 1. Backup database
             mkdir -p "$BACKUP_DIR"
             BACKUP_FILE="$BACKUP_DIR/paylink_backup_$(date +%Y%m%d_%H%M%S).sql"
+
             echo "1. Backing up database..."
             PGPASSWORD='Wow548302!' pg_dump -U apppaylinkmain -h 127.0.0.1 apppaylinkmain > "$BACKUP_FILE"
             echo "   Saved: $BACKUP_FILE"
 
-            # 2. Pull latest code
             cd "$APP_DIR"
             echo "2. Pulling latest code..."
             git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
             git pull origin main
 
-            # 3. Install dependencies
             echo "3. Installing dependencies..."
             npm install --production=false
 
-            # 4. Build
             echo "4. Building..."
             npm run build
 
-            # 5. Copy session table SQL
             echo "5. Copying session table SQL..."
             cp node_modules/connect-pg-simple/table.sql dist/
 
-            # 6. Restart app with dotenv
             echo "6. Restarting app..."
             pm2 delete paylink 2>/dev/null || true
             cd "$APP_DIR" && pm2 start "node -r dotenv/config dist/index.cjs" --name paylink
             pm2 save
 
-            # 7. Wait for startup and verify
             echo "7. Waiting for app to start..."
             sleep 10
 
@@ -70,11 +65,10 @@ jobs:
 
             if [ "$HEALTH" != "200" ] || [ "$READY" != "200" ]; then
               echo "ERROR: Health checks failed!"
-              pm2 logs paylink --lines 20 --nostream
+              pm2 logs paylink --lines 50 --nostream
               exit 1
             fi
 
-            # 8. Clean up old backups (keep last 10)
             ls -t "$BACKUP_DIR"/paylink_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
 
             echo "=========================================="
