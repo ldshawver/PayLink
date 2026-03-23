@@ -1,0 +1,97 @@
+ls -la /home/mypaylink/
+find /home/mypaylink -name "server.js" 2>/dev/null
+ls: cannot access '/home/mypaylink/PayLink/': No such file or directory
+total 52
+drwxr-xr-x 10 mypaylink mypaylink 4096 Mar 23 19:30 .
+drwxr-xr-x 12 root      root      4096 Mar 23 19:24 ..
+drwxrwx---  3 mypaylink mypaylink 4096 Jan 23 09:07 backups
+-rwxrwx---  1 mypaylink mypaylink  182 Jan 23 09:07 .bashrc
+drwxrwx---  3 mypaylink mypaylink 4096 Mar 23 12:12 htdocs
+drwxrwx---  4 mypaylink mypaylink 4096 Jan 23 09:07 logs
+drwxrwx---  3 mypaylink mypaylink 4096 Mar 23 19:30 .npm
+drwxrwx---  7 mypaylink mypaylink 4096 Mar 23 12:12 .nvm
+-rw-rw----  1 mypaylink mypaylink   88 Mar 23 19:30 package-lock.json
+drwxrwx---  5 mypaylink mypaylink 4096 Mar 23 19:30 .pm2
+-rwxrwx---  1 mypaylink mypaylink  675 Jan 23 09:07 .profile
+drwx------  2 mypaylink mypaylink 4096 Jan 23 09:07 .ssh
+drwxrwx---  2 mypaylink mypaylink 4096 Jan 23 09:07 tmp
+/home/mypaylink/.nvm/versions/node/v22.22.1/lib/node_modules/npm/node_modules/@npmcli/redact/lib/server.js
+mypaylink@paylink:~/htdocs/mypaylink.app$ cd /home/mypaylink/htdocs/mypaylink.app
+git clone https://github.com/ldshawver/PayLink.git /tmp/paylink-temp
+cp -r /tmp/paylink-temp/public-site/* .
+rm -rf /tmp/paylink-temp
+npm install
+pm2 start server.js --name paylink-public
+pm2 save
+curl http://127.0.0.1:3000
+Cloning into '/tmp/paylink-temp'...
+Username for 'https://github.com': ldshawver
+Password for 'https://ldshawver@github.com': 
+remote: Invalid username or token. Password authentication is not supported for Git operations.
+fatal: Authentication failed for 'https://github.com/ldshawver/PayLink.git/'
+cp: cannot stat '/tmp/paylink-temp/public-site/*': No such file or directory
+npm error code ENOENT
+npm error syscall open
+npm error path /home/mypaylink/htdocs/mypaylink.app/package.json
+npm error errno -2
+npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open '/home/mypaylink/htdocs/mypaylink.app/package.json'
+npm error enoent This is related to npm not being able to find a file.
+npm error enoent
+npm error A complete log of this run can be found in: /home/mypaylink/.npm/_logs/2026-03-23T19_33_22_112Z-debug-0.log
+[PM2][ERROR] Script not found: /home/mypaylink/htdocs/mypaylink.app/server.js
+[PM2] Saving current process list...
+[PM2][WARN] PM2 is not managing any process, skipping save...
+[PM2][WARN] To force saving use: pm2 save --force
+curl: (7) Failed to connect to 127.0.0.1 port 3000 after 0 ms: Couldn't connect to server
+mypaylink@paylink:~/htdocs/mypaylink.app$ cd /home/mypaylink/htdocs/mypaylink.app
+mkdir -p public/assets public/css public/js
+mypaylink@paylink:~/htdocs/mypaylink.app$ cat > package.json << 'PEOF'
+{
+  "name": "paylink-public-site",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}
+PEOF
+mypaylink@paylink:~/htdocs/mypaylink.app$ cat > server.js << 'SEOF'
+const express = require('express');
+const path = require('path');
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+['features','pricing','security','contact','vendor-portal','clock','terms','privacy'].forEach(p => {
+  app.get('/'+p, (req, res) => res.sendFile(path.join(__dirname, 'public', p+'.html')));
+});
+app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.listen(PORT, '127.0.0.1', () => console.log('PayLink public site on port '+PORT));
+SEOF
+mypaylink@paylink:~/htdocs/mypaylink.app$ # Switch to root first
+exit
+
+# As root, copy from the paylinkssh user's repo
+su - paylinkssh -c "cd /home/paylinkssh/paylink-app/PayLink && git pull origin main"
+
+# Copy public-site files to the mypaylink htdocs
+cp -r /home/paylinkssh/paylink-app/PayLink/public-site/* /home/mypaylink/htdocs/mypaylink.app/
+chown -R mypaylink:mypaylink /home/mypaylink/htdocs/mypaylink.app/
+
+# Switch back to mypaylink and install/start
+su - mypaylink
+cd /home/mypaylink/htdocs/mypaylink.app
+npm install
+pm2 start server.js --name paylink-public
+pm2 save
+curl http://127.0.0.1:3000
+logout
+Cloning into 'PayLink'...
+Username for 'https://github.com': ldshawver
+Password for 'https://ldshawver@github.com': 
+remote: Invalid username or token. Password authentication is not supported for Git operations.
+fatal: Authentication failed for 'https://github.com/ldshawver/PayLink.git/'
+root@paylink:/home/mypaylink# 
