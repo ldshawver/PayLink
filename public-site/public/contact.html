@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contact & Demo - PayLink | Workforce Operations Platform</title>
+  <meta name="description" content="Book a personalized demo of PayLink or contact our team. See how PayLink can streamline your payroll, scheduling, and workforce operations.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo"><img src="/assets/logo.png" alt="PayLink"><span>PayLink</span></a>
+      <ul class="nav-links">
+        <li><a href="/features">Features</a></li>
+        <li><a href="/pricing">Pricing</a></li>
+        <li><a href="/security">Security</a></li>
+        <li><a href="https://app.mypaylink.app" class="nav-cta">Login →</a></li>
+      </ul>
+      <button class="mobile-toggle" aria-label="Menu">&#9776;</button>
+    </div>
+    <div class="mobile-menu">
+      <a href="/features">Features</a>
+      <a href="/pricing">Pricing</a>
+      <a href="/security">Security</a>
+      <a href="/vendor-portal">Vendor Portal</a>
+      <a href="/clock">Quick Clock In</a>
+      <a href="/contact">Book a Demo</a>
+      <a href="https://app.mypaylink.app">Login →</a>
+    </div>
+  </nav>
+
+  <section class="page-hero">
+    <div class="container">
+      <span class="section-label fade-up">Contact</span>
+      <h1 class="fade-up stagger-1">Book a Demo</h1>
+      <p class="fade-up stagger-2">See how PayLink can simplify your workforce operations. Fill out the form and we'll schedule a personalized walkthrough.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <form class="contact-form fade-up" id="contactForm" onsubmit="return handleSubmit(event)">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="firstName">First Name</label>
+            <input type="text" id="firstName" name="firstName" required>
+          </div>
+          <div class="form-group">
+            <label for="lastName">Last Name</label>
+            <input type="text" id="lastName" name="lastName" required>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="email">Work Email</label>
+            <input type="email" id="email" name="email" required>
+          </div>
+          <div class="form-group">
+            <label for="phone">Phone</label>
+            <input type="tel" id="phone" name="phone">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="company">Company Name</label>
+            <input type="text" id="company" name="company" required>
+          </div>
+          <div class="form-group">
+            <label for="employees">Number of Employees</label>
+            <select id="employees" name="employees">
+              <option value="1-25">1–25</option>
+              <option value="26-50">26–50</option>
+              <option value="51-100">51–100</option>
+              <option value="101-250">101–250</option>
+              <option value="250+">250+</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="interest">What are you most interested in?</label>
+          <select id="interest" name="interest">
+            <option value="full-platform">Full Platform</option>
+            <option value="payroll">Payroll Processing</option>
+            <option value="time-tracking">Time & Attendance</option>
+            <option value="scheduling">Scheduling</option>
+            <option value="contractor-mgmt">Contractor Management</option>
+            <option value="multi-company">Multi-Company Setup</option>
+            <option value="self-hosted">Self-Hosted License</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="message">Tell us about your needs</label>
+          <textarea id="message" name="message" placeholder="What challenges are you facing with your current payroll or workforce management?"></textarea>
+        </div>
+        <button type="submit" class="btn-primary" style="width: 100%; justify-content: center;">Submit Request →</button>
+        <div id="formMessage" style="text-align: center; margin-top: 16px; display: none;"></div>
+      </form>
+    </div>
+  </section>
+
+  <section style="background: var(--dark-card);">
+    <div class="container section-center">
+      <h2 class="section-title fade-up">Other Ways to Reach Us</h2>
+      <div class="security-grid" style="margin-top: 32px;">
+        <div class="security-card fade-up stagger-1">
+          <div class="security-icon">📧</div>
+          <div><h3>Email</h3><p>info@mypaylink.app</p></div>
+        </div>
+        <div class="security-card fade-up stagger-2">
+          <div class="security-icon">🏢</div>
+          <div><h3>Alavont Holdings</h3><p>Enterprise workforce solutions for growing organizations.</p></div>
+        </div>
+        <div class="security-card fade-up stagger-3">
+          <div class="security-icon">⚡</div>
+          <div><h3>Quick Access</h3><p><a href="https://app.mypaylink.app" style="color: var(--teal-light);">Login to PayLink →</a></p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a href="/" class="nav-logo"><img src="/assets/logo.png" alt="PayLink" style="height: 32px;"><span>PayLink</span></a>
+          <p>A secure workforce operations platform by Alavont Holdings.</p>
+        </div>
+        <div><h4>Product</h4><ul class="footer-links"><li><a href="/features">Features</a></li><li><a href="/pricing">Pricing</a></li><li><a href="/security">Security</a></li><li><a href="/contact">Book a Demo</a></li></ul></div>
+        <div><h4>Access</h4><ul class="footer-links"><li><a href="https://app.mypaylink.app">Login</a></li><li><a href="/vendor-portal">Vendor Portal</a></li><li><a href="/clock">Quick Clock In</a></li></ul></div>
+        <div><h4>Company</h4><ul class="footer-links"><li><a href="/contact">Contact</a></li><li><a href="/terms">Terms of Service</a></li><li><a href="/privacy">Privacy Policy</a></li></ul></div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2025 Alavont Holdings. All rights reserved.</p>
+        <ul class="footer-bottom-links"><li><a href="/terms">Terms</a></li><li><a href="/privacy">Privacy</a></li></ul>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/js/main.js"></script>
+  <script>
+    function handleSubmit(e) {
+      e.preventDefault();
+      var msg = document.getElementById('formMessage');
+      msg.style.display = 'block';
+      msg.style.color = 'var(--teal-light)';
+      msg.textContent = 'Thank you! We\'ll be in touch within 24 hours to schedule your demo.';
+      document.getElementById('contactForm').reset();
+      return false;
+    }
+  </script>
+</body>
+</html>

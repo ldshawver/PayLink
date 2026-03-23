@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quick Clock In/Out - PayLink</title>
+  <meta name="description" content="PayLink Quick Clock In/Out. Fast employee time clock access for punching in and out.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    .clock-display {
+      font-size: clamp(3rem, 8vw, 5rem);
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      background: var(--gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin: 32px 0;
+      letter-spacing: -0.02em;
+    }
+    .clock-date {
+      font-size: 1.1rem;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    .clock-container {
+      background: var(--dark-card);
+      border: 1px solid var(--dark-border);
+      border-radius: 24px;
+      padding: 64px 48px;
+      max-width: 500px;
+      margin: 0 auto;
+      text-align: center;
+    }
+    .clock-actions {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      margin-top: 32px;
+    }
+    .clock-actions .btn-primary,
+    .clock-actions .btn-secondary {
+      padding: 16px 32px;
+      font-size: 1.1rem;
+    }
+  </style>
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo"><img src="/assets/logo.png" alt="PayLink"><span>PayLink</span></a>
+      <ul class="nav-links">
+        <li><a href="/features">Features</a></li>
+        <li><a href="/pricing">Pricing</a></li>
+        <li><a href="/security">Security</a></li>
+        <li><a href="https://app.mypaylink.app" class="nav-cta">Login →</a></li>
+      </ul>
+      <button class="mobile-toggle" aria-label="Menu">&#9776;</button>
+    </div>
+    <div class="mobile-menu">
+      <a href="/features">Features</a>
+      <a href="/pricing">Pricing</a>
+      <a href="/security">Security</a>
+      <a href="/vendor-portal">Vendor Portal</a>
+      <a href="/clock">Quick Clock In</a>
+      <a href="/contact">Book a Demo</a>
+      <a href="https://app.mypaylink.app">Login →</a>
+    </div>
+  </nav>
+
+  <section class="page-hero">
+    <div class="container">
+      <span class="section-label fade-up">Time Clock</span>
+      <h1 class="fade-up stagger-1">Quick Clock In / Out</h1>
+      <p class="fade-up stagger-2">Fast access to the PayLink time clock. Log in with your employee PIN to punch in or out.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <div class="clock-container fade-up">
+        <div class="clock-date" id="clockDate"></div>
+        <div class="clock-display" id="clockTime"></div>
+        <p style="color: var(--text-secondary); margin-bottom: 24px;">Log in to the PayLink app to clock in or out with your employee PIN.</p>
+        <div class="clock-actions">
+          <a href="https://app.mypaylink.app" class="btn-primary">Open Time Clock →</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="background: var(--dark-card);">
+    <div class="container section-center">
+      <h2 class="section-title fade-up">Time Clock Features</h2>
+      <div class="security-grid" style="margin-top: 32px;">
+        <div class="security-card fade-up stagger-1">
+          <div class="security-icon">🔢</div>
+          <div><h3>PIN Login</h3><p>Employees use a simple numeric PIN to clock in and out. No passwords needed at the time clock.</p></div>
+        </div>
+        <div class="security-card fade-up stagger-2">
+          <div class="security-icon">📍</div>
+          <div><h3>Station Enforcement</h3><p>Restrict clock-ins to approved stations or locations for security and accuracy.</p></div>
+        </div>
+        <div class="security-card fade-up stagger-3">
+          <div class="security-icon">⏰</div>
+          <div><h3>Auto Overtime</h3><p>Automatic daily, weekly, and double overtime calculations based on your company policies.</p></div>
+        </div>
+        <div class="security-card fade-up stagger-4">
+          <div class="security-icon">📊</div>
+          <div><h3>Real-Time Tracking</h3><p>See who's clocked in, hours worked today, and attendance status in real time.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a href="/" class="nav-logo"><img src="/assets/logo.png" alt="PayLink" style="height: 32px;"><span>PayLink</span></a>
+          <p>A secure workforce operations platform by Alavont Holdings.</p>
+        </div>
+        <div><h4>Product</h4><ul class="footer-links"><li><a href="/features">Features</a></li><li><a href="/pricing">Pricing</a></li><li><a href="/security">Security</a></li><li><a href="/contact">Book a Demo</a></li></ul></div>
+        <div><h4>Access</h4><ul class="footer-links"><li><a href="https://app.mypaylink.app">Login</a></li><li><a href="/vendor-portal">Vendor Portal</a></li><li><a href="/clock">Quick Clock In</a></li></ul></div>
+        <div><h4>Company</h4><ul class="footer-links"><li><a href="/contact">Contact</a></li><li><a href="/terms">Terms of Service</a></li><li><a href="/privacy">Privacy Policy</a></li></ul></div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2025 Alavont Holdings. All rights reserved.</p>
+        <ul class="footer-bottom-links"><li><a href="/terms">Terms</a></li><li><a href="/privacy">Privacy</a></li></ul>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/js/main.js"></script>
+  <script>
+    function updateClock() {
+      var now = new Date();
+      var h = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
+      var ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12 || 12;
+      document.getElementById('clockTime').textContent =
+        h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s + ' ' + ampm;
+      document.getElementById('clockDate').textContent =
+        now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    }
+    updateClock();
+    setInterval(updateClock, 1000);
+  </script>
+</body>
+</html>

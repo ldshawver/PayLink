@@ -76,6 +76,15 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 -   **No CORS:** Frontend and backend served on same origin; no CORS middleware needed.
 -   **Deployment docs:** See `DEPLOYMENT.md` for full Nginx config, systemd service, deploy checklist, rollback procedure, and troubleshooting guide.
 
+## Public Marketing Website
+-   **Location:** `public-site/` directory in the repository.
+-   **Domain:** `mypaylink.app` (marketing site). App remains at `app.mypaylink.app`.
+-   **Stack:** Static HTML/CSS/JS served by lightweight Express server (no build step needed).
+-   **Pages:** Home, Features, Pricing, Security, Contact/Demo, Vendor Portal, Quick Clock In, Terms, Privacy.
+-   **Design:** Dark premium SaaS aesthetic with teal-to-blue gradient, Inter font, scroll animations.
+-   **Deployment:** `cd public-site && npm install && pm2 start ecosystem.config.cjs`. Runs on port 3000 behind Nginx.
+-   **VPS path:** `/home/mypaylink/public-site/` (under the `mypaylink` site user).
+
 ## External Dependencies
 -   **PostgreSQL:** Primary application database.
 -   **NGINX:** Reverse proxy for production.
