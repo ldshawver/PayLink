@@ -393,17 +393,6 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/workers", async (req, res) => {
-    try {
-      const companyId = req.query.companyId as string | undefined;
-      const workers = await storage.getWorkers(companyId);
-      res.json(workers);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Failed to fetch workers" });
-    }
-  });
-
   app.post("/api/workers", requireRole("admin", "manager"), async (req, res) => {
     try {
       if (!req.body.companyId) return res.status(400).json({ message: "Company is required" });
@@ -861,6 +850,197 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Payroll processing error:", error);
       res.status(500).json({ message: "Failed to process payroll" });
+    }
+  });
+
+  // ── NACHA ACH File Generation ─────────────────────────────────────────────
+  app.get("/api/payroll-runs/:id/nacha", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      if (!run.useDirectDeposit) return res.status(400).json({ message: "Direct deposit is disabled for this payroll run" });
+      if (run.status !== "processed" && run.status !== "paid") return res.status(400).json({ message: "Payroll run must be processed before generating ACH file" });
+
+      const company = await storage.getCompany(run.companyId);
+      if (!company) return res.status(404).json({ message: "Company not found" });
+
+      const { remittanceSources } = await import("../shared/schema.js");
+      const sources = await db.select().from(remittanceSources).where(eq(remittanceSources.companyId, run.companyId));
+      const source = sources.find(s => (s.type === "ach" || s.type === "direct_deposit") && s.routingNumber) || sources.find(s => s.routingNumber);
+      if (!source || !source.routingNumber || !source.accountNumber) {
+        return res.status(400).json({ message: "No ACH remittance source configured for this company. Please add a remittance source with a routing and account number." });
+      }
+
+      const items = await storage.getPayrollItems(run.id);
+      const { payMethods } = await import("../shared/schema.js");
+
+      type PayMethodRow = { id: string; workerId: string; methodType: string; routingNumber: string | null; accountNumber: string | null; accountType: string | null; isPrimary: boolean | null; platform: string | null };
+      const allPayMethods = await db.select().from(payMethods) as PayMethodRow[];
+
+      const workers = await storage.getWorkers(run.companyId);
+      const workerMap: Record<string, typeof workers[0]> = {};
+      for (const w of workers) workerMap[w.id] = w;
+
+      const pr = (s: string, len: number) => s.substring(0, len).padEnd(len, " ");
+      const pl = (s: string, len: number) => s.substring(0, len).padStart(len, "0");
+      const nachaDate = (d: Date) => {
+        const yy = d.getFullYear().toString().slice(-2);
+        const mm = (d.getMonth() + 1).toString().padStart(2, "0");
+        const dd = d.getDate().toString().padStart(2, "0");
+        return `${yy}${mm}${dd}`;
+      };
+
+      const effectiveDate = run.payDate ? new Date(run.payDate + "T12:00:00") : new Date();
+      const now = new Date();
+      const fileDate = nachaDate(now);
+      const fileTime = now.getHours().toString().padStart(2, "0") + now.getMinutes().toString().padStart(2, "0");
+      const effDate = nachaDate(effectiveDate);
+
+      const odfiRouting = (source.routingNumber || "").replace(/\D/g, "").substring(0, 9);
+      const odfi8 = odfiRouting.substring(0, 8);
+      const companyId10 = "1" + ((company.ein || "").replace(/\D/g, "").substring(0, 9)).padStart(9, "0");
+      const companyName16 = pr(company.name || "", 16);
+      const immDest = source.immediateDest || (" " + odfiRouting);
+      const immDestName = pr(source.immediateDestName || source.institution || "BANK", 23);
+      const immOrigin = source.immediateOrigin || companyId10;
+      const immOriginName = pr(source.immediateOriginName || company.name || "", 23);
+
+      const fileHeader =
+        "1" +
+        "01" +
+        pl(immDest.padStart(10, " "), 10) +
+        pl(immOrigin, 10) +
+        fileDate +
+        fileTime +
+        "A" +
+        "094" +
+        "10" +
+        "1" +
+        immDestName +
+        immOriginName +
+        "        ";
+
+      const entries: string[] = [];
+      let entryHash = BigInt(0);
+      let totalCreditCents = BigInt(0);
+      let seqNum = 1;
+
+      for (const item of items) {
+        const worker = workerMap[item.workerId];
+        if (!worker) continue;
+        const netPay = parseFloat(item.netPay || "0");
+        if (netPay <= 0) continue;
+
+        const pm = allPayMethods.find(m =>
+          m.workerId === item.workerId &&
+          m.methodType === "direct_deposit" &&
+          !m.platform &&
+          m.routingNumber &&
+          m.accountNumber
+        ) || allPayMethods.find(m =>
+          m.workerId === item.workerId &&
+          m.methodType === "direct_deposit" &&
+          m.routingNumber &&
+          m.accountNumber
+        );
+        if (!pm || !pm.routingNumber || !pm.accountNumber) continue;
+
+        const rdfiRouting = pm.routingNumber.replace(/\D/g, "").substring(0, 9);
+        const rdfi8 = rdfiRouting.substring(0, 8);
+        const checkDigit = rdfiRouting.substring(8, 9) || "0";
+        const txnCode = (pm.accountType === "savings") ? "32" : "22";
+        const cents = Math.round(netPay * 100);
+        const dfiAccount = pr(pm.accountNumber.replace(/\D/g, ""), 17);
+        const amount10 = pl(cents.toString(), 10);
+        const workerName = pr(`${worker.firstName || ""} ${worker.lastName || ""}`.trim(), 22);
+        const indivId = pr(worker.id.substring(0, 15), 15);
+        const traceNum = odfi8 + pl(seqNum.toString(), 7);
+
+        entryHash += BigInt(rdfi8);
+        totalCreditCents += BigInt(cents);
+
+        entries.push(
+          "6" +
+          txnCode +
+          rdfi8 +
+          checkDigit +
+          dfiAccount +
+          amount10 +
+          indivId +
+          workerName +
+          "  " +
+          "0" +
+          traceNum
+        );
+        seqNum++;
+      }
+
+      if (entries.length === 0) {
+        return res.status(400).json({ message: "No employees with direct deposit banking information found in this payroll run." });
+      }
+
+      const entryCount = entries.length;
+      const hashStr = pl((entryHash % BigInt(10000000000)).toString(), 10);
+      const totalCreditStr = pl(totalCreditCents.toString(), 12);
+      const batchNum7 = "0000001";
+
+      const batchHeader =
+        "5" +
+        "220" +
+        companyName16 +
+        "                    " +
+        companyId10 +
+        "PPD" +
+        pr("PAYROLL", 10) +
+        "      " +
+        effDate +
+        "   " +
+        "1" +
+        odfi8 +
+        batchNum7;
+
+      const batchControl =
+        "8" +
+        "220" +
+        pl(entryCount.toString(), 6) +
+        hashStr +
+        "000000000000" +
+        totalCreditStr +
+        companyId10 +
+        "                   " +
+        "      " +
+        odfi8 +
+        batchNum7;
+
+      const allRecords = [fileHeader, batchHeader, ...entries, batchControl];
+      const totalRecords = allRecords.length + 1;
+      const blockCount = Math.ceil((totalRecords) / 10);
+      const paddingNeeded = blockCount * 10 - totalRecords;
+
+      const fileControl =
+        "9" +
+        "000001" +
+        pl(blockCount.toString(), 6) +
+        pl(entryCount.toString(), 8) +
+        hashStr +
+        "000000000000" +
+        totalCreditStr +
+        " ".repeat(39);
+
+      allRecords.push(fileControl);
+      for (let i = 0; i < paddingNeeded; i++) {
+        allRecords.push("9".repeat(94));
+      }
+
+      const nachaContent = allRecords.join("\r\n") + "\r\n";
+      const fileName = `ACH_${company.name.replace(/\s+/g, "_")}_${run.periodEnd}.ach`;
+
+      res.setHeader("Content-Type", "text/plain");
+      res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+      res.send(nachaContent);
+    } catch (error) {
+      console.error("NACHA generation error:", error);
+      res.status(500).json({ message: "Failed to generate ACH file" });
     }
   });
 

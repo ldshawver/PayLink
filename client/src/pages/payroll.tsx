@@ -336,11 +336,16 @@ function PayrollRunCard({
       const res = await apiRequest("PATCH", `/api/payroll-runs/${run.id}`, { useDirectDeposit: val });
       return res.json();
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] }),
-    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
   });
 
   const [payDateInput, setPayDateInput] = useState(run.payDate || "");
+
 
   const payDateMutation = useMutation({
     mutationFn: async (date: string) => {
@@ -351,8 +356,11 @@ function PayrollRunCard({
       queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
       toast({ title: "Pay date saved" });
     },
-    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
   });
+
 
   const downloadNacha = async () => {
     try {
@@ -541,6 +549,7 @@ function PayrollRunCard({
                 {run.useDirectDeposit !== false && (run.status === "processed" || run.status === "paid") && (
                   <Button
                     size="sm"
+                    variant="default"
                     onClick={downloadNacha}
                     data-testid={`button-download-ach-${run.id}`}
                     className="bg-teal-600 hover:bg-teal-700 text-white"
