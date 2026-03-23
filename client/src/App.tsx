@@ -26,7 +26,9 @@ import PrintExpenseCheckPage from "@/pages/print-expense-check";
 import MyProfilePage from "@/pages/my-profile";
 import PayrollAuditPage from "@/pages/payroll-audit";
 import LoginPage from "@/pages/login";
-import { Loader2 } from "lucide-react";
+import { Loader2, Menu } from "lucide-react";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { useSidebar } from "@/components/ui/sidebar";
 
 function RoleGuard({ roles, children }: { roles: string[]; children: React.ReactNode }) {
   const { user } = useAuth();
@@ -62,6 +64,43 @@ function AuthenticatedRouter() {
   );
 }
 
+function MobileHeader() {
+  const isMobile = useIsMobile();
+  const { toggleSidebar } = useSidebar();
+
+  if (!isMobile) {
+    return (
+      <header className="flex items-center justify-between gap-2 p-2 border-b sticky top-0 z-50 bg-background">
+        <SidebarTrigger data-testid="button-sidebar-toggle" />
+        <div className="flex items-center gap-3">
+          <ClockInButton />
+          <ThemeToggle />
+        </div>
+      </header>
+    );
+  }
+
+  return (
+    <>
+      <header className="flex items-center justify-between gap-2 px-3 py-2 border-b sticky top-0 z-50 bg-gradient-to-r from-teal-600 to-blue-600 text-white shadow-md">
+        <button
+          onClick={toggleSidebar}
+          data-testid="button-sidebar-toggle-mobile"
+          className="flex items-center gap-2 p-2 rounded-lg bg-white/15 hover:bg-white/25 active:bg-white/30 transition-colors"
+        >
+          <Menu className="h-6 w-6" />
+          <span className="text-sm font-semibold">Menu</span>
+        </button>
+        <span className="text-sm font-bold tracking-wide">PayLink</span>
+        <div className="flex items-center gap-2">
+          <ClockInButton />
+          <ThemeToggle />
+        </div>
+      </header>
+    </>
+  );
+}
+
 function AuthenticatedLayout() {
   const style = {
     "--sidebar-width": "16rem",
@@ -73,13 +112,7 @@ function AuthenticatedLayout() {
       <div className="flex h-screen w-full">
         <AppSidebar />
         <div className="flex flex-col flex-1 overflow-hidden">
-          <header className="flex items-center justify-between gap-2 p-2 border-b sticky top-0 z-50 bg-background">
-            <SidebarTrigger data-testid="button-sidebar-toggle" />
-            <div className="flex items-center gap-3">
-              <ClockInButton />
-              <ThemeToggle />
-            </div>
-          </header>
+          <MobileHeader />
           <main className="flex-1 overflow-y-auto">
             <AuthenticatedRouter />
           </main>
