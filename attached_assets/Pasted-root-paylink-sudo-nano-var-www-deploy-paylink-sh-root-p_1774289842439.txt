@@ -1,0 +1,182 @@
+root@paylink:~# sudo nano /var/www/deploy-paylink.sh
+root@paylink:~# sudo chmod +x /var/www/deploy-paylink.sh
+root@paylink:~# sudo nano /var/www/deploy-paylink.sh
+root@paylink:~# s   bash /var/www/deploy-paylink.sh
+s: command not found
+root@paylink:~# bash /var/www/deploy-paylink.sh
+==========================================
+PayLink Deploy - Mon Mar 23 05:55:31 PM UTC 2026
+==========================================
+Backing up PostgreSQL database...
+pg_dump: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "apppaylinkmain"
+connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "apppaylinkmain"
+root@paylink:~# pg_dump: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "apppaylinkmain"
+connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "apppaylinkmain"
+Command 'pg_dump:' not found, did you mean:
+  command 'pg_dump' from deb postgresql-client-common (257build1.1)
+Try: apt install <deb name>
+Command 'connection' not found, did you mean:
+  command 'connectron' from snap connectron (3.2.1)
+See 'snap info <snapname>' for additional versions.
+root@paylink:~# su - postgres -c "psql -c \"ALTER USER apppaylinkmain WITH PASSWORD 'Wow548302!';\""
+-bash: !': event not found
+root@paylink:~# PGPASSWORD='Wow548302!' psql -h 127.0.0.1 -p 5432 -U apppaylinkmain -d apppaylinkmain -c "SELECT 1;"
+ ?column? 
+----------
+        1
+(1 row)
+
+root@paylink:~# /home/paylinkssh/paylink-app/PayLink/.env
+-bash: /home/paylinkssh/paylink-app/PayLink/.env: Permission denied
+root@paylink:~# /home/paylinkssh/paylink-app/PayLink/.env
+-bash: /home/paylinkssh/paylink-app/PayLink/.env: Permission denied
+root@paylink:~# nano /home/paylinkssh/paylink-app/PayLink/.env
+root@paylink:~# su - postgres -c "psql -c \"ALTER USER apppaylinkmain WITH PASSWORD 'Wow548302!';\""
+-bash: !': event not found
+root@paylink:~# PGPASSWORD='Wow548302!' psql -h 127.0.0.1 -p 5432 -U apppaylinkmain -d apppaylinkmain -c "SELECT 1;"
+ ?column? 
+----------
+        1
+(1 row)
+
+root@paylink:~# DATABASE_URL=postgresql://apppaylinkmain:Wow548302%21@127.0.0.1:5432/apppaylinkmain
+root@paylink:~# nano home/paylinkssh/paylink-app/PayLink/.env
+root@paylink:~# 8302%21@127.0.0.1:5432/apppaylinkmain
+root@paylink:~# 
+-bash: 8302%21@127.0.0.1:5432/apppaylinkmain: No such file or directory
+root@paylink:~#: command not found
+root@paylink:~# nano home/paylinkssh/paylink-app/PayLink/.env
+root@paylink:~# nano /home/paylinkssh/paylink-app/PayLink/.env
+root@paylink:~# su - postgres -c "psql -c \"ALTER USER apppaylinkmain WITH PASSWORD 'Wow548302!';\""
+PGPASSWORD='Wow548302!' psql -h 127.0.0.1 -p 5432 -U apppaylinkmain -d apppaylinkmain -c "SELECT 1;"
+PGPASSWORD='Wow548302!' pg_dump -U apppaylinkmain -h 127.0.0.1 -d apppaylinkmain > /tmp/test_backup.sql
+-bash: !': event not found
+ ?column? 
+----------
+        1
+(1 row)
+
+root@paylink:~# out: 1. Backing up database...
+out:    Saved: /home/***/backups/paylink_backup_20260323_181101.sql
+out: 2. Pulling latest code...
+err: error: cannot open '.git/FETCH_HEAD': Permission denied
+2026/03/23 18:11:02 Process exited with status 1
+Command 'out:' not found, did you mean:
+  command 'outw' from deb ioport (1.2-1)
+  command 'outb' from deb ioport (1.2-1)
+  command 'outl' from deb ioport (1.2-1)
+Try: apt install <deb name>
+Command 'out:' not found, did you mean:
+  command 'outw' from deb ioport (1.2-1)
+  command 'outl' from deb ioport (1.2-1)
+  command 'outb' from deb ioport (1.2-1)
+Try: apt install <deb name>
+Command 'out:' not found, did you mean:
+  command 'outb' from deb ioport (1.2-1)
+  command 'outl' from deb ioport (1.2-1)
+  command 'outw' from deb ioport (1.2-1)
+Try: apt install <deb name>
+err:: command not found
+-bash: 2026/03/23: No such file or directory
+root@paylink:~# chown -R paylinkssh:mypaylink-app /home/paylinkssh/paylink-app
+find /home/paylinkssh/paylink-app -type d -exec chmod 775 {} \;
+find /home/paylinkssh/paylink-app -type f -exec chmod 664 {} \;
+chmod 600 /home/paylinkssh/paylink-app/PayLink/.env
+chmod +x /var/www/deploy-paylink.sh
+ls -la /home/paylinkssh/paylink-app/PayLink/.git
+su - paylinkssh
+cd /home/paylinkssh/paylink-app/PayLink
+git status
+git pull origin main
+root@paylink:~# ls -la /home/paylinkssh/paylink-app/PayLink/.git
+total 80
+drwxrwxr-x  8 paylinkssh mypaylink-app  4096 Mar 23 17:00 .
+drwxrwxr-x 13 paylinkssh mypaylink-app  4096 Mar 23 18:10 ..
+drwxrwxr-x  2 paylinkssh mypaylink-app  4096 Mar 23 12:44 branches
+-rw-rw-r--  1 paylinkssh mypaylink-app   257 Mar 23 12:44 config
+-rw-rw-r--  1 paylinkssh mypaylink-app    73 Mar 23 12:44 description
+-rw-rw-r--  1 paylinkssh mypaylink-app    88 Mar 23 17:00 FETCH_HEAD
+-rw-rw-r--  1 paylinkssh mypaylink-app    21 Mar 23 12:44 HEAD
+drwxrwxr-x  2 paylinkssh mypaylink-app  4096 Mar 23 12:44 hooks
+-rw-rw-r--  1 paylinkssh mypaylink-app 24024 Mar 23 17:00 index
+drwxrwxr-x  2 paylinkssh mypaylink-app  4096 Mar 23 12:44 info
+drwxrwxr-x  3 paylinkssh mypaylink-app  4096 Mar 23 12:44 logs
+drwxrwxr-x 49 paylinkssh mypaylink-app  4096 Mar 23 18:11 objects
+-rw-rw-r--  1 paylinkssh mypaylink-app    41 Mar 23 17:00 ORIG_HEAD
+-rw-rw-r--  1 paylinkssh mypaylink-app   186 Mar 23 12:44 packed-refs
+drwxrwxr-x  5 paylinkssh mypaylink-app  4096 Mar 23 12:44 refs
+root@paylink:~# su - paylinkssh
+paylinkssh@paylink:~$ cd /home/paylinkssh/paylink-app/PayLink
+paylinkssh@paylink:~/paylink-app/PayLink$ git status
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   package-lock.json
+        modified:   package.json
+        modified:   scripts/deploy-paylink.sh
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+        .env
+
+no changes added to commit (use "git add" and/or "git commit -a")
+paylinkssh@paylink:~/paylink-app/PayLink$ git pull origin main
+git@github.com: Permission denied (publickey).
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+paylinkssh@paylink:~/paylink-app/PayLink$ su - paylinkssh
+cd /home/paylinkssh/paylink-app/PayLink
+git status
+git pull origin main
+-bash: /usr/bin/su: Permission denied
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   package-lock.json
+        modified:   package.json
+        modified:   scripts/deploy-paylink.sh
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+        .env
+
+no changes added to commit (use "git add" and/or "git commit -a")
+git@github.com: Permission denied (publickey).
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+paylinkssh@paylink:~/paylink-app/PayLink$ su - paylinkssh
+cd /home/paylinkssh/paylink-app/PayLink
+git status
+git pull origin main
+-bash: /usr/bin/su: Permission denied
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   package-lock.json
+        modified:   package.json
+        modified:   scripts/deploy-paylink.sh
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+        .env
+
+no changes added to commit (use "git add" and/or "git commit -a")
+git@github.com: Permission denied (publickey).
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+paylinkssh@paylink:~/paylink-app/PayLink$ 
