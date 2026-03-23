@@ -63,6 +63,19 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 -   **Universal Entities:** Divisions, Cost Centers, and Secondary Wage Groups have nullable `companyId` — null means "available to all companies." Storage queries return universal + company-specific items.
 -   **Shift Marketplace (HotSchedules-style):** Employees post shifts for pickup via `shift_marketplace_listings` table. Other workers request to pick up shifts via `shift_marketplace_requests` with automatic eligibility checks (company/dept/branch/group/position/conflict/leave/weekly hours/rest periods via `server/eligibility.ts`). Managers approve/deny requests; approval reassigns `schedules.workerId`. Eligibility rule sets (`eligibility_rule_sets` table) allow configurable constraints. All actions logged to `schedule_audit_logs`. Responsibility policy: original worker keeps shift until approved replacement. Server-side authorization enforces worker ownership (listedByWorkerId/requestingWorkerId derived from session). Frontend: MarketplaceSection component with sub-tabs (Available Shifts, My Posted, My Requests, Approvals, Legacy Offers, Audit Log). API: `GET/POST /api/marketplace/listings`, `PATCH /api/marketplace/listings/:id`, `GET/POST /api/marketplace/requests`, `PATCH /api/marketplace/requests/:id/review`, `POST /api/marketplace/eligibility-check`, `GET /api/schedule-audit-logs`.
 
+## Production Deployment
+-   **Target:** `app.mypaylink.app` behind Nginx reverse proxy with SSL termination.
+-   **App binds to:** `127.0.0.1:8000` (configurable via `HOST` and `PORT` env vars).
+-   **Health endpoints:** `GET /health` (basic) and `GET /ready` (DB connectivity) — registered before session middleware, no auth required.
+-   **Startup validation:** Production mode requires `DATABASE_URL` and `SESSION_SECRET` env vars (fails fast if missing). Warns if `APP_BASE_URL` is unset.
+-   **Cookie security:** `httpOnly: true`, `secure: true` in production (behind HTTPS proxy), `sameSite: "lax"`.
+-   **Error handling:** Production error responses hide stack traces, SQL errors, and internal paths. 5xx returns generic "Internal server error". 4xx passes through error message.
+-   **Upload directory:** Configurable via `UPLOAD_DIR` env var (defaults to `./uploads`). Auto-created on startup with write permission check.
+-   **Absolute URLs:** All email/SMS link generation uses `getAppBaseUrl()` helper which reads `APP_BASE_URL` env var, falling back to request headers.
+-   **Security headers:** HSTS, X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy (production only).
+-   **No CORS:** Frontend and backend served on same origin; no CORS middleware needed.
+-   **Deployment docs:** See `DEPLOYMENT.md` for full Nginx config, systemd service, deploy checklist, rollback procedure, and troubleshooting guide.
+
 ## External Dependencies
 -   **PostgreSQL:** Primary application database.
 -   **NGINX:** Reverse proxy for production.

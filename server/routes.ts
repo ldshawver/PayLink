@@ -9,8 +9,23 @@ import { db } from "./db";
 import { sql } from "drizzle-orm";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema } from "@shared/schema";
 
+const isProduction = process.env.NODE_ENV === "production";
+
+function safeErrorMessage(error: unknown, fallback: string): string {
+  if (isProduction) return fallback;
+  return error instanceof Error ? error.message : String(error);
+}
+
+function getAppBaseUrl(req: Request): string {
+  if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL.replace(/\/+$/, "");
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
+  const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:5000";
+  return `${proto}://${host}`;
+}
+
+const resolvedUploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads");
 const uploadStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, path.join(process.cwd(), "uploads")),
+  destination: (_req, _file, cb) => cb(null, resolvedUploadDir),
   filename: (_req, file, cb) => {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     cb(null, uniqueSuffix + path.extname(file.originalname));
@@ -1323,7 +1338,7 @@ export async function registerRoutes(
       res.status(201).json({ created: created.length, skipped, templatesFound: activeRecurring.length, schedules: created });
     } catch (error) {
       console.error("Schedule generation error:", error);
-      res.status(500).json({ message: `Failed to generate schedules: ${error instanceof Error ? error.message : String(error)}` });
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to generate schedules") });
     }
   });
 
@@ -1387,10 +1402,7 @@ export async function registerRoutes(
         if (byWorker[s.workerId]) byWorker[s.workerId].shifts.push(s);
       }
 
-      // Determine base URL for schedule view link
-      const proto = req.headers["x-forwarded-proto"] || "http";
-      const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:5000";
-      const scheduleViewUrl = `${proto}://${host}/schedule`;
+      const scheduleViewUrl = `${getAppBaseUrl(req)}/schedule`;
 
       // Send notifications
       let notified = 0;
@@ -1427,7 +1439,7 @@ export async function registerRoutes(
       res.json({ published: targetSchedules.length, notified, results: notificationResults });
     } catch (error) {
       console.error("Schedule publish error:", error);
-      res.status(500).json({ message: `Failed to publish schedules: ${error instanceof Error ? error.message : String(error)}` });
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to publish schedules") });
     }
   });
 
@@ -1631,7 +1643,8 @@ export async function registerRoutes(
 
       res.status(201).json(payrollRun);
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to process payroll" });
+      console.error("Payroll processing error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to process payroll") });
     }
   });
 
@@ -2345,7 +2358,8 @@ export async function registerRoutes(
       }
       res.json({ message: `Created ${created.length} items${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up taxes/deductions" });
+      console.error("Tax/deduction setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up taxes/deductions") });
     }
   });
 
@@ -2414,7 +2428,8 @@ export async function registerRoutes(
       }
       res.json({ message: `Created ${created.length} policy groups${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up policy groups" });
+      console.error("Policy group setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up policy groups") });
     }
   });
 
@@ -2488,7 +2503,8 @@ export async function registerRoutes(
       }
       res.json({ message: `Created ${created.length} pay codes${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up pay codes" });
+      console.error("Pay code setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up pay codes") });
     }
   });
 
@@ -2565,7 +2581,8 @@ export async function registerRoutes(
       }
       res.json({ message: `Created ${created.length} holidays${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up holidays" });
+      console.error("Holiday setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up holidays") });
     }
   });
 
@@ -2988,8 +3005,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         receiptImagePath: filePath,
       });
     } catch (error: any) {
-      console.error("AI scan error:", error);
-      res.status(500).json({ message: "Failed to process receipt image", error: error.message });
+      console.error("Receipt image processing error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to process receipt image") });
     }
   });
 
@@ -3025,7 +3042,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           pendingTimecards: 0,
           pendingAmendments: pendingAmendments.length,
           pendingExpenses: pendingExpenses.length,
-          dashboardUrl: `${req.protocol}://${req.get("host")}/attendance?tab=pending-approvals`,
+          dashboardUrl: `${getAppBaseUrl(req)}/attendance?tab=pending-approvals`,
         };
 
         let emailSent = false, smsSent = false;
@@ -3123,8 +3140,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.setHeader("Content-Disposition", `attachment; filename="expense-report-${new Date().toISOString().split("T")[0]}.pdf"`);
       res.send(pdfBuffer);
     } catch (error: any) {
-      console.error("PDF export error:", error);
-      res.status(500).json({ message: "Failed to generate PDF", error: error.message });
+      console.error("PDF generation error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to generate PDF") });
     }
   });
 
@@ -4272,7 +4289,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       res.json({ message: `Created ${created.length} source(s)${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length, items: created });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up remittance sources" });
+      console.error("Remittance source setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up remittance sources") });
     }
   });
 
@@ -4297,7 +4315,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       res.json({ message: `Created ${created.length} agency(ies)${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up remittance agencies" });
+      console.error("Remittance agency setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up remittance agencies") });
     }
   });
 
@@ -4473,7 +4492,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       res.json({ message: `Created ${created.length} accounts${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up pay stub accounts" });
+      console.error("Pay stub account setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up pay stub accounts") });
     }
   });
 
@@ -4861,7 +4881,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       res.json({ message: `Created ${created.length} pay formulas${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up pay formulas" });
+      console.error("Pay formula setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up pay formulas") });
     }
   });
 
@@ -5623,7 +5644,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       res.json({ message: `Created ${created.length} premium policies${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up premium policies" });
+      console.error("Premium policy setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up premium policies") });
     }
   });
 
@@ -5650,7 +5672,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       res.json({ message: `Created ${created.length} exception policies${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up exception policies" });
+      console.error("Exception policy setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up exception policies") });
     }
   });
 
@@ -5673,7 +5696,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       res.json({ message: `Created ${created.length} schedule policies${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up schedule policies" });
+      console.error("Schedule policy setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up schedule policies") });
     }
   });
 
@@ -5697,7 +5721,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       res.json({ message: `Created ${created.length} holiday policies${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up holiday policies" });
+      console.error("Holiday policy setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up holiday policies") });
     }
   });
 
@@ -5722,7 +5747,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       res.json({ message: `Created ${created.length} accrual policies${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up accrual policies" });
+      console.error("Accrual policy setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up accrual policies") });
     }
   });
 
@@ -5747,7 +5773,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       res.json({ message: `Created ${created.length} absence policies${skipped.length ? `, skipped ${skipped.length} existing` : ""}`, count: created.length, skipped: skipped.length });
     } catch (error: any) {
-      res.status(500).json({ message: error.message || "Failed to set up absence policies" });
+      console.error("Absence policy setup error:", error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to set up absence policies") });
     }
   });
 
