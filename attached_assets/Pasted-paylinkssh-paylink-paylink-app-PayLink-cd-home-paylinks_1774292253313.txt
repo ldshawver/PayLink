@@ -1,0 +1,37 @@
+paylinkssh@paylink:~/paylink-app/PayLink$ cd /home/paylinkssh/paylink-app/PayLinkconnected"}paylinkssh@paylink:~/paylink-app/PayLink$ cd /home/paylinkssh/paylink-app/PayLink
+npm install dotenv
+pm2 delete paylink; pm2 start "node -r dotenv/config dist/index.cjs" --name paylink
+pm2 save
+
+added 1 package, and audited 572 packages in 3s
+
+81 packages are looking for funding
+  run `npm fund` for details
+
+5 vulnerabilities (1 low, 1 moderate, 3 high)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+Some issues need review, and may require choosing
+a different dependency.
+
+Run `npm audit` for details.
+[PM2] Applying action deleteProcessId on app [paylink](ids: [ 0 ])
+[PM2] [paylink](0) ✓
+┌────┬───────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name      │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+└────┴───────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[PM2] Starting /usr/bin/bash in fork_mode (1 instance)
+[PM2] Done.
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ N/A     │ fork    │ 238930   │ 0s     │ 0    │ online    │ 0%       │ 12.4mb   │ pay… │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[PM2] Saving current process list...
+[PM2] Successfully saved in /home/paylinkssh/.pm2/dump.pm2
+paylinkssh@paylink:~/paylink-app/PayLink$ sleep 3
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/ready
+{"status":"ok","timestamp":"2026-03-23T18:57:18.378Z"}{"status":"ok","database":"connected"}paylinkssh@paylink:~/paylink-app/PayLink$ 
