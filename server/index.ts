@@ -4,11 +4,27 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
+import path from "path";
+import fs from "fs";
+
+const isProduction = process.env.NODE_ENV === "production";
+
+if (isProduction) {
+  const requiredVars = ["DATABASE_URL", "SESSION_SECRET"];
+  const missing = requiredVars.filter((v) => !process.env[v]);
+  if (missing.length > 0) {
+    console.error(`FATAL: Missing required environment variables: ${missing.join(", ")}`);
+    process.exit(1);
+  }
+  if (!process.env.APP_BASE_URL) {
+    console.warn("WARNING: APP_BASE_URL is not set. Email/SMS links will fall back to request headers.");
+  }
+}
 
 const app = express();
 const httpServer = createServer(app);
 
-if (process.env.NODE_ENV === "production") {
+if (isProduction) {
   app.set("trust proxy", 1);
 }
 
@@ -25,6 +41,34 @@ declare module "express-session" {
   }
 }
 
+const uploadsDir = process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads");
+try {
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+    console.log(`Created upload directory: ${uploadsDir}`);
+  }
+  fs.accessSync(uploadsDir, fs.constants.W_OK);
+} catch (err: any) {
+  console.error(`FATAL: Upload directory "${uploadsDir}" is not writable: ${err.message}`);
+  if (isProduction) process.exit(1);
+}
+
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+app.get("/ready", async (_req, res) => {
+  try {
+    const { db } = await import("./db");
+    const { sql } = await import("drizzle-orm");
+    await db.execute(sql`SELECT 1`);
+    res.json({ status: "ok", database: "connected" });
+  } catch (err: any) {
+    console.error("[Ready] Database check failed:", err.message);
+    res.status(503).json({ status: "error", database: "unavailable" });
+  }
+});
+
 app.use(
   express.json({
     verify: (req, _res, buf) => {
@@ -35,13 +79,8 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
-import path from "path";
-import fs from "fs";
-const uploadsDir = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use("/uploads", express.static(uploadsDir));
 
-const isProduction = process.env.NODE_ENV === "production";
 const PgStore = connectPgSimple(session);
 app.use(
   session({
@@ -55,7 +94,7 @@ app.use(
     cookie: {
       maxAge: 24 * 60 * 60 * 1000,
       httpOnly: true,
-      secure: false,
+      secure: isProduction,
       sameSite: "lax",
     },
   }),
@@ -516,22 +555,6 @@ app.use((req, res, next) => {
 
   await registerRoutes(httpServer, app);
 
-  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-
-    console.error("Internal Server Error:", err);
-
-    if (res.headersSent) {
-      return next(err);
-    }
-
-    return res.status(status).json({ message });
-  });
-
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
   if (process.env.NODE_ENV === "production") {
     serveStatic(app);
   } else {
@@ -539,11 +562,19 @@ app.use((req, res, next) => {
     await setupVite(httpServer, app);
   }
 
-  app.use((err: any, _req: any, res: any, _next: any) => {
-    console.error("Unhandled error:", err);
-    res.status(err.status || 500).json({
-      message: isProduction ? "Internal server error" : err.message,
-    });
+  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+    const status = err.status || err.statusCode || 500;
+    console.error("Unhandled error:", isProduction ? err.message : err);
+
+    if (res.headersSent) {
+      return next(err);
+    }
+
+    const safeMessage = isProduction
+      ? (status < 500 ? (err.message || "Bad request") : "Internal server error")
+      : (err.message || "Internal Server Error");
+
+    return res.status(status).json({ message: safeMessage });
   });
 
   const port = parseInt(process.env.PORT || "5000", 10);
