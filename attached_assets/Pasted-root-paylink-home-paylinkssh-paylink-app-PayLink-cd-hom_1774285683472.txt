@@ -1,0 +1,114 @@
+root@paylink:/home/paylinkssh/paylink-app/PayLink# cd /home/paylinkssh/paylink-app/PayLink
+PGPASSWORD='Wow548302%21' psql -h 127.0.0.1 -U apppaylinkmain -d apppaylinkmain -f migrate.sql
+psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "apppaylinkmain"
+connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "apppaylinkmain"
+root@paylink:/home/paylinkssh/paylink-app/PayLink# PGPASSWORD='Wow548302!' psql -h 127.0.0.1 -U apppaylinkmain -d apppaylinkmain -f /home/paylinkssh/paylink-app/PayLink/migrate.sql
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:5: NOTICE:  column "approval_status" of relation "time_punches" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:6: NOTICE:  column "approved_by" of relation "time_punches" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:7: NOTICE:  column "schedule_id" of relation "time_punches" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:10: NOTICE:  column "schedule_id" of relation "time_entries" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:11: NOTICE:  column "scheduled_start" of relation "time_entries" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:12: NOTICE:  column "scheduled_end" of relation "time_entries" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:13: NOTICE:  column "scheduled_hours" of relation "time_entries" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:14: NOTICE:  column "late_minutes" of relation "time_entries" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:15: NOTICE:  column "early_departure_minutes" of relation "time_entries" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:16: NOTICE:  column "is_unscheduled" of relation "time_entries" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:17: NOTICE:  column "source" of relation "time_entries" already exists, skipping
+ALTER TABLE
+UPDATE 7
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:41: NOTICE:  column "payment_method" of relation "payroll_items" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:42: NOTICE:  column "payment_platform" of relation "payroll_items" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:43: NOTICE:  column "pay_method_id" of relation "payroll_items" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:46: NOTICE:  column "platform" of relation "pay_methods" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:47: NOTICE:  column "handle" of relation "pay_methods" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:50: NOTICE:  column "include_in_job_cost" of relation "receipts" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:51: NOTICE:  column "check_number" of relation "receipts" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:68: NOTICE:  relation "payroll_payment_methods" already exists, skipping
+CREATE TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:88: NOTICE:  relation "funding_accounts" already exists, skipping
+CREATE TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:122: NOTICE:  relation "payroll_payment_records" already exists, skipping
+CREATE TABLE
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:128: NOTICE:  column "job_id" of relation "schedules" already exists, skipping
+ALTER TABLE
+psql:/home/paylinkssh/paylink-app/PayLink/migrate.sql:131: NOTICE:  column "job_id" of relation "recurring_schedules" already exists, skipping
+ALTER TABLE
+ALTER TABLE
+root@paylink:/home/paylinkssh/paylink-app/PayLink# cd /home/paylinkssh/paylink-app/PayLink
+npm install dotenv
+npm run build
+pm2 delete paylink
+pm2 start "node -r dotenv/config dist/index.cjs" --name paylink
+pm2 save
+
+added 1 package, and audited 572 packages in 3s
+
+81 packages are looking for funding
+  run `npm fund` for details
+
+5 vulnerabilities (1 low, 1 moderate, 3 high)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+Some issues need review, and may require choosing
+a different dependency.
+
+Run `npm audit` for details.
+
+> rest-express@1.0.0 build
+> tsx script/build.ts
+
+building client...
+vite v7.3.0 building client environment for production...
+transforming (5) ../node_modules/wouter/esm/index.js
+A PostCSS plugin did not pass the `from` option to `postcss.parse`. This may cause imported assets to be incorrectly transformed. If you've recently added a PostCSS plugin that raised this warning, please contact the package author to fix the issue.
+✓ 1765 modules transformed.
+../dist/public/index.html                                                      2.26 kB │ gzip:   0.88 kB
+../dist/public/assets/PayLink_Logo_transparent_1771416877301-C_7uCr63.png    193.11 kB
+../dist/public/assets/index-DghFwQFK.css                                      89.90 kB │ gzip:  14.77 kB
+../dist/public/assets/index-CkapTnqn.js                                    1,323.56 kB │ gzip: 275.12 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 15.93s
+building server...
+
+  dist/index.cjs  1.9mb ⚠️
+
+⚡ Done in 1006ms
+[PM2] Applying action deleteProcessId on app [paylink](ids: [ 0 ])
+[PM2] [paylink](0) ✓
+┌────┬───────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name      │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+└────┴───────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[PM2] Starting /usr/bin/bash in fork_mode (1 instance)
+[PM2] Done.
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ N/A     │ fork    │ 161621   │ 0s     │ 0    │ online    │ 0%       │ 11.1mb   │ root     │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[PM2] Saving current process list...
+[PM2] Successfully saved in /root/.pm2/dump.pm2
+root@paylink:/home/paylinkssh/paylink-app/PayLink# 
