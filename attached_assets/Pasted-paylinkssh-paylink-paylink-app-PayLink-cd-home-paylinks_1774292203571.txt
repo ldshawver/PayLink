@@ -1,0 +1,68 @@
+paylinkssh@paylink:~/paylink-app/PayLink$ cd /home/paylinkssh/paylink-app/PayLink
+cp node_modules/connect-pg-simple/table.sql dist/
+pm2 delete paylink 2>/dev/null; pm2 start "node -r dotenv/config dist/index.cjs" --name paylink
+pm2 save
+sleep 5
+pm2 logs paylink --lines 20 --nostream
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/ready
+[PM2] Applying action deleteProcessId on app [paylink](ids: [ 0 ])
+[PM2] [paylink](0) ✓
+┌────┬───────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name      │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+└────┴───────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[PM2] Starting /usr/bin/bash in fork_mode (1 instance)
+[PM2] Done.
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ N/A     │ fork    │ 238538   │ 0s     │ 0    │ online    │ 0%       │ 12.0mb   │ pay… │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[PM2] Saving current process list...
+[PM2] Successfully saved in /home/paylinkssh/.pm2/dump.pm2
+[TAILING] Tailing last 20 lines for [paylink] process (change the value with --lines option)
+/home/paylinkssh/.pm2/logs/paylink-out.log last 20 lines:
+0|paylink  | Auto-migration OK: cost_centers.company_id nullable
+0|paylink  | Auto-migration OK: secondary_wage_groups.company_id nullable
+0|paylink  | Auto-migration OK: employee_group_configs table
+0|paylink  | Auto-migration OK: workers.worker_group
+0|paylink  | Auto-migration OK: schedule_preferences table
+0|paylink  | Auto-migration OK: shift_marketplace_listings table
+0|paylink  | Auto-migration OK: shift_marketplace_requests table
+0|paylink  | Auto-migration OK: eligibility_rule_sets table
+0|paylink  | Auto-migration OK: schedule_audit_logs table
+0|paylink  | Auto-migration OK: notification_preferences table
+0|paylink  | Auto-migration OK: expense_categories table
+0|paylink  | Auto-migration OK: expenses table
+0|paylink  | Auto-migration OK: expense_attachments table
+0|paylink  | Auto-migration OK: contractor_invoices table
+0|paylink  | Auto-migration OK: contractor_invoice_attachments table
+0|paylink  | Auto-migration OK: recurring_expense_templates table
+0|paylink  | Auto-migration OK: expense_approval_actions table
+0|paylink  | Auto-migration OK: payroll_reimbursement_items table
+0|paylink  | Admin user password reset to default
+0|paylink  | Roles already seeded, skipping
+
+/home/paylinkssh/.pm2/logs/paylink-error.log last 20 lines:
+0|paylink  |   throw err;
+0|paylink  |   ^
+0|paylink  | 
+0|paylink  | Error: Cannot find module 'dotenv/config'
+0|paylink  | Require stack:
+0|paylink  | - internal/preload
+0|paylink  |     at Module._resolveFilename (node:internal/modules/cjs/loader:1207:15)
+0|paylink  |     at Module._load (node:internal/modules/cjs/loader:1038:27)
+0|paylink  |     at internalRequire (node:internal/modules/cjs/loader:219:19)
+0|paylink  |     at Module._preloadModules (node:internal/modules/cjs/loader:1785:5)
+0|paylink  |     at loadPreloadModules (node:internal/process/pre_execution:745:5)
+0|paylink  |     at setupUserModules (node:internal/process/pre_execution:206:5)
+0|paylink  |     at prepareExecution (node:internal/process/pre_execution:159:5)
+0|paylink  |     at prepareMainThreadExecution (node:internal/process/pre_execution:53:10)
+0|paylink  |     at node:internal/main/run_main_module:11:19 {
+0|paylink  |   code: 'MODULE_NOT_FOUND',
+0|paylink  |   requireStack: [ 'internal/preload' ]
+0|paylink  | }
+0|paylink  | 
+0|paylink  | Node.js v20.20.0
+
+{"status":"ok","timestamp":"2026-03-23T18:56:28.097Z"}{"status":"ok","database":"connected"}paylinkssh@paylink:~/paylink-app/PayLink$ 
