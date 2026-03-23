@@ -393,7 +393,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/workers", requireRole("admin", "manager"), async (req, res)  {
+  app.post("/api/workers", requireRole("admin", "manager"), async (req, res) => {
     try {
       if (!req.body.companyId) return res.status(400).json({ message: "Company is required" });
       if (!req.body.firstName) return res.status(400).json({ message: "First name is required" });
