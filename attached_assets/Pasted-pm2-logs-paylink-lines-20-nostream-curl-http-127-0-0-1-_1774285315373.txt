@@ -1,0 +1,49 @@
+pm2 logs paylink --lines 20 --nostream
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/ready
+[TAILING] Tailing last 20 lines for [paylink] process (change the value with --lines option)
+/root/.pm2/logs/paylink-error.log last 20 lines:
+0|paylink  | 
+0|paylink  | Error: Cannot find module 'dotenv/config'
+0|paylink  | Require stack:
+0|paylink  | - internal/preload
+0|paylink  |     at Module._resolveFilename (node:internal/modules/cjs/loader:1207:15)
+0|paylink  |     at Module._load (node:internal/modules/cjs/loader:1038:27)
+0|paylink  |     at internalRequire (node:internal/modules/cjs/loader:219:19)
+0|paylink  |     at Module._preloadModules (node:internal/modules/cjs/loader:1785:5)
+0|paylink  |     at loadPreloadModules (node:internal/process/pre_execution:745:5)
+0|paylink  |     at setupUserModules (node:internal/process/pre_execution:206:5)
+0|paylink  |     at prepareExecution (node:internal/process/pre_execution:159:5)
+0|paylink  |     at prepareMainThreadExecution (node:internal/process/pre_execution:53:10)
+0|paylink  |     at node:internal/main/run_main_module:11:19 {
+0|paylink  |   code: 'MODULE_NOT_FOUND',
+0|paylink  |   requireStack: [ 'internal/preload' ]
+0|paylink  | }
+0|paylink  | 
+0|paylink  | Node.js v20.20.0
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+0|paylink  | FATAL: Missing required environment variables: DATABASE_URL, SESSION_SECRET
+
+/root/.pm2/logs/paylink-out.log last 20 lines:
+0|paylink  | Auto-migration skipped (workers.worker_group): relation "workers" does not exist
+0|paylink  | Auto-migration skipped (schedule_preferences table): relation "workers" does not exist
+0|paylink  | Auto-migration skipped (shift_marketplace_listings table): relation "schedules" does not exist
+0|paylink  | Auto-migration skipped (shift_marketplace_requests table): relation "shift_marketplace_listings" does not exist
+0|paylink  | Auto-migration skipped (eligibility_rule_sets table): relation "companies" does not exist
+0|paylink  | Auto-migration skipped (schedule_audit_logs table): relation "companies" does not exist
+0|paylink  | Auto-migration skipped (notification_preferences table): relation "workers" does not exist
+0|paylink  | Auto-migration OK: expense_categories table
+0|paylink  | Auto-migration skipped (expenses table): relation "companies" does not exist
+0|paylink  | Auto-migration OK: expense_attachments table
+0|paylink  | Auto-migration skipped (contractor_invoices table): relation "companies" does not exist
+0|paylink  | Auto-migration OK: contractor_invoice_attachments table
+0|paylink  | Auto-migration skipped (recurring_expense_templates table): relation "companies" does not exist
+0|paylink  | Auto-migration OK: expense_approval_actions table
+0|paylink  | Auto-migration skipped (payroll_reimbursement_items table): relation "workers" does not exist
+0|paylink  | Could not ensure admin user (tables may not exist yet)
+0|paylink  | Could not seed roles: relation "roles" does not exist
+0|paylink  | Tables may not exist yet, will try to seed anyway
+0|paylink  | Seed skipped or failed: relation "companies" does not exist
+0|paylink  | 5:01:11 PM [express] serving on 127.0.0.1:8000
+
+{"status":"ok","timestamp":"2026-03-23T17:01:26.255Z"}{"status":"ok","database":"connected"}root@paylink:/home/paylinkssh/paylink-app/PayLink# 
