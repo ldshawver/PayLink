@@ -4,12 +4,14 @@ set -e
 APP_DIR="/home/paylinkssh/paylink-app/PayLink"
 BACKUP_DIR="/home/paylinkssh/backups"
 
-echo "=== PayLink Deploy Started at $(date) ==="
+echo "=========================================="
+echo "PayLink Deploy - $(date)"
+echo "=========================================="
 
 mkdir -p "$BACKUP_DIR"
 BACKUP_FILE="$BACKUP_DIR/paylink_backup_$(date +%Y%m%d_%H%M%S).sql"
 echo "1. Backing up database..."
-pg_dump -U lshawver -h 127.0.0.1 paylink > "$BACKUP_FILE"
+PGPASSWORD='Wow548302!' pg_dump -U apppaylinkmain -h 127.0.0.1 apppaylinkmain > "$BACKUP_FILE"
 echo "   Saved: $BACKUP_FILE"
 
 cd "$APP_DIR"
@@ -26,25 +28,12 @@ npm run build
 echo "5. Copying session table SQL..."
 cp node_modules/connect-pg-simple/table.sql dist/
 
-if [ ! -f ecosystem.config.cjs ]; then
-  echo "6. Creating ecosystem config..."
-  cat > ecosystem.config.cjs << 'EOF'
-module.exports = {
-  apps: [{
-    name: "paylink",
-    script: "dist/index.cjs",
-    cwd: "/home/paylinkssh/paylink-app/PayLink",
-    node_args: "--env-file=.env"
-  }]
-};
-EOF
-fi
-
-echo "7. Restarting app..."
-pm2 restart paylink 2>/dev/null || pm2 start ecosystem.config.cjs
+echo "6. Restarting app..."
+pm2 delete paylink 2>/dev/null || true
+cd "$APP_DIR" && pm2 start "node -r dotenv/config dist/index.cjs" --name paylink
 pm2 save
 
-echo "8. Waiting for startup..."
+echo "7. Waiting for startup..."
 sleep 10
 
 HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health)
@@ -58,13 +47,15 @@ if [ "$HEALTH" != "200" ] || [ "$READY" != "200" ]; then
   pm2 logs paylink --lines 30 --nostream
   echo ""
   echo "To rollback:"
-  echo "  psql -U lshawver -h 127.0.0.1 paylink < $BACKUP_FILE"
+  echo "  PGPASSWORD='Wow548302!' psql -U apppaylinkmain -h 127.0.0.1 apppaylinkmain < $BACKUP_FILE"
   echo "  git checkout HEAD~1"
   echo "  npm run build && cp node_modules/connect-pg-simple/table.sql dist/"
-  echo "  pm2 restart paylink"
+  echo "  pm2 delete paylink && pm2 start 'node -r dotenv/config dist/index.cjs' --name paylink"
   exit 1
 fi
 
 ls -t "$BACKUP_DIR"/paylink_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
 
-echo "=== Deploy Complete ==="
+echo "=========================================="
+echo "Deploy Complete - Health: $HEALTH | Ready: $READY"
+echo "=========================================="
