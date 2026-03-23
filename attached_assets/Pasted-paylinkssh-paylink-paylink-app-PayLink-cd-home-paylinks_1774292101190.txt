@@ -1,0 +1,59 @@
+paylinkssh@paylink:~/paylink-app/PayLink$  cd /home/paylinkssh/paylink-app/PayLink
+git stash
+git pull origin main
+npm install --production=false
+chmod +x node_modules/.bin/tsx
+npm run build
+cp node_modules/connect-pg-simple/table.sql dist/
+pm2 delete paylink 2>/dev/null; pm2 start "node -r dotenv/config dist/index.cjs" --name paylink
+pm2 save
+No local changes to save
+From https://github.com/ldshawver/PayLink
+ * branch            main       -> FETCH_HEAD
+Already up to date.
+npm warn config production Use `--omit=dev` instead.
+
+up to date, audited 571 packages in 3s
+
+80 packages are looking for funding
+  run `npm fund` for details
+
+5 vulnerabilities (1 low, 1 moderate, 3 high)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+Some issues need review, and may require choosing
+a different dependency.
+
+Run `npm audit` for details.
+
+> rest-express@1.0.0 build
+> tsx script/build.ts
+
+building client...
+failed to load config from /home/paylinkssh/paylink-app/PayLink/vite.config.ts
+Error: The service was stopped: spawn /home/paylinkssh/paylink-app/PayLink/node_modules/vite/node_modules/@esbuild/linux-x64/bin/esbuild EACCES
+    at /home/paylinkssh/paylink-app/PayLink/node_modules/vite/node_modules/esbuild/lib/main.js:949:34
+    at responseCallbacks.<computed> (/home/paylinkssh/paylink-app/PayLink/node_modules/vite/node_modules/esbuild/lib/main.js:603:9)
+    at ChildProcess.afterClose (/home/paylinkssh/paylink-app/PayLink/node_modules/vite/node_modules/esbuild/lib/main.js:594:28)
+    at ChildProcess.emit (node:events:524:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:291:12)
+    at onErrorNT (node:internal/child_process:483:16)
+    at process.processTicksAndRejections (node:internal/process/task_queues:82:21)
+cp: cannot create regular file 'dist/': Not a directory
+[PM2] Applying action deleteProcessId on app [paylink](ids: [ 0 ])
+[PM2] [paylink](0) ✓
+┌────┬───────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name      │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+└────┴───────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[PM2] Starting /usr/bin/bash in fork_mode (1 instance)
+[PM2] Done.
+┌────┬────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name       │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink    │ default     │ N/A     │ fork    │ 238345   │ 0s     │ 0    │ online    │ 0%       │ 5.4mb    │ pay… │ disabled │
+└────┴────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[PM2] Saving current process list...
+[PM2] Successfully saved in /home/paylinkssh/.pm2/dump.pm2
+paylinkssh@paylink:~/paylink-app/PayLink$ 
