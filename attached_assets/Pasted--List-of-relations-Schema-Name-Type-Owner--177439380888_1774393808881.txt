@@ -1,0 +1,47 @@
+                    List of relations
+ Schema |              Name              | Type  |  Owner   
+--------+--------------------------------+-------+----------
+ public | absence_policies               | table | lshawver
+ public | accrual_accounts               | table | lshawver
+ public | accrual_balances               | table | lshawver
+ public | accrual_policies               | table | lshawver
+ public | accrual_policy_milestones      | table | lshawver
+ public | branches                       | table | lshawver
+ public | break_policies                 | table | lshawver
+ public | check_templates                | table | lshawver
+ public | companies                      | table | lshawver
+ public | contractor_invoice_attachments | table | lshawver
+ public | contractor_invoices            | table | lshawver
+ public | contributing_pay_codes         | table | lshawver
+ public | contributing_shifts            | table | lshawver
+ public | cost_centers                   | table | lshawver
+ public | currencies                     | table | lshawver
+ public | departments                    | table | lshawver
+ public | divisions                      | table | lshawver
+ public | eligibility_rule_sets          | table | lshawver
+ public | employee_contacts              | table | lshawver
+ public | employee_group_configs         | table | lshawver
+ public | employee_groups                | table | lshawver
+ public | employee_titles                | table | lshawver
+ public | employee_wage_groups           | table | lshawver
+ public | enterprises                    | table | lshawver
+ public | exception_policies             | table | lshawver
+ public | expense_approval_actions       | table | lshawver
+ public | expense_attachments            | table | lshawver
+ public | expense_categories             | table | lshawver
+ public | expenses                       | table | lshawver
+ public | funding_accounts               | table | lshawver
+ public | holiday_policies               | table | lshawver
+ public | holidays                       | table | lshawver
+ public | jobs                           | table | lshawver
+ public | kpi_groups                     | table | lshawver
+ public | legal_entities                 | table | lshawver
+ public | meal_policies                  | table | lshawver
+ public | new_hire_defaults              | table | lshawver
+ public | notification_preferences       | table | lshawver
+ public | overtime_policies              | table | lshawver
+ public | pay_codes                      | table | lshawver
+ public | pay_formulas                   | table | lshawver
+ public | pay_methods                    | table | lshawver
+ public | pay_period_schedules           | table | lshawver
+:
