@@ -13,6 +13,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/punch-clock.css">
 </head>
 <body>
 
@@ -41,37 +42,51 @@
     </div>
   </nav>
 
-  <section class="hero">
-    <div class="container">
-      <div class="hero-badge fade-up">🚀 Now Available</div>
-      <h1 class="fade-up stagger-1">
-        One Platform for<br>
-        <span class="gradient-text">Workforce Operations</span>
-      </h1>
-      <p class="fade-up stagger-2">
-        Payroll, scheduling, time tracking, contractor invoices, expense management, and multi-company HR — unified in one secure system.
-      </p>
-      <div class="hero-buttons fade-up stagger-3">
-        <a href="/contact" class="btn-primary">Book a Demo →</a>
-        <a href="/features" class="btn-secondary">See Features</a>
+  <section class="punch-hero">
+    <div class="punch-sticky">
+      <div class="punch-wrap">
+        <div class="clock-machine">
+          <div class="clock-header">
+            <div class="clock-brand">PayLink</div>
+            <div class="clock-title">Employee Time Clock</div>
+          </div>
+
+          <div class="clock-screen">
+            <div class="clock-analog">
+              <div class="clock-analog-center"></div>
+              <div class="clock-hand clock-hand-hour" id="hourHand"></div>
+              <div class="clock-hand clock-hand-minute" id="minuteHand"></div>
+              <div class="clock-hand clock-hand-second" id="secondHand"></div>
+            </div>
+            <div class="clock-date-display" id="punchDate"></div>
+            <div class="clock-time-display">
+              <span class="clock-time-digits" id="punchTimeDigits">12:00</span><span class="clock-time-seconds" id="punchTimeSec">:00</span><span class="clock-time-ampm" id="punchTimeAmPm">AM</span>
+            </div>
+            <div class="clock-status-line" id="punchStatus">Employees may clock in or out here</div>
+          </div>
+
+          <div class="clock-actions">
+            <button class="clock-btn clock-btn-in" id="btnClockIn" type="button">
+              <span class="btn-text">Clock In</span>
+              <span class="btn-loading"></span>
+            </button>
+            <button class="clock-btn clock-btn-out" id="btnClockOut" type="button">
+              <span class="btn-text">Clock Out</span>
+              <span class="btn-loading"></span>
+            </button>
+          </div>
+
+          <div class="clock-card-slot" id="cardSlot"></div>
+
+          <div class="clock-footer">
+            <div class="clock-footer-text">Alavont Holdings &bull; Secure Workforce Platform</div>
+          </div>
+        </div>
       </div>
-      <div class="hero-stats fade-up stagger-4">
-        <div class="hero-stat">
-          <div class="number">100%</div>
-          <div class="label">California Compliant</div>
-        </div>
-        <div class="hero-stat">
-          <div class="number">Multi-Co</div>
-          <div class="label">Enterprise Support</div>
-        </div>
-        <div class="hero-stat">
-          <div class="number">ACH</div>
-          <div class="label">Direct Deposit</div>
-        </div>
-        <div class="hero-stat">
-          <div class="number">24/7</div>
-          <div class="label">Time Clock Access</div>
-        </div>
+
+      <div class="scroll-hint">
+        Scroll down to see more
+        <span class="scroll-hint-arrow">&#8595;</span>
       </div>
     </div>
   </section>
@@ -416,5 +431,6 @@
   </footer>
 
   <script src="/js/main.js"></script>
+  <script src="/js/punch-clock.js"></script>
 </body>
 </html>

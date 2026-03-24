@@ -1,0 +1,578 @@
+Implementation Instructions for Replit
+Project Goal
+
+Build a full-screen, animated hero section for the external website that features a classic time-punch style clock interface. The hero should serve two purposes:
+
+Create a visually memorable landing experience.
+Allow employees to use the clock interface to clock in or out.
+
+As the user scrolls down, the large hero clock should smoothly scale down and transition upward, allowing the rest of the site content to appear below it.
+
+Functional Requirements
+1. Full-Screen Hero Section
+
+Create a hero section that fills the full viewport height on page load.
+
+It should contain:
+
+a large animated classic-style punch clock
+a digital live time display
+a “Clock In” button
+a “Clock Out” button
+a small line of text below the clock:
+Scroll down to see more
+
+The hero should feel bold, polished, and slightly nostalgic, like a vintage employee time clock mixed with a modern SaaS landing page.
+
+2. Clock Design / Visual Style
+
+The clock should look like a classic wall-mounted or tabletop time punch machine, not just a plain digital widget.
+
+Design cues:
+
+rounded metal housing
+brushed steel / matte black / deep charcoal finish
+glowing screen or backlit time window
+subtle shadows and highlights
+old-school punch card slot or card tray detail
+animated ticking second hand or soft mechanical motion
+subtle idle movement to make it feel alive
+
+Optional enhancements:
+
+a slight “tick” or “flip” animation each minute or second
+glowing accent around punch buttons
+fake punch-card insertion effect when user clicks clock in/out
+3. Live Time Behavior
+
+The clock must display the current local time in real time.
+
+Suggested display:
+
+current time in HH:MM:SS
+current date below or above the time
+optional analog hands plus digital display
+
+Use JavaScript to update every second.
+
+4. Employee Clock In / Clock Out Interaction
+
+The clock hero should allow employee use directly from the landing area.
+
+Minimum functionality:
+
+click “Clock In” sends a clock-in event
+click “Clock Out” sends a clock-out event
+show a short success state after action, such as:
+“You are clocked in”
+“Clock-out recorded”
+disable duplicate clicks briefly while submitting
+show loading animation while request is in progress
+
+Recommended API contract:
+
+POST /api/time/clock-in
+POST /api/time/clock-out
+
+Payload example:
+
+{
+  "employeeId": "current-session-user-id",
+  "timestamp": "2026-03-24T18:23:00Z",
+  "source": "landing-clock"
+}
+
+If employees are already authenticated, use session-based identity.
+If not authenticated, the hero should route them to sign in before allowing punch actions.
+
+Fallback behavior:
+
+if not logged in, clicking either button opens login modal or redirects to /login
+Scroll Animation Behavior
+5. Shrink-on-Scroll Effect
+
+As the visitor scrolls down:
+
+the hero clock should smoothly scale down
+move upward toward the top-center or top-left
+the “Scroll down to see more” text should fade out
+page content below should begin to appear naturally
+
+This effect should feel smooth, premium, and modern.
+
+Recommended behavior:
+
+at top of page: clock is large and centered
+after scrolling ~20–40% of viewport height: clock begins shrinking
+after ~80–100% of hero scroll range: clock becomes much smaller and locks into a header-like position or fades into the next layout
+
+Recommended CSS/JS tools:
+
+use position: sticky for the hero inner container
+animate scale and translate with transform
+use requestAnimationFrame or scroll event throttling
+avoid janky layout changes by animating transforms only
+Technical Build Recommendation
+6. Suggested Stack for Replit
+
+For the external website, use one of these:
+
+Best simple option
+HTML
+CSS
+Vanilla JavaScript
+Better scalable option
+React + Vite
+CSS modules or Tailwind
+Framer Motion for the hero scroll/scale animation
+
+If the external site is already lightweight and static, use Vanilla JS.
+If the external site may evolve into a more interactive landing page, use React + Framer Motion.
+
+For the effect you described, I’d recommend:
+
+React + Framer Motion
+
+because:
+
+smoother animations
+cleaner scroll transform logic
+easier reuse and future edits
+better component structure
+Recommended File Structure
+
+If using React:
+
+src/
+  components/
+    PunchClockHero.jsx
+    PunchClock.jsx
+    ScrollHint.jsx
+  pages/
+    HomePage.jsx
+  styles/
+    punchClock.css
+  utils/
+    time.js
+  App.jsx
+  main.jsx
+
+If using plain HTML/CSS/JS:
+
+/public-site
+  index.html
+  styles.css
+  script.js
+  assets/
+    clock-face.png
+    metal-texture.png
+    punch-card.svg
+Behavior Details Replit Should Implement
+7. Hero Layout Logic
+
+The hero section should use a tall scroll region, not just a single 100vh snap section.
+
+Recommended layout:
+
+outer section height: 180vh to 220vh
+inner clock container: position: sticky; top: 0; height: 100vh;
+clock stays visible while user scrolls through the intro animation range
+content below begins after the sticky region
+
+This creates the “clock zooms smaller as user scrolls down” effect very naturally.
+
+Visual Motion Requirements
+8. Required Animations
+
+Replit should implement the following animations:
+
+Idle clock animation
+subtle floating or breathing motion
+faint mechanical vibration or shadow shift
+optional second-hand tick
+Scroll animation
+scale from 1 down to about 0.35–0.5
+translate upward by -150px to -250px
+optional fade of surrounding decorative elements
+Button feedback
+soft press animation on click
+loading state
+confirmation flash or badge
+Scroll helper text
+gently bounce or pulse at page load
+fade away as scrolling begins
+Accessibility Requirements
+9. Accessibility
+
+Replit should make sure:
+
+buttons are keyboard accessible
+text contrast is high enough
+animations respect prefers-reduced-motion
+clock-in and clock-out states are announced to screen readers if possible
+focus states are visible
+API / Backend Integration Instructions
+10. Time Punch Logic
+
+The front-end clock UI should connect to the existing employee/auth system.
+
+Replit should:
+
+detect whether a user is authenticated
+if authenticated, send clock-in/out actions to the backend
+if not authenticated, redirect to login or open a modal
+
+Recommended backend endpoints:
+
+POST /api/time/clock-in
+POST /api/time/clock-out
+GET /api/time/status
+
+Suggested GET /api/time/status response:
+
+{
+  "isClockedIn": true,
+  "lastAction": "clock_in",
+  "lastTimestamp": "2026-03-24T15:10:22Z"
+}
+
+This lets the hero show current state like:
+
+“Currently clocked in”
+“Last punch: 8:04 AM”
+Suggested UX Copy
+11. Text Options
+
+Main helper text:
+
+Scroll down to see more
+
+Optional subtext under clock:
+
+Employees may clock in or out here
+
+Button text:
+
+Clock In
+Clock Out
+
+Success states:
+
+Clock-in recorded
+Clock-out recorded
+Currently clocked in
+Currently clocked out
+Starter React Prompt for Replit
+
+You can paste this directly into Replit as a build instruction:
+
+Build a premium full-screen hero section for the external website that features a large animated classic employee time punch clock.
+
+Requirements:
+- Use React and Framer Motion.
+- The hero should fill the viewport and remain visible during an intro scroll section.
+- The clock should have a vintage industrial time clock aesthetic: metal body, subtle shadows, retro punch-card styling, modern polish.
+- Display live local time updated every second.
+- Include two buttons: Clock In and Clock Out.
+- Add helper text below the clock: "Scroll down to see more".
+- As the user scrolls down, the clock should smoothly shrink and move upward, while the helper text fades out.
+- Use a sticky scroll section so the animation happens while the user scrolls through the hero.
+- After the hero animation, the rest of the website content should appear normally below.
+- Add button states for loading, success, and failure.
+- Build the clock-in and clock-out handlers as async functions that call:
+  POST /api/time/clock-in
+  POST /api/time/clock-out
+- If the user is not authenticated, redirect to /login before allowing punch actions.
+- Respect prefers-reduced-motion.
+- Keep the design clean, polished, and modern with a nostalgic mechanical punch clock vibe.
+- Organize the code into reusable components:
+  PunchClockHero.jsx
+  PunchClock.jsx
+  ScrollHint.jsx
+- Make the component responsive for desktop and mobile.
+Recommended React Component Logic
+12. Core Animation Pattern
+
+Replit should use:
+
+useScroll
+useTransform
+motion.div
+
+Conceptually:
+
+track scroll progress through the hero section
+transform:
+scale from 1 to 0.4
+y position from 0 to -220
+opacity for helper text from 1 to 0
+Example React Starter Code
+PunchClockHero.jsx
+import { useEffect, useState, useRef } from "react";
+import { motion, useScroll, useTransform } from "framer-motion";
+
+function PunchClock({ time, onClockIn, onClockOut, loading, status }) {
+  return (
+    <div className="clock-shell">
+      <div className="clock-top">EMPLOYEE TIME CLOCK</div>
+      <div className="clock-display">
+        <div className="clock-time">{time}</div>
+        <div className="clock-date">
+          {new Date().toLocaleDateString()}
+        </div>
+      </div>
+
+      <div className="clock-buttons">
+        <button onClick={onClockIn} disabled={loading}>Clock In</button>
+        <button onClick={onClockOut} disabled={loading}>Clock Out</button>
+      </div>
+
+      {status && <div className="clock-status">{status}</div>}
+    </div>
+  );
+}
+
+export default function PunchClockHero() {
+  const [time, setTime] = useState(new Date().toLocaleTimeString());
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
+  const sectionRef = useRef(null);
+
+  const { scrollYProgress } = useScroll({
+    target: sectionRef,
+    offset: ["start start", "end start"]
+  });
+
+  const scale = useTransform(scrollYProgress, [0, 0.7], [1, 0.42]);
+  const y = useTransform(scrollYProgress, [0, 0.7], [0, -220]);
+  const hintOpacity = useTransform(scrollYProgress, [0, 0.2], [1, 0]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTime(new Date().toLocaleTimeString());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const requireAuth = () => {
+    const isAuthenticated = true; // replace with real auth check
+    if (!isAuthenticated) {
+      window.location.href = "/login";
+      return false;
+    }
+    return true;
+  };
+
+  const handleClockAction = async (type) => {
+    if (!requireAuth()) return;
+
+    try {
+      setLoading(true);
+      setStatus("");
+
+      const endpoint =
+        type === "in" ? "/api/time/clock-in" : "/api/time/clock-out";
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          timestamp: new Date().toISOString(),
+          source: "landing-clock"
+        })
+      });
+
+      if (!res.ok) throw new Error("Request failed");
+
+      setStatus(type === "in" ? "Clock-in recorded" : "Clock-out recorded");
+    } catch (err) {
+      setStatus("Unable to record punch. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section ref={sectionRef} className="hero-scroll-section">
+      <div className="hero-sticky">
+        <motion.div
+          className="hero-clock-wrap"
+          style={{ scale, y }}
+        >
+          <PunchClock
+            time={time}
+            loading={loading}
+            status={status}
+            onClockIn={() => handleClockAction("in")}
+            onClockOut={() => handleClockAction("out")}
+          />
+        </motion.div>
+
+        <motion.div className="scroll-hint" style={{ opacity: hintOpacity }}>
+          Scroll down to see more
+        </motion.div>
+      </div>
+    </section>
+  );
+}
+CSS Starter
+.hero-scroll-section {
+  height: 200vh;
+  position: relative;
+  background:
+    radial-gradient(circle at center, #1c1c1c 0%, #0d0d0d 55%, #050505 100%);
+  color: white;
+}
+
+.hero-sticky {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.hero-clock-wrap {
+  will-change: transform;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.clock-shell {
+  width: min(90vw, 520px);
+  border-radius: 28px;
+  padding: 24px;
+  background: linear-gradient(180deg, #3b3b3b 0%, #1b1b1b 100%);
+  box-shadow:
+    0 30px 80px rgba(0,0,0,0.45),
+    inset 0 1px 0 rgba(255,255,255,0.15),
+    inset 0 -2px 8px rgba(0,0,0,0.4);
+  border: 1px solid rgba(255,255,255,0.08);
+  text-align: center;
+}
+
+.clock-top {
+  font-size: 0.85rem;
+  letter-spacing: 0.25em;
+  opacity: 0.8;
+  margin-bottom: 18px;
+}
+
+.clock-display {
+  background: #0b1210;
+  border-radius: 16px;
+  padding: 24px 16px;
+  margin-bottom: 20px;
+  box-shadow: inset 0 0 20px rgba(0, 255, 170, 0.08);
+}
+
+.clock-time {
+  font-size: clamp(2rem, 6vw, 4rem);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #b6ffd6;
+}
+
+.clock-date {
+  margin-top: 10px;
+  opacity: 0.75;
+  font-size: 0.95rem;
+}
+
+.clock-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.clock-buttons button {
+  border: none;
+  border-radius: 999px;
+  padding: 14px 22px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.clock-buttons button:hover {
+  transform: translateY(-2px);
+}
+
+.clock-buttons button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.clock-status {
+  margin-top: 16px;
+  font-size: 0.95rem;
+  color: #d8ffe8;
+}
+
+.scroll-hint {
+  position: absolute;
+  bottom: 36px;
+  font-size: 0.95rem;
+  letter-spacing: 0.06em;
+  opacity: 0.85;
+  animation: bounceHint 2s infinite;
+}
+
+@keyframes bounceHint {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(8px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll-hint {
+    animation: none;
+  }
+
+  .hero-clock-wrap {
+    transform: none !important;
+  }
+}
+If They Want Pure HTML/CSS/JS Instead
+
+If your external site is not React-based, tell Replit this instead:
+
+Build the hero using plain HTML, CSS, and JavaScript.
+Use a tall scroll section with a sticky inner container.
+Animate the clock scaling and upward movement based on window scroll position.
+Update the clock display every second with JavaScript.
+Wire the Clock In and Clock Out buttons to async fetch POST calls.
+Keep the code modular and easy to drop into the external public site.
+Smart UX Enhancements to Add
+
+These would make it feel extra polished:
+
+a punch-card slot visual that flashes when clocking in/out
+a tiny printed ticket animation after punch
+subtle sound toggle for mechanical click effect
+“Current status” badge
+employee name if logged in
+last punch time shown on the clock
+mobile version where clock stays centered longer before shrinking
+Best Placement on the Site
+
+This works best:
+
+as the homepage hero
+or as a separate employee portal intro section
+or as the top section of the external site before features, pricing, and product content
+
+If the main audience is both customers and employees, a good compromise is:
+
+hero includes the punch clock
+then below it the public content begins
+employee-only actions still require auth
+What to Tell Replit in One Clean Block
+
+Use this exact instruction block:
+
+Create a premium homepage hero for the external website featuring a large animated classic employee time punch clock. The hero should fill the full viewport and include a live updating clock, Clock In and Clock Out buttons, and the text “Scroll down to see more.” As the user scrolls down, the clock should smoothly shrink and move upward while the helper text fades out, then the rest of the website content should continue below. Use a sticky scroll section to achieve the animation. The clock should have a nostalgic mechanical time-clock look with modern polish. Make the buttons call async endpoints for clock in and clock out. If the user is not authenticated, redirect to login before allowing actions. Make the layout responsive, polished, and accessible. Use React and Framer Motion unless the current external site is plain HTML, in which case use vanilla JavaScript and CSS with transform-based scroll animation.
