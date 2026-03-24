@@ -91,58 +91,148 @@
     </div>
   </section>
 
-  <section>
+  <section style="padding-top: 40px;">
     <div class="container section-center">
-      <span class="section-label fade-up">Product Overview</span>
+      <span class="section-label fade-up">PayLink Overview</span>
       <h2 class="section-title fade-up stagger-1">Everything You Need to Run Payroll & HR</h2>
       <p class="section-desc fade-up stagger-2">
         PayLink replaces a patchwork of spreadsheets, time-clock apps, and payroll services with one integrated platform designed for growing businesses.
       </p>
-      <div class="product-visual fade-up stagger-3">
-        <div class="dashboard-preview">
-          <div class="dash-sidebar">
-            <div class="dash-sidebar-item active">📊 Dashboard</div>
-            <div class="dash-sidebar-item">👥 Employees</div>
-            <div class="dash-sidebar-item">⏱ Time Clock</div>
-            <div class="dash-sidebar-item">📅 Schedules</div>
-            <div class="dash-sidebar-item">💰 Payroll</div>
-            <div class="dash-sidebar-item">📋 Reports</div>
-            <div class="dash-sidebar-item">🏢 Companies</div>
-            <div class="dash-sidebar-item">⚙️ Settings</div>
+      <div class="product-visual fade-up stagger-3" id="dashCycler">
+        <div class="dash-page-indicator">
+          <button class="dash-dot active" data-page="0">Dashboard</button>
+          <button class="dash-dot" data-page="1">Employees</button>
+          <button class="dash-dot" data-page="2">Time Clock</button>
+          <button class="dash-dot" data-page="3">Schedules</button>
+          <button class="dash-dot" data-page="4">Payroll</button>
+          <button class="dash-dot" data-page="5">Reports</button>
+        </div>
+        <div class="dash-carousel">
+          <div class="dash-slide active" data-slide="0">
+            <div class="dashboard-preview">
+              <div class="dash-sidebar">
+                <div class="dash-sidebar-item active">📊 Dashboard</div>
+                <div class="dash-sidebar-item">👥 Employees</div>
+                <div class="dash-sidebar-item">⏱ Time Clock</div>
+                <div class="dash-sidebar-item">📅 Schedules</div>
+                <div class="dash-sidebar-item">💰 Payroll</div>
+                <div class="dash-sidebar-item">📋 Reports</div>
+              </div>
+              <div class="dash-main">
+                <div class="dash-card"><div class="label">Active Employees</div><div class="value">127</div><div class="change">↑ 12% this quarter</div></div>
+                <div class="dash-card"><div class="label">Hours This Week</div><div class="value">4,280</div><div class="change">↑ 3% vs last week</div></div>
+                <div class="dash-card"><div class="label">Next Payroll</div><div class="value">$184K</div><div class="change">Processing Mar 28</div></div>
+                <div class="dash-card"><div class="label">Open PTO</div><div class="value">14</div><div class="change">5 pending approval</div></div>
+                <div class="dash-card"><div class="label">Contractors</div><div class="value">23</div><div class="change">8 invoices pending</div></div>
+                <div class="dash-card"><div class="label">Compliance</div><div class="value">98%</div><div class="change">All audits passed</div></div>
+              </div>
+            </div>
           </div>
-          <div class="dash-main">
-            <div class="dash-card">
-              <div class="label">Active Employees</div>
-              <div class="value">127</div>
-              <div class="change">↑ 12% this quarter</div>
+          <div class="dash-slide" data-slide="1">
+            <div class="dashboard-preview">
+              <div class="dash-sidebar">
+                <div class="dash-sidebar-item">📊 Dashboard</div>
+                <div class="dash-sidebar-item active">👥 Employees</div>
+                <div class="dash-sidebar-item">⏱ Time Clock</div>
+                <div class="dash-sidebar-item">📅 Schedules</div>
+                <div class="dash-sidebar-item">💰 Payroll</div>
+                <div class="dash-sidebar-item">📋 Reports</div>
+              </div>
+              <div class="dash-main dash-main-list">
+                <div class="dash-list-header">
+                  <span>Name</span><span>Department</span><span>Type</span><span>Status</span>
+                </div>
+                <div class="dash-list-row"><span class="emp-name"><span class="emp-avatar">SM</span>Sarah Mitchell</span><span>Engineering</span><span class="badge-emp">Hourly</span><span class="badge-active">Active</span></div>
+                <div class="dash-list-row"><span class="emp-name"><span class="emp-avatar">JR</span>James Rodriguez</span><span>Operations</span><span class="badge-emp">Salary</span><span class="badge-active">Active</span></div>
+                <div class="dash-list-row"><span class="emp-name"><span class="emp-avatar">EC</span>Emily Chen</span><span>Design</span><span class="badge-con">Contractor</span><span class="badge-active">Active</span></div>
+                <div class="dash-list-row"><span class="emp-name"><span class="emp-avatar">MT</span>Michael Thompson</span><span>Programs</span><span class="badge-emp">Salary</span><span class="badge-active">Active</span></div>
+                <div class="dash-list-row"><span class="emp-name"><span class="emp-avatar">LW</span>Lisa Wang</span><span>Admin</span><span class="badge-emp">Hourly</span><span class="badge-active">Active</span></div>
+              </div>
             </div>
-            <div class="dash-card">
-              <div class="label">Hours This Week</div>
-              <div class="value">4,280</div>
-              <div class="change">↑ 3% vs last week</div>
+          </div>
+          <div class="dash-slide" data-slide="2">
+            <div class="dashboard-preview">
+              <div class="dash-sidebar">
+                <div class="dash-sidebar-item">📊 Dashboard</div>
+                <div class="dash-sidebar-item">👥 Employees</div>
+                <div class="dash-sidebar-item active">⏱ Time Clock</div>
+                <div class="dash-sidebar-item">📅 Schedules</div>
+                <div class="dash-sidebar-item">💰 Payroll</div>
+                <div class="dash-sidebar-item">📋 Reports</div>
+              </div>
+              <div class="dash-main">
+                <div class="dash-card tc-card"><div class="tc-clock">9:14 AM</div><div class="tc-label">Current Time</div></div>
+                <div class="dash-card"><div class="label">Clocked In</div><div class="value tc-green">84</div><div class="change">of 127 employees</div></div>
+                <div class="dash-card"><div class="label">Late Arrivals</div><div class="value tc-amber">3</div><div class="change">flagged for review</div></div>
+                <div class="dash-card"><div class="label">On Break</div><div class="value">12</div><div class="change">avg 28 min</div></div>
+                <div class="dash-card"><div class="label">Overtime Today</div><div class="value tc-amber">7</div><div class="change">approaching 8h</div></div>
+                <div class="dash-card"><div class="label">Absent</div><div class="value tc-red">2</div><div class="change">no call / no show</div></div>
+              </div>
             </div>
-            <div class="dash-card">
-              <div class="label">Next Payroll</div>
-              <div class="value">$184K</div>
-              <div class="change">Processing Mar 28</div>
+          </div>
+          <div class="dash-slide" data-slide="3">
+            <div class="dashboard-preview">
+              <div class="dash-sidebar">
+                <div class="dash-sidebar-item">📊 Dashboard</div>
+                <div class="dash-sidebar-item">👥 Employees</div>
+                <div class="dash-sidebar-item">⏱ Time Clock</div>
+                <div class="dash-sidebar-item active">📅 Schedules</div>
+                <div class="dash-sidebar-item">💰 Payroll</div>
+                <div class="dash-sidebar-item">📋 Reports</div>
+              </div>
+              <div class="dash-main dash-main-schedule">
+                <div class="sched-header"><span></span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span></div>
+                <div class="sched-row"><span class="sched-name">S. Mitchell</span><span class="sched-shift">8a-4p</span><span class="sched-shift">8a-4p</span><span class="sched-off">OFF</span><span class="sched-shift">8a-4p</span><span class="sched-shift">8a-4p</span></div>
+                <div class="sched-row"><span class="sched-name">J. Rodriguez</span><span class="sched-shift">9a-5p</span><span class="sched-shift">9a-5p</span><span class="sched-shift">9a-5p</span><span class="sched-shift">9a-5p</span><span class="sched-shift">9a-5p</span></div>
+                <div class="sched-row"><span class="sched-name">M. Thompson</span><span class="sched-shift">7a-3p</span><span class="sched-off">OFF</span><span class="sched-shift">7a-3p</span><span class="sched-shift">7a-3p</span><span class="sched-shift">7a-3p</span></div>
+                <div class="sched-row"><span class="sched-name">L. Wang</span><span class="sched-off">OFF</span><span class="sched-shift">10a-6p</span><span class="sched-shift">10a-6p</span><span class="sched-shift">10a-6p</span><span class="sched-off">OFF</span></div>
+              </div>
             </div>
-            <div class="dash-card">
-              <div class="label">Open PTO</div>
-              <div class="value">14</div>
-              <div class="change">5 pending approval</div>
+          </div>
+          <div class="dash-slide" data-slide="4">
+            <div class="dashboard-preview">
+              <div class="dash-sidebar">
+                <div class="dash-sidebar-item">📊 Dashboard</div>
+                <div class="dash-sidebar-item">👥 Employees</div>
+                <div class="dash-sidebar-item">⏱ Time Clock</div>
+                <div class="dash-sidebar-item">📅 Schedules</div>
+                <div class="dash-sidebar-item active">💰 Payroll</div>
+                <div class="dash-sidebar-item">📋 Reports</div>
+              </div>
+              <div class="dash-main">
+                <div class="dash-card"><div class="label">Current Run</div><div class="value">Mar 15-28</div><div class="change">Bi-weekly</div></div>
+                <div class="dash-card"><div class="label">Gross Payroll</div><div class="value">$184,320</div><div class="change">127 employees</div></div>
+                <div class="dash-card"><div class="label">Deductions</div><div class="value">$41,280</div><div class="change">Fed + State + FICA</div></div>
+                <div class="dash-card"><div class="label">Net Pay</div><div class="value">$143,040</div><div class="change">Ready for ACH</div></div>
+                <div class="dash-card"><div class="label">Direct Deposit</div><div class="value">119</div><div class="change">8 check payments</div></div>
+                <div class="dash-card"><div class="label">Status</div><div class="value badge-processing">Processing</div><div class="change">Pay date: Mar 28</div></div>
+              </div>
             </div>
-            <div class="dash-card">
-              <div class="label">Contractors</div>
-              <div class="value">23</div>
-              <div class="change">8 invoices pending</div>
-            </div>
-            <div class="dash-card">
-              <div class="label">Compliance</div>
-              <div class="value">98%</div>
-              <div class="change">All audits passed</div>
+          </div>
+          <div class="dash-slide" data-slide="5">
+            <div class="dashboard-preview">
+              <div class="dash-sidebar">
+                <div class="dash-sidebar-item">📊 Dashboard</div>
+                <div class="dash-sidebar-item">👥 Employees</div>
+                <div class="dash-sidebar-item">⏱ Time Clock</div>
+                <div class="dash-sidebar-item">📅 Schedules</div>
+                <div class="dash-sidebar-item">💰 Payroll</div>
+                <div class="dash-sidebar-item active">📋 Reports</div>
+              </div>
+              <div class="dash-main dash-main-list">
+                <div class="dash-list-header">
+                  <span>Report</span><span>Type</span><span>Period</span><span></span>
+                </div>
+                <div class="dash-list-row"><span>Payroll Summary</span><span>Payroll</span><span>Q1 2026</span><span class="badge-ready">Ready</span></div>
+                <div class="dash-list-row"><span>W-2 Forms</span><span>Tax</span><span>2025</span><span class="badge-ready">Ready</span></div>
+                <div class="dash-list-row"><span>1099-NEC</span><span>Tax</span><span>2025</span><span class="badge-ready">Ready</span></div>
+                <div class="dash-list-row"><span>Overtime Report</span><span>Timesheet</span><span>Mar 2026</span><span class="badge-processing">Generating</span></div>
+                <div class="dash-list-row"><span>Job Cost Analysis</span><span>Expense</span><span>Q1 2026</span><span class="badge-ready">Ready</span></div>
+              </div>
             </div>
           </div>
         </div>
+        <div class="dash-progress-bar"><div class="dash-progress-fill" id="dashProgressFill"></div></div>
       </div>
     </div>
   </section>
@@ -432,5 +522,6 @@
 
   <script src="/js/main.js"></script>
   <script src="/js/punch-clock.js"></script>
+  <script src="/js/dashboard-cycle.js"></script>
 </body>
 </html>

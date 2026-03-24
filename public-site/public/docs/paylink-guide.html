@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PayLink - Installation, Implementation & User Guide</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Inter', -apple-system, sans-serif; color: #1e293b; line-height: 1.7; background: #fff; }
+@media print {
+  body { font-size: 11pt; }
+  .page-break { page-break-before: always; }
+  .no-print { display: none; }
+  .cover { min-height: 100vh; }
+}
+
+.cover {
+  background: linear-gradient(135deg, #0f172a 0%, #0a0f1a 100%);
+  color: #fff;
+  padding: 80px 60px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.cover h1 { font-size: 3rem; font-weight: 800; margin-bottom: 16px; }
+.cover .subtitle { font-size: 1.3rem; color: #94a3b8; margin-bottom: 48px; }
+.cover .gradient-bar { width: 120px; height: 4px; background: linear-gradient(90deg, #0d9488, #2563eb); border-radius: 2px; margin-bottom: 48px; }
+.cover .meta { font-size: 0.9rem; color: #64748b; line-height: 2; }
+.cover .meta strong { color: #e2e8f0; }
+
+.toc { padding: 60px; }
+.toc h2 { font-size: 1.8rem; font-weight: 800; color: #0f172a; margin-bottom: 32px; border-bottom: 3px solid #0d9488; padding-bottom: 12px; }
+.toc-section { margin-bottom: 24px; }
+.toc-section h3 { font-size: 1rem; font-weight: 700; color: #0d9488; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+.toc-section ul { list-style: none; padding-left: 16px; }
+.toc-section li { padding: 4px 0; color: #475569; font-size: 0.9rem; }
+.toc-section li::before { content: ''; display: inline-block; width: 6px; height: 6px; background: #0d9488; border-radius: 50%; margin-right: 10px; vertical-align: middle; }
+
+.content { padding: 48px 60px; max-width: 900px; margin: 0 auto; }
+
+.section-divider {
+  background: linear-gradient(135deg, #0f172a, #1e293b);
+  color: #fff;
+  padding: 48px 60px;
+  margin: 0 -60px;
+}
+.section-divider h2 { font-size: 2rem; font-weight: 800; }
+.section-divider p { color: #94a3b8; margin-top: 8px; font-size: 1rem; }
+.section-divider .tier-badge {
+  display: inline-block;
+  background: linear-gradient(135deg, #0d9488, #2563eb);
+  color: #fff;
+  padding: 4px 16px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 12px;
+}
+
+h2 { font-size: 1.5rem; font-weight: 800; color: #0f172a; margin: 40px 0 16px; }
+h3 { font-size: 1.15rem; font-weight: 700; color: #1e293b; margin: 28px 0 12px; }
+h4 { font-size: 1rem; font-weight: 600; color: #334155; margin: 20px 0 8px; }
+
+p { margin-bottom: 12px; color: #475569; }
+ul, ol { margin: 12px 0 16px 24px; color: #475569; }
+li { margin-bottom: 6px; }
+
+code {
+  background: #f1f5f9;
+  color: #0f766e;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+pre {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 20px 24px;
+  border-radius: 10px;
+  overflow-x: auto;
+  margin: 16px 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+pre code { background: none; color: inherit; padding: 0; }
+
+.callout {
+  background: #f0fdfa;
+  border-left: 4px solid #0d9488;
+  padding: 16px 20px;
+  margin: 16px 0;
+  border-radius: 0 8px 8px 0;
+}
+.callout.warning {
+  background: #fffbeb;
+  border-left-color: #f59e0b;
+}
+.callout.danger {
+  background: #fef2f2;
+  border-left-color: #ef4444;
+}
+.callout strong { display: block; margin-bottom: 4px; color: #0f172a; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.88rem;
+}
+th { background: #f1f5f9; color: #334155; font-weight: 600; text-align: left; padding: 10px 14px; border: 1px solid #e2e8f0; }
+td { padding: 10px 14px; border: 1px solid #e2e8f0; color: #475569; }
+
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: linear-gradient(135deg, #0d9488, #2563eb);
+  color: #fff;
+  border-radius: 50%;
+  font-size: 0.8rem;
+  font-weight: 700;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.checklist { list-style: none; padding-left: 0; }
+.checklist li { padding: 6px 0; padding-left: 28px; position: relative; }
+.checklist li::before { content: '☐'; position: absolute; left: 0; color: #0d9488; font-size: 1.1rem; }
+
+.download-btn {
+  display: inline-block;
+  background: linear-gradient(135deg, #0d9488, #2563eb);
+  color: #fff;
+  padding: 12px 32px;
+  border-radius: 10px;
+  font-weight: 700;
+  text-decoration: none;
+  margin: 24px 0;
+  cursor: pointer;
+  border: none;
+  font-size: 1rem;
+}
+</style>
+</head>
+<body>
+
+<!-- COVER PAGE -->
+<div class="cover">
+  <div class="gradient-bar"></div>
+  <h1>PayLink</h1>
+  <div class="subtitle">Installation, Implementation & User Guide</div>
+  <div class="meta">
+    <strong>Version:</strong> 1.0<br>
+    <strong>Date:</strong> March 2026<br>
+    <strong>Software Owner:</strong> Adiken Inc.<br>
+    <strong>Platform:</strong> app.mypaylink.app<br>
+    <strong>Confidential</strong> &mdash; For authorized use only
+  </div>
+  <button class="download-btn no-print" onclick="window.print()" style="margin-top: 40px;">Save as PDF (Ctrl+P)</button>
+</div>
+
+<!-- TABLE OF CONTENTS -->
+<div class="toc page-break">
+  <h2>Table of Contents</h2>
+
+  <div class="toc-section">
+    <h3>Part 1 &mdash; Installation Guide (Adiken Inc.)</h3>
+    <ul>
+      <li>1.1 System Requirements</li>
+      <li>1.2 Server Provisioning</li>
+      <li>1.3 PostgreSQL Database Setup</li>
+      <li>1.4 Application Deployment</li>
+      <li>1.5 Nginx Reverse Proxy &amp; SSL</li>
+      <li>1.6 PM2 Process Management</li>
+      <li>1.7 DNS Configuration</li>
+      <li>1.8 GitHub Actions CI/CD</li>
+      <li>1.9 Backup &amp; Recovery</li>
+      <li>1.10 Monitoring &amp; Maintenance</li>
+      <li>1.11 Security Hardening</li>
+    </ul>
+  </div>
+
+  <div class="toc-section">
+    <h3>Part 2 &mdash; Implementation Guide (Customer Company)</h3>
+    <ul>
+      <li>2.1 Pre-Implementation Checklist</li>
+      <li>2.2 Enterprise &amp; Company Setup</li>
+      <li>2.3 Organizational Structure</li>
+      <li>2.4 Employee Data Import</li>
+      <li>2.5 Payroll Configuration</li>
+      <li>2.6 Time &amp; Attendance Setup</li>
+      <li>2.7 User Accounts &amp; Role Assignment</li>
+      <li>2.8 Go-Live Checklist</li>
+      <li>2.9 Post-Implementation Support</li>
+    </ul>
+  </div>
+
+  <div class="toc-section">
+    <h3>Part 3 &mdash; Admin User Guide (Customer Admin)</h3>
+    <ul>
+      <li>3.1 Logging In &amp; Navigation</li>
+      <li>3.2 Company Management</li>
+      <li>3.3 Employee Management</li>
+      <li>3.4 Time &amp; Attendance</li>
+      <li>3.5 Scheduling</li>
+      <li>3.6 Payroll Processing</li>
+      <li>3.7 Reports &amp; Tax Forms</li>
+      <li>3.8 Expense Management</li>
+      <li>3.9 HR Functions</li>
+      <li>3.10 Policies &amp; Accruals</li>
+      <li>3.11 User Account Management</li>
+      <li>3.12 Shift Marketplace</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================= -->
+<!-- PART 1: INSTALLATION (ADIKEN) -->
+<!-- ============================= -->
+<div class="page-break">
+  <div class="section-divider">
+    <div class="tier-badge">Adiken Inc. &mdash; Software Owner</div>
+    <h2>Part 1: Installation Guide</h2>
+    <p>Server provisioning, deployment, and infrastructure management</p>
+  </div>
+</div>
+
+<div class="content">
+
+<h2>1.1 System Requirements</h2>
+
+<table>
+  <tr><th>Component</th><th>Minimum</th><th>Recommended</th></tr>
+  <tr><td>OS</td><td>Ubuntu 22.04 LTS</td><td>Ubuntu 24.04 LTS</td></tr>
+  <tr><td>CPU</td><td>2 vCPU</td><td>4 vCPU</td></tr>
+  <tr><td>RAM</td><td>4 GB</td><td>8 GB</td></tr>
+  <tr><td>Storage</td><td>40 GB SSD</td><td>100 GB SSD</td></tr>
+  <tr><td>Node.js</td><td>v20.x</td><td>v22.x LTS</td></tr>
+  <tr><td>PostgreSQL</td><td>15</td><td>16</td></tr>
+  <tr><td>Nginx</td><td>1.18+</td><td>Latest stable</td></tr>
+</table>
+
+<h2>1.2 Server Provisioning</h2>
+
+<h3><span class="step-number">1</span>Create Server User</h3>
+<pre><code>sudo adduser paylinkssh --disabled-password
+sudo usermod -aG sudo paylinkssh
+mkdir -p /home/paylinkssh/.ssh
+# Add deployment SSH public key to authorized_keys</code></pre>
+
+<h3><span class="step-number">2</span>Install Node.js</h3>
+<pre><code>curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm install -g pm2</code></pre>
+
+<h3><span class="step-number">3</span>Clone Repository</h3>
+<pre><code>su - paylinkssh
+mkdir -p /home/paylinkssh/paylink-app
+cd /home/paylinkssh/paylink-app
+git clone git@github.com:YOUR-ORG/PayLink.git
+cd PayLink</code></pre>
+
+<h2>1.3 PostgreSQL Database Setup</h2>
+
+<h3><span class="step-number">1</span>Install PostgreSQL</h3>
+<pre><code>sudo apt install postgresql postgresql-contrib
+sudo systemctl enable postgresql</code></pre>
+
+<h3><span class="step-number">2</span>Create Database &amp; User</h3>
+<pre><code>sudo -u postgres psql
+CREATE USER apppaylinkmain WITH PASSWORD 'YOUR_SECURE_PASSWORD';
+CREATE DATABASE apppaylinkmain OWNER apppaylinkmain;
+GRANT ALL PRIVILEGES ON DATABASE apppaylinkmain TO apppaylinkmain;
+\q</code></pre>
+
+<div class="callout danger">
+  <strong>Security Warning</strong>
+  Never commit database passwords to source control. Use environment variables or GitHub Secrets exclusively.
+</div>
+
+<h2>1.4 Application Deployment</h2>
+
+<h3><span class="step-number">1</span>Configure Environment</h3>
+<p>Create <code>/home/paylinkssh/paylink-app/PayLink/.env</code>:</p>
+<pre><code>DATABASE_URL=postgresql://apppaylinkmain:PASSWORD@127.0.0.1:5432/apppaylinkmain
+SESSION_SECRET=your-random-64-char-secret
+NODE_ENV=production
+HOST=127.0.0.1
+PORT=8000
+APP_BASE_URL=https://app.mypaylink.app
+UPLOAD_DIR=/home/paylinkssh/paylink-app/PayLink/uploads</code></pre>
+
+<h3><span class="step-number">2</span>Build &amp; Start</h3>
+<pre><code>cd /home/paylinkssh/paylink-app/PayLink
+npm install --production=false
+npm run build
+cp node_modules/connect-pg-simple/table.sql dist/
+pm2 start "node -r dotenv/config dist/index.cjs" --name paylink
+pm2 save
+pm2 startup</code></pre>
+
+<h3><span class="step-number">3</span>Verify</h3>
+<pre><code>curl http://127.0.0.1:8000/health   # Should return 200
+curl http://127.0.0.1:8000/ready    # Should return 200 (DB connected)</code></pre>
+
+<h2>1.5 Nginx Reverse Proxy &amp; SSL</h2>
+
+<h3><span class="step-number">1</span>Install Nginx &amp; Certbot</h3>
+<pre><code>sudo apt install nginx certbot python3-certbot-nginx</code></pre>
+
+<h3><span class="step-number">2</span>Configure Nginx</h3>
+<p>Create <code>/etc/nginx/sites-available/paylink-app</code>:</p>
+<pre><code>server {
+    listen 80;
+    server_name app.mypaylink.app;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        client_max_body_size 50M;
+    }
+}
+
+# Enable and get SSL
+# sudo ln -s /etc/nginx/sites-available/paylink-app /etc/nginx/sites-enabled/
+# sudo certbot --nginx -d app.mypaylink.app</code></pre>
+
+<h2>1.6 PM2 Process Management</h2>
+<table>
+  <tr><th>Command</th><th>Purpose</th></tr>
+  <tr><td><code>pm2 status</code></td><td>View all running processes</td></tr>
+  <tr><td><code>pm2 logs paylink</code></td><td>View real-time logs</td></tr>
+  <tr><td><code>pm2 restart paylink</code></td><td>Restart the application</td></tr>
+  <tr><td><code>pm2 monit</code></td><td>Monitor CPU/Memory</td></tr>
+  <tr><td><code>pm2 save</code></td><td>Save process list for auto-restart</td></tr>
+</table>
+
+<h2>1.7 DNS Configuration</h2>
+<table>
+  <tr><th>Record</th><th>Name</th><th>Value</th><th>Purpose</th></tr>
+  <tr><td>A</td><td>app.mypaylink.app</td><td>YOUR_VPS_IP</td><td>Main application</td></tr>
+  <tr><td>A</td><td>mypaylink.app</td><td>YOUR_VPS_IP</td><td>Marketing site</td></tr>
+  <tr><td>CNAME</td><td>www</td><td>mypaylink.app</td><td>WWW redirect</td></tr>
+</table>
+
+<h2>1.8 GitHub Actions CI/CD</h2>
+<p>The deployment workflow at <code>.github/workflows/deploy.yml</code> automates:</p>
+<ol>
+  <li>Database backup (using <code>DB_PASSWORD</code> secret)</li>
+  <li>Git pull latest code</li>
+  <li>Install dependencies</li>
+  <li>Build application</li>
+  <li>Copy session table SQL</li>
+  <li>Restart with PM2</li>
+  <li>Health check verification</li>
+  <li>Old backup cleanup (keeps last 10)</li>
+</ol>
+
+<h4>Required GitHub Secrets:</h4>
+<table>
+  <tr><th>Secret Name</th><th>Description</th></tr>
+  <tr><td><code>VPS_HOST</code></td><td>Server IP address</td></tr>
+  <tr><td><code>VPS_USER</code></td><td>SSH username (paylinkssh)</td></tr>
+  <tr><td><code>VPS_SSH_KEY</code></td><td>Private SSH key for deployment</td></tr>
+  <tr><td><code>DB_PASSWORD</code></td><td>PostgreSQL password for backups</td></tr>
+</table>
+
+<h2>1.9 Backup &amp; Recovery</h2>
+
+<h3>Automated Backups</h3>
+<p>Set up a cron job for daily backups:</p>
+<pre><code># Edit crontab
+crontab -e
+
+# Add daily backup at 2 AM
+0 2 * * * PGPASSWORD='$DB_PASSWORD' pg_dump -U apppaylinkmain -h 127.0.0.1 apppaylinkmain > /home/paylinkssh/backups/paylink_$(date +\%Y\%m\%d).sql
+
+# Keep only last 30 days
+0 3 * * * find /home/paylinkssh/backups -name "*.sql" -mtime +30 -delete</code></pre>
+
+<h3>Manual Recovery</h3>
+<pre><code>psql -U apppaylinkmain -h 127.0.0.1 apppaylinkmain &lt; /home/paylinkssh/backups/paylink_YYYYMMDD.sql</code></pre>
+
+<h2>1.10 Monitoring &amp; Maintenance</h2>
+<ul>
+  <li>Monitor <code>/health</code> and <code>/ready</code> endpoints with uptime service (UptimeRobot, etc.)</li>
+  <li>Review PM2 logs weekly for errors: <code>pm2 logs paylink --lines 500 --nostream | grep -i error</code></li>
+  <li>Monitor disk usage: <code>df -h</code> (especially uploads directory)</li>
+  <li>Update Node.js and system packages monthly</li>
+  <li>Rotate SSL certificates (Certbot auto-renews)</li>
+</ul>
+
+<h2>1.11 Security Hardening</h2>
+<ul class="checklist">
+  <li>Firewall: Only ports 22, 80, 443 open (UFW)</li>
+  <li>SSH: Key-only auth, no root login</li>
+  <li>Database: Listen on localhost only (127.0.0.1)</li>
+  <li>App: Binds to 127.0.0.1, served via Nginx proxy</li>
+  <li>Secrets: Never in code &mdash; env vars and GitHub Secrets only</li>
+  <li>HSTS, X-Content-Type-Options, X-Frame-Options headers enabled</li>
+  <li>Session cookies: httpOnly, secure, sameSite=lax</li>
+  <li>Regular dependency audits: <code>npm audit</code></li>
+</ul>
+
+</div>
+
+<!-- ============================= -->
+<!-- PART 2: IMPLEMENTATION -->
+<!-- ============================= -->
+<div class="page-break">
+  <div class="section-divider">
+    <div class="tier-badge">Customer Company &mdash; Onboarding</div>
+    <h2>Part 2: Implementation Guide</h2>
+    <p>Setting up PayLink for a new customer organization</p>
+  </div>
+</div>
+
+<div class="content">
+
+<h2>2.1 Pre-Implementation Checklist</h2>
+<p>Gather the following before beginning setup:</p>
+
+<ul class="checklist">
+  <li>Company legal name, DBA, EIN (Federal Tax ID)</li>
+  <li>State tax ID numbers (e.g., California EDD number)</li>
+  <li>Company address, phone, and primary contact</li>
+  <li>Bank account information for payroll (routing + account number)</li>
+  <li>Employee roster with: names, SSNs, addresses, pay rates, hire dates</li>
+  <li>Department and branch structure</li>
+  <li>Pay schedule (weekly, bi-weekly, semi-monthly, monthly)</li>
+  <li>Existing PTO/accrual balances to carry over</li>
+  <li>Current tax withholding elections (W-4 data)</li>
+  <li>Workers' compensation classification codes</li>
+  <li>List of job codes / positions</li>
+  <li>Direct deposit enrollment forms</li>
+</ul>
+
+<h2>2.2 Enterprise &amp; Company Setup</h2>
+
+<h3><span class="step-number">1</span>Create Enterprise (if new)</h3>
+<p>An enterprise is the top-level entity (e.g., "Alavont Holdings") that contains one or more companies. If the customer is joining an existing enterprise, skip this step.</p>
+
+<h3><span class="step-number">2</span>Create Company</h3>
+<ol>
+  <li>Navigate to <strong>Companies</strong> in the sidebar</li>
+  <li>Click <strong>Add Company</strong></li>
+  <li>Enter: Legal Name, DBA, EIN, address, phone</li>
+  <li>Assign to the enterprise</li>
+  <li>Set pay period schedule</li>
+  <li>Save</li>
+</ol>
+
+<h3><span class="step-number">3</span>Configure Remittance Source</h3>
+<p>Required for ACH direct deposit:</p>
+<ol>
+  <li>Go to the company's settings</li>
+  <li>Add Remittance Source with bank routing number, account number, and company name</li>
+  <li>This is the source bank account for all direct deposit payments</li>
+</ol>
+
+<h2>2.3 Organizational Structure</h2>
+<p>Set up the following in order:</p>
+
+<table>
+  <tr><th>Entity</th><th>Description</th><th>Example</th></tr>
+  <tr><td>Branches</td><td>Physical locations</td><td>Main Office, Warehouse</td></tr>
+  <tr><td>Departments</td><td>Functional areas</td><td>Engineering, Sales, Admin</td></tr>
+  <tr><td>Divisions</td><td>Business divisions</td><td>West Coast, East Coast</td></tr>
+  <tr><td>Positions</td><td>Job roles</td><td>Manager, Technician</td></tr>
+  <tr><td>Jobs</td><td>Job codes for cost tracking</td><td>JOB-001, JOB-002</td></tr>
+  <tr><td>Cost Centers</td><td>Budget allocation centers</td><td>CC-100, CC-200</td></tr>
+</table>
+
+<div class="callout">
+  <strong>Universal Entities</strong>
+  Divisions, Cost Centers, and Secondary Wage Groups with no company assigned are available to ALL companies in the enterprise. Assign a specific company to restrict access.
+</div>
+
+<h2>2.4 Employee Data Import</h2>
+
+<h3>Option A: CSV Import</h3>
+<ol>
+  <li>Prepare a CSV file with columns: firstName, lastName, email, phone, payRate, payType, hireDate, employeeNumber, department, workerType</li>
+  <li>Navigate to the company, then use the CSV import function</li>
+  <li>Map columns to PayLink fields</li>
+  <li>Review and confirm the import</li>
+</ol>
+
+<h3>Option B: Manual Entry</h3>
+<ol>
+  <li>Go to <strong>Employees</strong> &rarr; <strong>Add Employee</strong></li>
+  <li>Fill in all required fields</li>
+  <li>Set worker type (Employee or Contractor) and worker group</li>
+  <li>Enter pay rate and pay type (hourly/salary)</li>
+  <li>Save</li>
+</ol>
+
+<h3>Post-Import Steps</h3>
+<ul>
+  <li>Assign departments, branches, and positions to each employee</li>
+  <li>Enter SSNs for tax reporting (encrypted at rest)</li>
+  <li>Set up direct deposit bank info for applicable employees</li>
+  <li>Create employee PINs for time clock access</li>
+  <li>Upload any required documents (I-9, W-4, etc.)</li>
+</ul>
+
+<h2>2.5 Payroll Configuration</h2>
+
+<h3><span class="step-number">1</span>Tax Setup</h3>
+<ol>
+  <li>Navigate to the company's tax configuration</li>
+  <li>Enter Federal EIN</li>
+  <li>Enter State tax IDs</li>
+  <li>Configure withholding rates (Federal, State, FICA, Medicare)</li>
+  <li>Set up any additional local taxes</li>
+</ol>
+
+<h3><span class="step-number">2</span>Deduction Templates</h3>
+<p>Create standard deductions:</p>
+<ul>
+  <li>Health insurance (pre-tax)</li>
+  <li>401(k) / retirement (pre-tax)</li>
+  <li>Dental / Vision (pre-tax)</li>
+  <li>Garnishments (post-tax)</li>
+  <li>Union dues (post-tax)</li>
+</ul>
+
+<h3><span class="step-number">3</span>Worker Group Configuration</h3>
+<table>
+  <tr><th>Group</th><th>Tax Treatment</th></tr>
+  <tr><td>Hourly Employee</td><td>Full taxes + deductions</td></tr>
+  <tr><td>Salaried Employee</td><td>Full taxes + deductions</td></tr>
+  <tr><td>Hourly Contractor</td><td>Zero deductions (1099)</td></tr>
+  <tr><td>Invoiced Contractor</td><td>Zero deductions (1099)</td></tr>
+  <tr><td>Shareholder Employee</td><td>Special S-Corp treatment</td></tr>
+  <tr><td>Owner Distribution</td><td>Distribution, not payroll</td></tr>
+  <tr><td>Volunteer</td><td>Excluded from payroll</td></tr>
+</table>
+
+<h2>2.6 Time &amp; Attendance Setup</h2>
+<ol>
+  <li><strong>Stations:</strong> Create time clock stations for each physical location</li>
+  <li><strong>Overtime Rules:</strong> Configure daily OT (California: 8h daily, 12h double-time) or weekly OT</li>
+  <li><strong>Rounding:</strong> Set punch rounding rules if applicable</li>
+  <li><strong>Break Policies:</strong> Configure meal and rest break tracking</li>
+  <li><strong>Accruals:</strong> Set up PTO, sick, and vacation accrual policies</li>
+</ol>
+
+<h2>2.7 User Accounts &amp; Role Assignment</h2>
+
+<h3>Create Admin Accounts</h3>
+<ol>
+  <li>Navigate to <strong>Settings</strong> &rarr; <strong>Users</strong></li>
+  <li>Create accounts for company managers</li>
+  <li>Assign appropriate roles:</li>
+</ol>
+
+<table>
+  <tr><th>Role</th><th>Access Level</th></tr>
+  <tr><td>System Administrator</td><td>Full access to everything</td></tr>
+  <tr><td>Owner</td><td>Full access, enterprise-level</td></tr>
+  <tr><td>HR Manager</td><td>Employee management, HR functions</td></tr>
+  <tr><td>Payroll Manager</td><td>Payroll processing, reports</td></tr>
+  <tr><td>Department Manager</td><td>Department employees, schedules</td></tr>
+  <tr><td>Supervisor</td><td>Time approval, limited scheduling</td></tr>
+  <tr><td>Employee</td><td>Self-service only</td></tr>
+  <tr><td>Contractor</td><td>Invoice submission, profile</td></tr>
+</table>
+
+<h2>2.8 Go-Live Checklist</h2>
+<ul class="checklist">
+  <li>All employees imported with correct pay rates</li>
+  <li>Tax configuration verified (EIN, state IDs, rates)</li>
+  <li>Direct deposit bank info entered for applicable employees</li>
+  <li>Time clock stations created and tested</li>
+  <li>Employee PINs distributed</li>
+  <li>Manager accounts created with correct roles</li>
+  <li>First test payroll run completed and reviewed</li>
+  <li>Accrual balances carried over from previous system</li>
+  <li>Email/SMS notifications configured (SMTP, optionally Twilio)</li>
+  <li>Training sessions completed for managers</li>
+  <li>Employees informed of new system and login methods</li>
+</ul>
+
+<h2>2.9 Post-Implementation Support</h2>
+<ul>
+  <li><strong>Week 1:</strong> Daily check-ins, monitor first punches and time entries</li>
+  <li><strong>Week 2:</strong> Review first payroll run, adjust any tax or deduction issues</li>
+  <li><strong>Month 1:</strong> Run payroll audit to check for missing data or misconfigurations</li>
+  <li><strong>Ongoing:</strong> Monthly audit checks, quarterly tax form generation review</li>
+</ul>
+
+</div>
+
+<!-- ============================= -->
+<!-- PART 3: ADMIN USER GUIDE -->
+<!-- ============================= -->
+<div class="page-break">
+  <div class="section-divider">
+    <div class="tier-badge">Customer Admin &mdash; User Manual</div>
+    <h2>Part 3: Admin User Guide</h2>
+    <p>Feature setup and day-to-day usage instructions</p>
+  </div>
+</div>
+
+<div class="content">
+
+<h2>3.1 Logging In &amp; Navigation</h2>
+
+<h3>Login Methods</h3>
+<table>
+  <tr><th>Method</th><th>Who Uses It</th><th>How</th></tr>
+  <tr><td>Username &amp; Password</td><td>Managers, Admins</td><td>Enter credentials on login page</td></tr>
+  <tr><td>Employee PIN</td><td>Employees</td><td>Enter employee number + 4-digit PIN</td></tr>
+  <tr><td>Kiosk Mode</td><td>Time Clock stations</td><td>Shared device, employees enter their number + PIN</td></tr>
+</table>
+
+<h3>Navigation</h3>
+<p>The sidebar contains all main sections. Click any item to navigate:</p>
+<ul>
+  <li><strong>Dashboard</strong> &mdash; Overview of key metrics</li>
+  <li><strong>Employees</strong> &mdash; Employee and contractor management</li>
+  <li><strong>Time &amp; Attendance</strong> &mdash; Punches, entries, time off, accruals</li>
+  <li><strong>Schedules</strong> &mdash; Weekly schedule grid, shift marketplace</li>
+  <li><strong>Payroll</strong> &mdash; Payroll runs, pay stubs, expenses</li>
+  <li><strong>Reports</strong> &mdash; All report types and tax forms</li>
+  <li><strong>Companies</strong> &mdash; Company and entity management</li>
+  <li><strong>HR</strong> &mdash; Reviews, qualifications, certifications</li>
+  <li><strong>Settings</strong> &mdash; Users, policies, system configuration</li>
+</ul>
+
+<h2>3.2 Company Management</h2>
+
+<h3>Adding a Company</h3>
+<ol>
+  <li>Go to <strong>Companies</strong></li>
+  <li>Click <strong>Add Company</strong></li>
+  <li>Fill in legal name, DBA, EIN, address</li>
+  <li>Click <strong>Save</strong></li>
+</ol>
+
+<h3>Managing Universal Entities</h3>
+<p>Branches, Departments, Jobs, Positions, Stations, and Employee Titles can be:</p>
+<ul>
+  <li><strong>Company-specific:</strong> Assigned to one company only</li>
+  <li><strong>Universal:</strong> Leave company field empty to make available to all companies</li>
+</ul>
+
+<h3>Divisions, Cost Centers &amp; Secondary Wage Groups</h3>
+<p>These also support universal assignment. Set <code>companyId</code> to null for enterprise-wide availability.</p>
+
+<h2>3.3 Employee Management</h2>
+
+<h3>Adding an Employee</h3>
+<ol>
+  <li>Go to <strong>Employees</strong> &rarr; <strong>Add Employee</strong></li>
+  <li>Select <strong>Company</strong> (required)</li>
+  <li>Enter first name, last name (required)</li>
+  <li>Set <strong>Worker Type</strong>: Employee or Contractor</li>
+  <li>Set <strong>Worker Group</strong>: hourly_employee, salaried_employee, etc.</li>
+  <li>Enter <strong>Pay Rate</strong> and <strong>Pay Type</strong> (hourly/salary)</li>
+  <li>Enter hire date</li>
+  <li>Assign employee number and PIN</li>
+  <li>Click <strong>Save</strong></li>
+</ol>
+
+<h3>Employee Profile Tabs</h3>
+<ul>
+  <li><strong>Personal:</strong> Name, address, SSN, date of birth</li>
+  <li><strong>Employment:</strong> Company, department, position, hire date</li>
+  <li><strong>Compensation:</strong> Pay rate, pay type, deductions</li>
+  <li><strong>Contacts:</strong> Emergency contacts, additional contacts</li>
+  <li><strong>Documents:</strong> Upload W-4, I-9, licenses, certifications</li>
+  <li><strong>Direct Deposit:</strong> Bank routing/account for ACH payments</li>
+</ul>
+
+<div class="callout warning">
+  <strong>Contractor Rule</strong>
+  Workers with a contractor worker type or contractor worker group ALWAYS receive zero deductions in payroll. This is automatic and cannot be overridden.
+</div>
+
+<h2>3.4 Time &amp; Attendance</h2>
+
+<h3>Time Clock (Kiosk Mode)</h3>
+<ol>
+  <li>Navigate to the Time Clock page</li>
+  <li>Employee enters their <strong>Employee Number</strong></li>
+  <li>Employee enters their <strong>4-digit PIN</strong></li>
+  <li>System shows current status and options: Clock In, Clock Out, Start Break, End Break</li>
+  <li>Punch is recorded with timestamp</li>
+</ol>
+
+<h3>Reviewing Time Entries</h3>
+<ol>
+  <li>Go to <strong>Time &amp; Attendance</strong></li>
+  <li>Select the date range and company</li>
+  <li>View all time entries for the period</li>
+  <li>Approve, edit, or flag entries as needed</li>
+  <li>Entries show: regular hours, overtime hours, double-time hours</li>
+</ol>
+
+<h3>Overtime Calculation</h3>
+<table>
+  <tr><th>Type</th><th>California Rule</th></tr>
+  <tr><td>Daily Overtime</td><td>Hours over 8 in a day = 1.5x</td></tr>
+  <tr><td>Daily Double-Time</td><td>Hours over 12 in a day = 2.0x</td></tr>
+  <tr><td>Weekly Overtime</td><td>Hours over 40 in a week = 1.5x</td></tr>
+  <tr><td>7th Consecutive Day</td><td>First 8 hours = 1.5x, over 8 = 2.0x</td></tr>
+</table>
+
+<h3>Time-Off Requests</h3>
+<ol>
+  <li>Employees submit time-off requests from their self-service portal</li>
+  <li>Managers receive notification</li>
+  <li>Go to <strong>Time &amp; Attendance</strong> &rarr; <strong>Pending Approvals</strong></li>
+  <li>Approve or deny with optional note</li>
+  <li>Employee receives email/SMS notification of decision</li>
+  <li>Approved time off appears as orange overlay on schedule grid</li>
+</ol>
+
+<h2>3.5 Scheduling</h2>
+
+<h3>Creating a Schedule</h3>
+<ol>
+  <li>Go to <strong>Schedules</strong></li>
+  <li>Select the week and company</li>
+  <li>Click on a cell to add a shift</li>
+  <li>Set start time, end time, department, and employee</li>
+  <li>Repeat for all needed shifts</li>
+</ol>
+
+<h3>Publishing Schedules</h3>
+<ol>
+  <li>After creating all shifts for the week, click <strong>Publish</strong></li>
+  <li>System checks for conflicts (approved time-off blocks publishing)</li>
+  <li>If no conflicts, schedule is published</li>
+  <li>Employees receive email and/or SMS notifications</li>
+</ol>
+
+<div class="callout warning">
+  <strong>Important</strong>
+  Publishing is blocked (HTTP 409) if any scheduled employee has approved time-off during a shift. Resolve conflicts first.
+</div>
+
+<h3>Recurring Schedules</h3>
+<p>Set up templates that repeat weekly. Assign employees to recurring shifts to save time.</p>
+
+<h2>3.6 Payroll Processing</h2>
+
+<h3>Running Payroll</h3>
+<ol>
+  <li>Go to <strong>Payroll</strong> &rarr; <strong>New Payroll Run</strong></li>
+  <li>Select company, period start, period end</li>
+  <li>Set <strong>Pay Date</strong></li>
+  <li>Toggle <strong>Direct Deposit (ACH)</strong> on/off (default: on)</li>
+  <li>Click <strong>Generate</strong></li>
+  <li>System calculates for all active workers:
+    <ul>
+      <li>Regular pay (hours x rate or salary / periods)</li>
+      <li>Overtime pay (OT hours x rate x 1.5)</li>
+      <li>Double-time pay (DT hours x rate x 2.0)</li>
+      <li>Deductions (Federal, State, FICA, Medicare, custom)</li>
+      <li>Net pay</li>
+    </ul>
+  </li>
+  <li>Review all line items</li>
+  <li>Click <strong>Process</strong> to finalize</li>
+</ol>
+
+<h3>NACHA ACH Direct Deposit</h3>
+<ol>
+  <li>After processing with direct deposit enabled, a <strong>Download ACH File</strong> button appears</li>
+  <li>Click to generate a NACHA-formatted <code>.ach</code> file</li>
+  <li>Upload this file to your company's bank portal</li>
+  <li>Bank initiates all direct deposits</li>
+  <li>Workers without bank info on file are automatically skipped (they receive checks)</li>
+</ol>
+
+<h3>Pay Stubs</h3>
+<p>After a payroll run is processed, pay stubs are generated for each worker. Employees can view their pay stubs in their self-service portal.</p>
+
+<h2>3.7 Reports &amp; Tax Forms</h2>
+
+<h3>Available Reports</h3>
+<table>
+  <tr><th>Category</th><th>Reports</th></tr>
+  <tr><td>Employee</td><td>Roster, directory, turnover</td></tr>
+  <tr><td>Timesheet</td><td>Hours summary, overtime, attendance</td></tr>
+  <tr><td>Payroll</td><td>Payroll summary, register, labor cost</td></tr>
+  <tr><td>Expense</td><td>Expense report, reimbursements</td></tr>
+  <tr><td>Job Cost</td><td>Job cost analysis, allocation</td></tr>
+</table>
+
+<h3>Tax Form Generation</h3>
+<table>
+  <tr><th>Form</th><th>Purpose</th><th>Frequency</th></tr>
+  <tr><td>W-2</td><td>Employee wage/tax statement</td><td>Annual</td></tr>
+  <tr><td>1099-NEC</td><td>Contractor payments</td><td>Annual</td></tr>
+  <tr><td>941</td><td>Quarterly Federal tax return</td><td>Quarterly</td></tr>
+  <tr><td>940</td><td>Annual Federal unemployment</td><td>Annual</td></tr>
+  <tr><td>DE 9</td><td>California quarterly contribution</td><td>Quarterly</td></tr>
+  <tr><td>DE 9C</td><td>California quarterly detail</td><td>Quarterly</td></tr>
+  <tr><td>1096</td><td>Summary of 1099 forms</td><td>Annual</td></tr>
+</table>
+
+<p>All reports support CSV export and can be saved for future reference.</p>
+
+<h2>3.8 Expense Management</h2>
+
+<h3>Submitting an Expense</h3>
+<ol>
+  <li>Go to <strong>Expenses</strong></li>
+  <li>Click <strong>New Expense</strong></li>
+  <li>Enter: vendor, amount, date, category, job (if applicable)</li>
+  <li>Upload receipt photo</li>
+  <li>Submit for approval</li>
+</ol>
+
+<h3>AI Receipt Scanning</h3>
+<p>Upload a receipt photo and the system automatically extracts:</p>
+<ul>
+  <li>Vendor name</li>
+  <li>Line items with quantities and costs</li>
+  <li>Subtotal, tax amount, total</li>
+  <li>Payment method</li>
+</ul>
+
+<h3>Approval Workflow</h3>
+<ol>
+  <li>Manager reviews submitted expenses</li>
+  <li>Approve or deny each expense</li>
+  <li>Approved expenses can be included in payroll reimbursements</li>
+</ol>
+
+<h2>3.9 HR Functions</h2>
+<p>The HR module provides full CRUD for:</p>
+<ul>
+  <li><strong>Performance Reviews:</strong> Schedule, conduct, and record employee reviews</li>
+  <li><strong>Qualifications:</strong> Track certifications, licenses, and expiration dates</li>
+  <li><strong>Skills:</strong> Manage employee skill inventories</li>
+  <li><strong>Education:</strong> Record educational history</li>
+  <li><strong>Languages:</strong> Track language proficiencies</li>
+  <li><strong>Memberships:</strong> Professional organization memberships</li>
+  <li><strong>Licenses:</strong> Professional licenses with expiration tracking</li>
+</ul>
+<p>All HR records are filtered by company for multi-company operations.</p>
+
+<h2>3.10 Policies &amp; Accruals</h2>
+
+<h3>Policy Engine</h3>
+<p>PayLink includes an extensive policy engine covering:</p>
+<ul>
+  <li>Overtime rules (daily, weekly, California-compliant)</li>
+  <li>Break policies (meal breaks, rest breaks)</li>
+  <li>Attendance policies</li>
+  <li>PTO/Vacation/Sick leave accrual rules</li>
+</ul>
+<p>Use the <strong>Quick Setup</strong> option to apply California-compliant defaults to a company.</p>
+
+<h3>Accrual Management</h3>
+<ol>
+  <li>Define accrual policies (rate, cap, carry-over rules)</li>
+  <li>Assign policies to employees or groups</li>
+  <li>System automatically accrues balances based on hours worked or pay periods</li>
+  <li>Employees can view their balances in self-service</li>
+</ol>
+
+<h2>3.11 User Account Management</h2>
+
+<h3>Creating a User Account</h3>
+<ol>
+  <li>Go to <strong>Settings</strong> &rarr; <strong>Users</strong></li>
+  <li>Click <strong>Add User</strong></li>
+  <li>Enter username and password</li>
+  <li>Select role from the dropdown</li>
+  <li>Optionally link to a worker record</li>
+  <li>Select company assignment</li>
+  <li>Save</li>
+</ol>
+
+<h3>Role Permissions</h3>
+<p>Each role has a predefined set of permissions controlling access to:</p>
+<ul>
+  <li>Workers (view, create, edit, delete)</li>
+  <li>Payroll (view, run, process)</li>
+  <li>Schedules (view, create, publish)</li>
+  <li>Reports (view, export)</li>
+  <li>Settings (view, modify)</li>
+</ul>
+
+<h2>3.12 Shift Marketplace</h2>
+
+<h3>How It Works</h3>
+<ol>
+  <li><strong>Post:</strong> Employee posts a shift they cannot work</li>
+  <li><strong>Browse:</strong> Other eligible employees see available shifts</li>
+  <li><strong>Request:</strong> Interested employees request to pick up the shift</li>
+  <li><strong>Eligibility Check:</strong> System verifies:
+    <ul>
+      <li>Same company/department/branch</li>
+      <li>No schedule conflicts</li>
+      <li>No approved leave during shift</li>
+      <li>Weekly hours limit not exceeded</li>
+      <li>Minimum rest period maintained</li>
+    </ul>
+  </li>
+  <li><strong>Approve:</strong> Manager reviews and approves/denies the request</li>
+  <li><strong>Reassign:</strong> On approval, shift is reassigned to the new worker</li>
+</ol>
+
+<div class="callout">
+  <strong>Responsibility Policy</strong>
+  The original worker keeps responsibility for the shift until a replacement is approved by management.
+</div>
+
+<h3>Marketplace Tabs</h3>
+<ul>
+  <li><strong>Available Shifts:</strong> Shifts posted by other employees</li>
+  <li><strong>My Posted:</strong> Shifts you've posted for pickup</li>
+  <li><strong>My Requests:</strong> Shifts you've requested to pick up</li>
+  <li><strong>Approvals:</strong> (Managers) Review pending requests</li>
+  <li><strong>Audit Log:</strong> Complete history of all marketplace activity</li>
+</ul>
+
+</div>
+
+<!-- FOOTER -->
+<div class="page-break">
+  <div class="section-divider" style="min-height: 200px;">
+    <h2>End of Document</h2>
+    <p style="margin-top: 24px;">PayLink Installation, Implementation &amp; User Guide v1.0</p>
+    <p>Prepared for Adiken Inc. &mdash; March 2026</p>
+    <p style="margin-top: 24px; font-size: 0.85rem; color: #64748b;">
+      For support, contact your PayLink administrator or visit app.mypaylink.app
+    </p>
+  </div>
+</div>
+
+</body>
+</html>

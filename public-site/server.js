@@ -11,6 +11,10 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const pages = ['features', 'pricing', 'security', 'contact', 'vendor-portal', 'clock', 'terms', 'privacy'];
 
+app.get('/docs/guide', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'docs', 'paylink-guide.html'));
+});
+
 pages.forEach(page => {
   app.get('/' + page, (req, res) => {
     res.sendFile(path.join(__dirname, 'public', page + '.html'));
