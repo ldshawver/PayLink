@@ -1,4 +1,4 @@
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', function() {
   var timeDigits = document.getElementById('punchTimeDigits');
   var timeSec = document.getElementById('punchTimeSec');
   var timeAmPm = document.getElementById('punchTimeAmPm');
@@ -10,6 +10,8 @@ document.addEventListener('DOMContentLoaded', () => {
   var hourHand = document.getElementById('hourHand');
   var minuteHand = document.getElementById('minuteHand');
   var secondHand = document.getElementById('secondHand');
+
+  var prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   function updateClock() {
     var now = new Date();
@@ -59,37 +61,20 @@ document.addEventListener('DOMContentLoaded', () => {
     btnIn.disabled = true;
     btnOut.disabled = true;
 
-    if (cardSlot) {
+    if (cardSlot && !prefersReducedMotion) {
       cardSlot.classList.remove('punching');
       void cardSlot.offsetWidth;
       cardSlot.classList.add('punching');
     }
 
+    if (statusLine) {
+      statusLine.textContent = 'Redirecting to login...';
+      statusLine.className = 'clock-status-line';
+    }
+
     setTimeout(function() {
-      btn.classList.remove('loading');
-      btnIn.disabled = false;
-      btnOut.disabled = false;
-
-      if (statusLine) {
-        if (type === 'in') {
-          statusLine.textContent = 'Clock-in recorded';
-          statusLine.className = 'clock-status-line clocked-in';
-        } else {
-          statusLine.textContent = 'Clock-out recorded';
-          statusLine.className = 'clock-status-line clocked-out';
-        }
-      }
-
-      var screen = document.querySelector('.clock-screen');
-      if (screen) {
-        var flash = document.createElement('div');
-        flash.className = 'clock-success-flash';
-        screen.appendChild(flash);
-        setTimeout(function() { flash.remove(); }, 800);
-      }
-
       window.location.href = 'https://app.mypaylink.app';
-    }, 1200);
+    }, 800);
   }
 
   if (btnIn) {
@@ -98,6 +83,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnOut) {
     btnOut.addEventListener('click', function() { handlePunch('out'); });
   }
+
+  if (prefersReducedMotion) return;
 
   var punchHero = document.querySelector('.punch-hero');
   var punchWrap = document.querySelector('.punch-wrap');
