@@ -32,7 +32,7 @@ jobs:
             BACKUP_FILE="$BACKUP_DIR/paylink_backup_$(date +%Y%m%d_%H%M%S).sql"
 
             echo "1. Backing up database..."
-            PGPASSWORD='Wow548302!' pg_dump -U apppaylinkmain -h 127.0.0.1 apppaylinkmain > "$BACKUP_FILE"
+            PGPASSWORD='${{ secrets.DB_PASSWORD }}' pg_dump -U apppaylinkmain -h 127.0.0.1 apppaylinkmain > "$BACKUP_FILE"
             echo "   Saved: $BACKUP_FILE"
 
             cd "$APP_DIR"
