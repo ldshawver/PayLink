@@ -6826,7 +6826,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           const statusText = decision === "approved" ? "APPROVED" : "DENIED";
           const noteText = reviewNote ? `\nNote: ${reviewNote}` : "";
           const subject = `Time-Off Request ${statusText}`;
-          const bodyText = `Hi ${worker.firstName},\n\nYour time-off request from ${item.startDate} to ${item.endDate} has been ${statusText}.${noteText}\n\nRegards,\nPayLink`;
+          const timeOffUrl = `${getAppBaseUrl(req)}/attendance?tab=time-off`;
+          const bodyText = `Hi ${worker.firstName},\n\nYour time-off request from ${item.startDate} to ${item.endDate} has been ${statusText}.${noteText}\n\nView your requests: ${timeOffUrl}\n\nRegards,\nPayLink`;
           const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
           if (email) {
             await sendShiftMarketplaceEmail({
