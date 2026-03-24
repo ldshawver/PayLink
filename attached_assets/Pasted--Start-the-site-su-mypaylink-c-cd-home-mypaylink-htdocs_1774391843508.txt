@@ -1,0 +1,30 @@
+# Start the site
+su - mypaylink -c "cd /home/mypaylink/htdocs/mypaylink.app && pm2 start server.js --name paylink-public && pm2 save"
+
+# Test it
+curl http://127.0.0.1:3000
+total 104
+drwxrwx--- 5 mypaylink mypaylink  4096 Mar 23 19:37 .
+drwxrwx--- 5 mypaylink mypaylink  4096 Mar 23 19:47 ..
+drwxrwx--- 2 mypaylink mypaylink  4096 Mar 23 19:37 assets
+-rw-rw---- 1 mypaylink mypaylink  6440 Mar 23 19:44 clock.html
+-rw-rw---- 1 mypaylink mypaylink  7309 Mar 23 19:44 contact.html
+drwxrwx--- 2 mypaylink mypaylink  4096 Mar 23 19:37 css
+-rw-rw---- 1 mypaylink mypaylink  8186 Mar 23 19:44 features.html
+-rw-rw---- 1 mypaylink mypaylink 18677 Mar 23 19:44 index.html
+drwxrwx--- 2 mypaylink mypaylink  4096 Mar 23 19:37 js
+-rw-rw---- 1 mypaylink mypaylink  7586 Mar 23 19:44 pricing.html
+-rw-rw---- 1 mypaylink mypaylink  7569 Mar 23 19:44 privacy.html
+-rw-rw---- 1 mypaylink mypaylink  7881 Mar 23 19:44 security.html
+-rw-rw---- 1 mypaylink mypaylink  6882 Mar 23 19:44 terms.html
+-rw-rw---- 1 mypaylink mypaylink  5897 Mar 23 19:44 vendor-portal.html
+[PM2] Starting /home/mypaylink/htdocs/mypaylink.app/server.js in fork_mode (1 instance)
+[PM2] Done.
+┌────┬───────────────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┬──────────┬──────────┬──────────┬──────────┐
+│ id │ name              │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │ cpu      │ mem      │ user     │ watching │
+├────┼───────────────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┼──────────┼──────────┼──────────┼──────────┤
+│ 0  │ paylink-public    │ default     │ 1.0.0   │ fork    │ 276177   │ 0s     │ 0    │ online    │ 0%       │ 36.9mb   │ myp… │ disabled │
+└────┴───────────────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┴──────────┴──────────┴──────────┴──────────┘
+[PM2] Saving current process list...
+[PM2] Successfully saved in /home/mypaylink/.pm2/dump.pm2
+curl: (7) Failed to connect to 127.0.0.1 port 3000 after 0 ms: Couldn't connect to server
