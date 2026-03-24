@@ -393,6 +393,17 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/workers", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const workers = await storage.getWorkers(companyId && companyId !== "all" ? companyId : undefined);
+      res.json(workers);
+    } catch (error) {
+      console.error("Failed to fetch workers:", error);
+      res.status(500).json({ message: "Failed to fetch workers" });
+    }
+  });
+
   app.post("/api/workers", requireRole("admin", "manager"), async (req, res) => {
     try {
       if (!req.body.companyId) return res.status(400).json({ message: "Company is required" });
