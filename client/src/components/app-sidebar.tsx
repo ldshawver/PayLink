@@ -276,6 +276,13 @@ const navSections: NavSection[] = [
     ],
   },
   {
+    label: "Billing",
+    icon: CreditCard,
+    url: "/billing",
+    roles: ["admin"],
+    items: [],
+  },
+  {
     label: "My Profile",
     icon: UserCircle,
     url: "/my-profile",

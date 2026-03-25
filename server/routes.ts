@@ -7391,8 +7391,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         userId = userResult.rows[0].id as string;
 
         await db.execute(sql`
-          INSERT INTO trial_signups (company_name, employee_count, first_name, last_name, job_title, email, phone, company_id, user_id, trial_start, trial_end, subscription_status, terms_accepted_at, signup_ip)
-          VALUES (${companyName}, ${employeeCount || null}, ${firstName}, ${lastName}, ${jobTitle || null}, ${email}, ${phone || null}, ${companyId}, ${userId}, ${now}, ${trialEnd}, 'trial_active', ${now}, ${req.ip || null})
+          INSERT INTO trial_signups (company_name, employee_count, first_name, last_name, job_title, email, phone, company_id, user_id, trial_start, trial_end, subscription_status, terms_accepted_at, terms_version, privacy_version, signup_ip)
+          VALUES (${companyName}, ${employeeCount || null}, ${firstName}, ${lastName}, ${jobTitle || null}, ${email}, ${phone || null}, ${companyId}, ${userId}, ${now}, ${trialEnd}, 'trial_active', ${now}, '1.0', '1.0', ${req.ip || null})
         `);
 
         await db.execute(sql`
@@ -7835,6 +7835,43 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.json({ message: "Subscription activated", subscriptionStatus: "active_paid" });
     } catch (e) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to activate billing") });
+    }
+  });
+
+  app.get("/api/billing/summary", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company associated" });
+
+      const countResult = await db.execute(sql`
+        SELECT COUNT(*) as count FROM workers
+        WHERE company_id = ${user.companyId} AND status = 'active'
+      `);
+      const billableEmployeeCount = parseInt(countResult.rows[0]?.count as string) || 0;
+
+      const companyResult = await db.execute(sql`
+        SELECT subscription_status, plan_name, trial_start, trial_end, billing_active, payment_method_on_file
+        FROM companies WHERE id = ${user.companyId}
+      `);
+      const company = companyResult.rows[0] as any;
+
+      const basePrice = 29;
+      const perEmployeePrice = 4;
+      const projectedMonthly = basePrice + (billableEmployeeCount * perEmployeePrice);
+
+      res.json({
+        billableEmployeeCount,
+        basePrice,
+        perEmployeePrice,
+        projectedMonthly,
+        subscriptionStatus: company?.subscription_status || "active_paid",
+        planName: company?.plan_name || "starter",
+        billingActive: company?.billing_active || false,
+        trialStart: company?.trial_start,
+        trialEnd: company?.trial_end,
+      });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch billing summary") });
     }
   });
 
