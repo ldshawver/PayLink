@@ -124,7 +124,7 @@ function CheckPortion({
       {/* MICR band — last flex item, sits at the bottom */}
       {config.showMicrLine && (
         <div style={{ textAlign: "center" }}>
-          <span style={{ fontSize: "12pt", fontWeight: "normal", fontFamily: "'MICR', 'Courier New', monospace", letterSpacing: "1px", color: "#000" }}>
+          <span style={{ fontSize: "12pt", fontWeight: "bold", fontFamily: "'MICR', 'Courier New', monospace", letterSpacing: "1px", color: "#000" }}>
             ⑈{remittanceSource?.routingNumber || "000000000"}⑈ ⑆{remittanceSource?.accountNumber || company.ein || "000000000"}⑆ {String(item.checkNumber || "0000").padStart(4, "0")}
           </span>
         </div>
