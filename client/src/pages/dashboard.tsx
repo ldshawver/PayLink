@@ -572,7 +572,7 @@ function DashboardClockCard() {
     : 0;
 
   return (
-    <Card className="border-l-4 border-l-teal-500 bg-gradient-to-r from-teal-50/50 to-transparent dark:from-teal-950/20" data-testid="dashlet-clock-actions">
+    <Card className="border-teal-200 dark:border-teal-800 bg-gradient-to-r from-teal-50/50 to-transparent dark:from-teal-950/20" data-testid="dashlet-clock-actions">
       <CardContent className="p-4 md:p-5">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
@@ -612,15 +612,15 @@ function DashboardClockCard() {
                   {isClockedIn ? (isOnBreak ? "On Break" : "Clocked In") : "Clocked Out"}
                 </Badge>
                 {isClockedIn && !isOnBreak && (
-                  <span className="inline-flex items-center rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5">
+                  <span className="inline-flex items-center rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5" data-testid="badge-dashboard-live">
                     LIVE
                   </span>
                 )}
               </div>
               <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
-                {clockInTime && <span>In since {clockInTime}</span>}
-                {totalToday > 0 && <span>{totalToday.toFixed(1)}h today</span>}
-                {!isClockedIn && todayPunches.length === 0 && <span>No punches today</span>}
+                {clockInTime && <span data-testid="text-clock-in-time">In since {clockInTime}</span>}
+                {totalToday > 0 && <span data-testid="text-hours-today">{totalToday.toFixed(1)}h today</span>}
+                {!isClockedIn && todayPunches.length === 0 && <span data-testid="text-no-punches">No punches today</span>}
               </div>
             </div>
           </div>

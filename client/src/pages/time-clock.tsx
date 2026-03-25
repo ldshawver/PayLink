@@ -422,9 +422,9 @@ export default function TimeClock() {
                     <SelectValue placeholder="Default rate" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="default">Default Rate (${Number(authenticatedWorker.payRate || 0).toFixed(2)}/hr)</SelectItem>
+                    <SelectItem value="default" data-testid="option-wagegroup-default">Default Rate (${Number(authenticatedWorker.payRate || 0).toFixed(2)}/hr)</SelectItem>
                     {assignedWageGroups.map(wg => (
-                      <SelectItem key={wg.id} value={wg.id}>{wg.name} (${Number(wg.hourlyRate || 0).toFixed(2)}/hr)</SelectItem>
+                      <SelectItem key={wg.id} value={wg.id} data-testid={`option-wagegroup-${wg.id}`}>{wg.name} (${Number(wg.hourlyRate || 0).toFixed(2)}/hr)</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
