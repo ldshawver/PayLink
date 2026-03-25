@@ -25,6 +25,8 @@ import PrintCheckPage from "@/pages/print-check";
 import PrintExpenseCheckPage from "@/pages/print-expense-check";
 import MyProfilePage from "@/pages/my-profile";
 import PayrollAuditPage from "@/pages/payroll-audit";
+import CustomersPage from "@/pages/customers";
+import InvoicesPage from "@/pages/invoices";
 import LoginPage from "@/pages/login";
 import { Loader2, Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -59,6 +61,8 @@ function AuthenticatedRouter() {
       <Route path="/reports">{() => <RoleGuard roles={["admin", "manager"]}><ReportsPage /></RoleGuard>}</Route>
       <Route path="/expenses" component={ExpensesPage} />
       <Route path="/payroll-audit">{() => <RoleGuard roles={["admin", "manager"]}><PayrollAuditPage /></RoleGuard>}</Route>
+      <Route path="/customers">{() => <RoleGuard roles={["admin", "manager"]}><CustomersPage /></RoleGuard>}</Route>
+      <Route path="/invoices">{() => <RoleGuard roles={["admin", "manager"]}><InvoicesPage /></RoleGuard>}</Route>
       <Route path="/print-expense-check" component={PrintExpenseCheckPage} />
       <Route path="/my-profile" component={MyProfilePage} />
       <Route component={NotFound} />

@@ -1840,3 +1840,386 @@ export const onboardingProgress = pgTable("onboarding_progress", {
 export const insertOnboardingProgressSchema = createInsertSchema(onboardingProgress).omit({ id: true, createdAt: true });
 export type OnboardingProgress = typeof onboardingProgress.$inferSelect;
 export type InsertOnboardingProgress = z.infer<typeof insertOnboardingProgressSchema>;
+
+// ── Customers ──────────────────────────────────────────
+export const customers = pgTable("customers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  customerName: text("customer_name").notNull(),
+  businessName: text("business_name"),
+  email: text("email"),
+  phone: text("phone"),
+  billingContactName: text("billing_contact_name"),
+  billingEmail: text("billing_email"),
+  billingAddress: text("billing_address"),
+  billingCity: text("billing_city"),
+  billingState: text("billing_state"),
+  billingZip: text("billing_zip"),
+  billingCountry: text("billing_country"),
+  taxId: text("tax_id"),
+  defaultPaymentTerms: text("default_payment_terms").default("net_30"),
+  notes: text("notes"),
+  status: text("status").default("active"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true, createdAt: true, updatedAt: true });
+export type Customer = typeof customers.$inferSelect;
+export type InsertCustomer = z.infer<typeof insertCustomerSchema>;
+
+// ── Invoice Templates ──────────────────────────────────────────
+export const invoiceTemplates = pgTable("invoice_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  layoutKey: text("layout_key").notNull().default("modern_clean"),
+  logoUrl: text("logo_url"),
+  brandColor: text("brand_color").default("#0d9488"),
+  headerText: text("header_text"),
+  footerText: text("footer_text"),
+  paymentInstructions: text("payment_instructions"),
+  termsAndConditions: text("terms_and_conditions"),
+  isDefault: boolean("is_default").default(false),
+  isSystem: boolean("is_system").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertInvoiceTemplateSchema = createInsertSchema(invoiceTemplates).omit({ id: true, createdAt: true, updatedAt: true });
+export type InvoiceTemplate = typeof invoiceTemplates.$inferSelect;
+export type InsertInvoiceTemplate = z.infer<typeof insertInvoiceTemplateSchema>;
+
+// ── Invoices ──────────────────────────────────────────
+export const invoices = pgTable("invoices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  customerId: varchar("customer_id").references(() => customers.id),
+  templateId: varchar("template_id").references(() => invoiceTemplates.id),
+  invoiceNumber: text("invoice_number").notNull(),
+  status: text("status").notNull().default("draft"),
+  issueDate: date("issue_date").notNull(),
+  dueDate: date("due_date").notNull(),
+  subtotal: numeric("subtotal").default("0"),
+  taxRate: numeric("tax_rate").default("0"),
+  taxAmount: numeric("tax_amount").default("0"),
+  discountAmount: numeric("discount_amount").default("0"),
+  discountType: text("discount_type").default("fixed"),
+  totalAmount: numeric("total_amount").default("0"),
+  amountPaid: numeric("amount_paid").default("0"),
+  amountDue: numeric("amount_due").default("0"),
+  currency: text("currency").default("USD"),
+  notes: text("notes"),
+  internalNotes: text("internal_notes"),
+  paymentTerms: text("payment_terms").default("net_30"),
+  recurringBillingId: varchar("recurring_billing_id"),
+  sentAt: timestamp("sent_at"),
+  viewedAt: timestamp("viewed_at"),
+  paidAt: timestamp("paid_at"),
+  voidedAt: timestamp("voided_at"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true, createdAt: true, updatedAt: true });
+export type Invoice = typeof invoices.$inferSelect;
+export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
+
+// ── Invoice Line Items ──────────────────────────────────────────
+export const invoiceLineItems = pgTable("invoice_line_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceId: varchar("invoice_id").notNull().references(() => invoices.id),
+  description: text("description").notNull(),
+  quantity: numeric("quantity").default("1"),
+  unitPrice: numeric("unit_price").default("0"),
+  amount: numeric("amount").default("0"),
+  taxable: boolean("taxable").default(true),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertInvoiceLineItemSchema = createInsertSchema(invoiceLineItems).omit({ id: true, createdAt: true });
+export type InvoiceLineItem = typeof invoiceLineItems.$inferSelect;
+export type InsertInvoiceLineItem = z.infer<typeof insertInvoiceLineItemSchema>;
+
+// ── Payments ──────────────────────────────────────────
+export const payments = pgTable("payments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  invoiceId: varchar("invoice_id").references(() => invoices.id),
+  customerId: varchar("customer_id").references(() => customers.id),
+  paymentMethod: text("payment_method").notNull(),
+  amount: numeric("amount").notNull(),
+  processorFee: numeric("processor_fee").default("0"),
+  netAmount: numeric("net_amount").default("0"),
+  paymentFeeCharged: numeric("payment_fee_charged").default("0"),
+  processorTransactionId: text("processor_transaction_id"),
+  status: text("status").notNull().default("pending"),
+  paidAt: timestamp("paid_at"),
+  failedAt: timestamp("failed_at"),
+  failureReason: text("failure_reason"),
+  receiptUrl: text("receipt_url"),
+  notes: text("notes"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertPaymentSchema = createInsertSchema(payments).omit({ id: true, createdAt: true, updatedAt: true });
+export type Payment = typeof payments.$inferSelect;
+export type InsertPayment = z.infer<typeof insertPaymentSchema>;
+
+// ── Saved Payment Methods ──────────────────────────────────────────
+export const savedPaymentMethods = pgTable("saved_payment_methods", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  customerId: varchar("customer_id").notNull().references(() => customers.id),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  methodType: text("method_type").notNull(),
+  last4: text("last_4"),
+  brand: text("brand"),
+  bankName: text("bank_name"),
+  expiryMonth: integer("expiry_month"),
+  expiryYear: integer("expiry_year"),
+  processorToken: text("processor_token"),
+  isDefault: boolean("is_default").default(false),
+  isAutoPay: boolean("is_auto_pay").default(false),
+  status: text("status").default("active"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertSavedPaymentMethodSchema = createInsertSchema(savedPaymentMethods).omit({ id: true, createdAt: true, updatedAt: true });
+export type SavedPaymentMethod = typeof savedPaymentMethods.$inferSelect;
+export type InsertSavedPaymentMethod = z.infer<typeof insertSavedPaymentMethodSchema>;
+
+// ── Recurring Billing Profiles ──────────────────────────────────────────
+export const recurringBillingProfiles = pgTable("recurring_billing_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  customerId: varchar("customer_id").notNull().references(() => customers.id),
+  templateId: varchar("template_id").references(() => invoiceTemplates.id),
+  name: text("name").notNull(),
+  frequency: text("frequency").notNull().default("monthly"),
+  customIntervalDays: integer("custom_interval_days"),
+  amount: numeric("amount").notNull(),
+  currency: text("currency").default("USD"),
+  lineItems: text("line_items"),
+  taxRate: numeric("tax_rate").default("0"),
+  startDate: date("start_date").notNull(),
+  endDate: date("end_date"),
+  nextInvoiceDate: date("next_invoice_date"),
+  trialEndDate: date("trial_end_date"),
+  autoPayEnabled: boolean("auto_pay_enabled").default(false),
+  retryOnFailure: boolean("retry_on_failure").default(true),
+  maxRetries: integer("max_retries").default(3),
+  status: text("status").notNull().default("active"),
+  canceledAt: timestamp("canceled_at"),
+  notes: text("notes"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertRecurringBillingProfileSchema = createInsertSchema(recurringBillingProfiles).omit({ id: true, createdAt: true, updatedAt: true });
+export type RecurringBillingProfile = typeof recurringBillingProfiles.$inferSelect;
+export type InsertRecurringBillingProfile = z.infer<typeof insertRecurringBillingProfileSchema>;
+
+// ── Document Folders ──────────────────────────────────────────
+export const documentFolders = pgTable("document_folders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  parentId: varchar("parent_id"),
+  category: text("category"),
+  color: text("color"),
+  sortOrder: integer("sort_order").default(0),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertDocumentFolderSchema = createInsertSchema(documentFolders).omit({ id: true, createdAt: true });
+export type DocumentFolder = typeof documentFolders.$inferSelect;
+export type InsertDocumentFolder = z.infer<typeof insertDocumentFolderSchema>;
+
+// ── Documents ──────────────────────────────────────────
+export const documents = pgTable("documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  folderId: varchar("folder_id").references(() => documentFolders.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  fileName: text("file_name").notNull(),
+  fileUrl: text("file_url").notNull(),
+  fileSize: integer("file_size"),
+  mimeType: text("mime_type"),
+  tags: text("tags"),
+  category: text("category"),
+  status: text("status").default("active"),
+  isTemplate: boolean("is_template").default(false),
+  templateMergeTags: text("template_merge_tags"),
+  expiresAt: timestamp("expires_at"),
+  assignedToWorkerId: varchar("assigned_to_worker_id"),
+  assignedToCustomerId: varchar("assigned_to_customer_id"),
+  currentVersionId: varchar("current_version_id"),
+  accessLevel: text("access_level").default("company"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertDocumentSchema = createInsertSchema(documents).omit({ id: true, createdAt: true, updatedAt: true });
+export type Document = typeof documents.$inferSelect;
+export type InsertDocument = z.infer<typeof insertDocumentSchema>;
+
+// ── Document Versions ──────────────────────────────────────────
+export const documentVersions = pgTable("document_versions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  documentId: varchar("document_id").notNull().references(() => documents.id),
+  versionNumber: integer("version_number").notNull().default(1),
+  fileName: text("file_name").notNull(),
+  fileUrl: text("file_url").notNull(),
+  fileSize: integer("file_size"),
+  changeNote: text("change_note"),
+  uploadedBy: varchar("uploaded_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertDocumentVersionSchema = createInsertSchema(documentVersions).omit({ id: true, createdAt: true });
+export type DocumentVersion = typeof documentVersions.$inferSelect;
+export type InsertDocumentVersion = z.infer<typeof insertDocumentVersionSchema>;
+
+// ── Document Signature Requests ──────────────────────────────────────────
+export const documentSignatureRequests = pgTable("document_signature_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  documentId: varchar("document_id").notNull().references(() => documents.id),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  status: text("status").notNull().default("draft"),
+  sentAt: timestamp("sent_at"),
+  completedAt: timestamp("completed_at"),
+  expiresAt: timestamp("expires_at"),
+  message: text("message"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertDocumentSignatureRequestSchema = createInsertSchema(documentSignatureRequests).omit({ id: true, createdAt: true, updatedAt: true });
+export type DocumentSignatureRequest = typeof documentSignatureRequests.$inferSelect;
+export type InsertDocumentSignatureRequest = z.infer<typeof insertDocumentSignatureRequestSchema>;
+
+// ── Document Signers ──────────────────────────────────────────
+export const documentSigners = pgTable("document_signers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  signatureRequestId: varchar("signature_request_id").notNull().references(() => documentSignatureRequests.id),
+  signerName: text("signer_name").notNull(),
+  signerEmail: text("signer_email").notNull(),
+  status: text("status").notNull().default("pending"),
+  signedAt: timestamp("signed_at"),
+  ipAddress: text("ip_address"),
+  signatureData: text("signature_data"),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertDocumentSignerSchema = createInsertSchema(documentSigners).omit({ id: true, createdAt: true });
+export type DocumentSigner = typeof documentSigners.$inferSelect;
+export type InsertDocumentSigner = z.infer<typeof insertDocumentSignerSchema>;
+
+// ── Document Audit Log ──────────────────────────────────────────
+export const documentAuditLogs = pgTable("document_audit_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  documentId: varchar("document_id").references(() => documents.id),
+  signatureRequestId: varchar("signature_request_id"),
+  companyId: varchar("company_id").notNull(),
+  action: text("action").notNull(),
+  actorName: text("actor_name"),
+  actorEmail: text("actor_email"),
+  actorId: varchar("actor_id"),
+  ipAddress: text("ip_address"),
+  details: text("details"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertDocumentAuditLogSchema = createInsertSchema(documentAuditLogs).omit({ id: true, createdAt: true });
+export type DocumentAuditLog = typeof documentAuditLogs.$inferSelect;
+export type InsertDocumentAuditLog = z.infer<typeof insertDocumentAuditLogSchema>;
+
+// ── Automation Rules ──────────────────────────────────────────
+export const automationRules = pgTable("automation_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  triggerType: text("trigger_type").notNull(),
+  triggerConfig: text("trigger_config"),
+  actionType: text("action_type").notNull(),
+  actionConfig: text("action_config"),
+  isEnabled: boolean("is_enabled").default(true),
+  isSystem: boolean("is_system").default(false),
+  category: text("category"),
+  lastTriggeredAt: timestamp("last_triggered_at"),
+  triggerCount: integer("trigger_count").default(0),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertAutomationRuleSchema = createInsertSchema(automationRules).omit({ id: true, createdAt: true, updatedAt: true });
+export type AutomationRule = typeof automationRules.$inferSelect;
+export type InsertAutomationRule = z.infer<typeof insertAutomationRuleSchema>;
+
+// ── Automation Events ──────────────────────────────────────────
+export const automationEvents = pgTable("automation_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ruleId: varchar("rule_id").notNull().references(() => automationRules.id),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  triggerType: text("trigger_type").notNull(),
+  actionType: text("action_type").notNull(),
+  status: text("status").notNull().default("completed"),
+  triggerData: text("trigger_data"),
+  actionResult: text("action_result"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertAutomationEventSchema = createInsertSchema(automationEvents).omit({ id: true, createdAt: true });
+export type AutomationEvent = typeof automationEvents.$inferSelect;
+export type InsertAutomationEvent = z.infer<typeof insertAutomationEventSchema>;
+
+// ── Notifications ──────────────────────────────────────────
+export const notifications = pgTable("notifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  userId: varchar("user_id"),
+  workerId: varchar("worker_id"),
+  customerId: varchar("customer_id"),
+  type: text("type").notNull(),
+  title: text("title").notNull(),
+  message: text("message"),
+  actionUrl: text("action_url"),
+  isRead: boolean("is_read").default(false),
+  readAt: timestamp("read_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertNotificationSchema = createInsertSchema(notifications).omit({ id: true, createdAt: true });
+export type Notification = typeof notifications.$inferSelect;
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+
+// ── Portal Access Tokens ──────────────────────────────────────────
+export const portalAccessTokens = pgTable("portal_access_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  customerId: varchar("customer_id").references(() => customers.id),
+  invoiceId: varchar("invoice_id").references(() => invoices.id),
+  documentId: varchar("document_id").references(() => documents.id),
+  signatureRequestId: varchar("signature_request_id"),
+  token: text("token").notNull(),
+  tokenType: text("token_type").notNull(),
+  expiresAt: timestamp("expires_at"),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});

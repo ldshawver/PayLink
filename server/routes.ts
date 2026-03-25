@@ -7624,5 +7624,319 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  // ══════════════════════════════════════════════════════════════════════
+  // CUSTOMERS
+  // ══════════════════════════════════════════════════════════════════════
+  app.get("/api/customers", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      const rows = await storage.getCustomers(companyId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch customers") }); }
+  });
+
+  app.get("/api/customers/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const r = await storage.getCustomer(req.params.id);
+      if (!r) return res.status(404).json({ message: "Customer not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.companyId && r.companyId !== user.companyId) return res.status(403).json({ message: "Access denied" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch customer") }); }
+  });
+
+  app.post("/api/customers", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.createCustomer(req.body);
+      res.status(201).json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create customer") }); }
+  });
+
+  app.patch("/api/customers/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.updateCustomer(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Customer not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update customer") }); }
+  });
+
+  app.delete("/api/customers/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      await storage.deleteCustomer(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete customer") }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // INVOICE TEMPLATES
+  // ══════════════════════════════════════════════════════════════════════
+  app.get("/api/invoice-templates", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const rows = await storage.getInvoiceTemplates(companyId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch invoice templates") }); }
+  });
+
+  app.post("/api/invoice-templates", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.createInvoiceTemplate(req.body);
+      res.status(201).json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create invoice template") }); }
+  });
+
+  app.patch("/api/invoice-templates/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.updateInvoiceTemplate(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Template not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update invoice template") }); }
+  });
+
+  app.delete("/api/invoice-templates/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      await storage.deleteInvoiceTemplate(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete invoice template") }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // INVOICES
+  // ══════════════════════════════════════════════════════════════════════
+  app.get("/api/invoices", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      const rows = await storage.getInvoices(companyId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch invoices") }); }
+  });
+
+  app.get("/api/invoices/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const r = await storage.getInvoice(req.params.id);
+      if (!r) return res.status(404).json({ message: "Invoice not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.companyId && r.companyId !== user.companyId) return res.status(403).json({ message: "Access denied" });
+      const lineItems = await storage.getInvoiceLineItems(req.params.id);
+      res.json({ ...r, lineItems });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch invoice") }); }
+  });
+
+  app.post("/api/invoices", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const { lineItems, ...invoiceData } = req.body;
+      const invoice = await storage.createInvoice(invoiceData);
+      if (lineItems && Array.isArray(lineItems)) {
+        for (const item of lineItems) {
+          await storage.createInvoiceLineItem({ ...item, invoiceId: invoice.id });
+        }
+      }
+      const items = await storage.getInvoiceLineItems(invoice.id);
+      res.status(201).json({ ...invoice, lineItems: items });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create invoice") }); }
+  });
+
+  app.patch("/api/invoices/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const { lineItems, ...invoiceData } = req.body;
+      const r = await storage.updateInvoice(req.params.id, invoiceData);
+      if (!r) return res.status(404).json({ message: "Invoice not found" });
+      if (lineItems && Array.isArray(lineItems)) {
+        await storage.deleteInvoiceLineItemsByInvoice(req.params.id);
+        for (const item of lineItems) {
+          await storage.createInvoiceLineItem({ ...item, invoiceId: req.params.id });
+        }
+      }
+      const items = await storage.getInvoiceLineItems(req.params.id);
+      res.json({ ...r, lineItems: items });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update invoice") }); }
+  });
+
+  app.delete("/api/invoices/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      await storage.deleteInvoice(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete invoice") }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // PAYMENTS
+  // ══════════════════════════════════════════════════════════════════════
+  app.get("/api/payments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      const rows = await storage.getPayments(companyId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch payments") }); }
+  });
+
+  app.post("/api/payments", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const payment = await storage.createPayment(req.body);
+      if (payment.invoiceId) {
+        const invoice = await storage.getInvoice(payment.invoiceId);
+        if (invoice) {
+          const allPayments = await storage.getPayments(invoice.companyId);
+          const invoicePayments = allPayments.filter(p => p.invoiceId === invoice.id && p.status !== "failed" && p.status !== "refunded");
+          const totalPaid = invoicePayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+          const invoiceTotal = parseFloat(invoice.totalAmount);
+          const newStatus = totalPaid >= invoiceTotal ? "paid" : "partially_paid";
+          await storage.updateInvoice(invoice.id, { status: newStatus, amountPaid: totalPaid.toFixed(2), amountDue: (invoiceTotal - totalPaid).toFixed(2) });
+        }
+      }
+      res.status(201).json(payment);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create payment") }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // RECURRING BILLING PROFILES
+  // ══════════════════════════════════════════════════════════════════════
+  app.get("/api/recurring-billing", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      const rows = await storage.getRecurringBillingProfiles(companyId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch recurring billing") }); }
+  });
+
+  app.post("/api/recurring-billing", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.createRecurringBillingProfile(req.body);
+      res.status(201).json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create recurring billing") }); }
+  });
+
+  app.patch("/api/recurring-billing/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.updateRecurringBillingProfile(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Profile not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update recurring billing") }); }
+  });
+
+  app.delete("/api/recurring-billing/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      await storage.deleteRecurringBillingProfile(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete recurring billing") }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // DOCUMENTS
+  // ══════════════════════════════════════════════════════════════════════
+  app.get("/api/document-folders", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      const rows = await storage.getDocumentFolders(companyId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch folders") }); }
+  });
+
+  app.post("/api/document-folders", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.createDocumentFolder(req.body);
+      res.status(201).json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create folder") }); }
+  });
+
+  app.get("/api/documents", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      const rows = await storage.getDocuments(companyId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch documents") }); }
+  });
+
+  app.get("/api/documents/:id", requireAuth, async (req, res) => {
+    try {
+      const r = await storage.getDocument(req.params.id);
+      if (!r) return res.status(404).json({ message: "Document not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch document") }); }
+  });
+
+  app.post("/api/documents", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.createDocument(req.body);
+      res.status(201).json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create document") }); }
+  });
+
+  app.patch("/api/documents/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.updateDocument(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Document not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update document") }); }
+  });
+
+  app.delete("/api/documents/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      await storage.deleteDocument(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete document") }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // AUTOMATION RULES
+  // ══════════════════════════════════════════════════════════════════════
+  app.get("/api/automation-rules", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      const rows = await storage.getAutomationRules(companyId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch automation rules") }); }
+  });
+
+  app.post("/api/automation-rules", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.createAutomationRule(req.body);
+      res.status(201).json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create automation rule") }); }
+  });
+
+  app.patch("/api/automation-rules/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.updateAutomationRule(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Rule not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update automation rule") }); }
+  });
+
+  app.delete("/api/automation-rules/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      await storage.deleteAutomationRule(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete automation rule") }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // NOTIFICATIONS
+  // ══════════════════════════════════════════════════════════════════════
+  app.get("/api/notifications", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      const userId = req.query.userId as string | undefined;
+      const rows = await storage.getNotifications(companyId, userId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch notifications") }); }
+  });
+
+  app.patch("/api/notifications/:id", requireAuth, async (req, res) => {
+    try {
+      const r = await storage.updateNotification(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Notification not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update notification") }); }
+  });
+
   return httpServer;
 }

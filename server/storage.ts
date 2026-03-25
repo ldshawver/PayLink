@@ -112,6 +112,26 @@ import {
   type RecurringExpenseTemplate, type InsertRecurringExpenseTemplate,
   type ExpenseApprovalAction, type InsertExpenseApprovalAction,
   type PayrollReimbursementItem, type InsertPayrollReimbursementItem,
+  customers, invoices, invoiceLineItems, invoiceTemplates, payments, savedPaymentMethods,
+  recurringBillingProfiles, documents, documentFolders, documentVersions,
+  documentSignatureRequests, documentSigners, documentAuditLogs,
+  automationRules, automationEvents, notifications, portalAccessTokens,
+  type Customer, type InsertCustomer,
+  type Invoice, type InsertInvoice,
+  type InvoiceLineItem, type InsertInvoiceLineItem,
+  type InvoiceTemplate, type InsertInvoiceTemplate,
+  type Payment, type InsertPayment,
+  type SavedPaymentMethod, type InsertSavedPaymentMethod,
+  type RecurringBillingProfile, type InsertRecurringBillingProfile,
+  type Document, type InsertDocument,
+  type DocumentFolder, type InsertDocumentFolder,
+  type DocumentVersion, type InsertDocumentVersion,
+  type DocumentSignatureRequest, type InsertDocumentSignatureRequest,
+  type DocumentSigner, type InsertDocumentSigner,
+  type DocumentAuditLog, type InsertDocumentAuditLog,
+  type AutomationRule, type InsertAutomationRule,
+  type AutomationEvent, type InsertAutomationEvent,
+  type Notification, type InsertNotification,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -507,6 +527,80 @@ export interface IStorage {
   createPayrollPaymentRecord(data: InsertPayrollPaymentRecord): Promise<PayrollPaymentRecord>;
   updatePayrollPaymentRecord(id: string, data: Partial<PayrollPaymentRecord>): Promise<PayrollPaymentRecord | undefined>;
   deletePayrollPaymentRecord(id: string): Promise<void>;
+
+  getCustomers(companyId: string): Promise<Customer[]>;
+  getCustomer(id: string): Promise<Customer | undefined>;
+  createCustomer(data: InsertCustomer): Promise<Customer>;
+  updateCustomer(id: string, data: Partial<Customer>): Promise<Customer | undefined>;
+  deleteCustomer(id: string): Promise<void>;
+
+  getInvoiceTemplates(companyId?: string): Promise<InvoiceTemplate[]>;
+  getInvoiceTemplate(id: string): Promise<InvoiceTemplate | undefined>;
+  createInvoiceTemplate(data: InsertInvoiceTemplate): Promise<InvoiceTemplate>;
+  updateInvoiceTemplate(id: string, data: Partial<InvoiceTemplate>): Promise<InvoiceTemplate | undefined>;
+  deleteInvoiceTemplate(id: string): Promise<void>;
+
+  getInvoices(companyId: string): Promise<Invoice[]>;
+  getInvoice(id: string): Promise<Invoice | undefined>;
+  createInvoice(data: InsertInvoice): Promise<Invoice>;
+  updateInvoice(id: string, data: Partial<Invoice>): Promise<Invoice | undefined>;
+  deleteInvoice(id: string): Promise<void>;
+
+  getInvoiceLineItems(invoiceId: string): Promise<InvoiceLineItem[]>;
+  createInvoiceLineItem(data: InsertInvoiceLineItem): Promise<InvoiceLineItem>;
+  updateInvoiceLineItem(id: string, data: Partial<InvoiceLineItem>): Promise<InvoiceLineItem | undefined>;
+  deleteInvoiceLineItem(id: string): Promise<void>;
+  deleteInvoiceLineItemsByInvoice(invoiceId: string): Promise<void>;
+
+  getPayments(companyId: string): Promise<Payment[]>;
+  getPayment(id: string): Promise<Payment | undefined>;
+  createPayment(data: InsertPayment): Promise<Payment>;
+  updatePayment(id: string, data: Partial<Payment>): Promise<Payment | undefined>;
+
+  getRecurringBillingProfiles(companyId: string): Promise<RecurringBillingProfile[]>;
+  getRecurringBillingProfile(id: string): Promise<RecurringBillingProfile | undefined>;
+  createRecurringBillingProfile(data: InsertRecurringBillingProfile): Promise<RecurringBillingProfile>;
+  updateRecurringBillingProfile(id: string, data: Partial<RecurringBillingProfile>): Promise<RecurringBillingProfile | undefined>;
+  deleteRecurringBillingProfile(id: string): Promise<void>;
+
+  getDocumentFolders(companyId: string): Promise<DocumentFolder[]>;
+  createDocumentFolder(data: InsertDocumentFolder): Promise<DocumentFolder>;
+  updateDocumentFolder(id: string, data: Partial<DocumentFolder>): Promise<DocumentFolder | undefined>;
+  deleteDocumentFolder(id: string): Promise<void>;
+
+  getDocuments(companyId: string): Promise<Document[]>;
+  getDocument(id: string): Promise<Document | undefined>;
+  createDocument(data: InsertDocument): Promise<Document>;
+  updateDocument(id: string, data: Partial<Document>): Promise<Document | undefined>;
+  deleteDocument(id: string): Promise<void>;
+
+  getDocumentVersions(documentId: string): Promise<DocumentVersion[]>;
+  createDocumentVersion(data: InsertDocumentVersion): Promise<DocumentVersion>;
+
+  getDocumentSignatureRequests(companyId: string): Promise<DocumentSignatureRequest[]>;
+  getDocumentSignatureRequest(id: string): Promise<DocumentSignatureRequest | undefined>;
+  createDocumentSignatureRequest(data: InsertDocumentSignatureRequest): Promise<DocumentSignatureRequest>;
+  updateDocumentSignatureRequest(id: string, data: Partial<DocumentSignatureRequest>): Promise<DocumentSignatureRequest | undefined>;
+
+  getDocumentSigners(requestId: string): Promise<DocumentSigner[]>;
+  createDocumentSigner(data: InsertDocumentSigner): Promise<DocumentSigner>;
+  updateDocumentSigner(id: string, data: Partial<DocumentSigner>): Promise<DocumentSigner | undefined>;
+
+  createDocumentAuditLog(data: InsertDocumentAuditLog): Promise<DocumentAuditLog>;
+  getDocumentAuditLogs(documentId: string): Promise<DocumentAuditLog[]>;
+
+  getAutomationRules(companyId: string): Promise<AutomationRule[]>;
+  getAutomationRule(id: string): Promise<AutomationRule | undefined>;
+  createAutomationRule(data: InsertAutomationRule): Promise<AutomationRule>;
+  updateAutomationRule(id: string, data: Partial<AutomationRule>): Promise<AutomationRule | undefined>;
+  deleteAutomationRule(id: string): Promise<void>;
+
+  getAutomationEvents(companyId: string): Promise<AutomationEvent[]>;
+  createAutomationEvent(data: InsertAutomationEvent): Promise<AutomationEvent>;
+
+  getNotifications(companyId: string, userId?: string): Promise<Notification[]>;
+  createNotification(data: InsertNotification): Promise<Notification>;
+  updateNotification(id: string, data: Partial<Notification>): Promise<Notification | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2337,6 +2431,254 @@ export class DatabaseStorage implements IStorage {
   }
   async updatePayrollReimbursementItem(id: string, data: Partial<PayrollReimbursementItem>): Promise<PayrollReimbursementItem | undefined> {
     const [r] = await db.update(payrollReimbursementItems).set(data).where(eq(payrollReimbursementItems.id, id)).returning();
+    return r;
+  }
+
+  // ── Customers ──────────────────────────────────────────
+  async getCustomers(companyId: string): Promise<Customer[]> {
+    return db.select().from(customers).where(eq(customers.companyId, companyId)).orderBy(desc(customers.createdAt));
+  }
+  async getCustomer(id: string): Promise<Customer | undefined> {
+    const [r] = await db.select().from(customers).where(eq(customers.id, id));
+    return r;
+  }
+  async createCustomer(data: InsertCustomer): Promise<Customer> {
+    const [r] = await db.insert(customers).values(data).returning();
+    return r;
+  }
+  async updateCustomer(id: string, data: Partial<Customer>): Promise<Customer | undefined> {
+    const [r] = await db.update(customers).set({ ...data, updatedAt: new Date() }).where(eq(customers.id, id)).returning();
+    return r;
+  }
+  async deleteCustomer(id: string): Promise<void> {
+    await db.delete(customers).where(eq(customers.id, id));
+  }
+
+  // ── Invoice Templates ──────────────────────────────────────────
+  async getInvoiceTemplates(companyId?: string): Promise<InvoiceTemplate[]> {
+    if (companyId) {
+      return db.select().from(invoiceTemplates).where(or(eq(invoiceTemplates.companyId, companyId), isNull(invoiceTemplates.companyId))).orderBy(invoiceTemplates.name);
+    }
+    return db.select().from(invoiceTemplates).orderBy(invoiceTemplates.name);
+  }
+  async getInvoiceTemplate(id: string): Promise<InvoiceTemplate | undefined> {
+    const [r] = await db.select().from(invoiceTemplates).where(eq(invoiceTemplates.id, id));
+    return r;
+  }
+  async createInvoiceTemplate(data: InsertInvoiceTemplate): Promise<InvoiceTemplate> {
+    const [r] = await db.insert(invoiceTemplates).values(data).returning();
+    return r;
+  }
+  async updateInvoiceTemplate(id: string, data: Partial<InvoiceTemplate>): Promise<InvoiceTemplate | undefined> {
+    const [r] = await db.update(invoiceTemplates).set({ ...data, updatedAt: new Date() }).where(eq(invoiceTemplates.id, id)).returning();
+    return r;
+  }
+  async deleteInvoiceTemplate(id: string): Promise<void> {
+    await db.delete(invoiceTemplates).where(eq(invoiceTemplates.id, id));
+  }
+
+  // ── Invoices ──────────────────────────────────────────
+  async getInvoices(companyId: string): Promise<Invoice[]> {
+    return db.select().from(invoices).where(eq(invoices.companyId, companyId)).orderBy(desc(invoices.createdAt));
+  }
+  async getInvoice(id: string): Promise<Invoice | undefined> {
+    const [r] = await db.select().from(invoices).where(eq(invoices.id, id));
+    return r;
+  }
+  async createInvoice(data: InsertInvoice): Promise<Invoice> {
+    const [r] = await db.insert(invoices).values(data).returning();
+    return r;
+  }
+  async updateInvoice(id: string, data: Partial<Invoice>): Promise<Invoice | undefined> {
+    const [r] = await db.update(invoices).set({ ...data, updatedAt: new Date() }).where(eq(invoices.id, id)).returning();
+    return r;
+  }
+  async deleteInvoice(id: string): Promise<void> {
+    await db.delete(invoiceLineItems).where(eq(invoiceLineItems.invoiceId, id));
+    await db.delete(invoices).where(eq(invoices.id, id));
+  }
+
+  // ── Invoice Line Items ──────────────────────────────────────────
+  async getInvoiceLineItems(invoiceId: string): Promise<InvoiceLineItem[]> {
+    return db.select().from(invoiceLineItems).where(eq(invoiceLineItems.invoiceId, invoiceId)).orderBy(invoiceLineItems.sortOrder);
+  }
+  async createInvoiceLineItem(data: InsertInvoiceLineItem): Promise<InvoiceLineItem> {
+    const [r] = await db.insert(invoiceLineItems).values(data).returning();
+    return r;
+  }
+  async updateInvoiceLineItem(id: string, data: Partial<InvoiceLineItem>): Promise<InvoiceLineItem | undefined> {
+    const [r] = await db.update(invoiceLineItems).set(data).where(eq(invoiceLineItems.id, id)).returning();
+    return r;
+  }
+  async deleteInvoiceLineItem(id: string): Promise<void> {
+    await db.delete(invoiceLineItems).where(eq(invoiceLineItems.id, id));
+  }
+  async deleteInvoiceLineItemsByInvoice(invoiceId: string): Promise<void> {
+    await db.delete(invoiceLineItems).where(eq(invoiceLineItems.invoiceId, invoiceId));
+  }
+
+  // ── Payments ──────────────────────────────────────────
+  async getPayments(companyId: string): Promise<Payment[]> {
+    return db.select().from(payments).where(eq(payments.companyId, companyId)).orderBy(desc(payments.createdAt));
+  }
+  async getPayment(id: string): Promise<Payment | undefined> {
+    const [r] = await db.select().from(payments).where(eq(payments.id, id));
+    return r;
+  }
+  async createPayment(data: InsertPayment): Promise<Payment> {
+    const [r] = await db.insert(payments).values(data).returning();
+    return r;
+  }
+  async updatePayment(id: string, data: Partial<Payment>): Promise<Payment | undefined> {
+    const [r] = await db.update(payments).set({ ...data, updatedAt: new Date() }).where(eq(payments.id, id)).returning();
+    return r;
+  }
+
+  // ── Recurring Billing Profiles ──────────────────────────────────────────
+  async getRecurringBillingProfiles(companyId: string): Promise<RecurringBillingProfile[]> {
+    return db.select().from(recurringBillingProfiles).where(eq(recurringBillingProfiles.companyId, companyId)).orderBy(desc(recurringBillingProfiles.createdAt));
+  }
+  async getRecurringBillingProfile(id: string): Promise<RecurringBillingProfile | undefined> {
+    const [r] = await db.select().from(recurringBillingProfiles).where(eq(recurringBillingProfiles.id, id));
+    return r;
+  }
+  async createRecurringBillingProfile(data: InsertRecurringBillingProfile): Promise<RecurringBillingProfile> {
+    const [r] = await db.insert(recurringBillingProfiles).values(data).returning();
+    return r;
+  }
+  async updateRecurringBillingProfile(id: string, data: Partial<RecurringBillingProfile>): Promise<RecurringBillingProfile | undefined> {
+    const [r] = await db.update(recurringBillingProfiles).set({ ...data, updatedAt: new Date() }).where(eq(recurringBillingProfiles.id, id)).returning();
+    return r;
+  }
+  async deleteRecurringBillingProfile(id: string): Promise<void> {
+    await db.delete(recurringBillingProfiles).where(eq(recurringBillingProfiles.id, id));
+  }
+
+  // ── Document Folders ──────────────────────────────────────────
+  async getDocumentFolders(companyId: string): Promise<DocumentFolder[]> {
+    return db.select().from(documentFolders).where(eq(documentFolders.companyId, companyId)).orderBy(documentFolders.sortOrder);
+  }
+  async createDocumentFolder(data: InsertDocumentFolder): Promise<DocumentFolder> {
+    const [r] = await db.insert(documentFolders).values(data).returning();
+    return r;
+  }
+  async updateDocumentFolder(id: string, data: Partial<DocumentFolder>): Promise<DocumentFolder | undefined> {
+    const [r] = await db.update(documentFolders).set(data).where(eq(documentFolders.id, id)).returning();
+    return r;
+  }
+  async deleteDocumentFolder(id: string): Promise<void> {
+    await db.delete(documentFolders).where(eq(documentFolders.id, id));
+  }
+
+  // ── Documents ──────────────────────────────────────────
+  async getDocuments(companyId: string): Promise<Document[]> {
+    return db.select().from(documents).where(eq(documents.companyId, companyId)).orderBy(desc(documents.createdAt));
+  }
+  async getDocument(id: string): Promise<Document | undefined> {
+    const [r] = await db.select().from(documents).where(eq(documents.id, id));
+    return r;
+  }
+  async createDocument(data: InsertDocument): Promise<Document> {
+    const [r] = await db.insert(documents).values(data).returning();
+    return r;
+  }
+  async updateDocument(id: string, data: Partial<Document>): Promise<Document | undefined> {
+    const [r] = await db.update(documents).set({ ...data, updatedAt: new Date() }).where(eq(documents.id, id)).returning();
+    return r;
+  }
+  async deleteDocument(id: string): Promise<void> {
+    await db.delete(documents).where(eq(documents.id, id));
+  }
+
+  // ── Document Versions ──────────────────────────────────────────
+  async getDocumentVersions(documentId: string): Promise<DocumentVersion[]> {
+    return db.select().from(documentVersions).where(eq(documentVersions.documentId, documentId)).orderBy(desc(documentVersions.versionNumber));
+  }
+  async createDocumentVersion(data: InsertDocumentVersion): Promise<DocumentVersion> {
+    const [r] = await db.insert(documentVersions).values(data).returning();
+    return r;
+  }
+
+  // ── Document Signature Requests ──────────────────────────────────────────
+  async getDocumentSignatureRequests(companyId: string): Promise<DocumentSignatureRequest[]> {
+    return db.select().from(documentSignatureRequests).where(eq(documentSignatureRequests.companyId, companyId)).orderBy(desc(documentSignatureRequests.createdAt));
+  }
+  async getDocumentSignatureRequest(id: string): Promise<DocumentSignatureRequest | undefined> {
+    const [r] = await db.select().from(documentSignatureRequests).where(eq(documentSignatureRequests.id, id));
+    return r;
+  }
+  async createDocumentSignatureRequest(data: InsertDocumentSignatureRequest): Promise<DocumentSignatureRequest> {
+    const [r] = await db.insert(documentSignatureRequests).values(data).returning();
+    return r;
+  }
+  async updateDocumentSignatureRequest(id: string, data: Partial<DocumentSignatureRequest>): Promise<DocumentSignatureRequest | undefined> {
+    const [r] = await db.update(documentSignatureRequests).set({ ...data, updatedAt: new Date() }).where(eq(documentSignatureRequests.id, id)).returning();
+    return r;
+  }
+
+  // ── Document Signers ──────────────────────────────────────────
+  async getDocumentSigners(requestId: string): Promise<DocumentSigner[]> {
+    return db.select().from(documentSigners).where(eq(documentSigners.signatureRequestId, requestId)).orderBy(documentSigners.sortOrder);
+  }
+  async createDocumentSigner(data: InsertDocumentSigner): Promise<DocumentSigner> {
+    const [r] = await db.insert(documentSigners).values(data).returning();
+    return r;
+  }
+  async updateDocumentSigner(id: string, data: Partial<DocumentSigner>): Promise<DocumentSigner | undefined> {
+    const [r] = await db.update(documentSigners).set(data).where(eq(documentSigners.id, id)).returning();
+    return r;
+  }
+
+  // ── Document Audit Logs ──────────────────────────────────────────
+  async createDocumentAuditLog(data: InsertDocumentAuditLog): Promise<DocumentAuditLog> {
+    const [r] = await db.insert(documentAuditLogs).values(data).returning();
+    return r;
+  }
+  async getDocumentAuditLogs(documentId: string): Promise<DocumentAuditLog[]> {
+    return db.select().from(documentAuditLogs).where(eq(documentAuditLogs.documentId, documentId)).orderBy(desc(documentAuditLogs.createdAt));
+  }
+
+  // ── Automation Rules ──────────────────────────────────────────
+  async getAutomationRules(companyId: string): Promise<AutomationRule[]> {
+    return db.select().from(automationRules).where(eq(automationRules.companyId, companyId)).orderBy(desc(automationRules.createdAt));
+  }
+  async getAutomationRule(id: string): Promise<AutomationRule | undefined> {
+    const [r] = await db.select().from(automationRules).where(eq(automationRules.id, id));
+    return r;
+  }
+  async createAutomationRule(data: InsertAutomationRule): Promise<AutomationRule> {
+    const [r] = await db.insert(automationRules).values(data).returning();
+    return r;
+  }
+  async updateAutomationRule(id: string, data: Partial<AutomationRule>): Promise<AutomationRule | undefined> {
+    const [r] = await db.update(automationRules).set({ ...data, updatedAt: new Date() }).where(eq(automationRules.id, id)).returning();
+    return r;
+  }
+  async deleteAutomationRule(id: string): Promise<void> {
+    await db.delete(automationRules).where(eq(automationRules.id, id));
+  }
+
+  // ── Automation Events ──────────────────────────────────────────
+  async getAutomationEvents(companyId: string): Promise<AutomationEvent[]> {
+    return db.select().from(automationEvents).where(eq(automationEvents.companyId, companyId)).orderBy(desc(automationEvents.createdAt));
+  }
+  async createAutomationEvent(data: InsertAutomationEvent): Promise<AutomationEvent> {
+    const [r] = await db.insert(automationEvents).values(data).returning();
+    return r;
+  }
+
+  // ── Notifications ──────────────────────────────────────────
+  async getNotifications(companyId: string, userId?: string): Promise<Notification[]> {
+    const conds = [eq(notifications.companyId, companyId)];
+    if (userId) conds.push(eq(notifications.userId, userId));
+    return db.select().from(notifications).where(and(...conds)).orderBy(desc(notifications.createdAt));
+  }
+  async createNotification(data: InsertNotification): Promise<Notification> {
+    const [r] = await db.insert(notifications).values(data).returning();
+    return r;
+  }
+  async updateNotification(id: string, data: Partial<Notification>): Promise<Notification | undefined> {
+    const [r] = await db.update(notifications).set(data).where(eq(notifications.id, id)).returning();
     return r;
   }
 }

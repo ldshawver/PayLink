@@ -67,6 +67,12 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 -   **Onboarding Checklist:** Dashboard widget for trial accounts with 6 setup steps: company details, first employee, pay schedule, payroll config, time clock, payroll preview. Progress tracked in `onboarding_progress` table. Disappears after all steps completed.
 -   **Analytics Tracking:** Event tracking for signup flow, trial lifecycle, and key user actions. Events: `pricing_page_view`, `signup_started`, `signup_completed`, `trial_started`, `view_demo_click`, `demo_started`, `subscription_activated`. Stored in `analytics_events` table.
 
+-   **Customer Management:** Full CRUD for customers/clients with contact info, billing address, tax ID, payment terms, and status tracking (active/inactive/prospect). Searchable directory with status filters. API: `GET/POST /api/customers`, `GET/PATCH/DELETE /api/customers/:id`.
+-   **Invoicing System:** Create, edit, duplicate, and delete invoices with line items (description, quantity, unit price, taxable flag). Supports statuses: draft, sent, viewed, paid, partially_paid, overdue, cancelled. Auto-calculates subtotals and totals. Payments track against invoices and auto-update paid/due amounts. Recurring billing profiles placeholder. API: `GET/POST /api/invoices`, `GET/PATCH/DELETE /api/invoices/:id`, `GET/POST /api/payments`, `GET/POST /api/recurring-billing`.
+-   **Document Management:** Folders, documents, versioning, signature requests with signers, and audit logs. API: `GET/POST /api/documents`, `GET/POST /api/document-folders`.
+-   **Automation Engine:** Rules-based automation with event logging. API: `GET/POST /api/automation-rules`.
+-   **Notifications System:** Company/user-scoped notification tracking. API: `GET/PATCH /api/notifications`.
+
 ## Production Deployment
 -   **Target:** `app.mypaylink.app` behind Nginx reverse proxy with SSL termination.
 -   **App binds to:** `127.0.0.1:8000` (configurable via `HOST` and `PORT` env vars).

@@ -621,6 +621,325 @@ app.use((req, res, next) => {
       completed_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    // Customers table
+    await run("customers table", sql`CREATE TABLE IF NOT EXISTS customers (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      customer_name TEXT NOT NULL,
+      business_name TEXT,
+      email TEXT,
+      phone TEXT,
+      billing_contact_name TEXT,
+      billing_email TEXT,
+      billing_address TEXT,
+      billing_city TEXT,
+      billing_state TEXT,
+      billing_zip TEXT,
+      billing_country TEXT,
+      tax_id TEXT,
+      default_payment_terms TEXT DEFAULT 'net_30',
+      notes TEXT,
+      status TEXT DEFAULT 'active',
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Invoice templates table
+    await run("invoice_templates table", sql`CREATE TABLE IF NOT EXISTS invoice_templates (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id),
+      name TEXT NOT NULL,
+      description TEXT,
+      layout_key TEXT NOT NULL DEFAULT 'modern_clean',
+      logo_url TEXT,
+      brand_color TEXT DEFAULT '#0d9488',
+      header_text TEXT,
+      footer_text TEXT,
+      payment_instructions TEXT,
+      terms_and_conditions TEXT,
+      is_default BOOLEAN DEFAULT FALSE,
+      is_system BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Invoices table
+    await run("invoices table", sql`CREATE TABLE IF NOT EXISTS invoices (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      customer_id VARCHAR REFERENCES customers(id),
+      template_id VARCHAR REFERENCES invoice_templates(id),
+      invoice_number TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      issue_date DATE NOT NULL,
+      due_date DATE NOT NULL,
+      subtotal NUMERIC DEFAULT 0,
+      tax_rate NUMERIC DEFAULT 0,
+      tax_amount NUMERIC DEFAULT 0,
+      discount_amount NUMERIC DEFAULT 0,
+      discount_type TEXT DEFAULT 'fixed',
+      total_amount NUMERIC DEFAULT 0,
+      amount_paid NUMERIC DEFAULT 0,
+      amount_due NUMERIC DEFAULT 0,
+      currency TEXT DEFAULT 'USD',
+      notes TEXT,
+      internal_notes TEXT,
+      payment_terms TEXT DEFAULT 'net_30',
+      recurring_billing_id VARCHAR,
+      sent_at TIMESTAMP,
+      viewed_at TIMESTAMP,
+      paid_at TIMESTAMP,
+      voided_at TIMESTAMP,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Invoice line items table
+    await run("invoice_line_items table", sql`CREATE TABLE IF NOT EXISTS invoice_line_items (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      invoice_id VARCHAR NOT NULL REFERENCES invoices(id),
+      description TEXT NOT NULL,
+      quantity NUMERIC DEFAULT 1,
+      unit_price NUMERIC DEFAULT 0,
+      amount NUMERIC DEFAULT 0,
+      taxable BOOLEAN DEFAULT TRUE,
+      sort_order INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Payments table
+    await run("payments table", sql`CREATE TABLE IF NOT EXISTS payments (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      invoice_id VARCHAR REFERENCES invoices(id),
+      customer_id VARCHAR REFERENCES customers(id),
+      payment_method TEXT NOT NULL,
+      amount NUMERIC NOT NULL,
+      processor_fee NUMERIC DEFAULT 0,
+      net_amount NUMERIC DEFAULT 0,
+      payment_fee_charged NUMERIC DEFAULT 0,
+      processor_transaction_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      paid_at TIMESTAMP,
+      failed_at TIMESTAMP,
+      failure_reason TEXT,
+      receipt_url TEXT,
+      notes TEXT,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Saved payment methods table
+    await run("saved_payment_methods table", sql`CREATE TABLE IF NOT EXISTS saved_payment_methods (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      customer_id VARCHAR NOT NULL REFERENCES customers(id),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      method_type TEXT NOT NULL,
+      last_4 TEXT,
+      brand TEXT,
+      bank_name TEXT,
+      expiry_month INTEGER,
+      expiry_year INTEGER,
+      processor_token TEXT,
+      is_default BOOLEAN DEFAULT FALSE,
+      is_auto_pay BOOLEAN DEFAULT FALSE,
+      status TEXT DEFAULT 'active',
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Recurring billing profiles table
+    await run("recurring_billing_profiles table", sql`CREATE TABLE IF NOT EXISTS recurring_billing_profiles (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      customer_id VARCHAR NOT NULL REFERENCES customers(id),
+      template_id VARCHAR REFERENCES invoice_templates(id),
+      name TEXT NOT NULL,
+      frequency TEXT NOT NULL DEFAULT 'monthly',
+      custom_interval_days INTEGER,
+      amount NUMERIC NOT NULL,
+      currency TEXT DEFAULT 'USD',
+      line_items TEXT,
+      tax_rate NUMERIC DEFAULT 0,
+      start_date DATE NOT NULL,
+      end_date DATE,
+      next_invoice_date DATE,
+      trial_end_date DATE,
+      auto_pay_enabled BOOLEAN DEFAULT FALSE,
+      retry_on_failure BOOLEAN DEFAULT TRUE,
+      max_retries INTEGER DEFAULT 3,
+      status TEXT NOT NULL DEFAULT 'active',
+      canceled_at TIMESTAMP,
+      notes TEXT,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Document folders table
+    await run("document_folders table", sql`CREATE TABLE IF NOT EXISTS document_folders (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      name TEXT NOT NULL,
+      parent_id VARCHAR,
+      category TEXT,
+      color TEXT,
+      sort_order INTEGER DEFAULT 0,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Documents table
+    await run("documents table", sql`CREATE TABLE IF NOT EXISTS documents (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      folder_id VARCHAR REFERENCES document_folders(id),
+      title TEXT NOT NULL,
+      description TEXT,
+      file_name TEXT NOT NULL,
+      file_url TEXT NOT NULL,
+      file_size INTEGER,
+      mime_type TEXT,
+      tags TEXT,
+      category TEXT,
+      status TEXT DEFAULT 'active',
+      is_template BOOLEAN DEFAULT FALSE,
+      template_merge_tags TEXT,
+      expires_at TIMESTAMP,
+      assigned_to_worker_id VARCHAR,
+      assigned_to_customer_id VARCHAR,
+      current_version_id VARCHAR,
+      access_level TEXT DEFAULT 'company',
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Document versions table
+    await run("document_versions table", sql`CREATE TABLE IF NOT EXISTS document_versions (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id VARCHAR NOT NULL REFERENCES documents(id),
+      version_number INTEGER NOT NULL DEFAULT 1,
+      file_name TEXT NOT NULL,
+      file_url TEXT NOT NULL,
+      file_size INTEGER,
+      change_note TEXT,
+      uploaded_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Document signature requests table
+    await run("document_signature_requests table", sql`CREATE TABLE IF NOT EXISTS document_signature_requests (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id VARCHAR NOT NULL REFERENCES documents(id),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      status TEXT NOT NULL DEFAULT 'draft',
+      sent_at TIMESTAMP,
+      completed_at TIMESTAMP,
+      expires_at TIMESTAMP,
+      message TEXT,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Document signers table
+    await run("document_signers table", sql`CREATE TABLE IF NOT EXISTS document_signers (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      signature_request_id VARCHAR NOT NULL REFERENCES document_signature_requests(id),
+      signer_name TEXT NOT NULL,
+      signer_email TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      signed_at TIMESTAMP,
+      ip_address TEXT,
+      signature_data TEXT,
+      sort_order INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Document audit logs table
+    await run("document_audit_logs table", sql`CREATE TABLE IF NOT EXISTS document_audit_logs (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id VARCHAR REFERENCES documents(id),
+      signature_request_id VARCHAR,
+      company_id VARCHAR NOT NULL,
+      action TEXT NOT NULL,
+      actor_name TEXT,
+      actor_email TEXT,
+      actor_id VARCHAR,
+      ip_address TEXT,
+      details TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Automation rules table
+    await run("automation_rules table", sql`CREATE TABLE IF NOT EXISTS automation_rules (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      name TEXT NOT NULL,
+      description TEXT,
+      trigger_type TEXT NOT NULL,
+      trigger_config TEXT,
+      action_type TEXT NOT NULL,
+      action_config TEXT,
+      is_enabled BOOLEAN DEFAULT TRUE,
+      is_system BOOLEAN DEFAULT FALSE,
+      category TEXT,
+      last_triggered_at TIMESTAMP,
+      trigger_count INTEGER DEFAULT 0,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Automation events table
+    await run("automation_events table", sql`CREATE TABLE IF NOT EXISTS automation_events (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      rule_id VARCHAR NOT NULL REFERENCES automation_rules(id),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      trigger_type TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'completed',
+      trigger_data TEXT,
+      action_result TEXT,
+      error_message TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Notifications table
+    await run("notifications table", sql`CREATE TABLE IF NOT EXISTS notifications (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      user_id VARCHAR,
+      worker_id VARCHAR,
+      customer_id VARCHAR,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT,
+      action_url TEXT,
+      is_read BOOLEAN DEFAULT FALSE,
+      read_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Portal access tokens table
+    await run("portal_access_tokens table", sql`CREATE TABLE IF NOT EXISTS portal_access_tokens (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      customer_id VARCHAR REFERENCES customers(id),
+      invoice_id VARCHAR REFERENCES invoices(id),
+      document_id VARCHAR REFERENCES documents(id),
+      signature_request_id VARCHAR,
+      token TEXT NOT NULL,
+      token_type TEXT NOT NULL,
+      expires_at TIMESTAMP,
+      used_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");

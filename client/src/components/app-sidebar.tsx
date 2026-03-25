@@ -55,6 +55,10 @@ import {
   CalendarOff,
   SlidersHorizontal,
   ShieldCheck,
+  HandCoins,
+  FilePlus2,
+  FolderClosed,
+  Workflow,
 } from "lucide-react";
 import {
   Sidebar,
@@ -234,6 +238,26 @@ const navSections: NavSection[] = [
       { title: "Memberships", url: "/hr?tab=memberships", icon: IdCard },
       { title: "Licenses", url: "/hr?tab=licenses", icon: BadgeCheck },
       { title: "Languages", url: "/hr?tab=languages", icon: Languages },
+    ],
+  },
+  {
+    label: "Customers",
+    icon: HandCoins,
+    url: "/customers",
+    roles: ["admin", "manager"],
+    items: [
+      { title: "Customer Directory", url: "/customers", icon: Users },
+    ],
+  },
+  {
+    label: "Invoicing",
+    icon: FilePlus2,
+    url: "/invoices",
+    roles: ["admin", "manager"],
+    items: [
+      { title: "Invoices", url: "/invoices?tab=invoices", icon: FileText },
+      { title: "Recurring Billing", url: "/invoices?tab=recurring", icon: Repeat },
+      { title: "Payments", url: "/invoices?tab=payments", icon: DollarSign },
     ],
   },
   {
