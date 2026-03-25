@@ -29,6 +29,8 @@ import LoginPage from "@/pages/login";
 import { Loader2, Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useSidebar } from "@/components/ui/sidebar";
+import { TrialBanner } from "@/components/trial-banner";
+import { UpgradeModal } from "@/components/upgrade-modal";
 
 function RoleGuard({ roles, children }: { roles: string[]; children: React.ReactNode }) {
   const { user } = useAuth();
@@ -112,10 +114,12 @@ function AuthenticatedLayout() {
       <div className="flex h-screen w-full">
         <AppSidebar />
         <div className="flex flex-col flex-1 overflow-hidden">
+          <TrialBanner />
           <MobileHeader />
           <main className="flex-1 overflow-y-auto">
             <AuthenticatedRouter />
           </main>
+          <UpgradeModal />
         </div>
       </div>
     </SidebarProvider>

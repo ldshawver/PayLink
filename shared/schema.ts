@@ -50,6 +50,14 @@ export const companies = pgTable("companies", {
   breakPolicyMinutes: integer("break_policy_minutes").default(30),
   breakAfterHours: integer("break_after_hours").default(6),
   timeRoundingMinutes: integer("time_rounding_minutes").default(15),
+  subscriptionStatus: text("subscription_status").default("active_paid"),
+  planName: text("plan_name").default("starter"),
+  trialStart: timestamp("trial_start"),
+  trialEnd: timestamp("trial_end"),
+  trialUsed: boolean("trial_used").default(false),
+  billingActive: boolean("billing_active").default(false),
+  paymentMethodOnFile: boolean("payment_method_on_file").default(false),
+  isDemo: boolean("is_demo").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

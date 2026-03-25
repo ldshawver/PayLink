@@ -89,6 +89,31 @@ function requireRole(...roles: string[]) {
   };
 }
 
+function requireActiveSubscription(req: Request, res: Response, next: NextFunction) {
+  if (!req.session?.userId) return next();
+  (async () => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return next();
+      const rows = await db.execute(sql`SELECT subscription_status, trial_end FROM companies WHERE id = ${user.companyId}`);
+      if (rows.rows.length === 0) return next();
+      const company = rows.rows[0] as any;
+      const status = company.subscription_status;
+      if (status === "trial_expired" || status === "suspended" || status === "canceled") {
+        return res.status(403).json({ message: "Your subscription is inactive. Please upgrade to continue." });
+      }
+      if (status === "trial_active" && company.trial_end) {
+        const trialEnd = new Date(company.trial_end);
+        if (new Date() > trialEnd) {
+          await db.execute(sql`UPDATE companies SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);
+          return res.status(403).json({ message: "Your trial has expired. Please upgrade to continue." });
+        }
+      }
+      next();
+    } catch { next(); }
+  })();
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -404,7 +429,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/workers", requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/workers", requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       if (!req.body.companyId) return res.status(400).json({ message: "Company is required" });
       if (!req.body.firstName) return res.status(400).json({ message: "First name is required" });
@@ -423,7 +448,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/workers/:id", requireRole("admin", "manager"), async (req, res) => {
+  app.patch("/api/workers/:id", requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       const worker = await storage.updateWorker(req.params.id as string, req.body);
       if (!worker) {
@@ -629,7 +654,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/payroll-runs/:id/process", async (req, res) => {
+  app.post("/api/payroll-runs/:id/process", requireActiveSubscription, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -865,7 +890,7 @@ export async function registerRoutes(
   });
 
   // ── NACHA ACH File Generation ─────────────────────────────────────────────
-  app.get("/api/payroll-runs/:id/nacha", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.get("/api/payroll-runs/:id/nacha", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -7301,9 +7326,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(400).json({ message: "You must accept the Terms of Service and Privacy Policy" });
       }
 
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({ message: "Please provide a valid email address" });
+      }
+
       const existingRows = await db.execute(sql`SELECT id FROM trial_signups WHERE email = ${email} LIMIT 1`);
       if (existingRows.rows.length > 0) {
         return res.status(409).json({ message: "An account with this email already exists. Please log in instead." });
+      }
+
+      const existingUser = await db.execute(sql`SELECT id FROM users WHERE username = ${email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "")} LIMIT 1`);
+      if (existingUser.rows.length > 0) {
+        // username collision handled by appending random number (already done below)
       }
 
       const now = new Date();
