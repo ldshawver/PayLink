@@ -125,8 +125,8 @@ export async function registerRoutes(
 ): Promise<Server> {
 
   app.use("/api", (req, res, next) => {
-    const publicPaths = ["/api/auth/", "/api/trial/signup", "/api/demo/login", "/api/analytics/event", "/api/time-clock/"];
-    if (publicPaths.some(p => req.path.startsWith(p))) return next();
+    const excludedPaths = ["/auth/", "/trial/signup", "/demo/login", "/analytics/event", "/time-clock/"];
+    if (excludedPaths.some(p => req.path.startsWith(p))) return next();
     blockDemoWrites(req, res, next);
   });
 
