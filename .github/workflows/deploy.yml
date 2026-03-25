@@ -13,11 +13,14 @@ jobs:
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.0
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script_stop: true
+          envs: DB_PASSWORD
           script: |
             set -e
 
@@ -32,7 +35,7 @@ jobs:
             BACKUP_FILE="$BACKUP_DIR/paylink_backup_$(date +%Y%m%d_%H%M%S).sql"
 
             echo "1. Backing up database..."
-            PGPASSWORD='${{ secrets.DB_PASSWORD }}' pg_dump -U apppaylinkmain -h 127.0.0.1 apppaylinkmain > "$BACKUP_FILE"
+            PGPASSWORD="$DB_PASSWORD" pg_dump -U apppaylinkmain -h 127.0.0.1 apppaylinkmain > "$BACKUP_FILE"
             echo "   Saved: $BACKUP_FILE"
 
             cd "$APP_DIR"
@@ -57,8 +60,8 @@ jobs:
             echo "7. Waiting for app to start..."
             sleep 10
 
-            HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health)
-            READY=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/ready)
+            HEALTH=$(curl -s -o /dev/null -w "%%{http_code}" http://127.0.0.1:8000/health)
+            READY=$(curl -s -o /dev/null -w "%%{http_code}" http://127.0.0.1:8000/ready)
 
             echo "   Health check: $HEALTH"
             echo "   Ready check: $READY"
