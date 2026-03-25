@@ -58,8 +58,8 @@ jobs:
             echo "7. Waiting for app to start..."
             sleep 10
 
-            HEALTH=$(curl -s -o /dev/null -w '%%{http_code}' http://127.0.0.1:8000/health)
-            READY=$(curl -s -o /dev/null -w '%%{http_code}' http://127.0.0.1:8000/ready)
+            HEALTH=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health)
+            READY=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/ready)
 
             echo "   Health check: $HEALTH"
             echo "   Ready check: $READY"
