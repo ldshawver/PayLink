@@ -1767,3 +1767,68 @@ export const payrollReimbursementItems = pgTable("payroll_reimbursement_items", 
 export const insertPayrollReimbursementItemSchema = createInsertSchema(payrollReimbursementItems).omit({ id: true, createdAt: true });
 export type PayrollReimbursementItem = typeof payrollReimbursementItems.$inferSelect;
 export type InsertPayrollReimbursementItem = z.infer<typeof insertPayrollReimbursementItemSchema>;
+
+// ── Trial Signups ──────────────────────────────────────────
+export const trialSignups = pgTable("trial_signups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyName: text("company_name").notNull(),
+  employeeCount: integer("employee_count"),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
+  jobTitle: text("job_title"),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  companyId: varchar("company_id"),
+  userId: varchar("user_id"),
+  trialStart: timestamp("trial_start").defaultNow(),
+  trialEnd: timestamp("trial_end"),
+  subscriptionStatus: text("subscription_status").default("trial_active"),
+  billingActive: boolean("billing_active").default(false),
+  paymentMethodOnFile: boolean("payment_method_on_file").default(false),
+  termsAcceptedAt: timestamp("terms_accepted_at"),
+  termsVersion: text("terms_version").default("1.0"),
+  privacyVersion: text("privacy_version").default("1.0"),
+  signupIp: text("signup_ip"),
+  canceledAt: timestamp("canceled_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertTrialSignupSchema = createInsertSchema(trialSignups).omit({ id: true, createdAt: true });
+export type TrialSignup = typeof trialSignups.$inferSelect;
+export type InsertTrialSignup = z.infer<typeof insertTrialSignupSchema>;
+
+// ── Analytics Events ──────────────────────────────────────────
+export const analyticsEvents = pgTable("analytics_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  eventName: text("event_name").notNull(),
+  userId: varchar("user_id"),
+  companyId: varchar("company_id"),
+  pageSource: text("page_source"),
+  metadata: text("metadata"),
+  sessionId: text("session_id"),
+  ipAddress: text("ip_address"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertAnalyticsEventSchema = createInsertSchema(analyticsEvents).omit({ id: true, createdAt: true });
+export type AnalyticsEvent = typeof analyticsEvents.$inferSelect;
+export type InsertAnalyticsEvent = z.infer<typeof insertAnalyticsEventSchema>;
+
+// ── Onboarding Progress ──────────────────────────────────────────
+export const onboardingProgress = pgTable("onboarding_progress", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  userId: varchar("user_id").notNull(),
+  stepCompanyDetails: boolean("step_company_details").default(false),
+  stepFirstEmployee: boolean("step_first_employee").default(false),
+  stepPaySchedule: boolean("step_pay_schedule").default(false),
+  stepPayrollConfig: boolean("step_payroll_config").default(false),
+  stepTimeClock: boolean("step_time_clock").default(false),
+  stepPayrollPreview: boolean("step_payroll_preview").default(false),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertOnboardingProgressSchema = createInsertSchema(onboardingProgress).omit({ id: true, createdAt: true });
+export type OnboardingProgress = typeof onboardingProgress.$inferSelect;
+export type InsertOnboardingProgress = z.infer<typeof insertOnboardingProgressSchema>;

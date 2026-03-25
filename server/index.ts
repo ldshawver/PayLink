@@ -556,6 +556,69 @@ app.use((req, res, next) => {
       included_in_payroll_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    // Subscription / billing columns on companies
+    await run("companies.subscription_status", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS subscription_status TEXT DEFAULT 'active_paid'`);
+    await run("companies.plan_name", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS plan_name TEXT DEFAULT 'starter'`);
+    await run("companies.trial_start", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS trial_start TIMESTAMP`);
+    await run("companies.trial_end", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS trial_end TIMESTAMP`);
+    await run("companies.trial_used", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS trial_used BOOLEAN DEFAULT FALSE`);
+    await run("companies.billing_active", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS billing_active BOOLEAN DEFAULT FALSE`);
+    await run("companies.payment_method_on_file", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS payment_method_on_file BOOLEAN DEFAULT FALSE`);
+    await run("companies.is_demo", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS is_demo BOOLEAN DEFAULT FALSE`);
+
+    // Trial signups table
+    await run("trial_signups table", sql`CREATE TABLE IF NOT EXISTS trial_signups (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_name TEXT NOT NULL,
+      employee_count INTEGER,
+      first_name TEXT NOT NULL,
+      last_name TEXT NOT NULL,
+      job_title TEXT,
+      email TEXT NOT NULL,
+      phone TEXT,
+      company_id VARCHAR,
+      user_id VARCHAR,
+      trial_start TIMESTAMP DEFAULT NOW(),
+      trial_end TIMESTAMP,
+      subscription_status TEXT DEFAULT 'trial_active',
+      billing_active BOOLEAN DEFAULT FALSE,
+      payment_method_on_file BOOLEAN DEFAULT FALSE,
+      terms_accepted_at TIMESTAMP,
+      terms_version TEXT DEFAULT '1.0',
+      privacy_version TEXT DEFAULT '1.0',
+      signup_ip TEXT,
+      canceled_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Analytics events table
+    await run("analytics_events table", sql`CREATE TABLE IF NOT EXISTS analytics_events (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      event_name TEXT NOT NULL,
+      user_id VARCHAR,
+      company_id VARCHAR,
+      page_source TEXT,
+      metadata TEXT,
+      session_id TEXT,
+      ip_address TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Onboarding progress table
+    await run("onboarding_progress table", sql`CREATE TABLE IF NOT EXISTS onboarding_progress (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL,
+      user_id VARCHAR NOT NULL,
+      step_company_details BOOLEAN DEFAULT FALSE,
+      step_first_employee BOOLEAN DEFAULT FALSE,
+      step_pay_schedule BOOLEAN DEFAULT FALSE,
+      step_payroll_config BOOLEAN DEFAULT FALSE,
+      step_time_clock BOOLEAN DEFAULT FALSE,
+      step_payroll_preview BOOLEAN DEFAULT FALSE,
+      completed_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");

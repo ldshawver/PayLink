@@ -7290,5 +7290,269 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to save notification preference" }); }
   });
 
+  // ── Trial Signup (public, no auth) ─────────────────────────────────────
+  app.post("/api/trial/signup", async (req, res) => {
+    try {
+      const { companyName, firstName, lastName, email, phone, jobTitle, employeeCount, termsAccepted } = req.body;
+      if (!companyName || !firstName || !lastName || !email) {
+        return res.status(400).json({ message: "Company name, first name, last name, and email are required" });
+      }
+      if (!termsAccepted) {
+        return res.status(400).json({ message: "You must accept the Terms of Service and Privacy Policy" });
+      }
+
+      const existingRows = await db.execute(sql`SELECT id FROM trial_signups WHERE email = ${email} LIMIT 1`);
+      if (existingRows.rows.length > 0) {
+        return res.status(409).json({ message: "An account with this email already exists. Please log in instead." });
+      }
+
+      const now = new Date();
+      const trialEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+      const companyResult = await db.execute(sql`
+        INSERT INTO companies (name, subscription_status, plan_name, trial_start, trial_end, trial_used, billing_active, is_demo)
+        VALUES (${companyName}, 'trial_active', 'starter', ${now}, ${trialEnd}, FALSE, FALSE, FALSE)
+        RETURNING id
+      `);
+      const companyId = companyResult.rows[0].id as string;
+
+      const username = email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "") + Math.floor(Math.random() * 1000);
+      const tempPassword = "Trial" + Math.random().toString(36).substring(2, 10) + "!";
+      const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+      const userResult = await db.execute(sql`
+        INSERT INTO users (username, password, role, company_id)
+        VALUES (${username}, ${hashedPassword}, 'admin', ${companyId})
+        RETURNING id
+      `);
+      const userId = userResult.rows[0].id as string;
+
+      await db.execute(sql`
+        INSERT INTO trial_signups (company_name, employee_count, first_name, last_name, job_title, email, phone, company_id, user_id, trial_start, trial_end, subscription_status, terms_accepted_at, signup_ip)
+        VALUES (${companyName}, ${employeeCount || null}, ${firstName}, ${lastName}, ${jobTitle || null}, ${email}, ${phone || null}, ${companyId}, ${userId}, ${now}, ${trialEnd}, 'trial_active', ${now}, ${req.ip || null})
+      `);
+
+      await db.execute(sql`
+        INSERT INTO onboarding_progress (company_id, user_id)
+        VALUES (${companyId}, ${userId})
+      `);
+
+      await db.execute(sql`
+        INSERT INTO analytics_events (event_name, user_id, company_id, page_source, metadata)
+        VALUES ('signup_completed', ${userId}, ${companyId}, 'signup', ${JSON.stringify({ plan: 'starter', employeeCount })})
+      `);
+
+      res.json({
+        message: "Trial account created successfully",
+        username,
+        temporaryPassword: tempPassword,
+        companyId,
+        trialEnd: trialEnd.toISOString(),
+        loginUrl: "https://app.mypaylink.app"
+      });
+    } catch (e) {
+      console.error("Trial signup error:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to create trial account") });
+    }
+  });
+
+  // ── Trial Status Check ─────────────────────────────────────────────────
+  app.get("/api/trial/status", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.json({ subscriptionStatus: "active_paid", isTrial: false });
+
+      const companyRows = await db.execute(sql`
+        SELECT subscription_status, plan_name, trial_start, trial_end, trial_used, billing_active, payment_method_on_file, is_demo
+        FROM companies WHERE id = ${user.companyId}
+      `);
+      if (companyRows.rows.length === 0) return res.json({ subscriptionStatus: "active_paid", isTrial: false });
+
+      const company = companyRows.rows[0] as any;
+      const now = new Date();
+      const trialEnd = company.trial_end ? new Date(company.trial_end) : null;
+      let status = company.subscription_status || "active_paid";
+
+      if (status === "trial_active" && trialEnd && now > trialEnd) {
+        status = "trial_expired";
+        await db.execute(sql`UPDATE companies SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);
+      }
+
+      const trialSignup = await db.execute(sql`SELECT first_name, last_name FROM trial_signups WHERE company_id = ${user.companyId} LIMIT 1`);
+
+      let daysRemaining = 0;
+      if (trialEnd && status === "trial_active") {
+        daysRemaining = Math.max(0, Math.ceil((trialEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+      }
+
+      res.json({
+        subscriptionStatus: status,
+        planName: company.plan_name || "starter",
+        isTrial: status === "trial_active",
+        isTrialExpired: status === "trial_expired",
+        isDemo: company.is_demo || false,
+        trialEnd: company.trial_end,
+        daysRemaining,
+        billingActive: company.billing_active || false,
+        paymentMethodOnFile: company.payment_method_on_file || false,
+        contactName: trialSignup.rows[0] ? `${trialSignup.rows[0].first_name} ${trialSignup.rows[0].last_name}` : null,
+      });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch trial status") });
+    }
+  });
+
+  // ── Onboarding Progress ────────────────────────────────────────────────
+  app.get("/api/onboarding/progress", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.json(null);
+
+      const rows = await db.execute(sql`
+        SELECT * FROM onboarding_progress WHERE company_id = ${user.companyId} AND user_id = ${user.id} LIMIT 1
+      `);
+      res.json(rows.rows[0] || null);
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch onboarding progress") });
+    }
+  });
+
+  app.patch("/api/onboarding/progress", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company associated" });
+
+      const { step } = req.body;
+      const validSteps = ["step_company_details", "step_first_employee", "step_pay_schedule", "step_payroll_config", "step_time_clock", "step_payroll_preview"];
+      if (!validSteps.includes(step)) return res.status(400).json({ message: "Invalid step" });
+
+      await db.execute(sql`
+        UPDATE onboarding_progress SET ${sql.raw(step)} = TRUE WHERE company_id = ${user.companyId} AND user_id = ${user.id}
+      `);
+
+      const allDone = await db.execute(sql`
+        SELECT * FROM onboarding_progress WHERE company_id = ${user.companyId} AND user_id = ${user.id}
+        AND step_company_details = TRUE AND step_first_employee = TRUE AND step_pay_schedule = TRUE
+        AND step_payroll_config = TRUE AND step_time_clock = TRUE AND step_payroll_preview = TRUE
+        LIMIT 1
+      `);
+      if (allDone.rows.length > 0) {
+        await db.execute(sql`UPDATE onboarding_progress SET completed_at = NOW() WHERE company_id = ${user.companyId} AND user_id = ${user.id}`);
+      }
+
+      res.json({ message: "Step completed", step });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to update onboarding progress") });
+    }
+  });
+
+  // ── Analytics Events (public for pre-auth, auth for in-app) ────────────
+  app.post("/api/analytics/event", async (req, res) => {
+    try {
+      const { eventName, pageSource, metadata, sessionId } = req.body;
+      if (!eventName) return res.status(400).json({ message: "eventName is required" });
+
+      await db.execute(sql`
+        INSERT INTO analytics_events (event_name, user_id, company_id, page_source, metadata, session_id, ip_address)
+        VALUES (${eventName}, ${req.session?.userId || null}, ${null}, ${pageSource || null}, ${metadata ? JSON.stringify(metadata) : null}, ${sessionId || null}, ${req.ip || null})
+      `);
+      res.json({ message: "Event recorded" });
+    } catch (e) {
+      res.status(500).json({ message: "Failed to record event" });
+    }
+  });
+
+  // ── Demo Login (public, creates temp demo session) ─────────────────────
+  app.post("/api/demo/login", async (req, res) => {
+    try {
+      let demoCompanyRows = await db.execute(sql`SELECT id FROM companies WHERE is_demo = TRUE LIMIT 1`);
+      let demoCompanyId: string;
+
+      if (demoCompanyRows.rows.length === 0) {
+        const result = await db.execute(sql`
+          INSERT INTO companies (name, subscription_status, plan_name, is_demo, pay_frequency, overtime_threshold)
+          VALUES ('Demo Company', 'active_paid', 'starter', TRUE, 'biweekly', 40)
+          RETURNING id
+        `);
+        demoCompanyId = result.rows[0].id as string;
+
+        const demoPass = await bcrypt.hash("demo123", 10);
+        await db.execute(sql`
+          INSERT INTO users (username, password, role, company_id)
+          VALUES ('demo_admin', ${demoPass}, 'admin', ${demoCompanyId})
+          ON CONFLICT (username) DO NOTHING
+        `);
+
+        const names = [
+          { first: "Sarah", last: "Johnson", type: "employee" },
+          { first: "Michael", last: "Chen", type: "employee" },
+          { first: "Emily", last: "Rodriguez", type: "employee" },
+          { first: "James", last: "Wilson", type: "employee" },
+          { first: "Lisa", last: "Thompson", type: "contractor" },
+        ];
+        for (const n of names) {
+          await db.execute(sql`
+            INSERT INTO workers (company_id, first_name, last_name, worker_type, status, hire_date, hourly_rate, worker_group)
+            VALUES (${demoCompanyId}, ${n.first}, ${n.last}, ${n.type}, 'active', '2024-01-15', '25.00', ${n.type === 'contractor' ? 'hourly_contractor' : 'hourly_employee'})
+          `);
+        }
+      } else {
+        demoCompanyId = demoCompanyRows.rows[0].id as string;
+      }
+
+      const demoUserRows = await db.execute(sql`SELECT id, username, role FROM users WHERE username = 'demo_admin' LIMIT 1`);
+      if (demoUserRows.rows.length === 0) {
+        return res.status(500).json({ message: "Demo environment not ready" });
+      }
+
+      const demoUser = demoUserRows.rows[0] as any;
+      req.session.userId = demoUser.id;
+      req.session.role = demoUser.role;
+      req.session.isDemo = true;
+
+      await db.execute(sql`
+        INSERT INTO analytics_events (event_name, page_source, ip_address)
+        VALUES ('demo_started', 'demo', ${req.ip || null})
+      `);
+
+      res.json({
+        message: "Demo session started",
+        user: { id: demoUser.id, username: demoUser.username, role: demoUser.role, companyId: demoCompanyId },
+        isDemo: true,
+      });
+    } catch (e) {
+      console.error("Demo login error:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to start demo") });
+    }
+  });
+
+  // ── Subscription / Billing Status Update ───────────────────────────────
+  app.post("/api/billing/activate", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company associated" });
+
+      await db.execute(sql`
+        UPDATE companies
+        SET subscription_status = 'active_paid', billing_active = TRUE, payment_method_on_file = TRUE
+        WHERE id = ${user.companyId}
+      `);
+
+      await db.execute(sql`
+        UPDATE trial_signups SET subscription_status = 'active_paid', billing_active = TRUE, payment_method_on_file = TRUE
+        WHERE company_id = ${user.companyId}
+      `);
+
+      await db.execute(sql`
+        INSERT INTO analytics_events (event_name, user_id, company_id, page_source)
+        VALUES ('subscription_activated', ${user.id}, ${user.companyId}, 'billing')
+      `);
+
+      res.json({ message: "Subscription activated", subscriptionStatus: "active_paid" });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to activate billing") });
+    }
+  });
+
   return httpServer;
 }

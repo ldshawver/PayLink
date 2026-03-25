@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Start Free Trial - PayLink | 30 Days Free, No Credit Card</title>
+  <meta name="description" content="Start your free 30-day PayLink trial. Full access to payroll, scheduling, time tracking, and HR. No credit card required.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo"><img src="/assets/logo.png" alt="PayLink"><span>PayLink</span></a>
+      <ul class="nav-links">
+        <li><a href="/features">Features</a></li>
+        <li><a href="/pricing">Pricing</a></li>
+        <li><a href="/security">Security</a></li>
+        <li><a href="https://app.mypaylink.app" class="nav-cta">Login →</a></li>
+      </ul>
+      <button class="mobile-toggle" aria-label="Menu">&#9776;</button>
+    </div>
+    <div class="mobile-menu">
+      <a href="/features">Features</a>
+      <a href="/pricing">Pricing</a>
+      <a href="/security">Security</a>
+      <a href="https://app.mypaylink.app">Login →</a>
+    </div>
+  </nav>
+
+  <section class="page-hero">
+    <div class="container">
+      <span class="section-label fade-up">Free Trial</span>
+      <h1 class="fade-up stagger-1">Start Your 30-Day Free Trial</h1>
+      <p class="fade-up stagger-2">Full access to every feature. No credit card required. Set up in under 2 minutes.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <div class="signup-layout">
+        <div class="signup-form-card fade-up stagger-1">
+          <form id="trialSignupForm" data-testid="form-trial-signup">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="firstName">First Name *</label>
+                <input type="text" id="firstName" name="firstName" required data-testid="input-first-name" placeholder="Jane">
+              </div>
+              <div class="form-group">
+                <label for="lastName">Last Name *</label>
+                <input type="text" id="lastName" name="lastName" required data-testid="input-last-name" placeholder="Smith">
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="email">Work Email *</label>
+              <input type="email" id="email" name="email" required data-testid="input-email" placeholder="jane@yourcompany.com">
+            </div>
+            <div class="form-group">
+              <label for="companyName">Company Name *</label>
+              <input type="text" id="companyName" name="companyName" required data-testid="input-company-name" placeholder="Acme Inc.">
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="jobTitle">Your Job Title</label>
+                <input type="text" id="jobTitle" name="jobTitle" data-testid="input-job-title" placeholder="HR Manager">
+              </div>
+              <div class="form-group">
+                <label for="employeeCount">Number of Employees</label>
+                <select id="employeeCount" name="employeeCount" data-testid="select-employee-count">
+                  <option value="">Select...</option>
+                  <option value="5">1-5</option>
+                  <option value="15">6-25</option>
+                  <option value="50">26-50</option>
+                  <option value="100">51-100</option>
+                  <option value="200">100+</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="phone">Phone (optional)</label>
+              <input type="tel" id="phone" name="phone" data-testid="input-phone" placeholder="(555) 123-4567">
+            </div>
+            <div class="form-group form-checkbox">
+              <input type="checkbox" id="termsAccepted" name="termsAccepted" required data-testid="checkbox-terms">
+              <label for="termsAccepted">I agree to the <a href="/terms" target="_blank">Terms of Service</a> and <a href="/privacy" target="_blank">Privacy Policy</a></label>
+            </div>
+            <button type="submit" class="btn-primary btn-lg btn-full" id="submitBtn" data-testid="button-submit-trial">
+              Start My Free Trial →
+            </button>
+            <p class="form-note">No credit card required &middot; Cancel anytime</p>
+            <div id="formError" class="form-error" style="display:none;" data-testid="text-form-error"></div>
+          </form>
+
+          <div id="signupSuccess" class="signup-success" style="display:none;" data-testid="text-signup-success">
+            <div class="success-icon">✓</div>
+            <h2>Welcome to PayLink!</h2>
+            <p>Your 30-day free trial is ready. Here are your login credentials:</p>
+            <div class="credentials-box">
+              <div class="credential-row">
+                <span class="credential-label">Username:</span>
+                <strong id="credUsername" data-testid="text-username"></strong>
+              </div>
+              <div class="credential-row">
+                <span class="credential-label">Password:</span>
+                <strong id="credPassword" data-testid="text-password"></strong>
+              </div>
+            </div>
+            <p class="credential-warning">Save these credentials — you'll need them to log in. You can change your password after logging in.</p>
+            <a href="https://app.mypaylink.app" class="btn-primary btn-lg" data-testid="link-login-now">Log In Now →</a>
+          </div>
+        </div>
+
+        <div class="signup-sidebar fade-up stagger-2">
+          <div class="sidebar-card">
+            <h3>What's included in your trial:</h3>
+            <ul class="trial-features">
+              <li>Full payroll processing & pay stubs</li>
+              <li>Time clock & attendance tracking</li>
+              <li>Employee scheduling & shift marketplace</li>
+              <li>ACH direct deposit file generation</li>
+              <li>Tax form generation (W-2, 1099, etc.)</li>
+              <li>Expense management with AI receipt scanning</li>
+              <li>Multi-company management</li>
+              <li>Role-based access control</li>
+              <li>Reports & CSV exports</li>
+            </ul>
+          </div>
+          <div class="sidebar-card">
+            <h3>After your trial:</h3>
+            <p class="trial-pricing">
+              <strong>$29/month</strong> base + <strong>$4</strong>/active employee
+            </p>
+            <p class="trial-note">Subscribe to keep your data and continue using PayLink. No obligation — your data stays safe even if you don't subscribe.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a href="/" class="nav-logo"><img src="/assets/logo.png" alt="PayLink" style="height: 32px;"><span>PayLink</span></a>
+          <p>A secure workforce operations platform by Alavont Holdings.</p>
+        </div>
+        <div>
+          <h4>Product</h4>
+          <ul class="footer-links">
+            <li><a href="/features">Features</a></li>
+            <li><a href="/pricing">Pricing</a></li>
+            <li><a href="/security">Security</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4>Access</h4>
+          <ul class="footer-links">
+            <li><a href="https://app.mypaylink.app">Login</a></li>
+            <li><a href="/clock">Quick Clock In</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4>Company</h4>
+          <ul class="footer-links">
+            <li><a href="/contact">Contact</a></li>
+            <li><a href="/terms">Terms of Service</a></li>
+            <li><a href="/privacy">Privacy Policy</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2025 Alavont Holdings. All rights reserved.</p>
+        <ul class="footer-bottom-links"><li><a href="/terms">Terms</a></li><li><a href="/privacy">Privacy</a></li></ul>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/js/main.js"></script>
+  <script>
+    (function() {
+      var form = document.getElementById('trialSignupForm');
+      var errorDiv = document.getElementById('formError');
+      var successDiv = document.getElementById('signupSuccess');
+      var submitBtn = document.getElementById('submitBtn');
+
+      fetch('https://app.mypaylink.app/api/analytics/event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventName: 'signup_started', pageSource: 'signup' })
+      }).catch(function() {});
+
+      form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        errorDiv.style.display = 'none';
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Creating your account...';
+
+        var data = {
+          firstName: document.getElementById('firstName').value.trim(),
+          lastName: document.getElementById('lastName').value.trim(),
+          email: document.getElementById('email').value.trim(),
+          companyName: document.getElementById('companyName').value.trim(),
+          jobTitle: document.getElementById('jobTitle').value.trim(),
+          employeeCount: document.getElementById('employeeCount').value ? parseInt(document.getElementById('employeeCount').value) : null,
+          phone: document.getElementById('phone').value.trim(),
+          termsAccepted: document.getElementById('termsAccepted').checked
+        };
+
+        fetch('https://app.mypaylink.app/api/trial/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        })
+        .then(function(res) { return res.json().then(function(body) { return { ok: res.ok, body: body }; }); })
+        .then(function(result) {
+          if (!result.ok) {
+            throw new Error(result.body.message || 'Something went wrong');
+          }
+          form.style.display = 'none';
+          document.getElementById('credUsername').textContent = result.body.username;
+          document.getElementById('credPassword').textContent = result.body.temporaryPassword;
+          successDiv.style.display = 'block';
+
+          fetch('https://app.mypaylink.app/api/analytics/event', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ eventName: 'trial_started', pageSource: 'signup' })
+          }).catch(function() {});
+        })
+        .catch(function(err) {
+          errorDiv.textContent = err.message;
+          errorDiv.style.display = 'block';
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Start My Free Trial →';
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

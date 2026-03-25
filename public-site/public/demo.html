@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interactive Demo - PayLink | Try Before You Sign Up</title>
+  <meta name="description" content="Explore PayLink's full-featured demo with sample data. See payroll, scheduling, time tracking, and HR in action — no signup required.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo"><img src="/assets/logo.png" alt="PayLink"><span>PayLink</span></a>
+      <ul class="nav-links">
+        <li><a href="/features">Features</a></li>
+        <li><a href="/pricing">Pricing</a></li>
+        <li><a href="/security">Security</a></li>
+        <li><a href="/signup" class="nav-cta">Start Free Trial</a></li>
+      </ul>
+      <button class="mobile-toggle" aria-label="Menu">&#9776;</button>
+    </div>
+    <div class="mobile-menu">
+      <a href="/features">Features</a>
+      <a href="/pricing">Pricing</a>
+      <a href="/security">Security</a>
+      <a href="/signup">Start Free Trial</a>
+      <a href="https://app.mypaylink.app">Login →</a>
+    </div>
+  </nav>
+
+  <section class="page-hero">
+    <div class="container">
+      <span class="section-label fade-up">Interactive Demo</span>
+      <h1 class="fade-up stagger-1">See PayLink in Action</h1>
+      <p class="fade-up stagger-2">Explore the full platform with sample data. No signup required. Click below to launch the demo.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="container section-center">
+      <div class="demo-launch-card fade-up stagger-1">
+        <div class="demo-icon">🖥️</div>
+        <h2>Launch Interactive Demo</h2>
+        <p>You'll be logged into a pre-configured demo company with sample employees, time entries, schedules, and payroll data. Explore everything PayLink offers — the demo is read-only so you can click around freely.</p>
+        <div class="demo-features">
+          <div class="demo-feature">
+            <span>📊</span>
+            <span>Dashboard & Reports</span>
+          </div>
+          <div class="demo-feature">
+            <span>👥</span>
+            <span>5 Sample Employees</span>
+          </div>
+          <div class="demo-feature">
+            <span>⏰</span>
+            <span>Time Clock & Schedules</span>
+          </div>
+          <div class="demo-feature">
+            <span>💰</span>
+            <span>Payroll Processing</span>
+          </div>
+        </div>
+        <button id="launchDemoBtn" class="btn-primary btn-lg" data-testid="button-launch-demo">
+          Launch Demo →
+        </button>
+        <div id="demoError" class="form-error" style="display:none;" data-testid="text-demo-error"></div>
+        <div id="demoLoading" class="demo-loading" style="display:none;">
+          <div class="spinner"></div>
+          <span>Setting up your demo environment...</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="background: var(--dark-card);">
+    <div class="container">
+      <div class="cta-banner fade-up">
+        <h2>Ready to Use PayLink for Real?</h2>
+        <p>Start your free 30-day trial with your own data. No credit card required.</p>
+        <div class="hero-buttons" style="justify-content: center;">
+          <a href="/signup" class="btn-primary">Start Free Trial →</a>
+          <a href="/pricing" class="btn-secondary">See Pricing →</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a href="/" class="nav-logo"><img src="/assets/logo.png" alt="PayLink" style="height: 32px;"><span>PayLink</span></a>
+          <p>A secure workforce operations platform by Alavont Holdings.</p>
+        </div>
+        <div>
+          <h4>Product</h4>
+          <ul class="footer-links">
+            <li><a href="/features">Features</a></li>
+            <li><a href="/pricing">Pricing</a></li>
+            <li><a href="/security">Security</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4>Access</h4>
+          <ul class="footer-links">
+            <li><a href="https://app.mypaylink.app">Login</a></li>
+            <li><a href="/signup">Start Free Trial</a></li>
+            <li><a href="/clock">Quick Clock In</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4>Company</h4>
+          <ul class="footer-links">
+            <li><a href="/contact">Contact</a></li>
+            <li><a href="/terms">Terms of Service</a></li>
+            <li><a href="/privacy">Privacy Policy</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2025 Alavont Holdings. All rights reserved.</p>
+        <ul class="footer-bottom-links"><li><a href="/terms">Terms</a></li><li><a href="/privacy">Privacy</a></li></ul>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/js/main.js"></script>
+  <script>
+    (function() {
+      var btn = document.getElementById('launchDemoBtn');
+      var errorDiv = document.getElementById('demoError');
+      var loadingDiv = document.getElementById('demoLoading');
+
+      fetch('https://app.mypaylink.app/api/analytics/event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventName: 'view_demo_click', pageSource: 'demo' })
+      }).catch(function() {});
+
+      btn.addEventListener('click', function() {
+        errorDiv.style.display = 'none';
+        loadingDiv.style.display = 'flex';
+        btn.disabled = true;
+        btn.textContent = 'Loading...';
+
+        fetch('https://app.mypaylink.app/api/demo/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: '{}'
+        })
+        .then(function(res) { return res.json().then(function(body) { return { ok: res.ok, body: body }; }); })
+        .then(function(result) {
+          if (!result.ok) throw new Error(result.body.message || 'Failed to start demo');
+          window.location.href = 'https://app.mypaylink.app';
+        })
+        .catch(function(err) {
+          errorDiv.textContent = err.message;
+          errorDiv.style.display = 'block';
+          loadingDiv.style.display = 'none';
+          btn.disabled = false;
+          btn.textContent = 'Launch Demo →';
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

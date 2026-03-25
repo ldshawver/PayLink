@@ -9,7 +9,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-const pages = ['features', 'pricing', 'security', 'contact', 'vendor-portal', 'clock', 'terms', 'privacy'];
+const pages = ['features', 'pricing', 'security', 'contact', 'vendor-portal', 'clock', 'terms', 'privacy', 'signup', 'demo'];
 
 app.get('/docs/guide', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'docs', 'paylink-guide.html'));
