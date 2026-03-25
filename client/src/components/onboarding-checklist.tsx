@@ -24,6 +24,8 @@ interface OnboardingData {
   step_payroll_config: boolean;
   step_time_clock: boolean;
   step_payroll_preview: boolean;
+  step_bank_connected: boolean;
+  onboarding_wizard_completed: boolean;
   completed_at: string | null;
 }
 
@@ -55,7 +57,7 @@ export function OnboardingChecklist() {
   });
 
   if (!isTrial || isLoading || !progress) return null;
-  if (progress.completed_at) return null;
+  if (progress.completed_at || progress.onboarding_wizard_completed) return null;
 
   const completedCount = steps.filter(s => progress[s.key as keyof OnboardingData]).length;
   const progressPercent = Math.round((completedCount / steps.length) * 100);

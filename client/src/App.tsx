@@ -1,6 +1,7 @@
+import { useEffect } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -10,6 +11,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { ClockInButton } from "@/components/clock-in-button";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import NotFound from "@/pages/not-found";
+import OnboardingWizard from "@/pages/onboarding";
 import Dashboard from "@/pages/dashboard";
 import AttendancePage from "@/pages/attendance";
 import SchedulePage from "@/pages/schedule";
@@ -31,6 +33,7 @@ import LoginPage from "@/pages/login";
 import { Loader2, Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useSidebar } from "@/components/ui/sidebar";
+import { useTrial } from "@/hooks/use-trial";
 import { TrialBanner } from "@/components/trial-banner";
 import { UpgradeModal } from "@/components/upgrade-modal";
 
@@ -51,6 +54,7 @@ function AuthenticatedRouter() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
+      <Route path="/onboarding" component={OnboardingWizard} />
       <Route path="/attendance" component={AttendancePage} />
       <Route path="/schedule" component={SchedulePage} />
       <Route path="/employee">{() => <RoleGuard roles={["admin", "manager"]}><EmployeePage /></RoleGuard>}</Route>
@@ -130,6 +134,26 @@ function AuthenticatedLayout() {
   );
 }
 
+function OnboardingRedirect({ children }: { children: React.ReactNode }) {
+  const { isTrial } = useTrial();
+  const [location, setLocation] = useLocation();
+
+  const { data: progress, isLoading: progressLoading } = useQuery<any>({
+    queryKey: ["/api/onboarding/progress"],
+    enabled: isTrial,
+    staleTime: 30000,
+  });
+
+  useEffect(() => {
+    if (!isTrial || progressLoading || !progress) return;
+    if (!progress.onboarding_wizard_completed && location !== "/onboarding") {
+      setLocation("/onboarding");
+    }
+  }, [isTrial, progressLoading, progress, location, setLocation]);
+
+  return <>{children}</>;
+}
+
 function AppContent() {
   const { user, isLoading } = useAuth();
   const [location] = useLocation();
@@ -156,7 +180,11 @@ function AppContent() {
     return <LoginPage />;
   }
 
-  return <AuthenticatedLayout />;
+  return (
+    <OnboardingRedirect>
+      <AuthenticatedLayout />
+    </OnboardingRedirect>
+  );
 }
 
 function App() {
