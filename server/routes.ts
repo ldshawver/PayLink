@@ -116,7 +116,9 @@ async function requireActiveSubscription(req: Request, res: Response, next: Next
       }
     }
     next();
-  } catch (_e) { next(); }
+  } catch (_e) {
+    return res.status(503).json({ message: "Unable to verify subscription status. Please try again." });
+  }
 }
 
 export async function registerRoutes(
@@ -124,10 +126,14 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/analytics/event", "/billing/activate"];
   app.use("/api", (req, res, next) => {
-    const excludedPaths = ["/auth/", "/trial/signup", "/demo/login", "/analytics/event"];
-    if (excludedPaths.some(p => req.path.startsWith(p))) return next();
+    if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
     blockDemoWrites(req, res, next);
+  });
+  app.use("/api", (req, res, next) => {
+    if (req.method === "GET" || publicWritePaths.some(p => req.path.startsWith(p))) return next();
+    requireActiveSubscription(req, res, next);
   });
 
   app.post("/api/auth/login", async (req, res) => {
