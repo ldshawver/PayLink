@@ -99,10 +99,10 @@ function MobileHeader() {
         <button
           onClick={toggleSidebar}
           data-testid="button-sidebar-toggle-mobile"
-          className="flex items-center gap-2 p-2 rounded-lg bg-white/15 hover:bg-white/25 active:bg-white/30 transition-colors"
+          className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-white/30 hover:bg-white/40 active:bg-white/50 transition-colors border border-white/40 shadow-md"
         >
-          <Menu className="h-6 w-6" />
-          <span className="text-sm font-semibold">Menu</span>
+          <Menu className="h-7 w-7" />
+          <span className="text-base font-bold tracking-wide">Menu</span>
         </button>
         <span className="text-sm font-bold tracking-wide">PayLink</span>
         <div className="flex items-center gap-2">

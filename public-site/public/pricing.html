@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/style.css">
 </head>
-<body>
+<body style="scroll-behavior: smooth;">
 
   <nav class="nav">
     <div class="nav-inner">
@@ -34,15 +34,22 @@
     </div>
   </nav>
 
-  <section class="page-hero">
+  <section class="page-hero" id="top">
     <div class="container">
       <span class="section-label fade-up">Pricing</span>
       <h1 class="fade-up stagger-1">One Plan. Everything Included.</h1>
       <p class="fade-up stagger-2">Start with a free 30-day trial. No credit card required. Cancel anytime.</p>
+      <div class="fade-up stagger-3" style="display:flex;gap:12px;justify-content:center;margin-top:16px;">
+        <a href="#starter" style="color:#fff;text-decoration:underline;font-size:14px;">Starter Plan</a>
+        <span style="color:rgba(255,255,255,0.5);">&middot;</span>
+        <a href="#enterprise" style="color:#fff;text-decoration:underline;font-size:14px;">Enterprise</a>
+        <span style="color:rgba(255,255,255,0.5);">&middot;</span>
+        <a href="#faq" style="color:#fff;text-decoration:underline;font-size:14px;">FAQ</a>
+      </div>
     </div>
   </section>
 
-  <section>
+  <section id="starter">
     <div class="container section-center">
       <div class="pricing-single fade-up stagger-1">
         <div class="pricing-badge">Most Popular</div>
@@ -95,7 +102,7 @@
     </div>
   </section>
 
-  <section style="background: var(--dark-card);">
+  <section id="enterprise" style="background: var(--dark-card);">
     <div class="container section-center">
       <h2 class="section-title fade-up">Enterprise & Volume Pricing</h2>
       <p class="section-desc fade-up stagger-1">Need more than 100 employees, custom integrations, or a self-hosted deployment?</p>
@@ -151,6 +158,38 @@
           <div class="security-icon">💾</div>
           <div><h3>Data Backups</h3><p>Automated daily backups with point-in-time recovery. Your data is always safe.</p></div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="container section-center">
+      <h2 class="section-title fade-up">Frequently Asked Questions</h2>
+      <div style="max-width: 720px; margin: 32px auto 0; text-align: left;" class="fade-up stagger-1">
+        <details style="border-bottom: 1px solid var(--border); padding: 16px 0;" data-testid="faq-trial">
+          <summary style="cursor:pointer;font-weight:600;font-size:16px;">What happens during the 30-day free trial?</summary>
+          <p style="margin-top:8px;color:var(--text-muted);font-size:14px;line-height:1.6;">You get full access to every feature — payroll processing, time tracking, scheduling, HR tools, and more. No credit card is required to start. At the end of your trial you can activate your subscription to keep your data and continue using PayLink.</p>
+        </details>
+        <details style="border-bottom: 1px solid var(--border); padding: 16px 0;" data-testid="faq-pricing">
+          <summary style="cursor:pointer;font-weight:600;font-size:16px;">How does per-employee pricing work?</summary>
+          <p style="margin-top:8px;color:var(--text-muted);font-size:14px;line-height:1.6;">You pay a $29/month base fee plus $4 per active employee per month. "Active" means any employee or hourly worker on your roster — contractors paid by invoice are not counted. If you have 10 active employees, your monthly bill is $29 + (10 × $4) = $69.</p>
+        </details>
+        <details style="border-bottom: 1px solid var(--border); padding: 16px 0;" data-testid="faq-cancel">
+          <summary style="cursor:pointer;font-weight:600;font-size:16px;">Can I cancel anytime?</summary>
+          <p style="margin-top:8px;color:var(--text-muted);font-size:14px;line-height:1.6;">Yes. There are no long-term contracts or cancellation fees. You can cancel from your Billing page at any time. Your data remains available for export even after cancellation.</p>
+        </details>
+        <details style="border-bottom: 1px solid var(--border); padding: 16px 0;" data-testid="faq-data">
+          <summary style="cursor:pointer;font-weight:600;font-size:16px;">What happens to my data if I don't subscribe?</summary>
+          <p style="margin-top:8px;color:var(--text-muted);font-size:14px;line-height:1.6;">Your data is safe. After the trial expires, your account enters a read-only state — you can still view and export your data, but payroll processing and write operations are paused until you activate a subscription.</p>
+        </details>
+        <details style="border-bottom: 1px solid var(--border); padding: 16px 0;" data-testid="faq-multi-company">
+          <summary style="cursor:pointer;font-weight:600;font-size:16px;">Does the Starter Plan support multiple companies?</summary>
+          <p style="margin-top:8px;color:var(--text-muted);font-size:14px;line-height:1.6;">Yes. The Starter Plan includes multi-company support at no extra cost. Each company has its own employees, payroll, and settings. The per-employee fee applies across all companies combined.</p>
+        </details>
+        <details style="border-bottom: 1px solid var(--border); padding: 16px 0;" data-testid="faq-enterprise">
+          <summary style="cursor:pointer;font-weight:600;font-size:16px;">When should I consider the Enterprise plan?</summary>
+          <p style="margin-top:8px;color:var(--text-muted);font-size:14px;line-height:1.6;">Enterprise pricing is available for organizations with 100+ employees, those needing API access, white-label/custom branding, self-hosted deployments, or a dedicated account manager. Contact our sales team to discuss your needs.</p>
+        </details>
       </div>
     </div>
   </section>
