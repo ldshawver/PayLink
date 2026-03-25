@@ -53,10 +53,10 @@ jobs:
 
             echo "6. Restarting app..."
             pm2 delete paylink 2>/dev/null || true
-            kill $(lsof -ti:8000) 2>/dev/null || true
-            sleep 2
+            fuser -k 8000/tcp 2>/dev/null || true
+            sleep 3
             cd "$APP_DIR" && pm2 start "node -r dotenv/config dist/index.cjs" --name paylink
-            pm2 save
+            pm2 save --force
 
             echo "7. Waiting for app to start..."
             sleep 10
