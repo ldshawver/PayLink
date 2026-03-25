@@ -1,24 +1,420 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Plus, Search, Edit, Trash2, FileText, DollarSign, Send, Eye, Loader2,
   CalendarDays, Clock, CheckCircle, AlertCircle, XCircle, Copy,
+  CreditCard, Building2, Zap, ArrowRight, Settings, Info, Sparkles,
+  TrendingDown, Shield,
 } from "lucide-react";
 import type { Invoice, Customer } from "@shared/schema";
 
 type InvoiceWithItems = Invoice & { lineItems?: any[] };
+
+interface PaymentMethodConfig {
+  id: string;
+  companyId: string;
+  methodType: string;
+  displayName: string;
+  description: string | null;
+  feeType: string;
+  feePercent: string | null;
+  feeFlat: string | null;
+  feeCap: string | null;
+  isEnabled: boolean | null;
+  isRecommended: boolean | null;
+  processingTime: string | null;
+  sortOrder: number | null;
+}
+
+const methodIcons: Record<string, any> = {
+  ach: Building2,
+  card: CreditCard,
+  instant_bank: Zap,
+  wire: ArrowRight,
+};
+
+const methodColors: Record<string, string> = {
+  ach: "border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950",
+  card: "border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950",
+  instant_bank: "border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950",
+  wire: "border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-950",
+};
+
+function calculateFee(config: PaymentMethodConfig, amount: number): number {
+  let fee = 0;
+  if (config.feeType === "percentage") {
+    fee = amount * (parseFloat(config.feePercent || "0") / 100);
+  } else if (config.feeType === "flat") {
+    fee = parseFloat(config.feeFlat || "0");
+  } else if (config.feeType === "both") {
+    fee = amount * (parseFloat(config.feePercent || "0") / 100) + parseFloat(config.feeFlat || "0");
+  }
+  if (config.feeCap && fee > parseFloat(config.feeCap)) {
+    fee = parseFloat(config.feeCap);
+  }
+  return Math.round(fee * 100) / 100;
+}
+
+function RecordPaymentDialog({ invoice, companyId, open, onOpenChange }: {
+  invoice: Invoice;
+  companyId: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { toast } = useToast();
+  const [selectedMethod, setSelectedMethod] = useState("");
+  const [amount, setAmount] = useState(invoice.amountDue || invoice.totalAmount || "0");
+  const [notes, setNotes] = useState("");
+
+  const amountDue = parseFloat(invoice.amountDue || invoice.totalAmount || "0");
+
+  const { data: configs = [] } = useQuery<PaymentMethodConfig[]>({
+    queryKey: [`/api/payment-method-configs?companyId=${companyId}`],
+    enabled: !!companyId && open,
+  });
+
+  const enabledConfigs = configs.filter(c => c.isEnabled);
+
+  useEffect(() => {
+    if (enabledConfigs.length > 0 && !selectedMethod) {
+      const recommended = enabledConfigs.find(c => c.isRecommended);
+      setSelectedMethod(recommended?.methodType || enabledConfigs[0].methodType);
+    }
+  }, [enabledConfigs, selectedMethod]);
+
+  const selectedConfig = enabledConfigs.find(c => c.methodType === selectedMethod);
+  const baseAmount = parseFloat(amount) || 0;
+  const feeAmount = selectedConfig ? calculateFee(selectedConfig, baseAmount) : 0;
+  const totalCharged = baseAmount + feeAmount;
+
+  const lowestFeeMethod = enabledConfigs.reduce<PaymentMethodConfig | null>((lowest, c) => {
+    const f = calculateFee(c, baseAmount);
+    if (!lowest) return c;
+    return f < calculateFee(lowest, baseAmount) ? c : lowest;
+  }, null);
+
+  const savingsAmount = selectedConfig && lowestFeeMethod && selectedMethod !== lowestFeeMethod.methodType
+    ? feeAmount - calculateFee(lowestFeeMethod, baseAmount)
+    : 0;
+
+  const paymentMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("POST", "/api/payments", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/invoices?companyId=${companyId}`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/payments?companyId=${companyId}`] });
+      toast({ title: "Payment recorded successfully" });
+      onOpenChange(false);
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const handleSubmit = () => {
+    paymentMutation.mutate({
+      companyId,
+      invoiceId: invoice.id,
+      customerId: invoice.customerId,
+      paymentMethod: selectedMethod,
+      amount: baseAmount.toFixed(2),
+      baseAmount: baseAmount.toFixed(2),
+      feeAmount: feeAmount.toFixed(2),
+      totalCharged: totalCharged.toFixed(2),
+      paymentFeeCharged: feeAmount.toFixed(2),
+      netAmount: baseAmount.toFixed(2),
+      status: "completed",
+      paidAt: new Date().toISOString(),
+      notes,
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <DollarSign className="h-5 w-5 text-teal-500" />
+            Record Payment — {invoice.invoiceNumber}
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-5">
+          <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+            <span className="text-sm text-muted-foreground">Amount Due</span>
+            <span className="text-lg font-bold" data-testid="text-payment-amount-due">${amountDue.toFixed(2)}</span>
+          </div>
+
+          <div>
+            <Label className="text-sm font-semibold mb-2 block">Payment Amount</Label>
+            <Input
+              type="number"
+              step="0.01"
+              value={amount}
+              onChange={e => setAmount(e.target.value)}
+              data-testid="input-payment-amount"
+            />
+          </div>
+
+          <div>
+            <Label className="text-sm font-semibold mb-3 block">Choose Payment Method</Label>
+            <div className="space-y-2">
+              {enabledConfigs.map(config => {
+                const Icon = methodIcons[config.methodType] || DollarSign;
+                const fee = calculateFee(config, baseAmount);
+                const isSelected = selectedMethod === config.methodType;
+                const colorClass = methodColors[config.methodType] || "";
+
+                return (
+                  <div
+                    key={config.methodType}
+                    className={`relative p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                      isSelected
+                        ? `ring-2 ring-teal-500 border-teal-500 ${colorClass}`
+                        : `border-border hover:border-muted-foreground/30 ${colorClass}`
+                    }`}
+                    onClick={() => setSelectedMethod(config.methodType)}
+                    data-testid={`payment-method-${config.methodType}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={`h-10 w-10 rounded-lg flex items-center justify-center ${
+                          isSelected ? "bg-teal-500 text-white" : "bg-background border"
+                        }`}>
+                          <Icon className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-sm">{config.displayName}</span>
+                            {config.isRecommended && (
+                              <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0">
+                                <Sparkles className="h-3 w-3 mr-0.5" /> Recommended
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-0.5">{config.description}</p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        {fee === 0 ? (
+                          <span className="text-sm font-bold text-emerald-600">FREE</span>
+                        ) : (
+                          <div>
+                            <span className="text-sm font-bold">${fee.toFixed(2)}</span>
+                            <span className="text-xs text-muted-foreground block">
+                              {config.feeType === "percentage" ? `${config.feePercent}% fee` : "flat fee"}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {config.processingTime && (
+                      <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
+                        <Clock className="h-3 w-3" />
+                        {config.processingTime}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {savingsAmount > 0 && lowestFeeMethod && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800" data-testid="savings-hint">
+              <TrendingDown className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+              <span className="text-sm text-emerald-700 dark:text-emerald-400">
+                Save ${savingsAmount.toFixed(2)} by paying with {lowestFeeMethod.displayName}
+              </span>
+            </div>
+          )}
+
+          <div className="border-t pt-4 space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Invoice Amount</span>
+              <span>${baseAmount.toFixed(2)}</span>
+            </div>
+            {feeAmount > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Processing Fee ({selectedConfig?.displayName})</span>
+                <span className="text-amber-600">+${feeAmount.toFixed(2)}</span>
+              </div>
+            )}
+            <div className="flex justify-between text-base font-bold pt-1 border-t">
+              <span>Total Charged</span>
+              <span data-testid="text-total-charged">${totalCharged.toFixed(2)}</span>
+            </div>
+          </div>
+
+          <div>
+            <Label className="text-xs">Notes (optional)</Label>
+            <Textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              rows={2}
+              placeholder="Payment reference, memo..."
+              data-testid="input-payment-notes"
+            />
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Shield className="h-3 w-3" />
+            All fees are disclosed before payment confirmation. No hidden charges.
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-payment">Cancel</Button>
+          <Button
+            onClick={handleSubmit}
+            disabled={!selectedMethod || baseAmount <= 0 || paymentMutation.isPending}
+            data-testid="button-confirm-payment"
+          >
+            {paymentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle className="h-4 w-4 mr-2" />}
+            Confirm Payment
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PaymentMethodSettings({ companyId }: { companyId: string }) {
+  const { toast } = useToast();
+  const { data: configs = [], isLoading } = useQuery<PaymentMethodConfig[]>({
+    queryKey: [`/api/payment-method-configs?companyId=${companyId}`],
+    enabled: !!companyId,
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: any }) => apiRequest("PATCH", `/api/payment-method-configs/${id}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/payment-method-configs?companyId=${companyId}`] });
+      toast({ title: "Payment method updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  if (isLoading) return <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 mb-2">
+        <Settings className="h-5 w-5 text-muted-foreground" />
+        <h3 className="text-lg font-semibold">Payment Method Configuration</h3>
+      </div>
+      <p className="text-sm text-muted-foreground">Configure which payment methods are available to your customers and set fee structures for each method.</p>
+
+      <div className="space-y-3">
+        {configs.map(config => {
+          const Icon = methodIcons[config.methodType] || DollarSign;
+          return (
+            <Card key={config.id} data-testid={`config-method-${config.methodType}`}>
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-center gap-3 flex-1">
+                    <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-teal-500 to-blue-500 flex items-center justify-center text-white flex-shrink-0">
+                      <Icon className="h-5 w-5" />
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold">{config.displayName}</span>
+                        {config.isRecommended && (
+                          <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">Recommended</Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">{config.description}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-4 flex-shrink-0">
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs text-muted-foreground">Fee %</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        className="w-20 h-8 text-sm"
+                        value={config.feePercent || "0"}
+                        onChange={e => updateMutation.mutate({ id: config.id, data: { feePercent: e.target.value } })}
+                        data-testid={`input-fee-percent-${config.methodType}`}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs text-muted-foreground">Flat $</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        className="w-20 h-8 text-sm"
+                        value={config.feeFlat || "0"}
+                        onChange={e => updateMutation.mutate({ id: config.id, data: { feeFlat: e.target.value } })}
+                        data-testid={`input-fee-flat-${config.methodType}`}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Tooltip>
+                        <TooltipTrigger>
+                          <Label className="text-xs text-muted-foreground cursor-help flex items-center gap-1">
+                            Enabled <Info className="h-3 w-3" />
+                          </Label>
+                        </TooltipTrigger>
+                        <TooltipContent>Toggle this payment method on or off for customers</TooltipContent>
+                      </Tooltip>
+                      <Switch
+                        checked={config.isEnabled ?? true}
+                        onCheckedChange={checked => updateMutation.mutate({ id: config.id, data: { isEnabled: checked } })}
+                        data-testid={`switch-enabled-${config.methodType}`}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Tooltip>
+                        <TooltipTrigger>
+                          <Label className="text-xs text-muted-foreground cursor-help flex items-center gap-1">
+                            <Sparkles className="h-3 w-3" />
+                          </Label>
+                        </TooltipTrigger>
+                        <TooltipContent>Mark as recommended method</TooltipContent>
+                      </Tooltip>
+                      <Switch
+                        checked={config.isRecommended ?? false}
+                        onCheckedChange={checked => updateMutation.mutate({ id: config.id, data: { isRecommended: checked } })}
+                        data-testid={`switch-recommended-${config.methodType}`}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      <Card className="border-dashed">
+        <CardContent className="p-4">
+          <div className="flex items-start gap-3">
+            <Info className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-muted-foreground space-y-1">
+              <p className="font-medium text-foreground">Fee Disclosure</p>
+              <p>All fees are transparently shown to customers before they confirm payment. Customers see the invoice amount, processing fee, and total charged in a clear breakdown.</p>
+              <p>ACH is set as the recommended low-cost option by default. Adjust fees and recommendations to match your business needs.</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 function InvoiceForm({ invoice, customers, companyId, onSave, onCancel }: {
   invoice?: InvoiceWithItems;
@@ -221,6 +617,7 @@ export default function InvoicesPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<InvoiceWithItems | undefined>();
   const [activeTab, setActiveTab] = useState("invoices");
+  const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
 
   const companyId = user?.companyId;
 
@@ -315,7 +712,7 @@ export default function InvoicesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Invoicing</h1>
-          <p className="text-muted-foreground">Create and manage invoices</p>
+          <p className="text-muted-foreground">Create and manage invoices with multiple payment methods</p>
         </div>
         <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-create-invoice">
           <Plus className="h-4 w-4 mr-2" /> New Invoice
@@ -346,6 +743,9 @@ export default function InvoicesPage() {
           <TabsTrigger value="invoices" data-testid="tab-invoices">Invoices</TabsTrigger>
           <TabsTrigger value="recurring" data-testid="tab-recurring">Recurring</TabsTrigger>
           <TabsTrigger value="payments" data-testid="tab-payments">Payments</TabsTrigger>
+          <TabsTrigger value="settings" data-testid="tab-payment-settings">
+            <Settings className="h-4 w-4 mr-1" /> Payment Methods
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="invoices" className="space-y-4">
@@ -390,6 +790,7 @@ export default function InvoicesPage() {
                 const sc = statusConfig[invoice.status] || statusConfig.draft;
                 const StatusIcon = sc.icon;
                 const customer = customerMap[invoice.customerId || ""];
+                const canRecordPayment = invoice.status !== "paid" && invoice.status !== "cancelled";
                 return (
                   <Card key={invoice.id} className="hover:shadow-md transition-shadow" data-testid={`card-invoice-${invoice.id}`}>
                     <CardContent className="p-4">
@@ -424,6 +825,13 @@ export default function InvoicesPage() {
                             )}
                           </div>
                           <div className="flex items-center gap-1">
+                            {canRecordPayment && (
+                              <Button variant="outline" size="sm" onClick={() => setPaymentInvoice(invoice)}
+                                className="text-emerald-600 border-emerald-200 hover:bg-emerald-50 dark:border-emerald-800 dark:hover:bg-emerald-950"
+                                data-testid={`button-record-payment-${invoice.id}`}>
+                                <DollarSign className="h-4 w-4 mr-1" /> Pay
+                              </Button>
+                            )}
                             <Button variant="ghost" size="sm" onClick={() => handleEdit(invoice)} data-testid={`button-edit-invoice-${invoice.id}`}>
                               <Edit className="h-4 w-4" />
                             </Button>
@@ -462,6 +870,10 @@ export default function InvoicesPage() {
         <TabsContent value="payments">
           <PaymentsTab companyId={companyId || ""} />
         </TabsContent>
+
+        <TabsContent value="settings">
+          <PaymentMethodSettings companyId={companyId || ""} />
+        </TabsContent>
       </Tabs>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -484,6 +896,15 @@ export default function InvoicesPage() {
           />
         </DialogContent>
       </Dialog>
+
+      {paymentInvoice && (
+        <RecordPaymentDialog
+          invoice={paymentInvoice}
+          companyId={companyId || ""}
+          open={!!paymentInvoice}
+          onOpenChange={open => { if (!open) setPaymentInvoice(null); }}
+        />
+      )}
     </div>
   );
 }
@@ -493,6 +914,13 @@ function PaymentsTab({ companyId }: { companyId: string }) {
     queryKey: [`/api/payments?companyId=${companyId}`],
     enabled: !!companyId,
   });
+
+  const methodLabels: Record<string, string> = {
+    ach: "ACH Bank Transfer",
+    card: "Credit/Debit Card",
+    instant_bank: "Instant Bank",
+    wire: "Wire Transfer",
+  };
 
   if (isLoading) return <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin" /></div>;
 
@@ -508,21 +936,58 @@ function PaymentsTab({ companyId }: { companyId: string }) {
     );
   }
 
+  const totalFeeRevenue = payments
+    .filter((p: any) => p.status === "completed")
+    .reduce((sum: number, p: any) => sum + parseFloat(p.feeAmount || p.paymentFeeCharged || "0"), 0);
+
   return (
-    <div className="space-y-2">
-      {payments.map((p: any) => (
-        <Card key={p.id} data-testid={`card-payment-${p.id}`}>
+    <div className="space-y-4">
+      {totalFeeRevenue > 0 && (
+        <Card className="border-teal-200 dark:border-teal-800">
           <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <div className="font-medium">${parseFloat(p.amount).toFixed(2)}</div>
-              <div className="text-sm text-muted-foreground">{p.paymentMethod} - {new Date(p.createdAt).toLocaleDateString()}</div>
+            <div className="flex items-center gap-2">
+              <TrendingDown className="h-5 w-5 text-teal-500" />
+              <span className="text-sm font-medium">Fee Revenue Collected</span>
             </div>
-            <Badge className={p.status === "completed" ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-700"}>
-              {p.status}
-            </Badge>
+            <span className="text-lg font-bold text-teal-600" data-testid="text-fee-revenue">${totalFeeRevenue.toFixed(2)}</span>
           </CardContent>
         </Card>
-      ))}
+      )}
+
+      <div className="space-y-2">
+        {payments.map((p: any) => {
+          const Icon = methodIcons[p.paymentMethod] || DollarSign;
+          const feeAmt = parseFloat(p.feeAmount || p.paymentFeeCharged || "0");
+          return (
+            <Card key={p.id} data-testid={`card-payment-${p.id}`}>
+              <CardContent className="p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-teal-500 to-blue-500 flex items-center justify-center text-white">
+                    <Icon className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="font-medium">${parseFloat(p.amount).toFixed(2)}</div>
+                    <div className="text-xs text-muted-foreground flex items-center gap-2">
+                      <span>{methodLabels[p.paymentMethod] || p.paymentMethod}</span>
+                      <span>-</span>
+                      <span>{new Date(p.createdAt).toLocaleDateString()}</span>
+                      {feeAmt > 0 && (
+                        <>
+                          <span>-</span>
+                          <span className="text-amber-600">Fee: ${feeAmt.toFixed(2)}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <Badge className={p.status === "completed" ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-700"}>
+                  {p.status}
+                </Badge>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
     </div>
   );
 }

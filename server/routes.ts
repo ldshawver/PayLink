@@ -7498,6 +7498,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         step_payroll_config: sql`UPDATE onboarding_progress SET step_payroll_config = TRUE WHERE company_id = ${user.companyId} AND user_id = ${user.id}`,
         step_time_clock: sql`UPDATE onboarding_progress SET step_time_clock = TRUE WHERE company_id = ${user.companyId} AND user_id = ${user.id}`,
         step_payroll_preview: sql`UPDATE onboarding_progress SET step_payroll_preview = TRUE WHERE company_id = ${user.companyId} AND user_id = ${user.id}`,
+        step_bank_connected: sql`UPDATE onboarding_progress SET step_bank_connected = TRUE WHERE company_id = ${user.companyId} AND user_id = ${user.id}`,
       };
       if (!stepQueries[step]) return res.status(400).json({ message: "Invalid step" });
 
@@ -7516,6 +7517,213 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.json({ message: "Step completed", step });
     } catch (e) {
       res.status(500).json({ message: safeErrorMessage(e, "Failed to update onboarding progress") });
+    }
+  });
+
+  app.post("/api/onboarding/business-info", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company associated" });
+
+      const { companyName, businessType, state, employeeCount, ein, address, city, zip, phone } = req.body;
+      if (!companyName) return res.status(400).json({ message: "Company name is required" });
+
+      await db.execute(sql`
+        UPDATE companies SET
+          name = ${companyName},
+          entity_type = ${businessType || 'llc'},
+          state = ${state || null},
+          ein = ${ein || null},
+          address = ${address || null},
+          city = ${city || null},
+          zip = ${zip || null},
+          phone = ${phone || null}
+        WHERE id = ${user.companyId}
+      `);
+
+      await db.execute(sql`
+        UPDATE onboarding_progress SET
+          step_company_details = TRUE,
+          business_type = ${businessType || null},
+          employee_count = ${employeeCount ? parseInt(employeeCount) : null}
+        WHERE company_id = ${user.companyId} AND user_id = ${user.id}
+      `);
+
+      res.json({ message: "Business info saved" });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to save business info") });
+    }
+  });
+
+  app.post("/api/onboarding/add-employees-csv", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company associated" });
+
+      const { employees } = req.body;
+      if (!Array.isArray(employees) || employees.length === 0) {
+        return res.status(400).json({ message: "At least one employee is required" });
+      }
+
+      const created = [];
+      for (const emp of employees) {
+        if (!emp.firstName || !emp.lastName) continue;
+        const worker = await storage.createWorker({
+          companyId: user.companyId,
+          firstName: emp.firstName,
+          lastName: emp.lastName,
+          email: emp.email || null,
+          phone: emp.phone || null,
+          workerType: emp.workerType || "employee",
+          payRate: emp.payRate || "0",
+          payType: emp.payType || "hourly",
+          jobTitle: emp.jobTitle || null,
+          department: emp.department || null,
+          hireDate: emp.hireDate || new Date().toISOString().split("T")[0],
+          status: "active",
+          isActive: true,
+        });
+        created.push(worker);
+      }
+
+      if (created.length > 0) {
+        await db.execute(sql`
+          UPDATE onboarding_progress SET step_first_employee = TRUE
+          WHERE company_id = ${user.companyId} AND user_id = ${user.id}
+        `);
+      }
+
+      res.json({ message: `${created.length} employee(s) added`, count: created.length });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to add employees") });
+    }
+  });
+
+  app.post("/api/onboarding/bank-info", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company associated" });
+
+      const { bankName, routingNumber, accountNumber, accountType } = req.body;
+
+      await db.execute(sql`
+        INSERT INTO funding_accounts (company_id, account_name, bank_name, routing_number, account_number, account_type, is_primary, is_verified)
+        VALUES (${user.companyId}, ${bankName || 'Primary Account'}, ${bankName || null}, ${routingNumber || null}, ${accountNumber || null}, ${accountType || 'checking'}, TRUE, FALSE)
+        ON CONFLICT DO NOTHING
+      `);
+
+      await db.execute(sql`
+        UPDATE onboarding_progress SET step_bank_connected = TRUE
+        WHERE company_id = ${user.companyId} AND user_id = ${user.id}
+      `);
+
+      res.json({ message: "Bank info saved" });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to save bank info") });
+    }
+  });
+
+  app.post("/api/onboarding/payroll-setup", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company associated" });
+
+      const { payFrequency, overtimeThreshold, overtimeMultiplier } = req.body;
+
+      await db.execute(sql`
+        UPDATE companies SET
+          pay_frequency = ${payFrequency || 'biweekly'},
+          overtime_threshold = ${overtimeThreshold ? parseInt(overtimeThreshold) : 40},
+          overtime_multiplier = ${overtimeMultiplier || '1.5'}
+        WHERE id = ${user.companyId}
+      `);
+
+      await db.execute(sql`
+        UPDATE onboarding_progress SET step_pay_schedule = TRUE, step_payroll_config = TRUE
+        WHERE company_id = ${user.companyId} AND user_id = ${user.id}
+      `);
+
+      res.json({ message: "Payroll setup saved" });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to save payroll setup") });
+    }
+  });
+
+  app.get("/api/onboarding/payroll-preview", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company associated" });
+
+      const companyResult = await db.execute(sql`SELECT * FROM companies WHERE id = ${user.companyId} LIMIT 1`);
+      const company = companyResult.rows[0];
+
+      const workersResult = await db.execute(sql`
+        SELECT id, first_name, last_name, pay_rate, pay_type, worker_type, job_title, department
+        FROM workers WHERE company_id = ${user.companyId} AND is_active = TRUE
+        ORDER BY last_name, first_name LIMIT 50
+      `);
+
+      const payFreq = (company?.pay_frequency as string) || "biweekly";
+      const hoursPerPeriod: Record<string, number> = {
+        weekly: 40, biweekly: 80, semimonthly: 86.67, monthly: 173.33
+      };
+      const periodHours = hoursPerPeriod[payFreq] || 80;
+
+      const preview = workersResult.rows.map((w: any) => {
+        const rate = parseFloat(w.pay_rate) || 0;
+        const isHourly = w.pay_type === "hourly";
+        const grossPay = isHourly ? rate * periodHours : rate / (payFreq === "weekly" ? 52 : payFreq === "biweekly" ? 26 : payFreq === "semimonthly" ? 24 : 12);
+        const estFedTax = grossPay * 0.12;
+        const estStateTax = grossPay * 0.04;
+        const estFica = grossPay * 0.0765;
+        const netPay = grossPay - estFedTax - estStateTax - estFica;
+
+        return {
+          id: w.id,
+          name: `${w.first_name} ${w.last_name}`,
+          jobTitle: w.job_title,
+          department: w.department,
+          payType: w.pay_type,
+          payRate: rate,
+          workerType: w.worker_type,
+          hours: isHourly ? periodHours : null,
+          grossPay: Math.round(grossPay * 100) / 100,
+          federalTax: Math.round(estFedTax * 100) / 100,
+          stateTax: Math.round(estStateTax * 100) / 100,
+          fica: Math.round(estFica * 100) / 100,
+          netPay: Math.round(netPay * 100) / 100,
+        };
+      });
+
+      res.json({
+        payFrequency: payFreq,
+        periodHours,
+        employees: preview,
+        totalGross: preview.reduce((s, p) => s + p.grossPay, 0),
+        totalNet: preview.reduce((s, p) => s + p.netPay, 0),
+        totalTaxes: preview.reduce((s, p) => s + p.federalTax + p.stateTax + p.fica, 0),
+      });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to generate payroll preview") });
+    }
+  });
+
+  app.post("/api/onboarding/complete-wizard", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company associated" });
+
+      await db.execute(sql`
+        UPDATE onboarding_progress SET
+          onboarding_wizard_completed = TRUE,
+          step_payroll_preview = TRUE,
+          completed_at = NOW()
+        WHERE company_id = ${user.companyId} AND user_id = ${user.id}
+      `);
+
+      res.json({ message: "Onboarding wizard completed" });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to complete wizard") });
     }
   });
 
@@ -7795,6 +8003,102 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       res.status(201).json(payment);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create payment") }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // PAYMENT METHOD CONFIGURATIONS
+  // ══════════════════════════════════════════════════════════════════════
+  app.get("/api/payment-method-configs", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      let configs = await storage.getPaymentMethodConfigs(companyId);
+      if (configs.length === 0) {
+        const defaults = [
+          { companyId, methodType: "ach", displayName: "Bank Transfer (ACH)", description: "No fee. Takes 2–4 business days.", feeType: "flat", feePercent: "0", feeFlat: "0", isEnabled: true, isRecommended: true, processingTime: "2-4 business days", sortOrder: 0 },
+          { companyId, methodType: "card", displayName: "Credit/Debit Card", description: "Instant payment. Processing fee applies.", feeType: "percentage", feePercent: "3", feeFlat: "0", isEnabled: true, isRecommended: false, processingTime: "Instant", sortOrder: 1 },
+          { companyId, methodType: "instant_bank", displayName: "Instant Bank Payment", description: "Faster bank transfer. Reduced fee.", feeType: "percentage", feePercent: "1", feeFlat: "0", isEnabled: true, isRecommended: false, processingTime: "Same day", sortOrder: 2 },
+          { companyId, methodType: "wire", displayName: "Wire Transfer", description: "For high-value invoices. Bank fees may apply.", feeType: "flat", feePercent: "0", feeFlat: "25", isEnabled: false, isRecommended: false, processingTime: "1-2 business days", sortOrder: 3 },
+        ];
+        for (const d of defaults) {
+          await storage.createPaymentMethodConfig(d as any);
+        }
+        configs = await storage.getPaymentMethodConfigs(companyId);
+      }
+      res.json(configs);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch payment method configs") }); }
+  });
+
+  app.patch("/api/payment-method-configs/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      const result = await storage.updatePaymentMethodConfig(req.params.id, req.body);
+      res.json(result);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update payment method config") }); }
+  });
+
+  app.post("/api/payment-method-configs", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      const result = await storage.createPaymentMethodConfig(req.body);
+      res.status(201).json(result);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create payment method config") }); }
+  });
+
+  app.delete("/api/payment-method-configs/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      await storage.deletePaymentMethodConfig(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete payment method config") }); }
+  });
+
+  app.post("/api/payments/calculate-fee", requireAuth, async (req, res) => {
+    try {
+      const { companyId, methodType, amount } = req.body;
+      if (!companyId || !methodType || !amount) return res.status(400).json({ message: "companyId, methodType, and amount are required" });
+
+      const configs = await storage.getPaymentMethodConfigs(companyId);
+      const config = configs.find(c => c.methodType === methodType);
+      if (!config) return res.status(404).json({ message: "Payment method not found" });
+      if (!config.isEnabled) return res.status(400).json({ message: "Payment method is not enabled" });
+
+      const baseAmount = parseFloat(amount);
+      let feeAmount = 0;
+
+      if (config.feeType === "percentage") {
+        feeAmount = baseAmount * (parseFloat(config.feePercent || "0") / 100);
+      } else if (config.feeType === "flat") {
+        feeAmount = parseFloat(config.feeFlat || "0");
+      } else if (config.feeType === "both") {
+        feeAmount = baseAmount * (parseFloat(config.feePercent || "0") / 100) + parseFloat(config.feeFlat || "0");
+      }
+
+      if (config.feeCap && feeAmount > parseFloat(config.feeCap)) {
+        feeAmount = parseFloat(config.feeCap);
+      }
+
+      const totalCharged = baseAmount + feeAmount;
+      const savings = configs
+        .filter(c => c.isEnabled && c.methodType !== methodType)
+        .map(c => {
+          let otherFee = 0;
+          if (c.feeType === "percentage") otherFee = baseAmount * (parseFloat(c.feePercent || "0") / 100);
+          else if (c.feeType === "flat") otherFee = parseFloat(c.feeFlat || "0");
+          else if (c.feeType === "both") otherFee = baseAmount * (parseFloat(c.feePercent || "0") / 100) + parseFloat(c.feeFlat || "0");
+          if (c.feeCap && otherFee > parseFloat(c.feeCap)) otherFee = parseFloat(c.feeCap);
+          return { methodType: c.methodType, displayName: c.displayName, fee: Math.round(otherFee * 100) / 100, savings: Math.round((feeAmount - otherFee) * 100) / 100 };
+        })
+        .filter(s => s.savings > 0);
+
+      res.json({
+        baseAmount: Math.round(baseAmount * 100) / 100,
+        feeAmount: Math.round(feeAmount * 100) / 100,
+        totalCharged: Math.round(totalCharged * 100) / 100,
+        feePercent: config.feePercent,
+        methodType: config.methodType,
+        displayName: config.displayName,
+        processingTime: config.processingTime,
+        potentialSavings: savings,
+      });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to calculate fee") }); }
   });
 
   // ══════════════════════════════════════════════════════════════════════

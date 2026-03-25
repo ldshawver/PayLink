@@ -112,7 +112,7 @@ import {
   type RecurringExpenseTemplate, type InsertRecurringExpenseTemplate,
   type ExpenseApprovalAction, type InsertExpenseApprovalAction,
   type PayrollReimbursementItem, type InsertPayrollReimbursementItem,
-  customers, invoices, invoiceLineItems, invoiceTemplates, payments, savedPaymentMethods,
+  customers, invoices, invoiceLineItems, invoiceTemplates, payments, savedPaymentMethods, paymentMethodConfigs,
   recurringBillingProfiles, documents, documentFolders, documentVersions,
   documentSignatureRequests, documentSigners, documentAuditLogs,
   automationRules, automationEvents, notifications, portalAccessTokens,
@@ -121,6 +121,7 @@ import {
   type InvoiceLineItem, type InsertInvoiceLineItem,
   type InvoiceTemplate, type InsertInvoiceTemplate,
   type Payment, type InsertPayment,
+  type PaymentMethodConfig, type InsertPaymentMethodConfig,
   type SavedPaymentMethod, type InsertSavedPaymentMethod,
   type RecurringBillingProfile, type InsertRecurringBillingProfile,
   type Document, type InsertDocument,
@@ -556,6 +557,11 @@ export interface IStorage {
   getPayment(id: string): Promise<Payment | undefined>;
   createPayment(data: InsertPayment): Promise<Payment>;
   updatePayment(id: string, data: Partial<Payment>): Promise<Payment | undefined>;
+
+  getPaymentMethodConfigs(companyId: string): Promise<PaymentMethodConfig[]>;
+  createPaymentMethodConfig(data: InsertPaymentMethodConfig): Promise<PaymentMethodConfig>;
+  updatePaymentMethodConfig(id: string, data: Partial<PaymentMethodConfig>): Promise<PaymentMethodConfig | undefined>;
+  deletePaymentMethodConfig(id: string): Promise<void>;
 
   getRecurringBillingProfiles(companyId: string): Promise<RecurringBillingProfile[]>;
   getRecurringBillingProfile(id: string): Promise<RecurringBillingProfile | undefined>;
@@ -2539,6 +2545,22 @@ export class DatabaseStorage implements IStorage {
   async updatePayment(id: string, data: Partial<Payment>): Promise<Payment | undefined> {
     const [r] = await db.update(payments).set({ ...data, updatedAt: new Date() }).where(eq(payments.id, id)).returning();
     return r;
+  }
+
+  // ── Payment Method Configs ──────────────────────────────────────────
+  async getPaymentMethodConfigs(companyId: string): Promise<PaymentMethodConfig[]> {
+    return db.select().from(paymentMethodConfigs).where(eq(paymentMethodConfigs.companyId, companyId)).orderBy(paymentMethodConfigs.sortOrder);
+  }
+  async createPaymentMethodConfig(data: InsertPaymentMethodConfig): Promise<PaymentMethodConfig> {
+    const [r] = await db.insert(paymentMethodConfigs).values(data).returning();
+    return r;
+  }
+  async updatePaymentMethodConfig(id: string, data: Partial<PaymentMethodConfig>): Promise<PaymentMethodConfig | undefined> {
+    const [r] = await db.update(paymentMethodConfigs).set(data).where(eq(paymentMethodConfigs.id, id)).returning();
+    return r;
+  }
+  async deletePaymentMethodConfig(id: string): Promise<void> {
+    await db.delete(paymentMethodConfigs).where(eq(paymentMethodConfigs.id, id));
   }
 
   // ── Recurring Billing Profiles ──────────────────────────────────────────

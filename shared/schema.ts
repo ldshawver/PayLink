@@ -1833,6 +1833,10 @@ export const onboardingProgress = pgTable("onboarding_progress", {
   stepPayrollConfig: boolean("step_payroll_config").default(false),
   stepTimeClock: boolean("step_time_clock").default(false),
   stepPayrollPreview: boolean("step_payroll_preview").default(false),
+  stepBankConnected: boolean("step_bank_connected").default(false),
+  onboardingWizardCompleted: boolean("onboarding_wizard_completed").default(false),
+  businessType: text("business_type"),
+  employeeCount: integer("employee_count"),
   completedAt: timestamp("completed_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -1957,6 +1961,9 @@ export const payments = pgTable("payments", {
   processorFee: numeric("processor_fee").default("0"),
   netAmount: numeric("net_amount").default("0"),
   paymentFeeCharged: numeric("payment_fee_charged").default("0"),
+  baseAmount: numeric("base_amount").default("0"),
+  feeAmount: numeric("fee_amount").default("0"),
+  totalCharged: numeric("total_charged").default("0"),
   processorTransactionId: text("processor_transaction_id"),
   status: text("status").notNull().default("pending"),
   paidAt: timestamp("paid_at"),
@@ -1972,6 +1979,28 @@ export const payments = pgTable("payments", {
 export const insertPaymentSchema = createInsertSchema(payments).omit({ id: true, createdAt: true, updatedAt: true });
 export type Payment = typeof payments.$inferSelect;
 export type InsertPayment = z.infer<typeof insertPaymentSchema>;
+
+// ── Payment Method Configurations ──────────────────────────────────
+export const paymentMethodConfigs = pgTable("payment_method_configs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  methodType: text("method_type").notNull(),
+  displayName: text("display_name").notNull(),
+  description: text("description"),
+  feeType: text("fee_type").notNull().default("percentage"),
+  feePercent: numeric("fee_percent").default("0"),
+  feeFlat: numeric("fee_flat").default("0"),
+  feeCap: numeric("fee_cap"),
+  isEnabled: boolean("is_enabled").default(true),
+  isRecommended: boolean("is_recommended").default(false),
+  processingTime: text("processing_time"),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertPaymentMethodConfigSchema = createInsertSchema(paymentMethodConfigs).omit({ id: true, createdAt: true });
+export type PaymentMethodConfig = typeof paymentMethodConfigs.$inferSelect;
+export type InsertPaymentMethodConfig = z.infer<typeof insertPaymentMethodConfigSchema>;
 
 // ── Saved Payment Methods ──────────────────────────────────────────
 export const savedPaymentMethods = pgTable("saved_payment_methods", {

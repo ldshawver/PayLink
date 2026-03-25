@@ -57,7 +57,7 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
     -   **Onboarding Checklist:** Guides new trial accounts through initial setup steps.
     -   **Analytics Tracking:** Event tracking for signup, trial, and key user actions.
     -   **Customer & Vendor Management:** Full CRUD for customers and vendors, including a public vendor portal for invoice submission.
-    -   **Invoicing System:** Create, edit, and manage invoices with line items, statuses, and payment tracking.
+    -   **Invoicing System:** Create, edit, and manage invoices with line items, statuses, and payment tracking. Multiple payment methods (ACH, Card, Instant Bank, Wire) with configurable per-method fees, fee disclosure at checkout, savings nudges, and a Payment Methods settings tab. API: `GET/POST/PATCH/DELETE /api/payment-method-configs`, `POST /api/payments/calculate-fee`.
     -   **Document Management:** Handles folders, documents, versioning, signature requests, and audit logs.
     -   **Automation Engine:** Rules-based automation with event logging.
     -   **Notifications System:** Company/user-scoped notification tracking.

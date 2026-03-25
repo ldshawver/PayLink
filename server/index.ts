@@ -622,6 +622,11 @@ app.use((req, res, next) => {
       created_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    await run("onboarding_progress.step_bank_connected", sql`ALTER TABLE onboarding_progress ADD COLUMN IF NOT EXISTS step_bank_connected BOOLEAN DEFAULT FALSE`);
+    await run("onboarding_progress.onboarding_wizard_completed", sql`ALTER TABLE onboarding_progress ADD COLUMN IF NOT EXISTS onboarding_wizard_completed BOOLEAN DEFAULT FALSE`);
+    await run("onboarding_progress.business_type", sql`ALTER TABLE onboarding_progress ADD COLUMN IF NOT EXISTS business_type TEXT`);
+    await run("onboarding_progress.employee_count", sql`ALTER TABLE onboarding_progress ADD COLUMN IF NOT EXISTS employee_count INTEGER`);
+
     // Customers table
     await run("customers table", sql`CREATE TABLE IF NOT EXISTS customers (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -929,6 +934,27 @@ app.use((req, res, next) => {
     )`);
 
     // Portal access tokens table
+    await run("payment_method_configs table", sql`CREATE TABLE IF NOT EXISTS payment_method_configs (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      method_type TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      description TEXT,
+      fee_type TEXT NOT NULL DEFAULT 'percentage',
+      fee_percent NUMERIC DEFAULT 0,
+      fee_flat NUMERIC DEFAULT 0,
+      fee_cap NUMERIC,
+      is_enabled BOOLEAN DEFAULT TRUE,
+      is_recommended BOOLEAN DEFAULT FALSE,
+      processing_time TEXT,
+      sort_order INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("payments.base_amount", sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS base_amount NUMERIC DEFAULT '0'`);
+    await run("payments.fee_amount", sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS fee_amount NUMERIC DEFAULT '0'`);
+    await run("payments.total_charged", sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS total_charged NUMERIC DEFAULT '0'`);
+
     await run("portal_access_tokens table", sql`CREATE TABLE IF NOT EXISTS portal_access_tokens (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       company_id VARCHAR NOT NULL REFERENCES companies(id),
