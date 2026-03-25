@@ -2612,7 +2612,11 @@ function NewHireDefaultsTab() {
 function WageGroupsTab() {
   const { toast } = useToast();
   const search = useSearch();
-  const workerId = new URLSearchParams(search).get("id") || "";
+  const urlWorkerId = new URLSearchParams(search).get("id") || "";
+  const [selectedWorkerId, setSelectedWorkerId] = useState(urlWorkerId);
+  const workerId = selectedWorkerId;
+  const workersQuery = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
+  const workers = workersQuery.data || [];
   const { data: assignments, isLoading } = useQuery<EmployeeWageGroup[]>({
     queryKey: ["/api/employee-wage-groups", workerId],
     queryFn: async () => {
@@ -2650,7 +2654,7 @@ function WageGroupsTab() {
   const wgLookup: Record<string, SecondaryWageGroup> = {};
   allWageGroups?.forEach(wg => { wgLookup[wg.id] = wg; });
 
-  if (isLoading) return <Skeleton className="h-64 w-full" />;
+  if (isLoading && workerId) return <Skeleton className="h-64 w-full" />;
 
   return (
     <div className="space-y-4">
@@ -2659,6 +2663,20 @@ function WageGroupsTab() {
           <CardTitle className="flex items-center gap-2"><DollarSign className="h-5 w-5" />Assigned Wage Groups</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Select Employee</Label>
+            <Select value={selectedWorkerId} onValueChange={setSelectedWorkerId}>
+              <SelectTrigger className="w-72" data-testid="select-wg-worker"><SelectValue placeholder="Select an employee" /></SelectTrigger>
+              <SelectContent>
+                {workers.map(w => (
+                  <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {!workerId ? (
+            <p className="text-sm text-muted-foreground py-4">Select an employee above to manage their wage group assignments.</p>
+          ) : <>
           <div className="flex items-center gap-3">
             <Select value={selectedWgId} onValueChange={setSelectedWgId}>
               <SelectTrigger className="w-64" data-testid="select-assign-wage-group"><SelectValue placeholder="Select wage group to assign" /></SelectTrigger>
@@ -2698,6 +2716,7 @@ function WageGroupsTab() {
               })}
             </TableBody>
           </Table>
+          </>}
         </CardContent>
       </Card>
     </div>
