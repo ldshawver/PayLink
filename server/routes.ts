@@ -89,35 +89,46 @@ function requireRole(...roles: string[]) {
   };
 }
 
-function requireActiveSubscription(req: Request, res: Response, next: NextFunction) {
+function blockDemoWrites(req: Request, res: Response, next: NextFunction) {
+  if (req.session?.isDemo && req.method !== "GET") {
+    return res.status(403).json({ message: "Demo mode is read-only. Sign up for a free trial to make changes." });
+  }
+  next();
+}
+
+async function requireActiveSubscription(req: Request, res: Response, next: NextFunction) {
   if (!req.session?.userId) return next();
-  (async () => {
-    try {
-      const user = await storage.getUser(req.session.userId!);
-      if (!user?.companyId) return next();
-      const rows = await db.execute(sql`SELECT subscription_status, trial_end FROM companies WHERE id = ${user.companyId}`);
-      if (rows.rows.length === 0) return next();
-      const company = rows.rows[0] as any;
-      const status = company.subscription_status;
-      if (status === "trial_expired" || status === "suspended" || status === "canceled") {
-        return res.status(403).json({ message: "Your subscription is inactive. Please upgrade to continue." });
+  try {
+    const user = await storage.getUser(req.session.userId!);
+    if (!user?.companyId) return next();
+    const rows = await db.execute(sql`SELECT subscription_status, trial_end FROM companies WHERE id = ${user.companyId}`);
+    if (rows.rows.length === 0) return next();
+    const company = rows.rows[0] as any;
+    const status = company.subscription_status;
+    if (status === "trial_expired" || status === "suspended" || status === "canceled") {
+      return res.status(403).json({ message: "Your subscription is inactive. Please upgrade to continue." });
+    }
+    if (status === "trial_active" && company.trial_end) {
+      const trialEnd = new Date(company.trial_end);
+      if (new Date() > trialEnd) {
+        await db.execute(sql`UPDATE companies SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);
+        return res.status(403).json({ message: "Your trial has expired. Please upgrade to continue." });
       }
-      if (status === "trial_active" && company.trial_end) {
-        const trialEnd = new Date(company.trial_end);
-        if (new Date() > trialEnd) {
-          await db.execute(sql`UPDATE companies SET subscription_status = 'trial_expired', trial_used = TRUE WHERE id = ${user.companyId}`);
-          return res.status(403).json({ message: "Your trial has expired. Please upgrade to continue." });
-        }
-      }
-      next();
-    } catch { next(); }
-  })();
+    }
+    next();
+  } catch (_e) { next(); }
 }
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  app.use("/api", (req, res, next) => {
+    const publicPaths = ["/api/auth/", "/api/trial/signup", "/api/demo/login", "/api/analytics/event", "/api/time-clock/"];
+    if (publicPaths.some(p => req.path.startsWith(p))) return next();
+    blockDemoWrites(req, res, next);
+  });
 
   app.post("/api/auth/login", async (req, res) => {
     try {
@@ -7339,13 +7350,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const now = new Date();
       const trialEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-      const companyResult = await db.execute(sql`
-        INSERT INTO companies (name, subscription_status, plan_name, trial_start, trial_end, trial_used, billing_active, is_demo)
-        VALUES (${companyName}, 'trial_active', 'starter', ${now}, ${trialEnd}, FALSE, FALSE, FALSE)
-        RETURNING id
-      `);
-      const companyId = companyResult.rows[0].id as string;
-
       const baseUsername = email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
       let username = baseUsername + Math.floor(Math.random() * 1000);
       const existingUser = await db.execute(sql`SELECT id FROM users WHERE username = ${username} LIMIT 1`);
@@ -7355,27 +7359,45 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const tempPassword = "Trial" + Math.random().toString(36).substring(2, 10) + "!";
       const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
-      const userResult = await db.execute(sql`
-        INSERT INTO users (username, password, role, company_id)
-        VALUES (${username}, ${hashedPassword}, 'admin', ${companyId})
-        RETURNING id
-      `);
-      const userId = userResult.rows[0].id as string;
+      let companyId: string;
+      let userId: string;
 
-      await db.execute(sql`
-        INSERT INTO trial_signups (company_name, employee_count, first_name, last_name, job_title, email, phone, company_id, user_id, trial_start, trial_end, subscription_status, terms_accepted_at, signup_ip)
-        VALUES (${companyName}, ${employeeCount || null}, ${firstName}, ${lastName}, ${jobTitle || null}, ${email}, ${phone || null}, ${companyId}, ${userId}, ${now}, ${trialEnd}, 'trial_active', ${now}, ${req.ip || null})
-      `);
+      await db.execute(sql`BEGIN`);
+      try {
+        const companyResult = await db.execute(sql`
+          INSERT INTO companies (name, subscription_status, plan_name, trial_start, trial_end, trial_used, billing_active, is_demo)
+          VALUES (${companyName}, 'trial_active', 'starter', ${now}, ${trialEnd}, FALSE, FALSE, FALSE)
+          RETURNING id
+        `);
+        companyId = companyResult.rows[0].id as string;
 
-      await db.execute(sql`
-        INSERT INTO onboarding_progress (company_id, user_id)
-        VALUES (${companyId}, ${userId})
-      `);
+        const userResult = await db.execute(sql`
+          INSERT INTO users (username, password, role, company_id)
+          VALUES (${username}, ${hashedPassword}, 'admin', ${companyId})
+          RETURNING id
+        `);
+        userId = userResult.rows[0].id as string;
 
-      await db.execute(sql`
-        INSERT INTO analytics_events (event_name, user_id, company_id, page_source, metadata)
-        VALUES ('signup_completed', ${userId}, ${companyId}, 'signup', ${JSON.stringify({ plan: 'starter', employeeCount })})
-      `);
+        await db.execute(sql`
+          INSERT INTO trial_signups (company_name, employee_count, first_name, last_name, job_title, email, phone, company_id, user_id, trial_start, trial_end, subscription_status, terms_accepted_at, signup_ip)
+          VALUES (${companyName}, ${employeeCount || null}, ${firstName}, ${lastName}, ${jobTitle || null}, ${email}, ${phone || null}, ${companyId}, ${userId}, ${now}, ${trialEnd}, 'trial_active', ${now}, ${req.ip || null})
+        `);
+
+        await db.execute(sql`
+          INSERT INTO onboarding_progress (company_id, user_id)
+          VALUES (${companyId}, ${userId})
+        `);
+
+        await db.execute(sql`
+          INSERT INTO analytics_events (event_name, user_id, company_id, page_source, metadata)
+          VALUES ('signup_completed', ${userId}, ${companyId}, 'signup', ${JSON.stringify({ plan: 'starter', employeeCount })})
+        `);
+
+        await db.execute(sql`COMMIT`);
+      } catch (txErr) {
+        await db.execute(sql`ROLLBACK`);
+        throw txErr;
+      }
 
       res.json({
         message: "Trial account created successfully",
@@ -7458,12 +7480,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!user?.companyId) return res.status(400).json({ message: "No company associated" });
 
       const { step } = req.body;
-      const validSteps = ["step_company_details", "step_first_employee", "step_pay_schedule", "step_payroll_config", "step_time_clock", "step_payroll_preview"];
-      if (!validSteps.includes(step)) return res.status(400).json({ message: "Invalid step" });
+      const stepQueries: Record<string, any> = {
+        step_company_details: sql`UPDATE onboarding_progress SET step_company_details = TRUE WHERE company_id = ${user.companyId} AND user_id = ${user.id}`,
+        step_first_employee: sql`UPDATE onboarding_progress SET step_first_employee = TRUE WHERE company_id = ${user.companyId} AND user_id = ${user.id}`,
+        step_pay_schedule: sql`UPDATE onboarding_progress SET step_pay_schedule = TRUE WHERE company_id = ${user.companyId} AND user_id = ${user.id}`,
+        step_payroll_config: sql`UPDATE onboarding_progress SET step_payroll_config = TRUE WHERE company_id = ${user.companyId} AND user_id = ${user.id}`,
+        step_time_clock: sql`UPDATE onboarding_progress SET step_time_clock = TRUE WHERE company_id = ${user.companyId} AND user_id = ${user.id}`,
+        step_payroll_preview: sql`UPDATE onboarding_progress SET step_payroll_preview = TRUE WHERE company_id = ${user.companyId} AND user_id = ${user.id}`,
+      };
+      if (!stepQueries[step]) return res.status(400).json({ message: "Invalid step" });
 
-      await db.execute(sql`
-        UPDATE onboarding_progress SET ${sql.raw(step)} = TRUE WHERE company_id = ${user.companyId} AND user_id = ${user.id}
-      `);
+      await db.execute(stepQueries[step]);
 
       const allDone = await db.execute(sql`
         SELECT * FROM onboarding_progress WHERE company_id = ${user.companyId} AND user_id = ${user.id}
@@ -7485,7 +7512,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/analytics/event", async (req, res) => {
     try {
       const { eventName, pageSource, metadata, sessionId } = req.body;
-      if (!eventName) return res.status(400).json({ message: "eventName is required" });
+      if (!eventName || typeof eventName !== "string") return res.status(400).json({ message: "eventName is required" });
+      const validEvents = ["pricing_page_view", "signup_started", "signup_completed", "trial_started", "view_demo_click", "demo_started", "subscription_activated"];
+      if (!validEvents.includes(eventName)) return res.status(400).json({ message: "Invalid event name" });
 
       await db.execute(sql`
         INSERT INTO analytics_events (event_name, user_id, company_id, page_source, metadata, session_id, ip_address)
