@@ -7336,11 +7336,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(409).json({ message: "An account with this email already exists. Please log in instead." });
       }
 
-      const existingUser = await db.execute(sql`SELECT id FROM users WHERE username = ${email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "")} LIMIT 1`);
-      if (existingUser.rows.length > 0) {
-        // username collision handled by appending random number (already done below)
-      }
-
       const now = new Date();
       const trialEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
@@ -7351,7 +7346,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
       const companyId = companyResult.rows[0].id as string;
 
-      const username = email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "") + Math.floor(Math.random() * 1000);
+      const baseUsername = email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
+      let username = baseUsername + Math.floor(Math.random() * 1000);
+      const existingUser = await db.execute(sql`SELECT id FROM users WHERE username = ${username} LIMIT 1`);
+      if (existingUser.rows.length > 0) {
+        username = baseUsername + Date.now().toString(36);
+      }
       const tempPassword = "Trial" + Math.random().toString(36).substring(2, 10) + "!";
       const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
