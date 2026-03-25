@@ -204,8 +204,8 @@ function StubSummarySection({
       }}>
         {/* LEFT SECTION: Addresses positioned for #10 double-window envelope */}
         <div style={{ position: "absolute", left: "0.35in", top: "0", width: "3.95in", height: "100%" }}>
-          {/* TOP WINDOW: Company return address — 22mm from top of section, 9mm from left */}
-          <div style={{ position: "absolute", top: "22mm", left: "9mm", fontSize: "9px" }}>
+          {/* TOP WINDOW: Company return address — 12mm from top of section, 9mm from left */}
+          <div style={{ position: "absolute", top: "12mm", left: "9mm", fontSize: "9px" }}>
             <div style={{ fontWeight: "bold", fontSize: "10px", marginBottom: "2px" }}>{company.name}</div>
             {company.address && <div style={{ fontSize: "8px", lineHeight: "1.1" }}>{company.address}</div>}
             {(company.city || company.state || company.zip) && (
