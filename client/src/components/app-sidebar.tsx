@@ -61,7 +61,6 @@ import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -272,17 +271,18 @@ function LogoutButton() {
   const { user, logout } = useAuth();
   return (
     <div className="flex items-center justify-between gap-2 flex-wrap">
-      <span className="text-xs text-sidebar-foreground/70 truncate">
+      <span className="text-sm text-sidebar-foreground/70 truncate font-medium">
         {user?.username}
       </span>
       <Button
         variant="ghost"
         size="sm"
         onClick={() => logout()}
+        className="h-9 px-3"
         data-testid="button-logout"
       >
-        <LogOut className="h-4 w-4 mr-1" />
-        <span className="text-xs">Logout</span>
+        <LogOut className="h-4 w-4 mr-2" />
+        <span className="text-sm">Logout</span>
       </Button>
     </div>
   );
@@ -326,12 +326,12 @@ export function AppSidebar() {
 
   return (
     <Sidebar>
-      <SidebarHeader className="p-4">
+      <SidebarHeader className="p-5 pb-4">
         <Link href="/">
           <div className="flex items-center gap-3 cursor-pointer" data-testid="link-logo">
             <img src={paylinkLogo} alt="PayLink" className="h-12 w-12 object-contain" />
             <div className="flex flex-col">
-              <span className="text-sm font-semibold tracking-tight">PayLink</span>
+              <span className="text-base font-bold tracking-tight">PayLink</span>
               <span className="text-xs text-sidebar-foreground/60">HR & Payroll</span>
             </div>
           </div>
@@ -346,10 +346,10 @@ export function AppSidebar() {
                 if (section.items.length === 0) {
                   return (
                     <SidebarMenuItem key={section.label}>
-                      <SidebarMenuButton asChild isActive={isActive(section.url)}>
+                      <SidebarMenuButton asChild isActive={isActive(section.url)} size="lg">
                         <Link href={section.url} data-testid={`link-nav-${section.label.toLowerCase()}`}>
-                          <section.icon className="h-4 w-4 text-teal-accent" />
-                          <span>{section.label}</span>
+                          <section.icon className="h-5 w-5 text-teal-accent" />
+                          <span className="text-[15px] font-medium">{section.label}</span>
                         </Link>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
@@ -360,9 +360,9 @@ export function AppSidebar() {
                   <Collapsible key={section.label} defaultOpen={isActive(section.url)} className="group/collapsible">
                     <SidebarMenuItem>
                       <CollapsibleTrigger asChild>
-                        <SidebarMenuButton isActive={isActive(section.url)} data-testid={`link-nav-${section.label.toLowerCase()}`}>
-                          <section.icon className="h-4 w-4 text-teal-accent" />
-                          <span>{section.label}</span>
+                        <SidebarMenuButton isActive={isActive(section.url)} size="lg" data-testid={`link-nav-${section.label.toLowerCase()}`}>
+                          <section.icon className="h-5 w-5 text-teal-accent" />
+                          <span className="text-[15px] font-medium">{section.label}</span>
                           <ChevronDown className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
                         </SidebarMenuButton>
                       </CollapsibleTrigger>
@@ -370,9 +370,10 @@ export function AppSidebar() {
                         <SidebarMenuSub>
                           {section.items.map((item) => (
                             <SidebarMenuSubItem key={item.title}>
-                              <SidebarMenuSubButton asChild isActive={isSubItemActive(item.url)}>
+                              <SidebarMenuSubButton asChild isActive={isSubItemActive(item.url)} size="md">
                                 <Link href={item.url} data-testid={`link-subnav-${item.title.toLowerCase().replace(/[\s/&]/g, "-")}`}>
-                                  <span>{item.title}</span>
+                                  <item.icon className="h-4 w-4 text-teal-accent/70" />
+                                  <span className="text-[14px]">{item.title}</span>
                                 </Link>
                               </SidebarMenuSubButton>
                             </SidebarMenuSubItem>

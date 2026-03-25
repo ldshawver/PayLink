@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { OnboardingChecklist } from "@/components/onboarding-checklist";
-import type { Worker, TimeEntry, Schedule } from "@shared/schema";
+import type { Worker, TimeEntry, TimePunch, Schedule } from "@shared/schema";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,8 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   LayoutDashboard,
   Settings,
@@ -29,6 +31,11 @@ import {
   FileText,
   TrendingUp,
   Newspaper,
+  Play,
+  Square,
+  Coffee,
+  ArrowRight,
+  LogIn,
 } from "lucide-react";
 
 const DASHLET_STORAGE_KEY = "paylink-dashlets";
