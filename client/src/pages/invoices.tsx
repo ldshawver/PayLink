@@ -16,7 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Plus, Search, Edit, Trash2, FileText, DollarSign, Send, Eye, Loader2,
-  CalendarDays, Clock, CheckCircle, AlertCircle, XCircle, Copy,
+  CalendarDays, Clock, CheckCircle, AlertCircle, XCircle, Copy, Link2,
   CreditCard, Building2, Zap, ArrowRight, Settings, Info, Sparkles,
   TrendingDown, Shield,
 } from "lucide-react";
@@ -832,6 +832,18 @@ export default function InvoicesPage() {
                                 <DollarSign className="h-4 w-4 mr-1" /> Pay
                               </Button>
                             )}
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button variant="ghost" size="sm" onClick={() => {
+                                  const payUrl = `${window.location.origin}/pay/${invoice.id}`;
+                                  navigator.clipboard.writeText(payUrl);
+                                  toast({ title: "Payment Link Copied", description: "Share this link with your customer to collect payment" });
+                                }} data-testid={`button-copy-pay-link-${invoice.id}`}>
+                                  <Link2 className="h-4 w-4 text-teal-600" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Copy Payment Link</TooltipContent>
+                            </Tooltip>
                             <Button variant="ghost" size="sm" onClick={() => handleEdit(invoice)} data-testid={`button-edit-invoice-${invoice.id}`}>
                               <Edit className="h-4 w-4" />
                             </Button>

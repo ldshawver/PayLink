@@ -235,7 +235,8 @@ export async function registerRoutes(
   });
 
   app.use("/api", (req, res, next) => {
-    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches") {
+    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches"
+      || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")) {
       return next();
     }
     requireAuth(req, res, next);
@@ -8099,6 +8100,243 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         potentialSavings: savings,
       });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to calculate fee") }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // STRIPE PAYMENT ROUTES (Public - no auth required for customer payments)
+  // ══════════════════════════════════════════════════════════════════════
+
+  app.get("/api/stripe/publishable-key", async (_req, res) => {
+    try {
+      const { getStripePublishableKey } = await import('./stripeClient');
+      const key = await getStripePublishableKey();
+      res.json({ publishableKey: key });
+    } catch (e) {
+      res.status(500).json({ message: "Stripe not configured" });
+    }
+  });
+
+  app.get("/api/pay/:invoiceId", async (req, res) => {
+    try {
+      const { invoiceId } = req.params;
+      const invoiceResult = await db.execute(sql`
+        SELECT i.*, c.name as company_name, c.id as company_id,
+          cust.customer_name as customer_name, cust.email as customer_email
+        FROM invoices i
+        JOIN companies c ON i.company_id = c.id
+        LEFT JOIN customers cust ON i.customer_id = cust.id
+        WHERE i.id = ${invoiceId}
+      `);
+      const invoice = invoiceResult.rows[0];
+      if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+      if (invoice.status === "paid") return res.json({ invoice, alreadyPaid: true });
+
+      const configs = await storage.getPaymentMethodConfigs(invoice.company_id as string);
+      const enabledConfigs = configs.filter(c => c.isEnabled && (c.methodType === 'ach' || c.methodType === 'card'));
+
+      res.json({
+        invoice: {
+          id: invoice.id,
+          invoiceNumber: invoice.invoice_number,
+          totalAmount: invoice.total_amount,
+          status: invoice.status,
+          dueDate: invoice.due_date,
+          companyName: invoice.company_name,
+          customerName: invoice.customer_name,
+          customerEmail: invoice.customer_email,
+        },
+        paymentMethods: enabledConfigs.map(c => ({
+          methodType: c.methodType,
+          displayName: c.displayName,
+          description: c.description,
+          feeType: c.feeType,
+          feePercent: c.feePercent,
+          feeFlat: c.feeFlat,
+          feeCap: c.feeCap,
+          processingTime: c.processingTime,
+          isRecommended: c.isRecommended,
+          feePassedToCustomer: c.feePassedToCustomer,
+        })),
+        alreadyPaid: false,
+      });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to load invoice") });
+    }
+  });
+
+  app.post("/api/pay/:invoiceId/create-payment-intent", async (req, res) => {
+    try {
+      const { getUncachableStripeClient } = await import('./stripeClient');
+      const stripe = await getUncachableStripeClient();
+      const { invoiceId } = req.params;
+      const { paymentMethodType, customerEmail, customerName } = req.body;
+
+      if (!paymentMethodType || !["ach", "card"].includes(paymentMethodType)) {
+        return res.status(400).json({ message: "Invalid payment method type" });
+      }
+
+      const invoiceResult = await db.execute(sql`
+        SELECT i.*, c.id as company_id FROM invoices i
+        JOIN companies c ON i.company_id = c.id
+        WHERE i.id = ${invoiceId}
+      `);
+      const invoice = invoiceResult.rows[0];
+      if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+      if (invoice.status === "paid") return res.status(400).json({ message: "Invoice already paid" });
+
+      const configs = await storage.getPaymentMethodConfigs(invoice.company_id as string);
+      const config = configs.find(c => c.methodType === paymentMethodType && c.isEnabled);
+      if (!config) return res.status(400).json({ message: "Payment method not available" });
+
+      const baseAmount = parseFloat(invoice.total_amount as string);
+      let feeAmount = 0;
+      if (config.feePassedToCustomer) {
+        if (config.feeType === "percentage") {
+          feeAmount = baseAmount * (parseFloat(config.feePercent || "0") / 100);
+        } else if (config.feeType === "flat") {
+          feeAmount = parseFloat(config.feeFlat || "0");
+        } else if (config.feeType === "both") {
+          feeAmount = baseAmount * (parseFloat(config.feePercent || "0") / 100) + parseFloat(config.feeFlat || "0");
+        }
+        if (config.feeCap && feeAmount > parseFloat(config.feeCap)) {
+          feeAmount = parseFloat(config.feeCap);
+        }
+      }
+      const totalCharged = Math.round((baseAmount + feeAmount) * 100);
+
+      let stripeCustomer;
+      const existingCustomers = await stripe.customers.list({
+        email: customerEmail,
+        limit: 1,
+      });
+      if (existingCustomers.data.length > 0) {
+        stripeCustomer = existingCustomers.data[0];
+      } else {
+        stripeCustomer = await stripe.customers.create({
+          email: customerEmail,
+          name: customerName || undefined,
+          metadata: { paylink_invoice_id: invoiceId },
+        });
+      }
+
+      const paymentMethodTypes: any[] = paymentMethodType === 'ach'
+        ? ['us_bank_account']
+        : ['card'];
+
+      const intentParams: any = {
+        amount: totalCharged,
+        currency: 'usd',
+        customer: stripeCustomer.id,
+        payment_method_types: paymentMethodTypes,
+        metadata: {
+          paylink_invoice_id: invoiceId,
+          paylink_company_id: invoice.company_id as string,
+          payment_method_type: paymentMethodType,
+          base_amount: baseAmount.toString(),
+          fee_amount: feeAmount.toFixed(2),
+        },
+      };
+
+      if (paymentMethodType === 'ach') {
+        intentParams.payment_method_options = {
+          us_bank_account: {
+            financial_connections: { permissions: ['payment_method'] },
+          },
+        };
+      }
+
+      const paymentIntent = await stripe.paymentIntents.create(intentParams);
+
+      await db.execute(sql`
+        INSERT INTO payments (company_id, invoice_id, payment_method, amount, base_amount, fee_amount, total_charged,
+          stripe_payment_intent_id, stripe_customer_id, status, mandate_accepted)
+        VALUES (${invoice.company_id}, ${invoiceId}, ${paymentMethodType},
+          ${baseAmount.toString()}, ${baseAmount.toString()}, ${feeAmount.toFixed(2)},
+          ${(totalCharged / 100).toFixed(2)}, ${paymentIntent.id}, ${stripeCustomer.id},
+          'pending', ${paymentMethodType === 'ach'})
+      `);
+
+      if (paymentMethodType === 'ach') {
+        await db.execute(sql`
+          UPDATE invoices SET status = 'processing' WHERE id = ${invoiceId}
+        `);
+      }
+
+      res.json({
+        clientSecret: paymentIntent.client_secret,
+        customerId: stripeCustomer.id,
+        baseAmount: Math.round(baseAmount * 100) / 100,
+        feeAmount: Math.round(feeAmount * 100) / 100,
+        totalCharged: totalCharged / 100,
+        paymentIntentId: paymentIntent.id,
+      });
+    } catch (e: any) {
+      console.error("Create payment intent error:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to create payment") });
+    }
+  });
+
+  app.post("/api/pay/:invoiceId/confirm-payment", async (req, res) => {
+    try {
+      const { invoiceId } = req.params;
+      const { paymentIntentId, paymentMethodType } = req.body;
+
+      if (!paymentIntentId) return res.status(400).json({ message: "paymentIntentId required" });
+
+      const { getUncachableStripeClient } = await import('./stripeClient');
+      const stripe = await getUncachableStripeClient();
+      const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+      if (pi.metadata?.paylink_invoice_id !== invoiceId) {
+        return res.status(403).json({ message: "Payment intent does not match this invoice" });
+      }
+
+      let newStatus = "pending";
+      if (pi.status === "succeeded") {
+        newStatus = "succeeded";
+      } else if (pi.status === "processing") {
+        newStatus = "processing";
+      } else if (pi.status === "requires_action" || pi.status === "requires_confirmation") {
+        newStatus = "pending";
+      } else if (pi.status === "canceled") {
+        newStatus = "failed";
+      }
+
+      await db.execute(sql`
+        UPDATE payments SET
+          status = ${newStatus},
+          processor_transaction_id = ${pi.id},
+          paid_at = ${newStatus === "succeeded" ? sql`NOW()` : sql`NULL`},
+          updated_at = NOW()
+        WHERE stripe_payment_intent_id = ${paymentIntentId}
+      `);
+
+      if (newStatus === "succeeded") {
+        await db.execute(sql`
+          UPDATE invoices SET status = 'paid', paid_at = NOW(), amount_paid = total_amount WHERE id = ${invoiceId}
+        `);
+      } else if (newStatus === "processing") {
+        await db.execute(sql`UPDATE invoices SET status = 'processing' WHERE id = ${invoiceId}`);
+      } else if (newStatus === "failed") {
+        await db.execute(sql`UPDATE invoices SET status = 'overdue' WHERE id = ${invoiceId}`);
+      }
+
+      res.json({ status: newStatus, paymentMethodType });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to confirm payment") });
+    }
+  });
+
+
+  app.get("/api/payments/stripe-status/:paymentIntentId", async (req, res) => {
+    try {
+      const { getUncachableStripeClient } = await import('./stripeClient');
+      const stripe = await getUncachableStripeClient();
+      const pi = await stripe.paymentIntents.retrieve(req.params.paymentIntentId);
+      res.json({ status: pi.status, amount: pi.amount, currency: pi.currency });
+    } catch (e) {
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to check payment status") });
+    }
   });
 
   // ══════════════════════════════════════════════════════════════════════

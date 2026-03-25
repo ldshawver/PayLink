@@ -49,3 +49,6 @@ waitForPort = 5000
 SMTP_HOST = "smtp.office365.com"
 SMTP_PORT = "587"
 SMTP_TLS = "true"
+
+[agent]
+integrations = ["stripe:1.0.0"]

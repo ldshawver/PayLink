@@ -71,6 +71,74 @@ app.get("/ready", async (_req, res) => {
   }
 });
 
+app.post(
+  '/api/stripe/webhook',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    const signature = req.headers['stripe-signature'];
+    if (!signature) {
+      return res.status(400).json({ error: 'Missing stripe-signature' });
+    }
+    try {
+      const { WebhookHandlers } = await import('./webhookHandlers');
+      const sig = Array.isArray(signature) ? signature[0] : signature;
+      if (!Buffer.isBuffer(req.body)) {
+        console.error('STRIPE WEBHOOK ERROR: req.body is not a Buffer');
+        return res.status(500).json({ error: 'Webhook processing error' });
+      }
+      await WebhookHandlers.processWebhook(req.body as Buffer, sig);
+
+      const event = JSON.parse(req.body.toString());
+      const eventType = event?.type;
+      const { db } = await import('./db');
+      const { sql } = await import('drizzle-orm');
+
+      if (eventType === "payment_intent.succeeded") {
+        const pi = event.data.object;
+        const invoiceId = pi.metadata?.paylink_invoice_id;
+        if (invoiceId) {
+          await db.execute(sql`
+            UPDATE payments SET status = 'succeeded', paid_at = NOW(), processor_transaction_id = ${pi.id}, updated_at = NOW()
+            WHERE stripe_payment_intent_id = ${pi.id}
+          `);
+          await db.execute(sql`
+            UPDATE invoices SET status = 'paid', paid_at = NOW(), amount_paid = total_amount WHERE id = ${invoiceId}
+          `);
+        }
+      } else if (eventType === "payment_intent.payment_failed") {
+        const pi = event.data.object;
+        const invoiceId = pi.metadata?.paylink_invoice_id;
+        if (invoiceId) {
+          const failReason = pi.last_payment_error?.message || "Payment failed";
+          await db.execute(sql`
+            UPDATE payments SET status = 'failed', failure_reason = ${failReason}, failed_at = NOW(), updated_at = NOW()
+            WHERE stripe_payment_intent_id = ${pi.id}
+          `);
+          await db.execute(sql`UPDATE invoices SET status = 'overdue' WHERE id = ${invoiceId}`);
+        }
+      } else if (eventType === "charge.refunded" || eventType === "charge.dispute.created") {
+        const charge = event.data.object;
+        const piId = charge.payment_intent;
+        if (piId) {
+          await db.execute(sql`
+            UPDATE payments SET status = 'failed', failure_reason = 'Payment returned/disputed', updated_at = NOW()
+            WHERE stripe_payment_intent_id = ${piId}
+          `);
+          const paymentResult = await db.execute(sql`SELECT invoice_id FROM payments WHERE stripe_payment_intent_id = ${piId} LIMIT 1`);
+          if (paymentResult.rows[0]?.invoice_id) {
+            await db.execute(sql`UPDATE invoices SET status = 'overdue' WHERE id = ${paymentResult.rows[0].invoice_id}`);
+          }
+        }
+      }
+
+      res.status(200).json({ received: true });
+    } catch (error: any) {
+      console.error('Webhook error:', error.message);
+      res.status(400).json({ error: 'Webhook processing error' });
+    }
+  }
+);
+
 app.use(
   express.json({
     verify: (req, _res, buf) => {
@@ -954,6 +1022,10 @@ app.use((req, res, next) => {
     await run("payments.base_amount", sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS base_amount NUMERIC DEFAULT '0'`);
     await run("payments.fee_amount", sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS fee_amount NUMERIC DEFAULT '0'`);
     await run("payments.total_charged", sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS total_charged NUMERIC DEFAULT '0'`);
+    await run("payments.stripe_payment_intent_id", sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_payment_intent_id TEXT`);
+    await run("payments.stripe_customer_id", sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`);
+    await run("payments.mandate_accepted", sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS mandate_accepted BOOLEAN DEFAULT FALSE`);
+    await run("payment_method_configs.fee_passed_to_customer", sql`ALTER TABLE payment_method_configs ADD COLUMN IF NOT EXISTS fee_passed_to_customer BOOLEAN DEFAULT TRUE`);
 
     await run("portal_access_tokens table", sql`CREATE TABLE IF NOT EXISTS portal_access_tokens (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -975,6 +1047,29 @@ app.use((req, res, next) => {
     await seedDatabase();
   } catch (e) {
     console.log("Seed skipped or failed:", (e as Error).message);
+  }
+
+  try {
+    const { runMigrations } = await import('stripe-replit-sync');
+    const { getStripeSync } = await import('./stripeClient');
+    console.log('Initializing Stripe schema...');
+    await runMigrations({ databaseUrl: process.env.DATABASE_URL! });
+    console.log('Stripe schema ready');
+
+    const stripeSync = await getStripeSync();
+    const replitDomains = process.env.REPLIT_DOMAINS;
+    if (replitDomains) {
+      const webhookBaseUrl = `https://${replitDomains.split(',')[0]}`;
+      console.log('Setting up Stripe managed webhook...');
+      await stripeSync.findOrCreateManagedWebhook(`${webhookBaseUrl}/api/stripe/webhook`);
+      console.log('Stripe webhook configured');
+    }
+
+    stripeSync.syncBackfill()
+      .then(() => console.log('Stripe data synced'))
+      .catch((err: any) => console.error('Stripe sync error:', err.message));
+  } catch (stripeErr: any) {
+    console.warn('Stripe init skipped:', stripeErr.message);
   }
 
   await registerRoutes(httpServer, app);

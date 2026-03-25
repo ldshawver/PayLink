@@ -29,6 +29,7 @@ import MyProfilePage from "@/pages/my-profile";
 import PayrollAuditPage from "@/pages/payroll-audit";
 import CustomersPage from "@/pages/customers";
 import InvoicesPage from "@/pages/invoices";
+import PayInvoicePage from "@/pages/pay-invoice";
 import LoginPage from "@/pages/login";
 import { Loader2, Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -157,6 +158,10 @@ function OnboardingRedirect({ children }: { children: React.ReactNode }) {
 function AppContent() {
   const { user, isLoading } = useAuth();
   const [location] = useLocation();
+
+  if (location.startsWith("/pay/")) {
+    return <PayInvoicePage />;
+  }
 
   if (location === "/time-clock") {
     return <TimeClock />;
