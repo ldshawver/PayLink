@@ -7635,8 +7635,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/customers", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
+      const customerType = req.query.customerType as string | undefined;
       if (!companyId) return res.status(400).json({ message: "companyId is required" });
-      const rows = await storage.getCustomers(companyId);
+      const rows = await storage.getCustomers(companyId, customerType);
       res.json(rows);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch customers") }); }
   });
@@ -7941,6 +7942,85 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!r) return res.status(404).json({ message: "Notification not found" });
       res.json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update notification") }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // VENDOR PORTAL (PUBLIC - no auth required, token-based)
+  // ══════════════════════════════════════════════════════════════════════
+  app.post("/api/portal/generate-token", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const { companyId, customerId, tokenType } = req.body;
+      if (!companyId || !customerId) return res.status(400).json({ message: "companyId and customerId required" });
+      const crypto = await import("crypto");
+      const token = crypto.randomBytes(32).toString("hex");
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      const r = await storage.createPortalAccessToken({
+        companyId,
+        customerId,
+        token,
+        tokenType: tokenType || "vendor_invoice_upload",
+        expiresAt,
+      });
+      res.status(201).json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to generate portal token") }); }
+  });
+
+  app.get("/api/portal/validate", async (req, res) => {
+    try {
+      const token = req.query.token as string;
+      if (!token) return res.status(400).json({ message: "Token required" });
+      const r = await storage.getPortalAccessTokenByToken(token);
+      if (!r) return res.status(404).json({ message: "Invalid or expired token" });
+      if (r.expiresAt && new Date(r.expiresAt) < new Date()) {
+        return res.status(410).json({ message: "Token has expired" });
+      }
+      const customer = r.customerId ? await storage.getCustomer(r.customerId) : null;
+      const company = await storage.getCompany(r.companyId);
+      res.json({
+        valid: true,
+        companyName: company?.name || "Unknown",
+        vendorName: customer?.customerName || "Unknown",
+        customerId: r.customerId,
+        companyId: r.companyId,
+        tokenType: r.tokenType,
+      });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to validate token") }); }
+  });
+
+  app.post("/api/portal/submit-invoice", async (req, res) => {
+    try {
+      const { token, ...invoiceData } = req.body;
+      if (!token) return res.status(400).json({ message: "Token required" });
+      const portalToken = await storage.getPortalAccessTokenByToken(token);
+      if (!portalToken) return res.status(404).json({ message: "Invalid token" });
+      if (portalToken.expiresAt && new Date(portalToken.expiresAt) < new Date()) {
+        return res.status(410).json({ message: "Token has expired" });
+      }
+      const invoice = await storage.createInvoice({
+        companyId: portalToken.companyId,
+        customerId: portalToken.customerId || undefined,
+        invoiceNumber: `VINV-${Date.now().toString(36).toUpperCase()}`,
+        status: "draft",
+        issueDate: new Date(),
+        subtotal: invoiceData.subtotal || "0",
+        total: invoiceData.total || "0",
+        notes: invoiceData.notes || "",
+        ...invoiceData,
+      });
+      if (invoiceData.lineItems && Array.isArray(invoiceData.lineItems)) {
+        for (const item of invoiceData.lineItems) {
+          await storage.createInvoiceLineItem({
+            invoiceId: invoice.id,
+            description: item.description || "",
+            quantity: item.quantity || "1",
+            unitPrice: item.unitPrice || "0",
+            total: item.total || "0",
+            taxable: item.taxable ?? false,
+          });
+        }
+      }
+      res.status(201).json({ message: "Invoice submitted successfully", invoiceId: invoice.id });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to submit invoice") }); }
   });
 
   return httpServer;

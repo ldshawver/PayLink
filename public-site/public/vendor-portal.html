@@ -9,6 +9,32 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/style.css">
+  <style>
+    .portal-form-section { max-width: 640px; margin: 0 auto; }
+    .portal-input { width: 100%; padding: 12px 16px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.05); color: #fff; font-size: 0.95rem; margin-top: 6px; outline: none; transition: border-color 0.2s; }
+    .portal-input:focus { border-color: var(--teal); }
+    .portal-input::placeholder { color: rgba(255,255,255,0.3); }
+    .portal-label { display: block; font-size: 0.85rem; color: rgba(255,255,255,0.6); margin-top: 16px; font-weight: 500; }
+    .portal-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .portal-line-item { display: grid; grid-template-columns: 3fr 1fr 1fr 1fr auto; gap: 8px; align-items: end; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    .portal-line-item input { padding: 8px 10px; font-size: 0.85rem; }
+    .portal-btn-add { background: none; border: 1px dashed rgba(255,255,255,0.2); color: rgba(255,255,255,0.5); padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 0.85rem; margin-top: 8px; transition: all 0.2s; }
+    .portal-btn-add:hover { border-color: var(--teal); color: var(--teal); }
+    .portal-btn-remove { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 1.2rem; padding: 4px 8px; }
+    .portal-submit-btn { width: 100%; padding: 14px; border: none; border-radius: 12px; background: linear-gradient(135deg, var(--teal), #3b82f6); color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 24px; transition: transform 0.2s, box-shadow 0.2s; }
+    .portal-submit-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(13,148,136,0.3); }
+    .portal-submit-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .portal-success { text-align: center; padding: 48px 24px; }
+    .portal-success h2 { color: #10b981; margin-bottom: 12px; }
+    .portal-error { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); padding: 12px 16px; border-radius: 10px; color: #ef4444; margin-top: 16px; font-size: 0.9rem; }
+    .portal-totals { margin-top: 16px; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 10px; }
+    .portal-totals-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 0.95rem; }
+    .portal-totals-row.total { font-weight: 700; font-size: 1.1rem; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px; margin-top: 4px; }
+    .portal-token-entry { max-width: 480px; margin: 0 auto; text-align: center; }
+    .portal-token-entry p { color: rgba(255,255,255,0.5); margin-bottom: 24px; }
+    .portal-verified { display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3); border-radius: 10px; color: #10b981; font-size: 0.9rem; margin-bottom: 24px; }
+    textarea.portal-input { min-height: 80px; resize: vertical; }
+  </style>
 </head>
 <body>
 
@@ -19,7 +45,7 @@
         <li><a href="/features">Features</a></li>
         <li><a href="/pricing">Pricing</a></li>
         <li><a href="/security">Security</a></li>
-        <li><a href="https://app.mypaylink.app" class="nav-cta">Login →</a></li>
+        <li><a href="https://app.mypaylink.app" class="nav-cta">Login &rarr;</a></li>
       </ul>
       <button class="mobile-toggle" aria-label="Menu">&#9776;</button>
     </div>
@@ -30,7 +56,7 @@
       <a href="/vendor-portal">Vendor Portal</a>
       <a href="/clock">Quick Clock In</a>
       <a href="/contact">Book a Demo</a>
-      <a href="https://app.mypaylink.app">Login →</a>
+      <a href="https://app.mypaylink.app">Login &rarr;</a>
     </div>
   </nav>
 
@@ -38,30 +64,70 @@
     <div class="container">
       <span class="section-label fade-up">Vendor & Contractor Portal</span>
       <h1 class="fade-up stagger-1">Your Work. Your Portal.</h1>
-      <p class="fade-up stagger-2">Submit invoices, track payments, view 1099 forms, and manage your profile — all in one place.</p>
+      <p class="fade-up stagger-2">Submit invoices, track payments, view 1099 forms, and manage your profile &mdash; all in one place.</p>
     </div>
   </section>
 
   <section>
     <div class="container">
-      <div class="portal-grid">
-        <div class="portal-card fade-up stagger-1">
-          <div class="portal-icon">📄</div>
-          <h3>Submit Invoices</h3>
-          <p>Upload invoices directly through the portal. Track them from submission through approval to payment.</p>
-          <a href="https://app.mypaylink.app" class="btn-primary">Login to Submit →</a>
+      <div id="portalContent">
+        <div id="tokenEntry" class="portal-token-entry">
+          <h2 class="section-title" style="font-size: 1.5rem;">Enter Your Portal Access Token</h2>
+          <p>Your company administrator will provide you with a unique access token. Paste it below to submit invoices.</p>
+          <input type="text" id="tokenInput" class="portal-input" placeholder="Paste your access token here..." style="text-align: center; font-family: monospace;">
+          <button id="btnValidateToken" class="portal-submit-btn" style="margin-top: 16px;">Access Portal</button>
+          <div id="tokenError" class="portal-error" style="display: none;"></div>
         </div>
-        <div class="portal-card fade-up stagger-2">
-          <div class="portal-icon">💳</div>
-          <h3>Track Payments</h3>
-          <p>View payment history, pending invoices, and upcoming payments. Know exactly when you're getting paid.</p>
-          <a href="https://app.mypaylink.app" class="btn-secondary">View Payments →</a>
+
+        <div id="invoiceForm" style="display: none;" class="portal-form-section">
+          <div id="portalVerified" class="portal-verified"></div>
+
+          <h2 class="section-title" style="font-size: 1.5rem; text-align: center;">Submit Invoice</h2>
+
+          <label class="portal-label">Invoice Number / Reference</label>
+          <input type="text" id="invNumber" class="portal-input" placeholder="e.g. INV-2026-001">
+
+          <div class="portal-row">
+            <div>
+              <label class="portal-label">Invoice Date</label>
+              <input type="date" id="invDate" class="portal-input">
+            </div>
+            <div>
+              <label class="portal-label">Due Date</label>
+              <input type="date" id="invDueDate" class="portal-input">
+            </div>
+          </div>
+
+          <label class="portal-label" style="margin-top: 24px; margin-bottom: 8px;">Line Items</label>
+          <div id="lineItems">
+            <div class="portal-line-item">
+              <div><label class="portal-label" style="margin-top:0;">Description</label></div>
+              <div><label class="portal-label" style="margin-top:0;">Qty</label></div>
+              <div><label class="portal-label" style="margin-top:0;">Rate</label></div>
+              <div><label class="portal-label" style="margin-top:0;">Amount</label></div>
+              <div></div>
+            </div>
+          </div>
+          <div id="lineItemRows"></div>
+          <button class="portal-btn-add" id="btnAddLine">+ Add Line Item</button>
+
+          <div class="portal-totals">
+            <div class="portal-totals-row"><span>Subtotal</span><span id="subtotalDisplay">$0.00</span></div>
+            <div class="portal-totals-row total"><span>Total</span><span id="totalDisplay">$0.00</span></div>
+          </div>
+
+          <label class="portal-label">Notes / Description of Work</label>
+          <textarea id="invNotes" class="portal-input" placeholder="Describe the work performed, services rendered, etc."></textarea>
+
+          <button id="btnSubmitInvoice" class="portal-submit-btn">Submit Invoice</button>
+          <div id="submitError" class="portal-error" style="display: none;"></div>
         </div>
-        <div class="portal-card fade-up stagger-3">
-          <div class="portal-icon">📋</div>
-          <h3>1099 Tax Forms</h3>
-          <p>Access your 1099-NEC forms at year end. Download and print for your tax filing — no waiting for mail.</p>
-          <a href="https://app.mypaylink.app" class="btn-secondary">View Tax Forms →</a>
+
+        <div id="successView" style="display: none;" class="portal-success">
+          <div style="font-size: 3rem;">&#10003;</div>
+          <h2>Invoice Submitted Successfully</h2>
+          <p style="color: rgba(255,255,255,0.5);">Your invoice has been submitted and will be reviewed by the company administrator. You will be notified once it's approved.</p>
+          <button class="portal-submit-btn" style="max-width: 300px; margin: 24px auto 0;" onclick="location.reload()">Submit Another Invoice</button>
         </div>
       </div>
     </div>
@@ -74,34 +140,22 @@
         <div class="why-item fade-up stagger-1">
           <div class="why-number">1</div>
           <h3>Get Invited</h3>
-          <p>Your company admin sends you a login to the PayLink contractor portal.</p>
+          <p>Your company admin generates a portal access token and shares it with you.</p>
         </div>
         <div class="why-item fade-up stagger-2">
           <div class="why-number">2</div>
-          <h3>Submit Work</h3>
-          <p>Upload invoices, log hours, or submit receipts through the portal.</p>
+          <h3>Enter Token</h3>
+          <p>Paste your access token above to unlock the invoice submission form.</p>
         </div>
         <div class="why-item fade-up stagger-3">
           <div class="why-number">3</div>
-          <h3>Get Approved</h3>
-          <p>Your submissions are reviewed and approved by the appropriate manager.</p>
+          <h3>Submit Invoice</h3>
+          <p>Fill in your line items, totals, and notes. Submit directly to the company.</p>
         </div>
         <div class="why-item fade-up stagger-4">
           <div class="why-number">4</div>
           <h3>Get Paid</h3>
-          <p>Payments are processed via direct deposit or check with your next payroll cycle.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <div class="container">
-      <div class="cta-banner fade-up">
-        <h2>Ready to Access Your Portal?</h2>
-        <p>Log in with the credentials provided by your company administrator.</p>
-        <div class="hero-buttons" style="justify-content: center;">
-          <a href="https://app.mypaylink.app" class="btn-primary">Login Now →</a>
+          <p>Payments are processed via direct deposit or check with the next payroll cycle.</p>
         </div>
       </div>
     </div>
@@ -126,5 +180,107 @@
   </footer>
 
   <script src="/js/main.js"></script>
+  <script>
+    const API_BASE = 'https://app.mypaylink.app';
+    let portalToken = '';
+    let lineItems = [{ description: '', quantity: 1, unitPrice: 0 }];
+
+    function renderLineItems() {
+      const container = document.getElementById('lineItemRows');
+      container.innerHTML = lineItems.map((item, i) => `
+        <div class="portal-line-item">
+          <input type="text" class="portal-input" placeholder="Description" value="${item.description}" onchange="updateLine(${i},'description',this.value)">
+          <input type="number" class="portal-input" placeholder="1" value="${item.quantity}" min="0" step="1" onchange="updateLine(${i},'quantity',this.value)">
+          <input type="number" class="portal-input" placeholder="0.00" value="${item.unitPrice}" min="0" step="0.01" onchange="updateLine(${i},'unitPrice',this.value)">
+          <input type="text" class="portal-input" value="$${(item.quantity * item.unitPrice).toFixed(2)}" readonly style="background:transparent;">
+          <button class="portal-btn-remove" onclick="removeLine(${i})" ${lineItems.length <= 1 ? 'disabled style="opacity:0.2"' : ''}>&times;</button>
+        </div>
+      `).join('');
+      updateTotals();
+    }
+
+    function updateLine(i, field, value) {
+      if (field === 'quantity') lineItems[i].quantity = parseFloat(value) || 0;
+      else if (field === 'unitPrice') lineItems[i].unitPrice = parseFloat(value) || 0;
+      else lineItems[i][field] = value;
+      renderLineItems();
+    }
+
+    function removeLine(i) {
+      if (lineItems.length > 1) { lineItems.splice(i, 1); renderLineItems(); }
+    }
+
+    function updateTotals() {
+      const subtotal = lineItems.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);
+      document.getElementById('subtotalDisplay').textContent = '$' + subtotal.toFixed(2);
+      document.getElementById('totalDisplay').textContent = '$' + subtotal.toFixed(2);
+    }
+
+    document.getElementById('btnAddLine').addEventListener('click', () => {
+      lineItems.push({ description: '', quantity: 1, unitPrice: 0 });
+      renderLineItems();
+    });
+
+    document.getElementById('btnValidateToken').addEventListener('click', async () => {
+      const token = document.getElementById('tokenInput').value.trim();
+      const errorEl = document.getElementById('tokenError');
+      if (!token) { errorEl.textContent = 'Please enter a token.'; errorEl.style.display = 'block'; return; }
+      errorEl.style.display = 'none';
+      try {
+        const res = await fetch(API_BASE + '/api/portal/validate?token=' + encodeURIComponent(token));
+        const data = await res.json();
+        if (!res.ok) { errorEl.textContent = data.message || 'Invalid token'; errorEl.style.display = 'block'; return; }
+        portalToken = token;
+        document.getElementById('tokenEntry').style.display = 'none';
+        document.getElementById('invoiceForm').style.display = 'block';
+        document.getElementById('portalVerified').innerHTML = '&#10003; Verified &mdash; Submitting to <strong>' + data.companyName + '</strong> as <strong>' + data.vendorName + '</strong>';
+        document.getElementById('invDate').value = new Date().toISOString().split('T')[0];
+        renderLineItems();
+      } catch (e) { errorEl.textContent = 'Connection error. Please try again.'; errorEl.style.display = 'block'; }
+    });
+
+    document.getElementById('btnSubmitInvoice').addEventListener('click', async () => {
+      const btn = document.getElementById('btnSubmitInvoice');
+      const errorEl = document.getElementById('submitError');
+      btn.disabled = true; btn.textContent = 'Submitting...';
+      errorEl.style.display = 'none';
+      const subtotal = lineItems.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);
+      try {
+        const res = await fetch(API_BASE + '/api/portal/submit-invoice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token: portalToken,
+            invoiceNumber: document.getElementById('invNumber').value || undefined,
+            issueDate: document.getElementById('invDate').value || undefined,
+            dueDate: document.getElementById('invDueDate').value || undefined,
+            notes: document.getElementById('invNotes').value || '',
+            subtotal: subtotal.toFixed(2),
+            total: subtotal.toFixed(2),
+            lineItems: lineItems.filter(l => l.description).map(l => ({
+              description: l.description,
+              quantity: String(l.quantity),
+              unitPrice: String(l.unitPrice),
+              total: String(l.quantity * l.unitPrice),
+              taxable: false,
+            })),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) { errorEl.textContent = data.message || 'Submission failed'; errorEl.style.display = 'block'; btn.disabled = false; btn.textContent = 'Submit Invoice'; return; }
+        document.getElementById('invoiceForm').style.display = 'none';
+        document.getElementById('successView').style.display = 'block';
+      } catch (e) {
+        errorEl.textContent = 'Connection error. Please try again.'; errorEl.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Submit Invoice';
+      }
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('token')) {
+      document.getElementById('tokenInput').value = params.get('token');
+      document.getElementById('btnValidateToken').click();
+    }
+  </script>
 </body>
 </html>

@@ -528,7 +528,7 @@ export interface IStorage {
   updatePayrollPaymentRecord(id: string, data: Partial<PayrollPaymentRecord>): Promise<PayrollPaymentRecord | undefined>;
   deletePayrollPaymentRecord(id: string): Promise<void>;
 
-  getCustomers(companyId: string): Promise<Customer[]>;
+  getCustomers(companyId: string, customerType?: string): Promise<Customer[]>;
   getCustomer(id: string): Promise<Customer | undefined>;
   createCustomer(data: InsertCustomer): Promise<Customer>;
   updateCustomer(id: string, data: Partial<Customer>): Promise<Customer | undefined>;
@@ -601,6 +601,9 @@ export interface IStorage {
   getNotifications(companyId: string, userId?: string): Promise<Notification[]>;
   createNotification(data: InsertNotification): Promise<Notification>;
   updateNotification(id: string, data: Partial<Notification>): Promise<Notification | undefined>;
+
+  createPortalAccessToken(data: any): Promise<any>;
+  getPortalAccessTokenByToken(token: string): Promise<any>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2435,8 +2438,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ── Customers ──────────────────────────────────────────
-  async getCustomers(companyId: string): Promise<Customer[]> {
-    return db.select().from(customers).where(eq(customers.companyId, companyId)).orderBy(desc(customers.createdAt));
+  async getCustomers(companyId: string, customerType?: string): Promise<Customer[]> {
+    const conditions = [eq(customers.companyId, companyId)];
+    if (customerType && customerType !== "all") {
+      conditions.push(eq(customers.customerType, customerType));
+    }
+    return db.select().from(customers).where(and(...conditions)).orderBy(desc(customers.createdAt));
   }
   async getCustomer(id: string): Promise<Customer | undefined> {
     const [r] = await db.select().from(customers).where(eq(customers.id, id));
@@ -2679,6 +2686,15 @@ export class DatabaseStorage implements IStorage {
   }
   async updateNotification(id: string, data: Partial<Notification>): Promise<Notification | undefined> {
     const [r] = await db.update(notifications).set(data).where(eq(notifications.id, id)).returning();
+    return r;
+  }
+
+  async createPortalAccessToken(data: any): Promise<any> {
+    const [r] = await db.insert(portalAccessTokens).values(data).returning();
+    return r;
+  }
+  async getPortalAccessTokenByToken(token: string): Promise<any> {
+    const [r] = await db.select().from(portalAccessTokens).where(eq(portalAccessTokens.token, token));
     return r;
   }
 }

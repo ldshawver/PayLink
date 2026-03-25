@@ -1,8 +1,30 @@
 .punch-hero {
   height: 140vh;
   position: relative;
-  background: radial-gradient(ellipse at 50% 30%, #0f1a2e 0%, #0a0f1a 50%, #050810 100%);
+  background: #050810;
   color: #fff;
+}
+
+.hero-video-bg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
+  object-fit: cover;
+  z-index: 0;
+  opacity: 0.45;
+}
+
+.hero-video-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
+  background: linear-gradient(180deg, rgba(5,8,16,0.5) 0%, rgba(5,8,16,0.3) 40%, rgba(5,8,16,0.7) 100%);
+  z-index: 1;
+  pointer-events: none;
 }
 
 .punch-sticky {
@@ -321,7 +343,13 @@
   color: rgba(255,255,255,0.4);
   font-size: 0.85rem;
   letter-spacing: 0.05em;
-  animation: hint-bounce 2s ease-in-out infinite;
+  animation: hint-float 2.5s ease-in-out infinite;
+  transition: opacity 0.4s ease;
+}
+
+.scroll-hint.faded {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .scroll-hint-arrow {
@@ -331,9 +359,9 @@
   opacity: 0.5;
 }
 
-@keyframes hint-bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(8px); }
+@keyframes hint-float {
+  0%, 100% { transform: translateY(0); opacity: 1; }
+  50% { transform: translateY(10px); opacity: 0.6; }
 }
 
 .clock-success-flash {
@@ -426,6 +454,8 @@
   .punch-wrap { transition: none !important; }
   .scroll-hint { animation: none; }
   .clock-hand-second { transition: none; }
+  .hero-video-bg { display: none; }
+  .feature-card, .why-item, .security-card { opacity: 1 !important; transform: none !important; }
 }
 
 @media (max-width: 480px) {

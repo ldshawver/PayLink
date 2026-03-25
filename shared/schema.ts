@@ -1845,6 +1845,7 @@ export type InsertOnboardingProgress = z.infer<typeof insertOnboardingProgressSc
 export const customers = pgTable("customers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id),
+  customerType: text("customer_type").default("customer"),
   customerName: text("customer_name").notNull(),
   businessName: text("business_name"),
   email: text("email"),

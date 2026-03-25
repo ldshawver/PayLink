@@ -1526,3 +1526,23 @@ section {
 .stagger-4 { transition-delay: 0.4s; }
 .stagger-5 { transition-delay: 0.5s; }
 .stagger-6 { transition-delay: 0.6s; }
+
+.tile-animate {
+  opacity: 0;
+  transform: translateY(40px);
+  transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1), transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tile-animate.tile-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (max-width: 768px) {
+  .hero-video-bg {
+    display: none;
+  }
+  .punch-hero {
+    background: radial-gradient(ellipse at 50% 30%, #0f1a2e 0%, #0a0f1a 50%, #050810 100%);
+  }
+}

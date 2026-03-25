@@ -28,6 +28,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  const scrollHint = document.querySelector('.scroll-hint');
+  if (scrollHint) {
+    let hintHidden = false;
+    window.addEventListener('scroll', () => {
+      if (!hintHidden && window.scrollY > 80) {
+        scrollHint.classList.add('faded');
+        hintHidden = true;
+      } else if (hintHidden && window.scrollY <= 80) {
+        scrollHint.classList.remove('faded');
+        hintHidden = false;
+      }
+    }, { passive: true });
+  }
+
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
   const observer = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
       if (entry.isIntersecting) {
@@ -37,4 +53,33 @@ document.addEventListener('DOMContentLoaded', () => {
   }, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
 
   document.querySelectorAll('.fade-up').forEach(el => observer.observe(el));
+
+  if (!prefersReduced) {
+    const tileObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const parent = entry.target.closest('.features-grid, .why-grid, .security-grid');
+          if (parent) {
+            const cards = Array.from(parent.children);
+            cards.forEach((card, i) => {
+              setTimeout(() => {
+                card.classList.add('tile-visible');
+              }, i * 120);
+            });
+          }
+          tileObserver.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.15 });
+
+    document.querySelectorAll('.features-grid, .why-grid, .security-grid').forEach(grid => {
+      const children = grid.children;
+      for (let i = 0; i < children.length; i++) {
+        children[i].classList.add('tile-animate');
+      }
+      if (children.length > 0) {
+        tileObserver.observe(children[0]);
+      }
+    });
+  }
 });

@@ -241,12 +241,12 @@ const navSections: NavSection[] = [
     ],
   },
   {
-    label: "Customers",
+    label: "Customers & Vendors",
     icon: HandCoins,
     url: "/customers",
     roles: ["admin", "manager"],
     items: [
-      { title: "Customer Directory", url: "/customers", icon: Users },
+      { title: "Directory", url: "/customers", icon: Users },
     ],
   },
   {

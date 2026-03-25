@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Search, Edit, Trash2, Building2, Mail, Phone, MapPin, Users, Loader2 } from "lucide-react";
+import { Plus, Search, Edit, Trash2, Building2, Mail, Phone, MapPin, Users, Loader2, Store, Truck } from "lucide-react";
 import type { Customer } from "@shared/schema";
 
 function CustomerForm({ customer, onSave, onCancel }: {
@@ -20,6 +20,7 @@ function CustomerForm({ customer, onSave, onCancel }: {
   onCancel: () => void;
 }) {
   const [form, setForm] = useState({
+    customerType: customer?.customerType || "customer",
     customerName: customer?.customerName || "",
     email: customer?.email || "",
     phone: customer?.phone || "",
@@ -37,8 +38,22 @@ function CustomerForm({ customer, onSave, onCancel }: {
     defaultPaymentTerms: customer?.defaultPaymentTerms || "net_30",
   });
 
+  const isVendor = form.customerType === "vendor";
+
   return (
     <div className="space-y-4">
+      <div>
+        <Label>Type *</Label>
+        <Select value={form.customerType} onValueChange={v => setForm({ ...form, customerType: v })}>
+          <SelectTrigger data-testid="select-customer-type">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="customer" data-testid="option-type-customer">Customer</SelectItem>
+            <SelectItem value="vendor" data-testid="option-type-vendor">Vendor</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
           <Label>Contact Name *</Label>
@@ -71,7 +86,7 @@ function CustomerForm({ customer, onSave, onCancel }: {
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <Label>Billing Address</Label>
+          <Label>{isVendor ? "Remit-To Address" : "Billing Address"}</Label>
           <Input data-testid="input-customer-address" value={form.billingAddress} onChange={e => setForm({ ...form, billingAddress: e.target.value })} />
         </div>
         <div>
@@ -135,7 +150,7 @@ function CustomerForm({ customer, onSave, onCancel }: {
       <DialogFooter>
         <Button variant="outline" onClick={onCancel} data-testid="button-cancel-customer">Cancel</Button>
         <Button onClick={() => onSave(form)} disabled={!form.customerName} data-testid="button-save-customer">
-          {customer ? "Update" : "Create"} Customer
+          {customer ? "Update" : "Create"} {form.customerType === "vendor" ? "Vendor" : "Customer"}
         </Button>
       </DialogFooter>
     </div>
@@ -147,6 +162,7 @@ export default function CustomersPage() {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Customer | undefined>();
 
@@ -161,7 +177,7 @@ export default function CustomersPage() {
     mutationFn: (data: any) => apiRequest("POST", "/api/customers", { ...data, companyId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/customers?companyId=${companyId}`] });
-      toast({ title: "Customer created" });
+      toast({ title: "Record created" });
       setDialogOpen(false);
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -171,7 +187,7 @@ export default function CustomersPage() {
     mutationFn: ({ id, data }: { id: string; data: any }) => apiRequest("PATCH", `/api/customers/${id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/customers?companyId=${companyId}`] });
-      toast({ title: "Customer updated" });
+      toast({ title: "Record updated" });
       setDialogOpen(false);
       setEditing(undefined);
     },
@@ -182,7 +198,7 @@ export default function CustomersPage() {
     mutationFn: (id: string) => apiRequest("DELETE", `/api/customers/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/customers?companyId=${companyId}`] });
-      toast({ title: "Customer deleted" });
+      toast({ title: "Record deleted" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -192,7 +208,8 @@ export default function CustomersPage() {
       (c.businessName && c.businessName.toLowerCase().includes(search.toLowerCase())) ||
       (c.email && c.email.toLowerCase().includes(search.toLowerCase()));
     const matchesStatus = statusFilter === "all" || c.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    const matchesType = typeFilter === "all" || (c.customerType || "customer") === typeFilter;
+    return matchesSearch && matchesStatus && matchesType;
   });
 
   const statusColors: Record<string, string> = {
@@ -201,25 +218,31 @@ export default function CustomersPage() {
     prospect: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
   };
 
+  const typeColors: Record<string, string> = {
+    customer: "bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-400",
+    vendor: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
+  };
+
   const stats = {
     total: customers.length,
+    customerCount: customers.filter(c => (c.customerType || "customer") === "customer").length,
+    vendorCount: customers.filter(c => c.customerType === "vendor").length,
     active: customers.filter(c => c.status === "active").length,
-    prospects: customers.filter(c => c.status === "prospect").length,
   };
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold" data-testid="text-page-title">Customers</h1>
-          <p className="text-muted-foreground">Manage your customer directory</p>
+          <h1 className="text-2xl font-bold" data-testid="text-page-title">Customers & Vendors</h1>
+          <p className="text-muted-foreground">Manage your customers and vendors</p>
         </div>
         <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-add-customer">
-          <Plus className="h-4 w-4 mr-2" /> Add Customer
+          <Plus className="h-4 w-4 mr-2" /> Add Customer / Vendor
         </Button>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4 flex items-center gap-3">
             <div className="h-10 w-10 rounded-lg bg-teal-100 dark:bg-teal-900/30 flex items-center justify-center">
@@ -227,7 +250,29 @@ export default function CustomersPage() {
             </div>
             <div>
               <div className="text-2xl font-bold" data-testid="text-total-customers">{stats.total}</div>
-              <div className="text-xs text-muted-foreground">Total Customers</div>
+              <div className="text-xs text-muted-foreground">Total</div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="h-10 w-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
+              <Store className="h-5 w-5 text-blue-600" />
+            </div>
+            <div>
+              <div className="text-2xl font-bold" data-testid="text-customer-count">{stats.customerCount}</div>
+              <div className="text-xs text-muted-foreground">Customers</div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="h-10 w-10 rounded-lg bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center">
+              <Truck className="h-5 w-5 text-orange-600" />
+            </div>
+            <div>
+              <div className="text-2xl font-bold" data-testid="text-vendor-count">{stats.vendorCount}</div>
+              <div className="text-xs text-muted-foreground">Vendors</div>
             </div>
           </CardContent>
         </Card>
@@ -242,25 +287,24 @@ export default function CustomersPage() {
             </div>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <div className="h-10 w-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
-              <Mail className="h-5 w-5 text-blue-600" />
-            </div>
-            <div>
-              <div className="text-2xl font-bold" data-testid="text-prospect-customers">{stats.prospects}</div>
-              <div className="text-xs text-muted-foreground">Prospects</div>
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       <div className="flex gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search customers..." value={search} onChange={e => setSearch(e.target.value)}
+          <Input placeholder="Search customers & vendors..." value={search} onChange={e => setSearch(e.target.value)}
             className="pl-10" data-testid="input-search-customers" />
         </div>
+        <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <SelectTrigger className="w-40" data-testid="select-type-filter">
+            <SelectValue placeholder="All types" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all" data-testid="option-all-types">All Types</SelectItem>
+            <SelectItem value="customer" data-testid="option-filter-customer">Customers</SelectItem>
+            <SelectItem value="vendor" data-testid="option-filter-vendor">Vendors</SelectItem>
+          </SelectContent>
+        </Select>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger className="w-40" data-testid="select-status-filter">
             <SelectValue placeholder="All statuses" />
@@ -282,10 +326,10 @@ export default function CustomersPage() {
         <Card>
           <CardContent className="py-12 text-center">
             <Users className="h-12 w-12 mx-auto text-muted-foreground/30 mb-3" />
-            <p className="text-muted-foreground">No customers found</p>
+            <p className="text-muted-foreground">No records found</p>
             <Button variant="outline" className="mt-4" onClick={() => { setEditing(undefined); setDialogOpen(true); }}
               data-testid="button-add-first-customer">
-              <Plus className="h-4 w-4 mr-2" /> Add your first customer
+              <Plus className="h-4 w-4 mr-2" /> Add your first customer or vendor
             </Button>
           </CardContent>
         </Card>
@@ -296,12 +340,19 @@ export default function CustomersPage() {
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-4 flex-1 min-w-0">
-                    <div className="h-10 w-10 rounded-full bg-gradient-to-br from-teal-500 to-blue-500 flex items-center justify-center text-white font-bold text-sm shrink-0">
+                    <div className={`h-10 w-10 rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0 ${
+                      (customer.customerType || "customer") === "vendor"
+                        ? "bg-gradient-to-br from-orange-500 to-amber-500"
+                        : "bg-gradient-to-br from-teal-500 to-blue-500"
+                    }`}>
                       {customer.customerName.charAt(0).toUpperCase()}
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className="font-semibold truncate" data-testid={`text-customer-name-${customer.id}`}>{customer.customerName}</span>
+                        <Badge className={typeColors[customer.customerType || "customer"]} data-testid={`badge-type-${customer.id}`}>
+                          {(customer.customerType || "customer") === "vendor" ? "Vendor" : "Customer"}
+                        </Badge>
                         <Badge className={statusColors[customer.status || "active"]} data-testid={`badge-status-${customer.id}`}>
                           {customer.status}
                         </Badge>
@@ -328,7 +379,7 @@ export default function CustomersPage() {
                       <Edit className="h-4 w-4" />
                     </Button>
                     <Button variant="ghost" size="sm" onClick={() => {
-                      if (confirm("Delete this customer?")) deleteMutation.mutate(customer.id);
+                      if (confirm("Delete this record?")) deleteMutation.mutate(customer.id);
                     }} data-testid={`button-delete-${customer.id}`}>
                       <Trash2 className="h-4 w-4 text-red-500" />
                     </Button>
@@ -343,7 +394,7 @@ export default function CustomersPage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{editing ? "Edit Customer" : "New Customer"}</DialogTitle>
+            <DialogTitle>{editing ? "Edit Record" : "New Customer / Vendor"}</DialogTitle>
           </DialogHeader>
           <CustomerForm
             customer={editing}

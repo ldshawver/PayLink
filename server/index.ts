@@ -646,6 +646,8 @@ app.use((req, res, next) => {
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    await run("customers.customer_type", sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS customer_type TEXT DEFAULT 'customer'`);
+
     // Invoice templates table
     await run("invoice_templates table", sql`CREATE TABLE IF NOT EXISTS invoice_templates (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
