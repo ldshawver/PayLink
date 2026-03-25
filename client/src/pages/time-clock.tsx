@@ -23,6 +23,26 @@ import type { EmployeeWageGroup, SecondaryWageGroup } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Worker, Company, TimePunch } from "@shared/schema";
 import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
+import bgVideo from "@assets/Gen-4_5_Create_a_cinematic_animated_background_video_for_a_mod_1774400668621.mp4";
+
+function VideoBackground() {
+  return (
+    <div className="fixed inset-0 z-0 overflow-hidden">
+      <video
+        autoPlay
+        loop
+        muted
+        playsInline
+        className="absolute w-full h-full object-cover"
+        data-testid="video-background"
+      >
+        <source src={bgVideo} type="video/mp4" />
+      </video>
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-900/85 via-teal-900/70 to-blue-900/80" />
+      <div className="absolute inset-0 bg-black/30" />
+    </div>
+  );
+}
 
 function LiveClock() {
   const [time, setTime] = useState(new Date());
@@ -35,16 +55,16 @@ function LiveClock() {
   return (
     <div className="text-center" data-testid="text-live-clock">
       <div className="flex items-baseline justify-center gap-1">
-        <span className="text-7xl font-light tracking-tight tabular-nums">
+        <span className="text-7xl font-light tracking-tight tabular-nums text-white drop-shadow-lg">
           {time.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })}
         </span>
         <div className="flex flex-col items-start">
-          <span className="text-2xl font-light tabular-nums text-teal-accent">
+          <span className="text-2xl font-light tabular-nums text-teal-300 drop-shadow-md">
             {time.getSeconds().toString().padStart(2, "0")}
           </span>
         </div>
       </div>
-      <p className="text-sm text-muted-foreground mt-3 tracking-wide uppercase">
+      <p className="text-sm text-white/70 mt-3 tracking-wide uppercase drop-shadow-sm">
         {time.toLocaleDateString("en-US", {
           weekday: "long",
           month: "long",
@@ -68,7 +88,7 @@ function NumPad({ onInput, onClear, onBackspace }: {
         <Button
           key={d}
           variant={d === "C" ? "secondary" : d === "<" ? "secondary" : "outline"}
-          className="text-lg font-medium"
+          className="text-lg font-medium h-12"
           onClick={() => {
             if (d === "C") onClear();
             else if (d === "<") onBackspace();
@@ -122,16 +142,22 @@ function PunchButton({
     },
   });
 
+  const buttonStyles = type === "clock_in"
+    ? "bg-emerald-600 hover:bg-emerald-700 text-white border-0 shadow-lg shadow-emerald-900/30 text-base py-6"
+    : type === "clock_out"
+    ? "bg-red-600 hover:bg-red-700 text-white border-0 shadow-lg shadow-red-900/30 text-base py-6"
+    : "bg-amber-500 hover:bg-amber-600 text-white border-0 shadow-lg shadow-amber-900/30 text-base py-6";
+
   return (
     <Button
       variant={variant}
       size="lg"
-      className="flex-1"
+      className={`flex-1 ${buttonStyles}`}
       onClick={() => punchMutation.mutate()}
       disabled={punchMutation.isPending}
       data-testid={`button-punch-${type}`}
     >
-      <Icon className="h-5 w-5 mr-2" />
+      <Icon className="h-6 w-6 mr-2" />
       {punchMutation.isPending ? "..." : label}
     </Button>
   );
@@ -250,24 +276,25 @@ export default function TimeClock() {
 
   if (!authenticatedWorker) {
     return (
-      <div className="flex items-center justify-center min-h-[calc(100vh-60px)] p-4 bg-gradient-to-br from-background via-background to-muted/50">
-        <div className="w-full max-w-md space-y-6">
-          <div className="flex flex-col items-center gap-2">
-            <img src={paylinkLogo} alt="PayLink" className="h-20 w-20 object-contain" />
-            <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-timeclock-title">Time Clock</h1>
-            <p className="text-sm text-muted-foreground">Enter your credentials to punch in or out</p>
+      <div className="relative flex items-center justify-center min-h-screen p-4">
+        <VideoBackground />
+        <div className="relative z-10 w-full max-w-md space-y-6">
+          <div className="flex flex-col items-center gap-3">
+            <img src={paylinkLogo} alt="PayLink" className="h-20 w-20 object-contain drop-shadow-2xl" />
+            <h1 className="text-3xl font-bold tracking-tight text-white drop-shadow-lg" data-testid="text-timeclock-title">Time Clock</h1>
+            <p className="text-sm text-white/60">Enter your credentials to punch in or out</p>
           </div>
 
-          <Card>
+          <Card className="bg-white/10 backdrop-blur-xl border-white/20 shadow-2xl">
             <CardContent className="p-6 space-y-6">
               <LiveClock />
 
-              <div className="h-px bg-border" />
+              <div className="h-px bg-white/20" />
 
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="empNum" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-                    <Hash className="h-3.5 w-3.5 text-blue-accent" /> Employee Number
+                  <Label htmlFor="empNum" className="flex items-center gap-2 text-xs uppercase tracking-wider text-white/70">
+                    <Hash className="h-3.5 w-3.5 text-teal-300" /> Employee Number
                   </Label>
                   <Input
                     id="empNum"
@@ -277,13 +304,13 @@ export default function TimeClock() {
                     placeholder="Enter employee number"
                     autoComplete="off"
                     data-testid="input-employee-number"
-                    className={activeField === "empNum" ? "ring-2 ring-teal-accent/50 border-teal-accent" : ""}
+                    className={`bg-white/10 border-white/30 text-white placeholder:text-white/40 ${activeField === "empNum" ? "ring-2 ring-teal-400/60 border-teal-400" : ""}`}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="pin" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-                    <Lock className="h-3.5 w-3.5 text-blue-accent" /> PIN
+                  <Label htmlFor="pin" className="flex items-center gap-2 text-xs uppercase tracking-wider text-white/70">
+                    <Lock className="h-3.5 w-3.5 text-teal-300" /> PIN
                   </Label>
                   <Input
                     id="pin"
@@ -294,7 +321,7 @@ export default function TimeClock() {
                     placeholder="Enter PIN"
                     autoComplete="off"
                     data-testid="input-pin"
-                    className={activeField === "pin" ? "ring-2 ring-teal-accent/50 border-teal-accent" : ""}
+                    className={`bg-white/10 border-white/30 text-white placeholder:text-white/40 ${activeField === "pin" ? "ring-2 ring-teal-400/60 border-teal-400" : ""}`}
                   />
                 </div>
 
@@ -305,7 +332,7 @@ export default function TimeClock() {
                 />
 
                 {authError && (
-                  <p className="text-sm text-destructive text-center" data-testid="text-auth-error">
+                  <p className="text-sm text-red-300 text-center font-medium drop-shadow-sm" data-testid="text-auth-error">
                     {authError}
                   </p>
                 )}
@@ -313,7 +340,7 @@ export default function TimeClock() {
                 <Button
                   type="submit"
                   size="lg"
-                  className="w-full"
+                  className="w-full bg-teal-600 hover:bg-teal-700 text-white shadow-lg shadow-teal-900/40 py-6 text-base"
                   disabled={authMutation.isPending || !employeeNumber || !pin}
                   data-testid="button-clock-login"
                 >
@@ -329,22 +356,23 @@ export default function TimeClock() {
   }
 
   return (
-    <div className="flex items-center justify-center min-h-[calc(100vh-60px)] p-4 bg-gradient-to-br from-background via-background to-muted/50">
-      <div className="w-full max-w-lg space-y-4">
-        <Card>
+    <div className="relative flex items-center justify-center min-h-screen p-4">
+      <VideoBackground />
+      <div className="relative z-10 w-full max-w-lg space-y-4">
+        <Card className="bg-white/10 backdrop-blur-xl border-white/20 shadow-2xl">
           <CardContent className="p-6 space-y-6">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
-                  <span className="text-sm font-semibold text-teal-accent">
+                <div className="h-12 w-12 rounded-full bg-teal-500/30 backdrop-blur-sm flex items-center justify-center border border-teal-400/30">
+                  <span className="text-sm font-bold text-teal-200">
                     {authenticatedWorker.firstName?.[0]}{authenticatedWorker.lastName?.[0]}
                   </span>
                 </div>
                 <div>
-                  <h2 className="text-lg font-semibold" data-testid="text-worker-name">
+                  <h2 className="text-lg font-bold text-white drop-shadow-md" data-testid="text-worker-name">
                     {authenticatedWorker.firstName} {authenticatedWorker.lastName}
                   </h2>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs text-white/60">
                     {authenticatedWorker.jobTitle} {authenticatedCompany && `\u00B7 ${authenticatedCompany.name}`}
                   </p>
                 </div>
@@ -353,28 +381,34 @@ export default function TimeClock() {
                 variant="ghost"
                 size="icon"
                 onClick={handleLogout}
+                className="text-white/60 hover:text-white hover:bg-white/10"
                 data-testid="button-clock-logout"
               >
-                <LogOut className="h-4 w-4" />
+                <LogOut className="h-5 w-5" />
               </Button>
             </div>
 
             <LiveClock />
 
             <div className="flex items-center justify-center gap-3">
-              <div className={`h-2.5 w-2.5 rounded-full ${
-                isClockedIn ? "bg-green-500 animate-pulse" :
-                isOnBreak ? "bg-amber-500 animate-pulse" :
-                "bg-muted-foreground/40"
+              <div className={`h-3 w-3 rounded-full shadow-lg ${
+                isClockedIn ? "bg-green-400 animate-pulse shadow-green-400/50" :
+                isOnBreak ? "bg-amber-400 animate-pulse shadow-amber-400/50" :
+                "bg-white/40"
               }`} />
               <Badge
                 variant={isClockedIn ? "default" : isOnBreak ? "secondary" : "outline"}
+                className={`text-sm px-4 py-1 ${
+                  isClockedIn ? "bg-emerald-600/80 text-white border-emerald-500/50" :
+                  isOnBreak ? "bg-amber-500/80 text-white border-amber-400/50" :
+                  "bg-white/10 text-white/80 border-white/30"
+                }`}
                 data-testid="badge-clock-status"
               >
                 {isClockedIn ? "Clocked In" : isOnBreak ? "On Break" : "Clocked Out"}
               </Badge>
               {lastPunch && (
-                <span className="text-xs text-muted-foreground">
+                <span className="text-xs text-white/50">
                   since {new Date(lastPunch.punchTime).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
                 </span>
               )}
@@ -382,9 +416,9 @@ export default function TimeClock() {
 
             {!isClockedIn && !isOnBreak && assignedWageGroups.length > 0 && (
               <div className="w-full">
-                <Label className="text-xs uppercase tracking-wider text-muted-foreground mb-1 block">Select Role / Wage Group</Label>
+                <Label className="text-xs uppercase tracking-wider text-white/60 mb-1 block">Select Role / Wage Group</Label>
                 <Select value={selectedWageGroupId} onValueChange={setSelectedWageGroupId}>
-                  <SelectTrigger data-testid="select-timeclock-wage-group">
+                  <SelectTrigger className="bg-white/10 border-white/30 text-white" data-testid="select-timeclock-wage-group">
                     <SelectValue placeholder="Default rate" />
                   </SelectTrigger>
                   <SelectContent>
@@ -446,10 +480,10 @@ export default function TimeClock() {
         </Card>
 
         {workerPunches.length > 0 && (
-          <Card>
+          <Card className="bg-white/10 backdrop-blur-xl border-white/20 shadow-2xl">
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <Activity className="h-4 w-4 text-teal-accent" />
+              <CardTitle className="text-sm font-semibold flex items-center gap-2 text-white/90">
+                <Activity className="h-4 w-4 text-teal-300" />
                 Today's Activity
               </CardTitle>
             </CardHeader>
@@ -458,20 +492,20 @@ export default function TimeClock() {
                 {workerPunches.slice(0, 10).map((punch) => (
                   <div
                     key={punch.id}
-                    className="flex items-center justify-between py-2.5 border-b last:border-0"
+                    className="flex items-center justify-between py-2.5 border-b border-white/10 last:border-0"
                     data-testid={`row-punch-${punch.id}`}
                   >
                     <div className="flex items-center gap-3">
                       <div className={`h-2 w-2 rounded-full ${
-                        punch.punchType === "clock_in" ? "bg-green-500" :
-                        punch.punchType === "clock_out" ? "bg-red-500" :
-                        "bg-amber-500"
+                        punch.punchType === "clock_in" ? "bg-green-400" :
+                        punch.punchType === "clock_out" ? "bg-red-400" :
+                        "bg-amber-400"
                       }`} />
-                      <span className="text-sm capitalize">
+                      <span className="text-sm capitalize text-white/80">
                         {punch.punchType.replace(/_/g, " ")}
                       </span>
                     </div>
-                    <span className="text-xs text-muted-foreground tabular-nums">
+                    <span className="text-xs text-white/50 tabular-nums">
                       {new Date(punch.punchTime).toLocaleTimeString("en-US", {
                         hour: "numeric",
                         minute: "2-digit",
