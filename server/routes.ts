@@ -125,7 +125,7 @@ export async function registerRoutes(
 ): Promise<Server> {
 
   app.use("/api", (req, res, next) => {
-    const excludedPaths = ["/auth/", "/trial/signup", "/demo/login", "/analytics/event", "/time-clock/"];
+    const excludedPaths = ["/auth/", "/trial/signup", "/demo/login", "/analytics/event"];
     if (excludedPaths.some(p => req.path.startsWith(p))) return next();
     blockDemoWrites(req, res, next);
   });
@@ -400,7 +400,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/companies", requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/companies", requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.enterpriseId === "") data.enterpriseId = null;
@@ -1435,7 +1435,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/schedules", async (req, res) => {
+  app.post("/api/schedules", requireActiveSubscription, async (req, res) => {
     try {
       const { workerId, companyId, date, startTime, endTime, department, jobId, note } = req.body;
       if (!workerId || !companyId || !date || !startTime || !endTime) {
@@ -3925,7 +3925,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Accounting Export ─────────────────────────────────────────────────
-  app.get("/api/expenses/export/csv", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.get("/api/expenses/export/csv", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       const allExpenses = await storage.getExpenses(req.query.companyId as string);
       const allWorkers = await storage.getWorkers();
@@ -3949,7 +3949,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to export" }); }
   });
 
-  app.get("/api/contractor-invoices/export/csv", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.get("/api/contractor-invoices/export/csv", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       const allInvs = await storage.getContractorInvoices(req.query.companyId as string);
       const allWorkers = await storage.getWorkers();
