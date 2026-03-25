@@ -488,6 +488,199 @@ function TimesheetSummaryDashlet() {
   );
 }
 
+function DashboardClockCard() {
+  const { user } = useAuth();
+  const { toast } = useToast();
+
+  const workersQuery = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
+  const entriesQuery = useQuery<TimeEntry[]>({ queryKey: ["/api/time-entries"] });
+  const punchesQuery = useQuery<TimePunch[]>({ queryKey: ["/api/time-punches"] });
+
+  const workers = workersQuery.data || [];
+  const linkedWorker = workers.find(
+    (w) => (user as any)?.workerId === w.id || w.email === user?.username || w.employeeNumber === user?.username
+  );
+
+  const openEntry = linkedWorker
+    ? entriesQuery.data?.find((e) => e.workerId === linkedWorker.id && e.clockIn && !e.clockOut)
+    : null;
+
+  const todayPunches = linkedWorker
+    ? (punchesQuery.data || [])
+        .filter((p) => p.workerId === linkedWorker.id)
+        .filter((p) => new Date(p.punchTime).toDateString() === new Date().toDateString())
+        .sort((a, b) => new Date(b.punchTime).getTime() - new Date(a.punchTime).getTime())
+    : [];
+
+  const isOnBreak = todayPunches.length > 0 && todayPunches[0].punchType === "break_start";
+  const isClockedIn = !!openEntry;
+
+  const punchMutation = useMutation({
+    mutationFn: async (punchType: string) => {
+      if (!linkedWorker) throw new Error("No linked worker found");
+      await apiRequest("POST", "/api/time-punches", {
+        workerId: linkedWorker.id,
+        companyId: linkedWorker.companyId,
+        punchType,
+      });
+    },
+    onSuccess: (_, punchType) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/time-punches"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/time-entries"] });
+      const labels: Record<string, string> = {
+        clock_in: "Clocked In",
+        clock_out: "Clocked Out",
+        break_start: "Break Started",
+        break_end: "Break Ended",
+      };
+      toast({ title: labels[punchType] || "Punch Recorded" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  if (!linkedWorker) return null;
+
+  const clockInTime = openEntry?.clockIn
+    ? new Date(openEntry.clockIn).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+    : null;
+
+  const totalToday = todayPunches.length > 0
+    ? (() => {
+        let total = 0;
+        const sorted = [...todayPunches].reverse();
+        for (let i = 0; i < sorted.length; i++) {
+          if (sorted[i].punchType === "clock_in") {
+            const end = sorted.find((p, j) => j > i && (p.punchType === "clock_out" || p.punchType === "break_start"));
+            if (end) {
+              total += (new Date(end.punchTime).getTime() - new Date(sorted[i].punchTime).getTime()) / 3600000;
+            } else if (isClockedIn) {
+              total += (Date.now() - new Date(sorted[i].punchTime).getTime()) / 3600000;
+            }
+          } else if (sorted[i].punchType === "break_end") {
+            const end = sorted.find((p, j) => j > i && (p.punchType === "clock_out" || p.punchType === "break_start"));
+            if (end) {
+              total += (new Date(end.punchTime).getTime() - new Date(sorted[i].punchTime).getTime()) / 3600000;
+            } else if (isClockedIn) {
+              total += (Date.now() - new Date(sorted[i].punchTime).getTime()) / 3600000;
+            }
+          }
+        }
+        return total;
+      })()
+    : 0;
+
+  return (
+    <Card className="border-l-4 border-l-teal-500 bg-gradient-to-r from-teal-50/50 to-transparent dark:from-teal-950/20" data-testid="dashlet-clock-actions">
+      <CardContent className="p-4 md:p-5">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className={`h-12 w-12 rounded-xl flex items-center justify-center shadow-sm ${
+              isClockedIn
+                ? isOnBreak
+                  ? "bg-amber-100 dark:bg-amber-900/30"
+                  : "bg-emerald-100 dark:bg-emerald-900/30"
+                : "bg-slate-100 dark:bg-slate-800"
+            }`}>
+              {isClockedIn ? (
+                isOnBreak ? (
+                  <Coffee className="h-6 w-6 text-amber-600" />
+                ) : (
+                  <Clock className="h-6 w-6 text-emerald-600" />
+                )
+              ) : (
+                <LogIn className="h-6 w-6 text-slate-500" />
+              )}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-sm" data-testid="text-clock-worker-name">
+                  {linkedWorker.firstName} {linkedWorker.lastName}
+                </span>
+                <Badge
+                  variant={isClockedIn ? "default" : "secondary"}
+                  className={`text-[11px] ${
+                    isClockedIn
+                      ? isOnBreak
+                        ? "bg-amber-500 text-white"
+                        : "bg-emerald-600 text-white"
+                      : ""
+                  }`}
+                  data-testid="badge-dashboard-clock-status"
+                >
+                  {isClockedIn ? (isOnBreak ? "On Break" : "Clocked In") : "Clocked Out"}
+                </Badge>
+                {isClockedIn && !isOnBreak && (
+                  <span className="inline-flex items-center rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5">
+                    LIVE
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
+                {clockInTime && <span>In since {clockInTime}</span>}
+                {totalToday > 0 && <span>{totalToday.toFixed(1)}h today</span>}
+                {!isClockedIn && todayPunches.length === 0 && <span>No punches today</span>}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            {!isClockedIn && !isOnBreak ? (
+              <Button
+                onClick={() => punchMutation.mutate("clock_in")}
+                disabled={punchMutation.isPending}
+                className="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm gap-2"
+                data-testid="button-dashboard-clock-in"
+              >
+                <Play className="h-4 w-4" />
+                Clock In
+              </Button>
+            ) : (
+              <>
+                {isClockedIn && !isOnBreak && (
+                  <Button
+                    variant="outline"
+                    onClick={() => punchMutation.mutate("break_start")}
+                    disabled={punchMutation.isPending}
+                    className="flex-1 sm:flex-none gap-2 border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30"
+                    data-testid="button-dashboard-break-start"
+                  >
+                    <Coffee className="h-4 w-4" />
+                    Break
+                  </Button>
+                )}
+                {isOnBreak && (
+                  <Button
+                    variant="outline"
+                    onClick={() => punchMutation.mutate("break_end")}
+                    disabled={punchMutation.isPending}
+                    className="flex-1 sm:flex-none gap-2 border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30"
+                    data-testid="button-dashboard-break-end"
+                  >
+                    <ArrowRight className="h-4 w-4" />
+                    End Break
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  onClick={() => punchMutation.mutate("clock_out")}
+                  disabled={punchMutation.isPending}
+                  className="flex-1 sm:flex-none gap-2 border-red-300 text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950/30"
+                  data-testid="button-dashboard-clock-out"
+                >
+                  <Square className="h-4 w-4" />
+                  Clock Out
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Dashboard() {
   const { user } = useAuth();
   const userRole = (user as any)?.role || "employee";
@@ -559,6 +752,8 @@ export default function Dashboard() {
       </div>
 
       <OnboardingChecklist />
+
+      <DashboardClockCard />
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {allowedDashlets.filter((d) => visibility[d.id] !== false).map((d) => (
