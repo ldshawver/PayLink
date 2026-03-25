@@ -7346,7 +7346,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Trial Signup (public, no auth) ─────────────────────────────────────
   app.post("/api/trial/signup", async (req, res) => {
     try {
-      const { companyName, firstName, lastName, email, phone, jobTitle, employeeCount, termsAccepted } = req.body;
+      const { companyName, firstName, lastName, email, phone, jobTitle, employeeCount, termsAccepted, password } = req.body;
       if (!companyName || !firstName || !lastName || !email) {
         return res.status(400).json({ message: "Company name, first name, last name, and email are required" });
       }
@@ -7357,6 +7357,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(email)) {
         return res.status(400).json({ message: "Please provide a valid email address" });
+      }
+
+      if (password && password.length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters" });
       }
 
       const existingRows = await db.execute(sql`SELECT id FROM trial_signups WHERE email = ${email} LIMIT 1`);
@@ -7373,7 +7377,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (existingUser.rows.length > 0) {
         username = baseUsername + Date.now().toString(36);
       }
-      const tempPassword = "Trial" + Math.random().toString(36).substring(2, 10) + "!";
+      const tempPassword = password || ("Trial" + Math.random().toString(36).substring(2, 10) + "!");
       const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
       let companyId: string;

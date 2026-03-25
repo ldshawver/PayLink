@@ -83,6 +83,10 @@
               <label for="phone">Phone (optional)</label>
               <input type="tel" id="phone" name="phone" data-testid="input-phone" placeholder="(555) 123-4567">
             </div>
+            <div class="form-group">
+              <label for="password">Create Password *</label>
+              <input type="password" id="password" name="password" required minlength="8" data-testid="input-password" placeholder="Minimum 8 characters">
+            </div>
             <div class="form-group form-checkbox">
               <input type="checkbox" id="termsAccepted" name="termsAccepted" required data-testid="checkbox-terms">
               <label for="termsAccepted">I agree to the <a href="/terms" target="_blank">Terms of Service</a> and <a href="/privacy" target="_blank">Privacy Policy</a> and represent that I have authority to bind my organization to this agreement.</label>
@@ -103,7 +107,7 @@
                 <span class="credential-label">Username:</span>
                 <strong id="credUsername" data-testid="text-username"></strong>
               </div>
-              <div class="credential-row">
+              <div class="credential-row" id="credPasswordRow">
                 <span class="credential-label">Password:</span>
                 <strong id="credPassword" data-testid="text-password"></strong>
               </div>
@@ -172,7 +176,7 @@
         </div>
       </div>
       <div class="footer-bottom">
-        <p>&copy; 2025 Alavont Holdings. All rights reserved.</p>
+        <p>&copy; 2026 Alavont Holdings. All rights reserved.</p>
         <ul class="footer-bottom-links"><li><a href="/terms">Terms</a></li><li><a href="/privacy">Privacy</a></li></ul>
       </div>
     </div>
@@ -206,8 +210,17 @@
           jobTitle: document.getElementById('jobTitle').value.trim(),
           employeeCount: document.getElementById('employeeCount').value ? parseInt(document.getElementById('employeeCount').value) : null,
           phone: document.getElementById('phone').value.trim(),
+          password: document.getElementById('password').value,
           termsAccepted: document.getElementById('termsAccepted').checked
         };
+
+        if (data.password && data.password.length < 8) {
+          errorDiv.textContent = 'Password must be at least 8 characters';
+          errorDiv.style.display = 'block';
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Start My Free Trial \u2192';
+          return;
+        }
 
         fetch('https://app.mypaylink.app/api/trial/signup', {
           method: 'POST',
@@ -221,7 +234,12 @@
           }
           form.style.display = 'none';
           document.getElementById('credUsername').textContent = result.body.username;
-          document.getElementById('credPassword').textContent = result.body.temporaryPassword;
+          var pwRow = document.getElementById('credPasswordRow');
+          if (data.password) {
+            pwRow.style.display = 'none';
+          } else {
+            document.getElementById('credPassword').textContent = result.body.temporaryPassword;
+          }
           successDiv.style.display = 'block';
 
           fetch('https://app.mypaylink.app/api/analytics/event', {

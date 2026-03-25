@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useTrial } from "@/hooks/use-trial";
 import { useAuth } from "@/hooks/use-auth";
@@ -38,6 +38,11 @@ export default function BillingPage() {
 
   const activateMutation = useMutation({
     mutationFn: async () => {
+      fetch("/api/analytics/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventName: "billing_setup_started", pageSource: "billing" }),
+      }).catch(() => {});
       await apiRequest("POST", "/api/billing/activate", {});
     },
     onSuccess: () => {
@@ -47,13 +52,21 @@ export default function BillingPage() {
       fetch("/api/analytics/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ eventName: "subscription_activated", pageSource: "billing" }),
+        body: JSON.stringify({ eventName: "billing_setup_completed", pageSource: "billing" }),
       }).catch(() => {});
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to activate subscription.", variant: "destructive" });
     },
   });
+
+  useEffect(() => {
+    fetch("/api/analytics/event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ eventName: "billing_page_view", pageSource: "billing" }),
+    }).catch(() => {});
+  }, []);
 
   const billableCount = billingData?.billableEmployeeCount || 0;
   const basePrice = 29;
