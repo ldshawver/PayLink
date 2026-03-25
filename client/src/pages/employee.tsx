@@ -85,7 +85,9 @@ function EmployeeTab() {
     mobilePhone: "", fax: "", workEmail: "", homeEmail: "",
     note: "", tags: "", isShareholder: false,
     defaultBranchId: "", defaultDepartmentId: "", policyGroupId: "",
-    payPeriodScheduleId: "", groupId: "", titleId: ""
+    payPeriodScheduleId: "", groupId: "", titleId: "",
+    emergencyContactName: "", emergencyContactRelationship: "",
+    emergencyContactPhone: "", emergencyContactEmail: ""
   };
 
   const [form, setForm] = useState(emptyForm);
@@ -101,13 +103,39 @@ function EmployeeTab() {
   const policyGroupsQuery = useQuery<PolicyGroup[]>({ queryKey: ["/api/policy-groups"] });
   const payPeriodSchedulesQuery = useQuery<PayPeriodSchedule[]>({ queryKey: ["/api/pay-period-schedules"] });
 
+  async function saveEmergencyContact(workerId: string, data: typeof form) {
+    if (!data.emergencyContactName) return;
+    try {
+      const res = await fetch(`/api/employee-contacts?workerId=${workerId}`);
+      const existing: EmployeeContact[] = res.ok ? await res.json() : [];
+      const primary = existing.find(c => c.isPrimary) || existing[0];
+      const contactData = {
+        workerId, contactType: "emergency", name: data.emergencyContactName,
+        relationship: data.emergencyContactRelationship || null,
+        phone: data.emergencyContactPhone || null,
+        email: data.emergencyContactEmail || null, isPrimary: true
+      };
+      if (primary) {
+        await apiRequest("PATCH", `/api/employee-contacts/${primary.id}`, contactData);
+      } else {
+        await apiRequest("POST", "/api/employee-contacts", contactData);
+      }
+    } catch {}
+  }
+
   const createMutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const { isShareholder, ...rest } = data;
-      await apiRequest("POST", "/api/workers", cleanFormData({ ...rest, isShareholder }));
+      const { isShareholder, emergencyContactName, emergencyContactRelationship,
+        emergencyContactPhone, emergencyContactEmail, ...rest } = data;
+      const resp = await apiRequest("POST", "/api/workers", cleanFormData({ ...rest, isShareholder }));
+      const newWorker = await resp.json();
+      if (emergencyContactName && newWorker?.id) {
+        await saveEmergencyContact(newWorker.id, data);
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/workers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/employee-contacts"] });
       toast({ title: "Employee added successfully" });
       setAddOpen(false);
       resetForm();
@@ -119,10 +147,14 @@ function EmployeeTab() {
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: Partial<typeof form> }) => {
-      await apiRequest("PATCH", `/api/workers/${id}`, cleanFormData(data as Record<string, any>));
+      const { emergencyContactName, emergencyContactRelationship,
+        emergencyContactPhone, emergencyContactEmail, ...rest } = data as typeof form;
+      await apiRequest("PATCH", `/api/workers/${id}`, cleanFormData(rest as Record<string, any>));
+      await saveEmergencyContact(id, data as typeof form);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/workers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/employee-contacts"] });
       toast({ title: "Employee updated successfully" });
       setEditOpen(false);
       setEditWorker(null);
@@ -136,8 +168,22 @@ function EmployeeTab() {
     setForm({ ...emptyForm });
   }
 
-  function openEdit(worker: Worker) {
+  async function openEdit(worker: Worker) {
     setEditWorker(worker);
+    let ecName = "", ecRelationship = "", ecPhone = "", ecEmail = "";
+    try {
+      const res = await fetch(`/api/employee-contacts?workerId=${worker.id}`);
+      if (res.ok) {
+        const contacts: EmployeeContact[] = await res.json();
+        const primary = contacts.find(c => c.isPrimary) || contacts[0];
+        if (primary) {
+          ecName = primary.name || "";
+          ecRelationship = primary.relationship || "";
+          ecPhone = primary.phone || "";
+          ecEmail = primary.email || "";
+        }
+      }
+    } catch {}
     setForm({
       firstName: worker.firstName,
       middleName: worker.middleName || "",
@@ -183,7 +229,11 @@ function EmployeeTab() {
       policyGroupId: worker.policyGroupId || "",
       payPeriodScheduleId: worker.payPeriodScheduleId || "",
       groupId: worker.groupId || "",
-      titleId: worker.titleId || ""
+      titleId: worker.titleId || "",
+      emergencyContactName: ecName,
+      emergencyContactRelationship: ecRelationship,
+      emergencyContactPhone: ecPhone,
+      emergencyContactEmail: ecEmail
     });
     setEditOpen(true);
   }
@@ -533,6 +583,40 @@ function EmployeeTab() {
                 ))}
               </SelectContent>
             </Select>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <h3 className="text-sm font-semibold flex items-center gap-2 text-muted-foreground">
+            <UserPlus className="h-4 w-4" /> Emergency Contact
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Contact Name</Label>
+              <Input data-testid="input-emergencyContactName" value={form.emergencyContactName}
+                onChange={e => setForm(f => ({ ...f, emergencyContactName: e.target.value }))}
+                placeholder="Full name" />
+            </div>
+            <div className="space-y-2">
+              <Label>Relationship</Label>
+              <Input data-testid="input-emergencyContactRelationship" value={form.emergencyContactRelationship}
+                onChange={e => setForm(f => ({ ...f, emergencyContactRelationship: e.target.value }))}
+                placeholder="e.g. Spouse, Parent" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Phone</Label>
+              <Input data-testid="input-emergencyContactPhone" value={form.emergencyContactPhone}
+                onChange={e => setForm(f => ({ ...f, emergencyContactPhone: e.target.value }))}
+                placeholder="Phone number" />
+            </div>
+            <div className="space-y-2">
+              <Label>Email</Label>
+              <Input data-testid="input-emergencyContactEmail" type="email" value={form.emergencyContactEmail}
+                onChange={e => setForm(f => ({ ...f, emergencyContactEmail: e.target.value }))}
+                placeholder="Email address" />
+            </div>
           </div>
         </div>
 
@@ -2861,7 +2945,7 @@ export default function EmployeePage() {
       <div>
         <h1 className="text-2xl font-bold" data-testid="text-page-title">Employee</h1>
         <p className="text-muted-foreground" data-testid="text-page-subtitle">
-          Manage employees, contacts, wages, and more
+          Manage employees, wages, and more
         </p>
       </div>
 
@@ -2869,9 +2953,6 @@ export default function EmployeePage() {
         <TabsList className="flex flex-wrap" data-testid="tabs-employee">
           <TabsTrigger value="employee" data-testid="tab-employee">
             <Users className="mr-2 h-4 w-4" />Employee
-          </TabsTrigger>
-          <TabsTrigger value="contacts" data-testid="tab-contacts">
-            <UserPlus className="mr-2 h-4 w-4" />Emergency Contacts
           </TabsTrigger>
           <TabsTrigger value="preferences" data-testid="tab-preferences">
             <Settings className="mr-2 h-4 w-4" />Preferences
@@ -2906,7 +2987,6 @@ export default function EmployeePage() {
         </TabsList>
 
         <TabsContent value="employee"><EmployeeTab /></TabsContent>
-        <TabsContent value="contacts"><EmployeeContactsTab /></TabsContent>
         <TabsContent value="preferences"><PreferencesTab /></TabsContent>
         <TabsContent value="documents"><DocumentsTab /></TabsContent>
         <TabsContent value="wages"><WagesTab /></TabsContent>

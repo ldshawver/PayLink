@@ -16,7 +16,6 @@ import {
   CalendarCheck,
   Repeat,
   FileText,
-  Contact,
   Wallet,
   CreditCard,
   Tag,
@@ -140,7 +139,6 @@ const navSections: NavSection[] = [
     roles: ["admin", "manager"],
     items: [
       { title: "Employee", url: "/employee?tab=employee", icon: Users },
-      { title: "Employee Contacts", url: "/employee?tab=contacts", icon: Contact },
       { title: "Preferences", url: "/employee?tab=preferences", icon: Settings },
       { title: "Wages", url: "/employee?tab=wages", icon: Wallet },
       { title: "Pay Methods", url: "/employee?tab=pay-methods", icon: CreditCard },
