@@ -56,7 +56,7 @@ try {
 }
 
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  res.json({ status: "ok" });
 });
 
 app.get("/ready", async (_req, res) => {
