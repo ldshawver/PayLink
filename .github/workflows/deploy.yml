@@ -44,7 +44,8 @@ jobs:
             echo "3. Installing dependencies..."
             npm install --production=false
 
-            echo "4. Building..."
+            echo "4. Fixing permissions and building..."
+            if [ -d dist ]; then chmod -R u+w dist/ 2>/dev/null || true; fi
             npm run build
 
             echo "5. Copying session table SQL..."

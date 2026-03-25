@@ -435,11 +435,16 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/workers", requireRole("admin", "manager"), async (req, res) => {
+  app.get("/api/workers", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
       const companyId = req.query.companyId as string | undefined;
-      const workers = await storage.getWorkers(companyId && companyId !== "all" ? companyId : undefined);
-      res.json(workers);
+      const allWorkers = await storage.getWorkers(companyId && companyId !== "all" ? companyId : undefined);
+      if (user && user.role === "employee" && user.workerId) {
+        const selfWorker = allWorkers.filter(w => w.id === user.workerId);
+        return res.json(selfWorker);
+      }
+      res.json(allWorkers);
     } catch (error) {
       console.error("Failed to fetch workers:", error);
       res.status(500).json({ message: "Failed to fetch workers" });
