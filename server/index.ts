@@ -636,6 +636,7 @@ app.use((req, res, next) => {
     await run("companies.billing_active", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS billing_active BOOLEAN DEFAULT FALSE`);
     await run("companies.payment_method_on_file", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS payment_method_on_file BOOLEAN DEFAULT FALSE`);
     await run("companies.is_demo", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS is_demo BOOLEAN DEFAULT FALSE`);
+    await run("companies.next_check_number", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS next_check_number INTEGER DEFAULT 1`);
 
     // Trial signups table
     await run("trial_signups table", sql`CREATE TABLE IF NOT EXISTS trial_signups (

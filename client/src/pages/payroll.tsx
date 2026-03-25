@@ -19,7 +19,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Link } from "wouter";
 import {
   DollarSign, Clock, Calendar, ChevronDown, ChevronUp, Plus, Download, Printer,
-  Calculator, FileText, CreditCard, CalendarDays, Settings, Building, Receipt, Zap,
+  Calculator, FileText, CreditCard, CalendarDays, Settings, Building, Building2, Receipt, Zap,
   ChevronLeft, ChevronRight, Check, AlertCircle, ArrowRight, Pencil, Trash2,
   Layout, Eye, EyeOff, Image, Save, Copy, ExternalLink, RefreshCw,
   Banknote, Wallet, BadgeCheck, CircleDot, ToggleLeft, ToggleRight, BarChart3
@@ -42,6 +42,9 @@ function ProcessPayrollTab() {
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [formData, setFormData] = useState({ companyId: "", periodStart: "", periodEnd: "" });
+  const [showAll, setShowAll] = useState(false);
+  const [dateSearch, setDateSearch] = useState("");
+  const [companyFilter, setCompanyFilter] = useState("all");
 
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
@@ -65,18 +68,40 @@ function ProcessPayrollTab() {
 
   const totalRuns = payrollRuns.length;
   const totalPayroll = payrollRuns.reduce((sum, r) => sum + Number(r.totalGross || 0), 0);
-  const lastRun = payrollRuns.length > 0
-    ? payrollRuns.reduce((latest, r) => {
-        const d = new Date(r.createdAt || 0);
-        return d > new Date(latest.createdAt || 0) ? r : latest;
-      })
-    : null;
 
   const getCompanyName = (id: string) => companies.find(c => c.id === id)?.name || id;
   const getWorkerName = (id: string) => {
     const w = workers.find(w => w.id === id);
     return w ? `${w.firstName} ${w.lastName}` : id;
   };
+
+  const sortedRuns = [...payrollRuns].sort((a, b) =>
+    new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+  );
+
+  const latestByCompany: Record<string, PayrollRun> = {};
+  for (const run of sortedRuns) {
+    if (!latestByCompany[run.companyId]) {
+      latestByCompany[run.companyId] = run;
+    }
+  }
+
+  let displayRuns: PayrollRun[];
+  if (showAll || dateSearch || companyFilter !== "all") {
+    displayRuns = sortedRuns.filter(run => {
+      if (companyFilter !== "all" && run.companyId !== companyFilter) return false;
+      if (dateSearch) {
+        const periodStart = run.periodStart ? String(run.periodStart) : "";
+        const periodEnd = run.periodEnd ? String(run.periodEnd) : "";
+        const createdDate = run.createdAt ? new Date(run.createdAt).toISOString().split("T")[0] : "";
+        return periodStart.includes(dateSearch) || periodEnd.includes(dateSearch) || createdDate.includes(dateSearch);
+      }
+      return true;
+    });
+  } else {
+    displayRuns = Object.values(latestByCompany);
+    displayRuns.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  }
 
   const exportCSV = (run: PayrollRun, items: PayrollItem[]) => {
     const headers = ["Worker", "Type", "Rate", "Reg Hrs", "OT Hrs", "Reg Pay", "OT Pay", "Gross", "Deductions", "Net Pay", "Check #"];
@@ -141,18 +166,48 @@ function ProcessPayrollTab() {
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Last Run</CardTitle>
-            <Calendar className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium text-muted-foreground">Companies</CardTitle>
+            <Building2 className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold" data-testid="text-last-run">
-              {lastRun ? new Date(lastRun.createdAt!).toLocaleDateString() : "N/A"}
-            </div>
+            <div className="text-2xl font-bold" data-testid="text-company-count">{Object.keys(latestByCompany).length}</div>
           </CardContent>
         </Card>
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
+          <Select value={companyFilter} onValueChange={v => { setCompanyFilter(v); if (v !== "all") setShowAll(true); }}>
+            <SelectTrigger className="w-[200px]" data-testid="select-payroll-company-filter">
+              <SelectValue placeholder="All Companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Input
+            type="date"
+            className="w-[180px]"
+            data-testid="input-payroll-date-search"
+            value={dateSearch}
+            onChange={e => { setDateSearch(e.target.value); if (e.target.value) setShowAll(true); }}
+            placeholder="Search by date"
+          />
+          {dateSearch && (
+            <Button variant="ghost" size="sm" onClick={() => setDateSearch("")} data-testid="button-clear-date">
+              Clear
+            </Button>
+          )}
+          <Button
+            variant={showAll ? "default" : "outline"}
+            size="sm"
+            onClick={() => { setShowAll(!showAll); if (showAll) { setDateSearch(""); setCompanyFilter("all"); } }}
+            data-testid="button-toggle-all-payrolls"
+          >
+            {showAll ? "Show Latest Only" : "Show All Payrolls"}
+          </Button>
+        </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-run-payroll"><Plus className="mr-2 h-4 w-4" />Run Payroll</Button>
@@ -190,8 +245,14 @@ function ProcessPayrollTab() {
         </Dialog>
       </div>
 
+      {!showAll && !dateSearch && companyFilter === "all" && payrollRuns.length > Object.keys(latestByCompany).length && (
+        <p className="text-sm text-muted-foreground">
+          Showing latest payroll per company. {payrollRuns.length - Object.keys(latestByCompany).length} older run(s) hidden.
+        </p>
+      )}
+
       <div className="space-y-4">
-        {payrollRuns.map(run => (
+        {displayRuns.map(run => (
           <PayrollRunCard
             key={run.id}
             run={run}
@@ -202,10 +263,12 @@ function ProcessPayrollTab() {
             onExportCSV={exportCSV}
           />
         ))}
-        {payrollRuns.length === 0 && (
+        {displayRuns.length === 0 && (
           <Card>
             <CardContent className="p-6 text-center text-muted-foreground">
-              No payroll runs yet. Click "Run Payroll" to get started.
+              {payrollRuns.length === 0
+                ? 'No payroll runs yet. Click "Run Payroll" to get started.'
+                : "No payroll runs match your search."}
             </CardContent>
           </Card>
         )}

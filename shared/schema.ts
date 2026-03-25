@@ -58,6 +58,7 @@ export const companies = pgTable("companies", {
   billingActive: boolean("billing_active").default(false),
   paymentMethodOnFile: boolean("payment_method_on_file").default(false),
   isDemo: boolean("is_demo").default(false),
+  nextCheckNumber: integer("next_check_number").default(1),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

@@ -218,6 +218,12 @@ function CompanyFormFields({
         </div>
       </div>
       <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-2">
+          <Label htmlFor="next-check-number">Next Check Number</Label>
+          <Input id="next-check-number" data-testid="input-next-check-number" type="number" value={form.nextCheckNumber} onChange={set("nextCheckNumber")} placeholder="e.g. 100" />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
         <FileUploadField
           label="Company Logo"
           value={form.logoUrl || ""}
@@ -240,7 +246,7 @@ function CompanyFormFields({
 const emptyCompanyForm = (): Record<string, string> => ({
   enterpriseId: "", legalEntityId: "", name: "", legalName: "", ein: "", entityType: "llc",
   address: "", city: "", state: "", zip: "", phone: "", payFrequency: "biweekly",
-  logoUrl: "", iconUrl: "",
+  logoUrl: "", iconUrl: "", nextCheckNumber: "",
 });
 
 function CompanyInfoTab() {
@@ -304,6 +310,7 @@ function CompanyInfoTab() {
       payFrequency: company.payFrequency || "biweekly",
       logoUrl: company.logoUrl || "",
       iconUrl: company.iconUrl || "",
+      nextCheckNumber: String(company.nextCheckNumber || ""),
     });
     setEditOpen(true);
   };

@@ -425,6 +425,7 @@ export async function registerRoutes(
       const data = { ...req.body };
       if (data.enterpriseId === "") data.enterpriseId = null;
       if (data.legalEntityId === "") data.legalEntityId = null;
+      if (data.nextCheckNumber !== undefined) data.nextCheckNumber = parseInt(data.nextCheckNumber) || null;
       const company = await storage.updateCompany(req.params.id as string, data);
       if (!company) {
         return res.status(404).json({ message: "Company not found" });
@@ -722,7 +723,7 @@ export async function registerRoutes(
       }
 
       let totalGross = 0, totalNet = 0, totalHours = 0, totalOT = 0;
-      let checkNum = 1001;
+      let checkNum = company.nextCheckNumber || 1;
       const items: any[] = [];
 
       const allWageGroups = await storage.getSecondaryWageGroups(run.companyId);
@@ -892,6 +893,8 @@ export async function registerRoutes(
       for (const item of items) {
         await storage.createPayrollItem(item);
       }
+
+      await storage.updateCompany(run.companyId, { nextCheckNumber: checkNum });
 
       await storage.updatePayrollRun(run.id, {
         status: "processed",
@@ -1762,7 +1765,7 @@ export async function registerRoutes(
       const dtMultiplier = 2.0;
       const items: any[] = [];
       let totalGross = 0, totalNet = 0, totalHoursSum = 0, totalOT = 0;
-      let checkNum = 1001;
+      let checkNum = company.nextCheckNumber || 1;
 
       for (const worker of activeWorkers) {
         const workerEntries = entries.filter(e => e.workerId === worker.id);
@@ -1879,6 +1882,8 @@ export async function registerRoutes(
       for (const item of items) {
         await storage.createPayrollItem({ payrollRunId: payrollRun.id, ...item });
       }
+
+      await storage.updateCompany(companyId, { nextCheckNumber: checkNum });
 
       res.status(201).json(payrollRun);
     } catch (error: any) {
