@@ -85,6 +85,7 @@ jobs:
             cd "$APP_DIR" && pm2 start dist/index.cjs \
               --name paylink \
               --cwd "$APP_DIR" \
+              --interpreter node \
               --node-args="-r dotenv/config" \
               --update-env \
               -- dotenv_config_path="$ENV_FILE"
