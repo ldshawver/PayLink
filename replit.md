@@ -16,6 +16,15 @@ When deploying updates to the VPS, ALWAYS follow this exact sequence:
 Create the backups directory first: `mkdir -p ~/backups`.
 If anything goes wrong, restore: `psql -U lshawver -h 127.0.0.1 paylink < ~/backups/paylink_backup_YYYYMMDD_HHMMSS.sql`.
 
+VPS .env Rules (CRITICAL - NEVER VIOLATE):
+1. NEVER modify or overwrite the VPS .env file from code or deploy scripts.
+2. NEVER change database connection variable names without updating deploy config and app config together.
+3. The app uses ONE PostgreSQL database via DATABASE_URL (port 5432). There is no MySQL/MariaDB.
+4. The marketing website (mypaylink.app) is static HTML — no database connection.
+5. Before restarting PM2, validate that DATABASE_URL and SESSION_SECRET exist in the .env.
+6. Do not add automatic destructive migrations or resets on startup.
+7. Required .env vars: DATABASE_URL, SESSION_SECRET. Recommended: APP_BASE_URL, PORT, NODE_ENV.
+
 Schema Change Rules (CRITICAL - NEVER VIOLATE):
 1. NEVER drop existing tables - only add new tables.
 2. NEVER remove columns from existing tables - only add new columns with ALTER TABLE ADD COLUMN IF NOT EXISTS.
