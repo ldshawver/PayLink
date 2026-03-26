@@ -17,16 +17,28 @@ Create the backups directory first: `mkdir -p ~/backups`.
 If anything goes wrong, restore: `psql -U lshawver -h 127.0.0.1 paylink < ~/backups/paylink_backup_YYYYMMDD_HHMMSS.sql`.
 
 Production VPS Safety Rules (CRITICAL - NEVER VIOLATE):
-1. NEVER overwrite, recreate, or reset the VPS .env file. Production source of truth: /home/paylinkssh/paylink-app/PayLink/.env
+1. NEVER overwrite, recreate, or reset the VPS .env file. Production source of truth: /etc/paylink/.env (outside the git repo).
 2. NEVER assume MySQL/MariaDB. PayLink production uses PostgreSQL only.
 3. Required production env vars: DATABASE_URL, SESSION_SECRET, APP_BASE_URL, PORT=8000, NODE_ENV=production.
-4. Always start PM2 with explicit dotenv path: dotenv_config_path=/home/paylinkssh/paylink-app/PayLink/.env
+4. Always start PM2 with explicit dotenv path: dotenv_config_path=/etc/paylink/.env
 5. Do not use shell-string PM2 startup if direct node startup can be used.
 6. Do not add destructive startup resets, schema drops, or automatic database recreation.
 7. Before restarting production, validate: .env file exists, DATABASE_URL exists, SESSION_SECRET exists, APP_BASE_URL exists.
 8. Keep deploy backup logic aligned to PostgreSQL. Use pg_dump, not mysqldump.
 9. Marketing site is static and does not need its own database connection variable. It talks to the app API.
 10. Do not change production ports unless explicitly instructed. PayLink app runs behind reverse proxy on 127.0.0.1:8000.
+
+VPS Deploy Architecture:
+- App repo: /home/paylinkssh/paylink-app/PayLink
+- App SSH user: paylinkssh
+- App domain: app.mypaylink.app (reverse proxy to 127.0.0.1:8000)
+- App site root: /home/mypaylink-app/htdocs/app.mypaylink.app
+- Env file: /etc/paylink/.env (outside git, owned by paylinkssh, chmod 600)
+- Marketing domain: mypaylink.app (port 3000)
+- Marketing site root: /home/mypaylink/htdocs/mypaylink.appsite
+- Marketing site user: mypaylink
+- Marketing SSH user: mypaylinks
+- GitHub secrets needed: VPS_HOST, VPS_USER, VPS_SSH_KEY, WEBSITE_SSH_USER, WEBSITE_SSH_KEY
 
 Schema Change Rules (CRITICAL - NEVER VIOLATE):
 1. NEVER drop existing tables - only add new tables.
