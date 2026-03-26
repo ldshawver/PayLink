@@ -6,9 +6,9 @@ on:
       - main
 
 jobs:
-  deploy:
+  deploy-app:
     runs-on: ubuntu-latest
-    name: Deploy to Production
+    name: Deploy App (app.mypaylink.app)
 
     steps:
       - name: Deploy via SSH
@@ -18,6 +18,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script_stop: true
+          command_timeout: 10m
           script: |
             set -e
 
@@ -25,7 +26,7 @@ jobs:
             BACKUP_DIR="/home/paylinkssh/backups"
 
             echo "=========================================="
-            echo "PayLink Deploy - $(date)"
+            echo "PayLink App Deploy - $(date)"
             echo "=========================================="
 
             mkdir -p "$BACKUP_DIR"
@@ -79,5 +80,50 @@ jobs:
             ls -t "$BACKUP_DIR"/paylink_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
 
             echo "=========================================="
-            echo "Deploy Complete - Health: $HEALTH | Ready: $READY"
+            echo "App Deploy Complete - Health: $HEALTH | Ready: $READY"
+            echo "=========================================="
+
+  deploy-website:
+    runs-on: ubuntu-latest
+    name: Deploy Website (mypaylink.app)
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+
+            APP_DIR="/home/paylinkssh/paylink-app/PayLink"
+            WEBSITE_DIR="/home/mypaylink/htdocs/mypaylink.app"
+
+            echo "=========================================="
+            echo "PayLink Website Deploy - $(date)"
+            echo "=========================================="
+
+            cd "$APP_DIR"
+            echo "1. Ensuring latest code..."
+            git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
+            git checkout -- package.json package-lock.json 2>/dev/null || true
+            git pull origin main 2>/dev/null || true
+
+            echo "2. Syncing public site files..."
+            rsync -av --delete \
+              --exclude='.git' \
+              --exclude='node_modules' \
+              "$APP_DIR/public-site/public/" "$WEBSITE_DIR/"
+
+            echo "3. Restarting website process..."
+            pm2 restart mypaylink 2>/dev/null || true
+
+            echo "4. Verifying..."
+            WEBSITE_CHECK=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ 2>/dev/null || echo "skip")
+            echo "   Website check: $WEBSITE_CHECK"
+
+            echo "=========================================="
+            echo "Website Deploy Complete"
             echo "=========================================="
