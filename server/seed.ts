@@ -12,8 +12,8 @@ const PERMISSION_RESOURCES = [
 async function ensureAdminUser() {
   try {
     const existing = await db.select().from(users).where(eq(users.username, "admin"));
-    const hashedPassword = await bcrypt.hash("admin", 10);
     if (existing.length === 0) {
+      const hashedPassword = await bcrypt.hash("admin", 10);
       await db.insert(users).values({
         username: "admin",
         password: hashedPassword,
@@ -21,8 +21,13 @@ async function ensureAdminUser() {
       });
       console.log("Admin user created (admin/admin)");
     } else {
-      await db.update(users).set({ password: hashedPassword }).where(eq(users.username, "admin"));
-      console.log("Admin user password reset to default");
+      if (process.env.NODE_ENV === "production") {
+        console.log("Admin user exists, skipping password reset (production mode)");
+      } else {
+        const hashedPassword = await bcrypt.hash("admin", 10);
+        await db.update(users).set({ password: hashedPassword }).where(eq(users.username, "admin"));
+        console.log("Admin user password reset to default (dev mode)");
+      }
     }
   } catch (e) {
     console.log("Could not ensure admin user (tables may not exist yet)");
