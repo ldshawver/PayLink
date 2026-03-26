@@ -68,9 +68,12 @@ jobs:
             echo "3. Installing dependencies..."
             npm install --production=false
 
-            # Step 4: Build (no sudo - deploy user owns the files)
+            # Step 4: Build
             echo "4. Building..."
-            if [ -d dist ]; then chmod -R u+w dist/ 2>/dev/null || true; fi
+            rm -rf "$APP_DIR/dist" 2>/dev/null || true
+            mkdir -p "$APP_DIR/dist"
+            chmod -R u+rwX,g+rwX "$APP_DIR" 2>/dev/null || true
+
             npm run build
 
             # Step 5: Copy session table SQL
