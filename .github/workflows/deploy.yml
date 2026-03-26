@@ -69,8 +69,17 @@ jobs:
             npm install --production=false
 
             # Step 4: Build
-            echo "4. Fixing permissions and building..."
-            if [ -d dist ]; then chmod -R u+w dist/ 2>/dev/null || true; fi
+            echo "4. Cleaning and building..."
+
+            # Force remove dist safely
+            rm -rf dist 2>/dev/null || true
+
+            # Recreate clean dist folder
+            mkdir -p dist
+
+            # Fix ownership just in case
+            sudo chown -R $USER:$USER "$APP_DIR"
+
             npm run build
 
             # Step 5: Copy session table SQL
