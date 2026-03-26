@@ -16,14 +16,17 @@ When deploying updates to the VPS, ALWAYS follow this exact sequence:
 Create the backups directory first: `mkdir -p ~/backups`.
 If anything goes wrong, restore: `psql -U lshawver -h 127.0.0.1 paylink < ~/backups/paylink_backup_YYYYMMDD_HHMMSS.sql`.
 
-VPS .env Rules (CRITICAL - NEVER VIOLATE):
-1. NEVER modify or overwrite the VPS .env file from code or deploy scripts.
-2. NEVER change database connection variable names without updating deploy config and app config together.
-3. The app uses ONE PostgreSQL database via DATABASE_URL (port 5432). There is no MySQL/MariaDB.
-4. The marketing website (mypaylink.app) is static HTML — no database connection.
-5. Before restarting PM2, validate that DATABASE_URL and SESSION_SECRET exist in the .env.
-6. Do not add automatic destructive migrations or resets on startup.
-7. Required .env vars: DATABASE_URL, SESSION_SECRET. Recommended: APP_BASE_URL, PORT, NODE_ENV.
+Production VPS Safety Rules (CRITICAL - NEVER VIOLATE):
+1. NEVER overwrite, recreate, or reset the VPS .env file. Production source of truth: /home/paylinkssh/paylink-app/PayLink/.env
+2. NEVER assume MySQL/MariaDB. PayLink production uses PostgreSQL only.
+3. Required production env vars: DATABASE_URL, SESSION_SECRET, APP_BASE_URL, PORT=8000, NODE_ENV=production.
+4. Always start PM2 with explicit dotenv path: dotenv_config_path=/home/paylinkssh/paylink-app/PayLink/.env
+5. Do not use shell-string PM2 startup if direct node startup can be used.
+6. Do not add destructive startup resets, schema drops, or automatic database recreation.
+7. Before restarting production, validate: .env file exists, DATABASE_URL exists, SESSION_SECRET exists, APP_BASE_URL exists.
+8. Keep deploy backup logic aligned to PostgreSQL. Use pg_dump, not mysqldump.
+9. Marketing site is static and does not need its own database connection variable. It talks to the app API.
+10. Do not change production ports unless explicitly instructed. PayLink app runs behind reverse proxy on 127.0.0.1:8000.
 
 Schema Change Rules (CRITICAL - NEVER VIOLATE):
 1. NEVER drop existing tables - only add new tables.
