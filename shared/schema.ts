@@ -59,6 +59,7 @@ export const companies = pgTable("companies", {
   paymentMethodOnFile: boolean("payment_method_on_file").default(false),
   isDemo: boolean("is_demo").default(false),
   nextCheckNumber: integer("next_check_number").default(1),
+  stationEnforcementEnabled: boolean("station_enforcement_enabled").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -149,6 +150,7 @@ export const timePunches = pgTable("time_punches", {
   approvalStatus: text("approval_status").default("approved"),
   approvedBy: varchar("approved_by"),
   scheduleId: varchar("schedule_id"),
+  stationId: varchar("station_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

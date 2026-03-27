@@ -236,6 +236,7 @@ app.use((req, res, next) => {
     await run("time_punches.approval_status", sql`ALTER TABLE time_punches ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'approved'`);
     await run("time_punches.approved_by", sql`ALTER TABLE time_punches ADD COLUMN IF NOT EXISTS approved_by VARCHAR`);
     await run("time_punches.schedule_id", sql`ALTER TABLE time_punches ADD COLUMN IF NOT EXISTS schedule_id VARCHAR`);
+    await run("time_punches.station_id", sql`ALTER TABLE time_punches ADD COLUMN IF NOT EXISTS station_id VARCHAR`);
     // time_entries additions
     await run("time_entries.double_time_hours", sql`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS double_time_hours NUMERIC DEFAULT 0`);
     await run("time_entries.wage_group_id", sql`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS wage_group_id VARCHAR`);
@@ -1027,6 +1028,8 @@ app.use((req, res, next) => {
     await run("payments.stripe_customer_id", sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`);
     await run("payments.mandate_accepted", sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS mandate_accepted BOOLEAN DEFAULT FALSE`);
     await run("payment_method_configs.fee_passed_to_customer", sql`ALTER TABLE payment_method_configs ADD COLUMN IF NOT EXISTS fee_passed_to_customer BOOLEAN DEFAULT TRUE`);
+
+    await run("companies.station_enforcement_enabled", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS station_enforcement_enabled BOOLEAN DEFAULT FALSE`);
 
     await run("portal_access_tokens table", sql`CREATE TABLE IF NOT EXISTS portal_access_tokens (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

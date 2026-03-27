@@ -581,12 +581,33 @@ export async function registerRoutes(
       if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in/out." });
       }
-      // Station enforcement: if company has active stations, require stationId for clock_in
+      let matchedStationId: string | undefined;
       if (punchType === "clock_in" && worker.companyId) {
-        const allStations = await storage.getStations(worker.companyId);
-        const activeStations = allStations.filter(s => s.status === "active");
-        if (activeStations.length > 0 && !req.body.stationId) {
-          return res.status(400).json({ message: "A station must be selected to clock in. Please select an active station." });
+        const companyRows = await db.execute(sql`SELECT station_enforcement_enabled FROM companies WHERE id = ${worker.companyId}`);
+        const enforcementEnabled = companyRows.rows.length > 0 && (companyRows.rows[0] as any).station_enforcement_enabled === true;
+        if (enforcementEnabled) {
+          const allStations = await storage.getStations(worker.companyId);
+          const activeStations = allStations.filter(s => s.status === "active");
+          if (activeStations.length > 0) {
+            const clientIp = req.ip || req.socket.remoteAddress || "";
+            const matched = activeStations.find(s => {
+              if (!s.ipRestriction) return false;
+              const restrictions = s.ipRestriction.split(",").map(r => r.trim());
+              return restrictions.some(r => {
+                if (r.includes("/")) {
+                  const [subnet, bits] = r.split("/");
+                  const mask = ~((1 << (32 - parseInt(bits))) - 1) >>> 0;
+                  const ipToNum = (ip: string) => ip.split(".").reduce((acc, oct) => (acc << 8) + parseInt(oct), 0) >>> 0;
+                  return (ipToNum(clientIp) & mask) === (ipToNum(subnet) & mask);
+                }
+                return clientIp === r;
+              });
+            });
+            if (!matched) {
+              return res.status(403).json({ message: `Clock-in denied. Your IP address (${clientIp}) does not match any authorized station. Contact your administrator.` });
+            }
+            matchedStationId = matched.id;
+          }
         }
       }
       const today = new Date().toISOString().split("T")[0];
@@ -623,6 +644,7 @@ export async function registerRoutes(
         workerId, companyId, punchType, punchTime: new Date(),
         approvalStatus: punchApprovalStatus,
         scheduleId: matchingSchedule?.id || undefined,
+        stationId: matchedStationId ?? null,
       });
 
       if (punchType === "clock_in") {
@@ -1198,15 +1220,35 @@ export async function registerRoutes(
       if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in/out. They submit invoices instead." });
       }
-      // Station enforcement: if company has active stations, require stationId for clock_in
+      let matchedStationId: string | undefined;
       if (req.body.punchType === "clock_in" && worker.companyId) {
-        const allStations = await storage.getStations(worker.companyId);
-        const activeStations = allStations.filter(s => s.status === "active");
-        if (activeStations.length > 0 && !req.body.stationId) {
-          return res.status(400).json({ message: "A station must be selected to clock in. Please select an active station." });
+        const companyRows = await db.execute(sql`SELECT station_enforcement_enabled FROM companies WHERE id = ${worker.companyId}`);
+        const enforcementEnabled = companyRows.rows.length > 0 && (companyRows.rows[0] as any).station_enforcement_enabled === true;
+        if (enforcementEnabled) {
+          const allStations = await storage.getStations(worker.companyId);
+          const activeStations = allStations.filter(s => s.status === "active");
+          if (activeStations.length > 0) {
+            const clientIp = req.ip || req.socket.remoteAddress || "";
+            const matched = activeStations.find(s => {
+              if (!s.ipRestriction) return false;
+              const restrictions = s.ipRestriction.split(",").map(r => r.trim());
+              return restrictions.some(r => {
+                if (r.includes("/")) {
+                  const [subnet, bits] = r.split("/");
+                  const mask = ~((1 << (32 - parseInt(bits))) - 1) >>> 0;
+                  const ipToNum = (ip: string) => ip.split(".").reduce((acc, oct) => (acc << 8) + parseInt(oct), 0) >>> 0;
+                  return (ipToNum(clientIp) & mask) === (ipToNum(subnet) & mask);
+                }
+                return clientIp === r;
+              });
+            });
+            if (!matched) {
+              return res.status(403).json({ message: `Clock-in denied. Your IP address (${clientIp}) does not match any authorized station. Contact your administrator.` });
+            }
+            matchedStationId = matched.id;
+          }
         }
       }
-      // Only pass known punch fields — strip unknown properties like stationId that aren't in the schema
       const punch = await storage.createTimePunch({
         workerId: worker.id,
         companyId: worker.companyId,
@@ -1214,6 +1256,7 @@ export async function registerRoutes(
         punchTime: new Date(),
         note: req.body.note ?? null,
         scheduleId: req.body.scheduleId ?? null,
+        stationId: matchedStationId ?? null,
       });
 
       if (punch.punchType === "clock_in") {
@@ -3088,6 +3131,11 @@ export async function registerRoutes(
       console.error(error);
       res.status(500).json({ message: "Failed to delete membership" });
     }
+  });
+
+  app.get("/api/client-ip", async (req, res) => {
+    const clientIp = req.ip || req.socket.remoteAddress || "";
+    res.json({ ip: clientIp });
   });
 
   app.get("/api/stations", async (req, res) => {

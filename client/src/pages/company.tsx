@@ -3384,6 +3384,18 @@ function StationsTab() {
 
   const { data: stationsList, isLoading } = useQuery<Station[]>({ queryKey: ["/api/stations"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: clientIpData } = useQuery<{ ip: string }>({ queryKey: ["/api/client-ip"] });
+
+  const toggleEnforcementMutation = useMutation({
+    mutationFn: async ({ companyId, enabled }: { companyId: string; enabled: boolean }) => {
+      await apiRequest("PATCH", `/api/companies/${companyId}`, { stationEnforcementEnabled: enabled });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      toast({ title: "Station enforcement updated" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
 
   const prepareData = (data: typeof form) => ({
     ...data,
@@ -3470,6 +3482,36 @@ function StationsTab() {
 
   return (
     <div className="space-y-4">
+      {companies && companies.length > 0 && (
+        <Card className="p-4">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-sm">Station IP Enforcement</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">When enabled, employees can only clock in from IP addresses that match an active station. The station is detected automatically.</p>
+              </div>
+            </div>
+            {companies.map((c) => (
+              <div key={c.id} className="flex items-center justify-between border rounded-lg p-3">
+                <span className="text-sm font-medium">{c.name}</span>
+                <div className="flex items-center gap-2">
+                  <Badge variant={(c as any).stationEnforcementEnabled ? "default" : "secondary"} data-testid={`badge-enforcement-${c.id}`}>
+                    {(c as any).stationEnforcementEnabled ? "Enabled" : "Disabled"}
+                  </Badge>
+                  <Switch
+                    checked={(c as any).stationEnforcementEnabled || false}
+                    onCheckedChange={(v) => toggleEnforcementMutation.mutate({ companyId: c.id, enabled: v })}
+                    data-testid={`switch-enforcement-${c.id}`}
+                  />
+                </div>
+              </div>
+            ))}
+            {clientIpData && (
+              <p className="text-xs text-muted-foreground">Your current IP address: <span className="font-mono font-medium" data-testid="text-current-ip">{clientIpData.ip}</span></p>
+            )}
+          </div>
+        </Card>
+      )}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <h2 className="text-lg font-semibold">Stations</h2>
         <Dialog open={addOpen} onOpenChange={setAddOpen}>
