@@ -56,10 +56,16 @@ jobs:
             PGPASSWORD="$DB_PW" pg_dump -U "$DB_USER" -h "$DB_HOST" "$DB_NAME" > "$BACKUP_FILE"
             echo "   Saved: $BACKUP_FILE"
 
-            # Step 2: Pull latest code (safe pull - no stash, no clean, no reset)
+            # Step 2: Fix ownership and pull latest code
             cd "$APP_DIR"
-            echo "2. Pulling latest code..."
+            echo "2. Fixing file ownership and pulling latest code..."
             git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
+
+            # Fix any root-owned files FIRST (before git or npm touch anything)
+            find "$APP_DIR" -not -path '*/node_modules/*' -not -path '*/.git/*' \
+              -user root -exec chown paylinkssh:mypaylink-app {} + 2>/dev/null || true
+            chmod -R u+rwX,g+rwX "$APP_DIR" 2>/dev/null || true
+
             git checkout -- package.json package-lock.json 2>/dev/null || true
             git pull origin main
 
@@ -67,11 +73,10 @@ jobs:
             echo "3. Installing dependencies..."
             npm install --production=false
 
-            # Step 4: Build (no sudo - deploy user paylinkssh owns the files)
+            # Step 4: Build
             echo "4. Building..."
             rm -rf "$APP_DIR/dist" 2>/dev/null || true
             mkdir -p "$APP_DIR/dist"
-            chmod -R u+rwX,g+rwX "$APP_DIR" 2>/dev/null || true
             npm run build
 
             # Step 5: Copy session table SQL
