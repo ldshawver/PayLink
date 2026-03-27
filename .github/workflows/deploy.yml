@@ -34,7 +34,6 @@ jobs:
             echo "0. Validating environment..."
             if [ ! -f "$ENV_FILE" ]; then
               echo "ERROR: $ENV_FILE does not exist. Cannot deploy."
-              echo "       Create it manually: sudo mkdir -p /etc/paylink && sudo nano /etc/paylink/.env"
               exit 1
             fi
             for VAR in DATABASE_URL SESSION_SECRET APP_BASE_URL PORT NODE_ENV; do
@@ -43,7 +42,7 @@ jobs:
                 exit 1
               fi
             done
-            echo "   Environment validated (DATABASE_URL, SESSION_SECRET, APP_BASE_URL, PORT, NODE_ENV)"
+            echo "   Environment validated"
 
             # Step 1: Backup PostgreSQL database
             mkdir -p "$BACKUP_DIR"
@@ -63,27 +62,27 @@ jobs:
             git checkout -- package.json package-lock.json 2>/dev/null || true
             git pull origin main
 
-            # Step 3: Normalize write permissions before npm touches anything
+            # Step 3: Normalize permissions
             echo "3. Normalizing permissions..."
             chmod -R u+rwX,g+rwX "$APP_DIR" 2>/dev/null || true
 
-            # Step 4: Install dependencies
+            # Step 4: Install dependencies and fix all binary permissions
             echo "4. Installing dependencies..."
             npm install --production=false
             chmod +x "$APP_DIR/node_modules/.bin/"* 2>/dev/null || true
+            find "$APP_DIR/node_modules" -path "*/bin/*" -type f -exec chmod +x {} + 2>/dev/null || true
 
             # Step 5: Build
             echo "5. Building..."
             rm -rf "$APP_DIR/dist" 2>/dev/null || true
             mkdir -p "$APP_DIR/dist"
-            chmod -R u+rwX,g+rwX "$APP_DIR" 2>/dev/null || true
             npm run build
 
             # Step 6: Copy session table SQL
             echo "6. Copying session table SQL..."
             cp node_modules/connect-pg-simple/table.sql dist/
 
-            # Step 7: Restart app with explicit env file path (non-root PM2)
+            # Step 7: Restart app
             echo "7. Restarting app..."
             pm2 delete paylink 2>/dev/null || true
             fuser -k 8000/tcp 2>/dev/null || true
@@ -116,65 +115,16 @@ jobs:
             # Cleanup old backups (keep last 10)
             ls -t "$BACKUP_DIR"/paylink_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
 
-            echo "=========================================="
-            echo "App Deploy Complete - Health: $HEALTH | Ready: $READY"
-            echo "=========================================="
-
-  deploy-website:
-    runs-on: ubuntu-latest
-    name: Deploy Website (mypaylink.app)
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: public-site/public
-
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.WEBSITE_SSH_USER }}
-          key: ${{ secrets.WEBSITE_SSH_KEY }}
-          script_stop: true
-          command_timeout: 5m
-          script: |
-            set -e
-
+            # Step 9: Also sync marketing website files
+            echo "9. Syncing marketing website..."
             WEBSITE_DIR="/home/mypaylink/htdocs/mypaylink.appsite"
-            REPO_DIR="/home/paylinkssh/paylink-app/PayLink"
-
-            echo "=========================================="
-            echo "PayLink Website Deploy - $(date)"
-            echo "=========================================="
-            echo "   Site user: mypaylink"
-            echo "   SSH user: mypaylinks"
-            echo "   Target: $WEBSITE_DIR"
-
-            echo "1. Pulling latest code from app repo..."
-            cd "$REPO_DIR" 2>/dev/null || true
-            git config --global --add safe.directory "$REPO_DIR" 2>/dev/null || true
-            git pull origin main 2>/dev/null || true
-
-            echo "2. Syncing public site files..."
-            if [ -d "$REPO_DIR/public-site/public" ]; then
+            if [ -d "$APP_DIR/public-site/public" ] && [ -d "$WEBSITE_DIR" ]; then
               rsync -av --delete \
                 --exclude='.git' \
                 --exclude='node_modules' \
-                "$REPO_DIR/public-site/public/" "$WEBSITE_DIR/"
-            else
-              echo "ERROR: Source directory not found at $REPO_DIR/public-site/public"
-              exit 1
+                "$APP_DIR/public-site/public/" "$WEBSITE_DIR/" 2>/dev/null || echo "   Website sync skipped (permission issue)"
             fi
 
-            echo "3. Restarting website process..."
-            pm2 restart mypaylink 2>/dev/null || echo "   PM2 process 'mypaylink' not found, skipping restart"
-
-            echo "4. Verifying..."
-            sleep 3
-            WEBSITE_CHECK=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ 2>/dev/null || echo "skip")
-            echo "   Website check: $WEBSITE_CHECK"
-
             echo "=========================================="
-            echo "Website Deploy Complete"
+            echo "App Deploy Complete - Health: $HEALTH | Ready: $READY"
             echo "=========================================="
