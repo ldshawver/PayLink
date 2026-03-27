@@ -70,6 +70,7 @@ jobs:
             # Step 4: Install dependencies
             echo "4. Installing dependencies..."
             npm install --production=false
+            chmod +x "$APP_DIR/node_modules/.bin/"* 2>/dev/null || true
 
             # Step 5: Build
             echo "5. Building..."
