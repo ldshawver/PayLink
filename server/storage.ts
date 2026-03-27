@@ -116,6 +116,7 @@ import {
   recurringBillingProfiles, documents, documentFolders, documentVersions,
   documentSignatureRequests, documentSigners, documentAuditLogs,
   automationRules, automationEvents, notifications, portalAccessTokens,
+  documentAcls, documentRetentionPolicies, onboardingPackets, onboardingPacketSteps, invoiceApprovalWorkflows,
   type Customer, type InsertCustomer,
   type Invoice, type InsertInvoice,
   type InvoiceLineItem, type InsertInvoiceLineItem,
@@ -133,6 +134,11 @@ import {
   type AutomationRule, type InsertAutomationRule,
   type AutomationEvent, type InsertAutomationEvent,
   type Notification, type InsertNotification,
+  type DocumentAcl, type InsertDocumentAcl,
+  type DocumentRetentionPolicy, type InsertDocumentRetentionPolicy,
+  type OnboardingPacket, type InsertOnboardingPacket,
+  type OnboardingPacketStep, type InsertOnboardingPacketStep,
+  type InvoiceApprovalWorkflow, type InsertInvoiceApprovalWorkflow,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -594,6 +600,30 @@ export interface IStorage {
 
   createDocumentAuditLog(data: InsertDocumentAuditLog): Promise<DocumentAuditLog>;
   getDocumentAuditLogs(documentId: string): Promise<DocumentAuditLog[]>;
+  getDocumentAuditLogsByCompany(companyId: string): Promise<DocumentAuditLog[]>;
+
+  getDocumentAcls(companyId: string): Promise<DocumentAcl[]>;
+  createDocumentAcl(data: InsertDocumentAcl): Promise<DocumentAcl>;
+  deleteDocumentAcl(id: string): Promise<void>;
+
+  getDocumentRetentionPolicies(companyId: string): Promise<DocumentRetentionPolicy[]>;
+  createDocumentRetentionPolicy(data: InsertDocumentRetentionPolicy): Promise<DocumentRetentionPolicy>;
+  updateDocumentRetentionPolicy(id: string, data: Partial<DocumentRetentionPolicy>): Promise<DocumentRetentionPolicy | undefined>;
+  deleteDocumentRetentionPolicy(id: string): Promise<void>;
+
+  getOnboardingPackets(companyId: string): Promise<OnboardingPacket[]>;
+  getOnboardingPacket(id: string): Promise<OnboardingPacket | undefined>;
+  createOnboardingPacket(data: InsertOnboardingPacket): Promise<OnboardingPacket>;
+  updateOnboardingPacket(id: string, data: Partial<OnboardingPacket>): Promise<OnboardingPacket | undefined>;
+
+  getOnboardingPacketSteps(packetId: string): Promise<OnboardingPacketStep[]>;
+  createOnboardingPacketStep(data: InsertOnboardingPacketStep): Promise<OnboardingPacketStep>;
+  updateOnboardingPacketStep(id: string, data: Partial<OnboardingPacketStep>): Promise<OnboardingPacketStep | undefined>;
+
+  getInvoiceApprovalWorkflows(companyId: string): Promise<InvoiceApprovalWorkflow[]>;
+  getInvoiceApprovalWorkflow(id: string): Promise<InvoiceApprovalWorkflow | undefined>;
+  createInvoiceApprovalWorkflow(data: InsertInvoiceApprovalWorkflow): Promise<InvoiceApprovalWorkflow>;
+  updateInvoiceApprovalWorkflow(id: string, data: Partial<InvoiceApprovalWorkflow>): Promise<InvoiceApprovalWorkflow | undefined>;
 
   getAutomationRules(companyId: string): Promise<AutomationRule[]>;
   getAutomationRule(id: string): Promise<AutomationRule | undefined>;
@@ -2717,6 +2747,80 @@ export class DatabaseStorage implements IStorage {
   }
   async getPortalAccessTokenByToken(token: string): Promise<any> {
     const [r] = await db.select().from(portalAccessTokens).where(eq(portalAccessTokens.token, token));
+    return r;
+  }
+
+  async getDocumentAuditLogsByCompany(companyId: string): Promise<DocumentAuditLog[]> {
+    return db.select().from(documentAuditLogs).where(eq(documentAuditLogs.companyId, companyId)).orderBy(desc(documentAuditLogs.createdAt));
+  }
+
+  async getDocumentAcls(companyId: string): Promise<DocumentAcl[]> {
+    return db.select().from(documentAcls).where(eq(documentAcls.companyId, companyId));
+  }
+  async createDocumentAcl(data: InsertDocumentAcl): Promise<DocumentAcl> {
+    const [r] = await db.insert(documentAcls).values(data).returning();
+    return r;
+  }
+  async deleteDocumentAcl(id: string): Promise<void> {
+    await db.delete(documentAcls).where(eq(documentAcls.id, id));
+  }
+
+  async getDocumentRetentionPolicies(companyId: string): Promise<DocumentRetentionPolicy[]> {
+    return db.select().from(documentRetentionPolicies).where(eq(documentRetentionPolicies.companyId, companyId)).orderBy(desc(documentRetentionPolicies.createdAt));
+  }
+  async createDocumentRetentionPolicy(data: InsertDocumentRetentionPolicy): Promise<DocumentRetentionPolicy> {
+    const [r] = await db.insert(documentRetentionPolicies).values(data).returning();
+    return r;
+  }
+  async updateDocumentRetentionPolicy(id: string, data: Partial<DocumentRetentionPolicy>): Promise<DocumentRetentionPolicy | undefined> {
+    const [r] = await db.update(documentRetentionPolicies).set({ ...data, updatedAt: new Date() }).where(eq(documentRetentionPolicies.id, id)).returning();
+    return r;
+  }
+  async deleteDocumentRetentionPolicy(id: string): Promise<void> {
+    await db.delete(documentRetentionPolicies).where(eq(documentRetentionPolicies.id, id));
+  }
+
+  async getOnboardingPackets(companyId: string): Promise<OnboardingPacket[]> {
+    return db.select().from(onboardingPackets).where(eq(onboardingPackets.companyId, companyId)).orderBy(desc(onboardingPackets.createdAt));
+  }
+  async getOnboardingPacket(id: string): Promise<OnboardingPacket | undefined> {
+    const [r] = await db.select().from(onboardingPackets).where(eq(onboardingPackets.id, id));
+    return r;
+  }
+  async createOnboardingPacket(data: InsertOnboardingPacket): Promise<OnboardingPacket> {
+    const [r] = await db.insert(onboardingPackets).values(data).returning();
+    return r;
+  }
+  async updateOnboardingPacket(id: string, data: Partial<OnboardingPacket>): Promise<OnboardingPacket | undefined> {
+    const [r] = await db.update(onboardingPackets).set({ ...data, updatedAt: new Date() }).where(eq(onboardingPackets.id, id)).returning();
+    return r;
+  }
+
+  async getOnboardingPacketSteps(packetId: string): Promise<OnboardingPacketStep[]> {
+    return db.select().from(onboardingPacketSteps).where(eq(onboardingPacketSteps.packetId, packetId)).orderBy(onboardingPacketSteps.sortOrder);
+  }
+  async createOnboardingPacketStep(data: InsertOnboardingPacketStep): Promise<OnboardingPacketStep> {
+    const [r] = await db.insert(onboardingPacketSteps).values(data).returning();
+    return r;
+  }
+  async updateOnboardingPacketStep(id: string, data: Partial<OnboardingPacketStep>): Promise<OnboardingPacketStep | undefined> {
+    const [r] = await db.update(onboardingPacketSteps).set(data).where(eq(onboardingPacketSteps.id, id)).returning();
+    return r;
+  }
+
+  async getInvoiceApprovalWorkflows(companyId: string): Promise<InvoiceApprovalWorkflow[]> {
+    return db.select().from(invoiceApprovalWorkflows).where(eq(invoiceApprovalWorkflows.companyId, companyId)).orderBy(desc(invoiceApprovalWorkflows.createdAt));
+  }
+  async getInvoiceApprovalWorkflow(id: string): Promise<InvoiceApprovalWorkflow | undefined> {
+    const [r] = await db.select().from(invoiceApprovalWorkflows).where(eq(invoiceApprovalWorkflows.id, id));
+    return r;
+  }
+  async createInvoiceApprovalWorkflow(data: InsertInvoiceApprovalWorkflow): Promise<InvoiceApprovalWorkflow> {
+    const [r] = await db.insert(invoiceApprovalWorkflows).values(data).returning();
+    return r;
+  }
+  async updateInvoiceApprovalWorkflow(id: string, data: Partial<InvoiceApprovalWorkflow>): Promise<InvoiceApprovalWorkflow | undefined> {
+    const [r] = await db.update(invoiceApprovalWorkflows).set({ ...data, updatedAt: new Date() }).where(eq(invoiceApprovalWorkflows.id, id)).returning();
     return r;
   }
 }

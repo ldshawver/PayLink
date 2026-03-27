@@ -96,6 +96,25 @@ function blockDemoWrites(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+async function getSessionCompanyId(req: Request): Promise<string | null> {
+  if (!req.session?.userId) return null;
+  const user = await storage.getUser(req.session.userId);
+  return user?.companyId || null;
+}
+
+function enforceCompanyScope(source: "query" | "body" = "query") {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const sessionCompanyId = await getSessionCompanyId(req);
+    if (!sessionCompanyId) return res.status(401).json({ message: "Not authenticated" });
+    const requestedCompanyId = source === "query" ? (req.query.companyId as string) : req.body?.companyId;
+    if (requestedCompanyId && requestedCompanyId !== sessionCompanyId) {
+      return res.status(403).json({ message: "Access denied: company mismatch" });
+    }
+    (req as any)._companyId = sessionCompanyId;
+    next();
+  };
+}
+
 async function requireActiveSubscription(req: Request, res: Response, next: NextFunction) {
   if (!req.session?.userId) return next();
   try {
@@ -8470,26 +8489,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ══════════════════════════════════════════════════════════════════════
   // DOCUMENTS
   // ══════════════════════════════════════════════════════════════════════
-  app.get("/api/document-folders", requireAuth, async (req, res) => {
+  app.get("/api/document-folders", requireAuth, enforceCompanyScope("query"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
-      if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      const companyId = (req as any)._companyId;
       const rows = await storage.getDocumentFolders(companyId);
       res.json(rows);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch folders") }); }
   });
 
-  app.post("/api/document-folders", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+  app.post("/api/document-folders", requireAuth, requireRole("admin", "manager"), blockDemoWrites, enforceCompanyScope("body"), async (req, res) => {
     try {
-      const r = await storage.createDocumentFolder(req.body);
+      const r = await storage.createDocumentFolder({ ...req.body, companyId: (req as any)._companyId });
       res.status(201).json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create folder") }); }
   });
 
-  app.get("/api/documents", requireAuth, async (req, res) => {
+  app.get("/api/documents", requireAuth, enforceCompanyScope("query"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
-      if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      const companyId = (req as any)._companyId;
       const rows = await storage.getDocuments(companyId);
       res.json(rows);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch documents") }); }
@@ -8503,26 +8520,318 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch document") }); }
   });
 
-  app.post("/api/documents", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+  app.post("/api/documents", requireAuth, requireRole("admin", "manager"), blockDemoWrites, enforceCompanyScope("body"), async (req, res) => {
     try {
-      const r = await storage.createDocument(req.body);
+      const r = await storage.createDocument({ ...req.body, companyId: (req as any)._companyId });
       res.status(201).json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create document") }); }
   });
 
   app.patch("/api/documents/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
+      const doc = await storage.getDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Document not found" });
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (doc.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
       const r = await storage.updateDocument(req.params.id, req.body);
-      if (!r) return res.status(404).json({ message: "Document not found" });
       res.json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update document") }); }
   });
 
   app.delete("/api/documents/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
+      const doc = await storage.getDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Document not found" });
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (doc.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
       await storage.deleteDocument(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete document") }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // DOCUMENT MANAGEMENT - EXTENDED (ACLs, Audit, Retention, Workflows)
+  // ══════════════════════════════════════════════════════════════════════
+
+  app.patch("/api/document-folders/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.updateDocumentFolder(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Folder not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update folder") }); }
+  });
+
+  app.delete("/api/document-folders/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      await storage.deleteDocumentFolder(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete folder") }); }
+  });
+
+  app.get("/api/document-versions", requireAuth, async (req, res) => {
+    try {
+      const documentId = req.query.documentId as string;
+      if (!documentId) return res.status(400).json({ message: "documentId is required" });
+      const rows = await storage.getDocumentVersions(documentId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch versions") }); }
+  });
+
+  app.post("/api/document-versions", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.createDocumentVersion(req.body);
+      res.status(201).json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create version") }); }
+  });
+
+  app.post("/api/documents/:id/upload", requireAuth, requireRole("admin", "manager"), blockDemoWrites, documentUpload.single("file"), async (req: any, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const fileUrl = `/uploads/${req.file.filename}`;
+      const doc = await storage.getDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Document not found" });
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (doc.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
+      const versions = await storage.getDocumentVersions(req.params.id);
+      const newVersionNum = versions.length > 0 ? Math.max(...versions.map(v => v.versionNumber)) + 1 : 1;
+      const version = await storage.createDocumentVersion({
+        documentId: req.params.id,
+        versionNumber: newVersionNum,
+        fileName: req.file.originalname,
+        fileUrl,
+        fileSize: req.file.size,
+        changeNote: req.body.changeNote || "",
+        uploadedBy: (req.session as any)?.username || "",
+      });
+      await storage.updateDocument(req.params.id, {
+        fileUrl,
+        fileName: req.file.originalname,
+        fileSize: req.file.size,
+        mimeType: req.file.mimetype,
+        currentVersionId: version.id,
+      });
+      const user = await storage.getUser((req.session as any)?.userId);
+      await storage.createDocumentAuditLog({
+        documentId: req.params.id,
+        companyId: doc.companyId,
+        action: "version_uploaded",
+        actorId: (req.session as any)?.userId,
+        actorName: user?.username || "",
+        ipAddress: req.ip || "",
+        details: `Version ${newVersionNum} uploaded: ${req.file.originalname}`,
+      });
+      res.status(201).json(version);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to upload document version") }); }
+  });
+
+  app.get("/api/document-audit-logs", requireAuth, enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const documentId = req.query.documentId as string;
+      if (documentId) {
+        const rows = await storage.getDocumentAuditLogs(documentId);
+        return res.json(rows);
+      }
+      const rows = await storage.getDocumentAuditLogsByCompany(companyId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch audit logs") }); }
+  });
+
+  app.get("/api/document-audit-logs/export", requireAuth, requireRole("admin"), enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const logs = await storage.getDocumentAuditLogsByCompany(companyId);
+      const startDate = req.query.startDate ? new Date(req.query.startDate as string) : null;
+      const endDate = req.query.endDate ? new Date(req.query.endDate as string) : null;
+      let filtered = logs;
+      if (startDate) filtered = filtered.filter(l => l.createdAt && new Date(l.createdAt) >= startDate);
+      if (endDate) filtered = filtered.filter(l => l.createdAt && new Date(l.createdAt) <= endDate);
+      const csv = ["Timestamp,Action,Document ID,Actor,Actor ID,IP Address,Details"]
+        .concat(filtered.map(l =>
+          `"${l.createdAt}","${l.action}","${l.documentId || ''}","${l.actorName || ''}","${l.actorId || ''}","${l.ipAddress || ''}","${(l.details || '').replace(/"/g, '""')}"`
+        )).join("\n");
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", "attachment; filename=document-audit-log.csv");
+      res.send(csv);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to export audit logs") }); }
+  });
+
+  app.get("/api/document-acls", requireAuth, enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const rows = await storage.getDocumentAcls(companyId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch ACLs") }); }
+  });
+
+  app.post("/api/document-acls", requireAuth, requireRole("admin"), blockDemoWrites, enforceCompanyScope("body"), async (req, res) => {
+    try {
+      const r = await storage.createDocumentAcl({ ...req.body, companyId: (req as any)._companyId });
+      res.status(201).json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create ACL") }); }
+  });
+
+  app.delete("/api/document-acls/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      await storage.deleteDocumentAcl(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete ACL") }); }
+  });
+
+  app.get("/api/document-retention-policies", requireAuth, enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const rows = await storage.getDocumentRetentionPolicies(companyId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch retention policies") }); }
+  });
+
+  app.post("/api/document-retention-policies", requireAuth, requireRole("admin"), blockDemoWrites, enforceCompanyScope("body"), async (req, res) => {
+    try {
+      const r = await storage.createDocumentRetentionPolicy({ ...req.body, companyId: (req as any)._companyId });
+      res.status(201).json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create retention policy") }); }
+  });
+
+  app.patch("/api/document-retention-policies/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.updateDocumentRetentionPolicy(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Policy not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update retention policy") }); }
+  });
+
+  app.delete("/api/document-retention-policies/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      await storage.deleteDocumentRetentionPolicy(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete retention policy") }); }
+  });
+
+  app.get("/api/onboarding-packets", requireAuth, enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const rows = await storage.getOnboardingPackets(companyId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch onboarding packets") }); }
+  });
+
+  app.post("/api/onboarding-packets", requireAuth, requireRole("admin", "manager"), blockDemoWrites, enforceCompanyScope("body"), async (req, res) => {
+    try {
+      const packet = await storage.createOnboardingPacket(req.body);
+      const templateSteps: Record<string, Array<{name: string; type: string; desc: string}>> = {
+        "Standard Onboarding": [
+          { name: "Offer Letter", type: "document_sign", desc: "Sign the employment offer letter" },
+          { name: "W-4 Tax Withholding", type: "document_upload", desc: "Complete W-4 federal tax withholding form" },
+          { name: "W-9 / I-9 Verification", type: "document_upload", desc: "Complete employment eligibility verification" },
+          { name: "Direct Deposit Setup", type: "document_upload", desc: "Provide banking information for direct deposit" },
+          { name: "Employee Handbook Acknowledgement", type: "document_sign", desc: "Read and sign the employee handbook" },
+          { name: "Benefits Enrollment", type: "task_complete", desc: "Review and select benefit options" },
+        ],
+        "Contractor Onboarding": [
+          { name: "Independent Contractor Agreement", type: "document_sign", desc: "Sign the contractor agreement" },
+          { name: "W-9 Form", type: "document_upload", desc: "Complete W-9 tax form" },
+          { name: "NDA / Confidentiality Agreement", type: "document_sign", desc: "Sign non-disclosure agreement" },
+        ],
+      };
+      const steps = templateSteps[req.body.templateName] || templateSteps["Standard Onboarding"];
+      for (let i = 0; i < steps.length; i++) {
+        await storage.createOnboardingPacketStep({
+          packetId: packet.id,
+          stepName: steps[i].name,
+          stepType: steps[i].type,
+          description: steps[i].desc,
+          sortOrder: i,
+          status: "pending",
+          assignedTo: req.body.workerId,
+        });
+      }
+      res.status(201).json(packet);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create onboarding packet") }); }
+  });
+
+  app.get("/api/onboarding-packets/:id", requireAuth, async (req, res) => {
+    try {
+      const packet = await storage.getOnboardingPacket(req.params.id);
+      if (!packet) return res.status(404).json({ message: "Packet not found" });
+      const steps = await storage.getOnboardingPacketSteps(req.params.id);
+      res.json({ ...packet, steps });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch onboarding packet") }); }
+  });
+
+  app.patch("/api/onboarding-packets/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.updateOnboardingPacket(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Packet not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update onboarding packet") }); }
+  });
+
+  app.get("/api/onboarding-packet-steps", requireAuth, async (req, res) => {
+    try {
+      const packetId = req.query.packetId as string;
+      if (!packetId) return res.status(400).json({ message: "packetId is required" });
+      const rows = await storage.getOnboardingPacketSteps(packetId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch steps") }); }
+  });
+
+  app.patch("/api/onboarding-packet-steps/:id", requireAuth, blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.updateOnboardingPacketStep(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Step not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update step") }); }
+  });
+
+  app.get("/api/invoice-approval-workflows", requireAuth, enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const rows = await storage.getInvoiceApprovalWorkflows(companyId);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch invoice workflows") }); }
+  });
+
+  app.post("/api/invoice-approval-workflows", requireAuth, requireRole("admin", "manager"), blockDemoWrites, documentUpload.single("file"), async (req: any, res) => {
+    try {
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (!sessionCompanyId) return res.status(401).json({ message: "Not authenticated" });
+      if (req.body.companyId && req.body.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
+      let documentId = req.body.documentId;
+      if (req.file) {
+        const fileUrl = `/uploads/${req.file.filename}`;
+        const doc = await storage.createDocument({
+          companyId: sessionCompanyId,
+          title: req.body.vendorName ? `Invoice - ${req.body.vendorName}` : "Invoice Upload",
+          fileName: req.file.originalname,
+          fileUrl,
+          fileSize: req.file.size,
+          mimeType: req.file.mimetype,
+          category: "Accounting",
+          department: "Accounting",
+          classification: "confidential",
+          documentType: "invoice",
+          createdBy: (req.session as any)?.username || "",
+        });
+        documentId = doc.id;
+      }
+      const r = await storage.createInvoiceApprovalWorkflow({
+        ...req.body,
+        companyId: sessionCompanyId,
+        documentId,
+        status: "received",
+        submittedBy: (req.session as any)?.userId,
+      });
+      res.status(201).json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create invoice workflow") }); }
+  });
+
+  app.patch("/api/invoice-approval-workflows/:id", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const r = await storage.updateInvoiceApprovalWorkflow(req.params.id, req.body);
+      if (!r) return res.status(404).json({ message: "Workflow not found" });
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update invoice workflow") }); }
   });
 
   // ══════════════════════════════════════════════════════════════════════

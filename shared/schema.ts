@@ -2074,6 +2074,8 @@ export const documentFolders = pgTable("document_folders", {
   color: text("color"),
   sortOrder: integer("sort_order").default(0),
   createdBy: varchar("created_by"),
+  legalHold: boolean("legal_hold").default(false),
+  retentionPolicyId: varchar("retention_policy_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -2102,6 +2104,15 @@ export const documents = pgTable("documents", {
   assignedToCustomerId: varchar("assigned_to_customer_id"),
   currentVersionId: varchar("current_version_id"),
   accessLevel: text("access_level").default("company"),
+  classification: text("classification").default("internal"),
+  documentType: text("document_type"),
+  department: text("department"),
+  owner: text("owner"),
+  effectiveDate: timestamp("effective_date"),
+  retentionPolicyId: varchar("retention_policy_id"),
+  dispositionDate: timestamp("disposition_date"),
+  dispositionStatus: text("disposition_status"),
+  legalHold: boolean("legal_hold").default(false),
   createdBy: varchar("created_by"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -2260,3 +2271,108 @@ export const portalAccessTokens = pgTable("portal_access_tokens", {
   usedAt: timestamp("used_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+// ── Document ACLs ──────────────────────────────────────────
+export const documentAcls = pgTable("document_acls", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  documentId: varchar("document_id"),
+  folderId: varchar("folder_id"),
+  principalType: text("principal_type").notNull(),
+  principalId: varchar("principal_id").notNull(),
+  permission: text("permission").notNull(),
+  inherited: boolean("inherited").default(false),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertDocumentAclSchema = createInsertSchema(documentAcls).omit({ id: true, createdAt: true });
+export type DocumentAcl = typeof documentAcls.$inferSelect;
+export type InsertDocumentAcl = z.infer<typeof insertDocumentAclSchema>;
+
+// ── Document Retention Policies ──────────────────────────────────────────
+export const documentRetentionPolicies = pgTable("document_retention_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  documentType: text("document_type"),
+  retentionYears: integer("retention_years"),
+  retentionMonths: integer("retention_months"),
+  retentionRule: text("retention_rule"),
+  dispositionAction: text("disposition_action").default("archive"),
+  isActive: boolean("is_active").default(true),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertDocumentRetentionPolicySchema = createInsertSchema(documentRetentionPolicies).omit({ id: true, createdAt: true, updatedAt: true });
+export type DocumentRetentionPolicy = typeof documentRetentionPolicies.$inferSelect;
+export type InsertDocumentRetentionPolicy = z.infer<typeof insertDocumentRetentionPolicySchema>;
+
+// ── Onboarding Packets ──────────────────────────────────────────
+export const onboardingPackets = pgTable("onboarding_packets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  workerId: varchar("worker_id").notNull(),
+  templateName: text("template_name").notNull(),
+  status: text("status").notNull().default("pending"),
+  assignedBy: varchar("assigned_by"),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  dueDate: timestamp("due_date"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertOnboardingPacketSchema = createInsertSchema(onboardingPackets).omit({ id: true, createdAt: true, updatedAt: true });
+export type OnboardingPacket = typeof onboardingPackets.$inferSelect;
+export type InsertOnboardingPacket = z.infer<typeof insertOnboardingPacketSchema>;
+
+// ── Onboarding Packet Steps ──────────────────────────────────────────
+export const onboardingPacketSteps = pgTable("onboarding_packet_steps", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  packetId: varchar("packet_id").notNull().references(() => onboardingPackets.id),
+  stepName: text("step_name").notNull(),
+  stepType: text("step_type").notNull(),
+  description: text("description"),
+  sortOrder: integer("sort_order").default(0),
+  status: text("status").notNull().default("pending"),
+  assignedTo: varchar("assigned_to"),
+  documentId: varchar("document_id"),
+  completedAt: timestamp("completed_at"),
+  completedBy: varchar("completed_by"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertOnboardingPacketStepSchema = createInsertSchema(onboardingPacketSteps).omit({ id: true, createdAt: true });
+export type OnboardingPacketStep = typeof onboardingPacketSteps.$inferSelect;
+export type InsertOnboardingPacketStep = z.infer<typeof insertOnboardingPacketStepSchema>;
+
+// ── Invoice Approval Workflows ──────────────────────────────────────────
+export const invoiceApprovalWorkflows = pgTable("invoice_approval_workflows", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  documentId: varchar("document_id"),
+  vendorName: text("vendor_name"),
+  invoiceNumber: text("invoice_number"),
+  invoiceDate: timestamp("invoice_date"),
+  totalAmount: text("total_amount"),
+  extractedData: text("extracted_data"),
+  status: text("status").notNull().default("received"),
+  currentApproverId: varchar("current_approver_id"),
+  approvalChain: text("approval_chain"),
+  submittedBy: varchar("submitted_by"),
+  approvedAt: timestamp("approved_at"),
+  approvedBy: varchar("approved_by"),
+  paidAt: timestamp("paid_at"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertInvoiceApprovalWorkflowSchema = createInsertSchema(invoiceApprovalWorkflows).omit({ id: true, createdAt: true, updatedAt: true });
+export type InvoiceApprovalWorkflow = typeof invoiceApprovalWorkflows.$inferSelect;
+export type InsertInvoiceApprovalWorkflow = z.infer<typeof insertInvoiceApprovalWorkflowSchema>;

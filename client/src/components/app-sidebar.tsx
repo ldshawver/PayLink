@@ -175,6 +175,20 @@ const navSections: NavSection[] = [
     ],
   },
   {
+    label: "Company Documents",
+    icon: FolderClosed,
+    url: "/company-documents",
+    roles: ["admin", "manager"],
+    items: [
+      { title: "All Documents", url: "/company-documents?tab=documents", icon: FileText },
+      { title: "Collections", url: "/company-documents?tab=collections", icon: FolderOpen },
+      { title: "Onboarding", url: "/company-documents?tab=onboarding", icon: UserCheck },
+      { title: "Invoice Approval", url: "/company-documents?tab=invoice-approval", icon: Receipt },
+      { title: "Retention Policies", url: "/company-documents?tab=retention", icon: Shield },
+      { title: "Audit Log", url: "/company-documents?tab=audit", icon: ShieldCheck },
+    ],
+  },
+  {
     label: "Payroll",
     icon: DollarSign,
     url: "/payroll",

@@ -1044,6 +1044,99 @@ app.use((req, res, next) => {
       used_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    await run("document_folders.legal_hold", sql`ALTER TABLE document_folders ADD COLUMN IF NOT EXISTS legal_hold BOOLEAN DEFAULT FALSE`);
+    await run("document_folders.retention_policy_id", sql`ALTER TABLE document_folders ADD COLUMN IF NOT EXISTS retention_policy_id VARCHAR`);
+
+    await run("documents.classification", sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS classification TEXT DEFAULT 'internal'`);
+    await run("documents.document_type", sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_type TEXT`);
+    await run("documents.department", sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS department TEXT`);
+    await run("documents.owner", sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS owner TEXT`);
+    await run("documents.effective_date", sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS effective_date TIMESTAMP`);
+    await run("documents.retention_policy_id", sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS retention_policy_id VARCHAR`);
+    await run("documents.disposition_date", sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS disposition_date TIMESTAMP`);
+    await run("documents.disposition_status", sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS disposition_status TEXT`);
+    await run("documents.legal_hold", sql`ALTER TABLE documents ADD COLUMN IF NOT EXISTS legal_hold BOOLEAN DEFAULT FALSE`);
+
+    await run("document_acls table", sql`CREATE TABLE IF NOT EXISTS document_acls (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      document_id VARCHAR,
+      folder_id VARCHAR,
+      principal_type TEXT NOT NULL,
+      principal_id VARCHAR NOT NULL,
+      permission TEXT NOT NULL,
+      inherited BOOLEAN DEFAULT FALSE,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("document_retention_policies table", sql`CREATE TABLE IF NOT EXISTS document_retention_policies (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      name TEXT NOT NULL,
+      description TEXT,
+      document_type TEXT,
+      retention_years INTEGER,
+      retention_months INTEGER,
+      retention_rule TEXT,
+      disposition_action TEXT DEFAULT 'archive',
+      is_active BOOLEAN DEFAULT TRUE,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("onboarding_packets table", sql`CREATE TABLE IF NOT EXISTS onboarding_packets (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      worker_id VARCHAR NOT NULL,
+      template_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      assigned_by VARCHAR,
+      started_at TIMESTAMP,
+      completed_at TIMESTAMP,
+      due_date TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("onboarding_packet_steps table", sql`CREATE TABLE IF NOT EXISTS onboarding_packet_steps (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      packet_id VARCHAR NOT NULL REFERENCES onboarding_packets(id),
+      step_name TEXT NOT NULL,
+      step_type TEXT NOT NULL,
+      description TEXT,
+      sort_order INTEGER DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      assigned_to VARCHAR,
+      document_id VARCHAR,
+      completed_at TIMESTAMP,
+      completed_by VARCHAR,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("invoice_approval_workflows table", sql`CREATE TABLE IF NOT EXISTS invoice_approval_workflows (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      document_id VARCHAR,
+      vendor_name TEXT,
+      invoice_number TEXT,
+      invoice_date TIMESTAMP,
+      total_amount TEXT,
+      extracted_data TEXT,
+      status TEXT NOT NULL DEFAULT 'received',
+      current_approver_id VARCHAR,
+      approval_chain TEXT,
+      submitted_by VARCHAR,
+      approved_at TIMESTAMP,
+      approved_by VARCHAR,
+      paid_at TIMESTAMP,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");
