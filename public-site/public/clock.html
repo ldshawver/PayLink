@@ -7,148 +7,551 @@
   <meta name="description" content="PayLink Quick Clock In/Out. Fast employee time clock access for punching in and out.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
-    .clock-display {
-      font-size: clamp(3rem, 8vw, 5rem);
-      font-weight: 800;
-      font-variant-numeric: tabular-nums;
-      background: var(--gradient);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      margin: 32px 0;
-      letter-spacing: -0.02em;
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0f1a;
+      color: #f1f5f9;
     }
-    .clock-date {
-      font-size: 1.1rem;
-      color: var(--text-muted);
-      margin-bottom: 8px;
+
+    .video-bg {
+      position: fixed; inset: 0; z-index: 0; overflow: hidden;
     }
-    .clock-container {
-      background: var(--dark-card);
-      border: 1px solid var(--dark-border);
-      border-radius: 24px;
-      padding: 64px 48px;
-      max-width: 500px;
-      margin: 0 auto;
-      text-align: center;
+    .video-bg video {
+      position: absolute; width: 100%; height: 100%; object-fit: cover;
     }
-    .clock-actions {
-      display: flex;
-      gap: 16px;
-      justify-content: center;
-      margin-top: 32px;
+    .video-bg .overlay-gradient {
+      position: absolute; inset: 0;
+      background: linear-gradient(135deg, rgba(15,23,42,0.85), rgba(13,94,88,0.70), rgba(30,58,138,0.80));
     }
-    .clock-actions .btn-primary,
-    .clock-actions .btn-secondary {
-      padding: 16px 32px;
-      font-size: 1.1rem;
+    .video-bg .overlay-dark {
+      position: absolute; inset: 0; background: rgba(0,0,0,0.30);
+    }
+
+    .clock-page {
+      position: relative; z-index: 1;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; padding: 16px;
+    }
+    .clock-wrapper {
+      width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 16px;
+    }
+
+    .glass-card {
+      background: rgba(255,255,255,0.10);
+      backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+      border: 1px solid rgba(255,255,255,0.20);
+      border-radius: 16px;
+      box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+      padding: 24px;
+    }
+
+    .logo-header {
+      display: flex; flex-direction: column; align-items: center; gap: 12px;
+    }
+    .logo-header img { height: 72px; width: 72px; object-fit: contain; filter: drop-shadow(0 0 20px rgba(0,0,0,0.5)); }
+    .logo-header h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; color: #fff; text-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+    .logo-header p { font-size: 0.875rem; color: rgba(255,255,255,0.6); }
+
+    .live-clock { text-align: center; }
+    .live-clock .time-row { display: flex; align-items: baseline; justify-content: center; gap: 4px; }
+    .live-clock .time-main {
+      font-size: 4rem; font-weight: 300; letter-spacing: -0.02em;
+      font-variant-numeric: tabular-nums; color: #fff;
+      text-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    }
+    .live-clock .time-seconds {
+      font-size: 1.5rem; font-weight: 300; font-variant-numeric: tabular-nums;
+      color: #5eead4; text-shadow: 0 1px 6px rgba(0,0,0,0.3);
+    }
+    .live-clock .date-line {
+      font-size: 0.8rem; color: rgba(255,255,255,0.7); margin-top: 12px;
+      letter-spacing: 0.08em; text-transform: uppercase; text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    }
+
+    .divider { height: 1px; background: rgba(255,255,255,0.20); margin: 4px 0; }
+
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-label {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em;
+      color: rgba(255,255,255,0.7);
+    }
+    .form-label svg { width: 14px; height: 14px; color: #5eead4; }
+    .form-input {
+      width: 100%; padding: 10px 14px; border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.30);
+      background: rgba(255,255,255,0.10);
+      color: #fff; font-size: 0.95rem; font-family: inherit;
+      outline: none; transition: all 0.15s;
+    }
+    .form-input::placeholder { color: rgba(255,255,255,0.40); }
+    .form-input:focus, .form-input.active {
+      border-color: #2dd4bf; box-shadow: 0 0 0 3px rgba(45,212,191,0.25);
+    }
+
+    .numpad {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+      max-width: 260px; margin: 0 auto;
+    }
+    .numpad-btn {
+      height: 48px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.20);
+      background: rgba(255,255,255,0.08);
+      color: #fff; font-size: 1.1rem; font-weight: 500; font-family: inherit;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .numpad-btn:hover { background: rgba(255,255,255,0.15); }
+    .numpad-btn:active { transform: scale(0.95); }
+    .numpad-btn.secondary { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.7); }
+
+    .error-msg {
+      font-size: 0.875rem; color: #fca5a5; text-align: center; font-weight: 500;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    }
+
+    .btn-primary-clock {
+      width: 100%; padding: 14px; border-radius: 8px; border: none;
+      background: #0d9488; color: #fff; font-size: 1rem; font-weight: 600;
+      font-family: inherit; cursor: pointer;
+      box-shadow: 0 4px 14px rgba(13,148,136,0.40);
+      transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn-primary-clock:hover { background: #0f766e; }
+    .btn-primary-clock:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .worker-header {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+    }
+    .worker-info { display: flex; align-items: center; gap: 12px; }
+    .worker-avatar {
+      width: 48px; height: 48px; border-radius: 50%;
+      background: rgba(45,212,191,0.30); backdrop-filter: blur(4px);
+      border: 1px solid rgba(45,212,191,0.30);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.875rem; font-weight: 700; color: #a7f3d0;
+    }
+    .worker-name { font-size: 1.1rem; font-weight: 700; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+    .worker-title { font-size: 0.75rem; color: rgba(255,255,255,0.6); }
+    .btn-logout {
+      width: 40px; height: 40px; border-radius: 8px; border: none;
+      background: transparent; color: rgba(255,255,255,0.6); cursor: pointer;
+      display: flex; align-items: center; justify-content: center; transition: all 0.15s;
+    }
+    .btn-logout:hover { background: rgba(255,255,255,0.10); color: #fff; }
+
+    .status-row {
+      display: flex; align-items: center; justify-content: center; gap: 12px;
+    }
+    .status-dot {
+      width: 12px; height: 12px; border-radius: 50%;
+    }
+    .status-dot.clocked-in { background: #4ade80; animation: pulse-green 2s infinite; box-shadow: 0 0 8px rgba(74,222,128,0.5); }
+    .status-dot.on-break { background: #fbbf24; animation: pulse-amber 2s infinite; box-shadow: 0 0 8px rgba(251,191,36,0.5); }
+    .status-dot.clocked-out { background: rgba(255,255,255,0.4); }
+    @keyframes pulse-green { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+    @keyframes pulse-amber { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+    .status-badge {
+      padding: 4px 16px; border-radius: 999px; font-size: 0.875rem; font-weight: 500;
+    }
+    .status-badge.clocked-in { background: rgba(16,185,129,0.80); color: #fff; border: 1px solid rgba(16,185,129,0.50); }
+    .status-badge.on-break { background: rgba(245,158,11,0.80); color: #fff; border: 1px solid rgba(245,158,11,0.50); }
+    .status-badge.clocked-out { background: rgba(255,255,255,0.10); color: rgba(255,255,255,0.80); border: 1px solid rgba(255,255,255,0.30); }
+
+    .status-since { font-size: 0.75rem; color: rgba(255,255,255,0.50); }
+
+    .punch-buttons { display: flex; gap: 12px; }
+    .punch-btn {
+      flex: 1; padding: 14px; border-radius: 8px; border: none;
+      font-size: 1rem; font-weight: 600; font-family: inherit; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      transition: all 0.15s;
+    }
+    .punch-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .punch-btn.clock-in { background: #059669; color: #fff; box-shadow: 0 4px 14px rgba(5,150,105,0.30); }
+    .punch-btn.clock-in:hover { background: #047857; }
+    .punch-btn.clock-out { background: #dc2626; color: #fff; box-shadow: 0 4px 14px rgba(220,38,38,0.30); }
+    .punch-btn.clock-out:hover { background: #b91c1c; }
+    .punch-btn.break-btn { background: #d97706; color: #fff; box-shadow: 0 4px 14px rgba(217,119,6,0.30); }
+    .punch-btn.break-btn:hover { background: #b45309; }
+
+    .activity-title {
+      font-size: 0.875rem; font-weight: 600; color: rgba(255,255,255,0.90);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .activity-title svg { width: 16px; height: 16px; color: #5eead4; }
+    .activity-list { display: flex; flex-direction: column; }
+    .activity-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.10);
+    }
+    .activity-item:last-child { border-bottom: none; }
+    .activity-item-left { display: flex; align-items: center; gap: 12px; }
+    .activity-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .activity-dot.in { background: #4ade80; }
+    .activity-dot.out { background: #f87171; }
+    .activity-dot.break { background: #fbbf24; }
+    .activity-label { font-size: 0.875rem; color: rgba(255,255,255,0.80); text-transform: capitalize; }
+    .activity-time { font-size: 0.75rem; color: rgba(255,255,255,0.50); font-variant-numeric: tabular-nums; }
+
+    @media (max-width: 480px) {
+      .live-clock .time-main { font-size: 3rem; }
+      .live-clock .time-seconds { font-size: 1.1rem; }
+      .glass-card { padding: 20px; }
     }
   </style>
 </head>
 <body>
 
-  <nav class="nav">
-    <div class="nav-inner">
-      <a href="/" class="nav-logo"><img src="/assets/logo.png" alt="PayLink"><span>PayLink</span></a>
-      <ul class="nav-links">
-        <li><a href="/features">Features</a></li>
-        <li><a href="/pricing">Pricing</a></li>
-        <li><a href="/security">Security</a></li>
-        <li><a href="https://app.mypaylink.app" class="nav-cta">Login →</a></li>
-      </ul>
-      <button class="mobile-toggle" aria-label="Menu">&#9776;</button>
-    </div>
-    <div class="mobile-menu">
-      <a href="/features">Features</a>
-      <a href="/pricing">Pricing</a>
-      <a href="/security">Security</a>
-      <a href="/vendor-portal">Vendor Portal</a>
-      <a href="/clock">Quick Clock In</a>
-      <a href="/contact">Book a Demo</a>
-      <a href="https://app.mypaylink.app">Login →</a>
-    </div>
-  </nav>
+  <div class="video-bg">
+    <video autoplay loop muted playsinline>
+      <source src="/assets/clock-bg.mp4" type="video/mp4">
+    </video>
+    <div class="overlay-gradient"></div>
+    <div class="overlay-dark"></div>
+  </div>
 
-  <section class="page-hero">
-    <div class="container">
-      <span class="section-label fade-up">Time Clock</span>
-      <h1 class="fade-up stagger-1">Quick Clock In / Out</h1>
-      <p class="fade-up stagger-2">Fast access to the PayLink time clock. Log in with your employee PIN to punch in or out.</p>
-    </div>
-  </section>
+  <div class="clock-page">
+    <div class="clock-wrapper" id="clockApp">
 
-  <section>
-    <div class="container">
-      <div class="clock-container fade-up">
-        <div class="clock-date" id="clockDate"></div>
-        <div class="clock-display" id="clockTime"></div>
-        <p style="color: var(--text-secondary); margin-bottom: 24px;">Log in to the PayLink app to clock in or out with your employee PIN.</p>
-        <div class="clock-actions">
-          <a href="https://app.mypaylink.app" class="btn-primary">Open Time Clock →</a>
+      <div id="loginView">
+        <div class="logo-header" style="margin-bottom: 16px;">
+          <img src="/assets/logo.png" alt="PayLink">
+          <h1>Time Clock</h1>
+          <p>Enter your credentials to punch in or out</p>
+        </div>
+
+        <div class="glass-card" style="display: flex; flex-direction: column; gap: 20px;">
+          <div class="live-clock" id="loginClock"></div>
+
+          <div class="divider"></div>
+
+          <form id="authForm" style="display: flex; flex-direction: column; gap: 14px;">
+            <div class="form-group">
+              <label class="form-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>
+                Employee Number
+              </label>
+              <input type="text" id="empNum" class="form-input active" placeholder="Enter employee number" autocomplete="off" data-testid="input-employee-number">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                PIN
+              </label>
+              <input type="password" id="pinInput" class="form-input" placeholder="Enter PIN" autocomplete="off" data-testid="input-pin">
+            </div>
+
+            <div class="numpad" id="numpad"></div>
+
+            <div id="authError" class="error-msg" style="display:none;" data-testid="text-auth-error"></div>
+
+            <button type="submit" class="btn-primary-clock" id="loginBtn" disabled data-testid="button-clock-login">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M7 21v-2a4 4 0 0 1 4-4h.5"/><path d="M18.5 14.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"/><path d="M20 21v-1.5a2 2 0 0 0-2-2h-.5"/></svg>
+              Sign In
+            </button>
+          </form>
         </div>
       </div>
-    </div>
-  </section>
 
-  <section style="background: var(--dark-card);">
-    <div class="container section-center">
-      <h2 class="section-title fade-up">Time Clock Features</h2>
-      <div class="security-grid" style="margin-top: 32px;">
-        <div class="security-card fade-up stagger-1">
-          <div class="security-icon">🔢</div>
-          <div><h3>PIN Login</h3><p>Employees use a simple numeric PIN to clock in and out. No passwords needed at the time clock.</p></div>
+      <div id="punchedView" style="display:none; flex-direction: column; gap: 16px;">
+        <div class="glass-card" style="display: flex; flex-direction: column; gap: 20px;">
+          <div class="worker-header">
+            <div class="worker-info">
+              <div class="worker-avatar" id="workerInitials"></div>
+              <div>
+                <div class="worker-name" id="workerName" data-testid="text-worker-name"></div>
+                <div class="worker-title" id="workerTitle"></div>
+              </div>
+            </div>
+            <button class="btn-logout" id="logoutBtn" title="Sign Out" data-testid="button-clock-logout">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            </button>
+          </div>
+
+          <div class="live-clock" id="punchedClock"></div>
+
+          <div class="status-row" id="statusRow"></div>
+
+          <div class="punch-buttons" id="punchButtons"></div>
         </div>
-        <div class="security-card fade-up stagger-2">
-          <div class="security-icon">📍</div>
-          <div><h3>Station Enforcement</h3><p>Restrict clock-ins to approved stations or locations for security and accuracy.</p></div>
-        </div>
-        <div class="security-card fade-up stagger-3">
-          <div class="security-icon">⏰</div>
-          <div><h3>Auto Overtime</h3><p>Automatic daily, weekly, and double overtime calculations based on your company policies.</p></div>
-        </div>
-        <div class="security-card fade-up stagger-4">
-          <div class="security-icon">📊</div>
-          <div><h3>Real-Time Tracking</h3><p>See who's clocked in, hours worked today, and attendance status in real time.</p></div>
+
+        <div class="glass-card" id="activityCard" style="display:none;">
+          <div class="activity-title" style="margin-bottom: 12px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Today's Activity
+          </div>
+          <div class="activity-list" id="activityList"></div>
         </div>
       </div>
-    </div>
-  </section>
 
-  <footer class="footer">
-    <div class="container">
-      <div class="footer-grid">
-        <div class="footer-brand">
-          <a href="/" class="nav-logo"><img src="/assets/logo.png" alt="PayLink" style="height: 32px;"><span>PayLink</span></a>
-          <p>A secure workforce operations platform by Alavont Holdings.</p>
-        </div>
-        <div><h4>Product</h4><ul class="footer-links"><li><a href="/features">Features</a></li><li><a href="/pricing">Pricing</a></li><li><a href="/security">Security</a></li><li><a href="/contact">Book a Demo</a></li></ul></div>
-        <div><h4>Access</h4><ul class="footer-links"><li><a href="https://app.mypaylink.app">Login</a></li><li><a href="/vendor-portal">Vendor Portal</a></li><li><a href="/clock">Quick Clock In</a></li></ul></div>
-        <div><h4>Company</h4><ul class="footer-links"><li><a href="/contact">Contact</a></li><li><a href="/terms">Terms of Service</a></li><li><a href="/privacy">Privacy Policy</a></li></ul></div>
-      </div>
-      <div class="footer-bottom">
-        <p>&copy; 2025 Alavont Holdings. All rights reserved.</p>
-        <ul class="footer-bottom-links"><li><a href="/terms">Terms</a></li><li><a href="/privacy">Privacy</a></li></ul>
-      </div>
     </div>
-  </footer>
+  </div>
 
-  <script src="/js/main.js"></script>
   <script>
-    function updateClock() {
+    var API_BASE = 'https://app.mypaylink.app';
+    var activeField = 'empNum';
+    var worker = null;
+    var company = null;
+    var punches = [];
+    var autoLogoutTimer = null;
+
+    function $(id) { return document.getElementById(id); }
+
+    function updateLiveClock(containerId) {
+      var el = $(containerId);
+      if (!el) return;
       var now = new Date();
-      var h = now.getHours(), m = now.getMinutes(), s = now.getSeconds();
-      var ampm = h >= 12 ? 'PM' : 'AM';
-      h = h % 12 || 12;
-      document.getElementById('clockTime').textContent =
-        h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s + ' ' + ampm;
-      document.getElementById('clockDate').textContent =
-        now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+      var h = now.getHours(), m = now.getMinutes();
+      var hStr = (h < 10 ? '0' : '') + h;
+      var mStr = (m < 10 ? '0' : '') + m;
+      var sStr = (now.getSeconds() < 10 ? '0' : '') + now.getSeconds();
+      var dateStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+      el.innerHTML =
+        '<div class="time-row">' +
+          '<span class="time-main">' + hStr + ':' + mStr + '</span>' +
+          '<span class="time-seconds">' + sStr + '</span>' +
+        '</div>' +
+        '<div class="date-line">' + dateStr + '</div>';
     }
-    updateClock();
-    setInterval(updateClock, 1000);
+
+    function buildNumpad() {
+      var digits = ['1','2','3','4','5','6','7','8','9','C','0','<'];
+      var html = '';
+      digits.forEach(function(d) {
+        var cls = (d === 'C' || d === '<') ? 'numpad-btn secondary' : 'numpad-btn';
+        var label = d === '<' ? '\u232B' : d;
+        var testId = d === '<' ? 'back' : d;
+        html += '<button type="button" class="' + cls + '" data-digit="' + d + '" data-testid="button-numpad-' + testId + '">' + label + '</button>';
+      });
+      $('numpad').innerHTML = html;
+      $('numpad').addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-digit]');
+        if (!btn) return;
+        var d = btn.getAttribute('data-digit');
+        var field = $(activeField === 'empNum' ? 'empNum' : 'pinInput');
+        if (d === 'C') { field.value = ''; }
+        else if (d === '<') { field.value = field.value.slice(0, -1); }
+        else { field.value += d; }
+        checkLoginReady();
+      });
+    }
+
+    function setActiveField(name) {
+      activeField = name;
+      $('empNum').classList.toggle('active', name === 'empNum');
+      $('pinInput').classList.toggle('active', name === 'pin');
+    }
+
+    function checkLoginReady() {
+      $('loginBtn').disabled = !$('empNum').value || !$('pinInput').value;
+    }
+
+    $('empNum').addEventListener('focus', function() { setActiveField('empNum'); });
+    $('pinInput').addEventListener('focus', function() { setActiveField('pin'); });
+    $('empNum').addEventListener('input', checkLoginReady);
+    $('pinInput').addEventListener('input', checkLoginReady);
+
+    $('authForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      doAuth();
+    });
+
+    function doAuth() {
+      var empNum = $('empNum').value.trim();
+      var pin = $('pinInput').value.trim();
+      if (!empNum || !pin) {
+        showError('Please enter both employee number and PIN');
+        return;
+      }
+      $('loginBtn').disabled = true;
+      $('loginBtn').textContent = 'Authenticating...';
+
+      fetch(API_BASE + '/api/time-clock/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ employeeNumber: empNum, pin: pin })
+      })
+      .then(function(res) {
+        if (!res.ok) throw new Error('Invalid employee number or PIN');
+        return res.json();
+      })
+      .then(function(data) {
+        worker = data.worker;
+        company = data.company;
+        $('empNum').value = '';
+        $('pinInput').value = '';
+        hideError();
+        showPunchedView();
+        loadPunches();
+        startAutoLogout();
+      })
+      .catch(function(err) {
+        showError(err.message || 'Authentication failed');
+        $('pinInput').value = '';
+        $('loginBtn').disabled = false;
+        $('loginBtn').innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M7 21v-2a4 4 0 0 1 4-4h.5"/><path d="M18.5 14.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"/><path d="M20 21v-1.5a2 2 0 0 0-2-2h-.5"/></svg> Sign In';
+      });
+    }
+
+    function showError(msg) {
+      $('authError').textContent = msg;
+      $('authError').style.display = 'block';
+    }
+    function hideError() {
+      $('authError').style.display = 'none';
+    }
+
+    function showPunchedView() {
+      $('loginView').style.display = 'none';
+      $('punchedView').style.display = 'flex';
+      var initials = (worker.firstName || '')[0] + (worker.lastName || '')[0];
+      $('workerInitials').textContent = initials;
+      $('workerName').textContent = (worker.firstName || '') + ' ' + (worker.lastName || '');
+      var title = worker.jobTitle || '';
+      if (company) title += (title ? ' \u00B7 ' : '') + company.name;
+      $('workerTitle').textContent = title;
+    }
+
+    function loadPunches() {
+      fetch(API_BASE + '/api/time-clock/punches?workerId=' + worker.id + '&employeeNumber=' + worker.employeeNumber + '&pin=' + worker.pin, {
+        credentials: 'include'
+      })
+      .then(function(res) { return res.ok ? res.json() : []; })
+      .then(function(data) {
+        punches = data || [];
+        renderStatus();
+        renderActivity();
+      })
+      .catch(function() { punches = []; renderStatus(); renderActivity(); });
+    }
+
+    function getClockState() {
+      if (!punches.length) return { status: 'out', lastPunch: null };
+      var last = punches[0];
+      if (last.punchType === 'clock_in' || last.punchType === 'break_end') return { status: 'in', lastPunch: last };
+      if (last.punchType === 'break_start') return { status: 'break', lastPunch: last };
+      return { status: 'out', lastPunch: last };
+    }
+
+    function renderStatus() {
+      var state = getClockState();
+      var dotClass = state.status === 'in' ? 'clocked-in' : state.status === 'break' ? 'on-break' : 'clocked-out';
+      var badgeClass = dotClass;
+      var badgeText = state.status === 'in' ? 'Clocked In' : state.status === 'break' ? 'On Break' : 'Clocked Out';
+      var sinceHtml = '';
+      if (state.lastPunch) {
+        var t = new Date(state.lastPunch.punchTime);
+        sinceHtml = '<span class="status-since">since ' + t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) + '</span>';
+      }
+      $('statusRow').innerHTML =
+        '<div class="status-dot ' + dotClass + '"></div>' +
+        '<span class="status-badge ' + badgeClass + '">' + badgeText + '</span>' +
+        sinceHtml;
+      renderPunchButtons(state.status);
+    }
+
+    function renderPunchButtons(status) {
+      var html = '';
+      if (status === 'out') {
+        html = '<button class="punch-btn clock-in" onclick="doPunch(\'clock_in\')" data-testid="button-punch-clock_in">' +
+          '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg> Clock In</button>';
+      } else {
+        if (status === 'in') {
+          html += '<button class="punch-btn break-btn" onclick="doPunch(\'break_start\')" data-testid="button-punch-break_start">' +
+            '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V8z"/><line x1="6" y1="2" x2="6" y2="4"/><line x1="10" y1="2" x2="10" y2="4"/><line x1="14" y1="2" x2="14" y2="4"/></svg> Break</button>';
+        }
+        if (status === 'break') {
+          html += '<button class="punch-btn break-btn" onclick="doPunch(\'break_end\')" data-testid="button-punch-break_end">' +
+            '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg> End Break</button>';
+        }
+        html += '<button class="punch-btn clock-out" onclick="doPunch(\'clock_out\')" data-testid="button-punch-clock_out">' +
+          '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg> Clock Out</button>';
+      }
+      $('punchButtons').innerHTML = html;
+    }
+
+    function doPunch(type) {
+      var btns = $('punchButtons').querySelectorAll('button');
+      btns.forEach(function(b) { b.disabled = true; });
+
+      fetch(API_BASE + '/api/time-clock/punch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          workerId: worker.id,
+          companyId: worker.companyId,
+          punchType: type,
+          employeeNumber: worker.employeeNumber,
+          pin: worker.pin
+        })
+      })
+      .then(function(res) {
+        if (!res.ok) return res.json().then(function(d) { throw new Error(d.message || 'Punch failed'); });
+        return res.json();
+      })
+      .then(function() {
+        loadPunches();
+        resetAutoLogout();
+      })
+      .catch(function(err) {
+        alert(err.message || 'Punch failed');
+        btns.forEach(function(b) { b.disabled = false; });
+      });
+    }
+
+    function renderActivity() {
+      if (!punches.length) {
+        $('activityCard').style.display = 'none';
+        return;
+      }
+      $('activityCard').style.display = 'block';
+      var html = '';
+      punches.slice(0, 10).forEach(function(p) {
+        var dotCls = p.punchType === 'clock_in' ? 'in' : p.punchType === 'clock_out' ? 'out' : 'break';
+        var label = p.punchType.replace(/_/g, ' ');
+        var time = new Date(p.punchTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+        html += '<div class="activity-item" data-testid="row-punch-' + p.id + '">' +
+          '<div class="activity-item-left"><div class="activity-dot ' + dotCls + '"></div><span class="activity-label">' + label + '</span></div>' +
+          '<span class="activity-time">' + time + '</span></div>';
+      });
+      $('activityList').innerHTML = html;
+    }
+
+    function doLogout() {
+      worker = null;
+      company = null;
+      punches = [];
+      clearTimeout(autoLogoutTimer);
+      $('punchedView').style.display = 'none';
+      $('loginView').style.display = 'block';
+      $('loginBtn').disabled = true;
+      $('loginBtn').innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M7 21v-2a4 4 0 0 1 4-4h.5"/><path d="M18.5 14.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"/><path d="M20 21v-1.5a2 2 0 0 0-2-2h-.5"/></svg> Sign In';
+    }
+
+    function startAutoLogout() {
+      clearTimeout(autoLogoutTimer);
+      autoLogoutTimer = setTimeout(doLogout, 120000);
+    }
+    function resetAutoLogout() {
+      startAutoLogout();
+    }
+
+    $('logoutBtn').addEventListener('click', doLogout);
+
+    buildNumpad();
+    setInterval(function() {
+      updateLiveClock('loginClock');
+      updateLiveClock('punchedClock');
+    }, 1000);
+    updateLiveClock('loginClock');
+    updateLiveClock('punchedClock');
   </script>
 </body>
 </html>
