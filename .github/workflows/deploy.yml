@@ -125,17 +125,25 @@ jobs:
             NGINX_CONF="$APP_DIR/scripts/nginx-mypaylink.conf"
             NGINX_AVAIL="/etc/nginx/sites-available/mypaylink.app"
             NGINX_ENABLED="/etc/nginx/sites-enabled/mypaylink.app"
-            if [ -f "$NGINX_CONF" ]; then
-              sudo cp "$NGINX_CONF" "$NGINX_AVAIL"
-              sudo ln -sf "$NGINX_AVAIL" "$NGINX_ENABLED" 2>/dev/null || true
-              if sudo nginx -t 2>&1; then
-                sudo systemctl reload nginx
-                echo "   Nginx reloaded"
-              else
-                echo "   WARNING: nginx -t failed — config not applied"
-              fi
+            if [ ! -f "$NGINX_CONF" ]; then
+              echo "   ERROR: Nginx config not found at $NGINX_CONF"
+              exit 1
+            fi
+            sudo cp "$NGINX_CONF" "$NGINX_AVAIL"
+            echo "   Copied config to $NGINX_AVAIL"
+            sudo ln -sf "$NGINX_AVAIL" "$NGINX_ENABLED"
+            echo "   Symlinked into sites-enabled"
+            if ! sudo nginx -t 2>&1; then
+              echo "   ERROR: nginx -t failed. Rolling back config."
+              exit 1
+            fi
+            sudo systemctl reload nginx
+            echo "   Nginx reloaded successfully"
+            # Verify /api/ proxy rule is present in the live config
+            if grep -q 'location.*api' "$NGINX_AVAIL"; then
+              echo "   OK: /api/ proxy rule confirmed in active config"
             else
-              echo "   WARNING: Nginx config not found at $NGINX_CONF"
+              echo "   WARNING: /api/ proxy rule not found in $NGINX_AVAIL"
             fi
 
             # Step 9: Deploy marketing site
