@@ -128,6 +128,12 @@ jobs:
             # Cleanup old backups (keep last 10)
             ls -t "$BACKUP_DIR"/paylink_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
 
+            # Stage public-site files in /tmp for website deploy job
+            echo "Staging public-site files for website deploy..."
+            rm -rf /tmp/paylink-public-staging
+            cp -r "$APP_DIR/public-site/public" /tmp/paylink-public-staging
+            chmod -R 755 /tmp/paylink-public-staging
+
             echo "=========================================="
             echo "App Deploy Complete - Health: $HEALTH | Ready: $READY"
             echo "=========================================="
@@ -138,12 +144,6 @@ jobs:
     needs: deploy-app
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install rsync
-        run: sudo apt-get install -y rsync
-
       - name: Setup SSH key for website user
         run: |
           mkdir -p ~/.ssh
@@ -151,20 +151,56 @@ jobs:
           chmod 600 ~/.ssh/website_key
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Repair destination permissions before rsync
-        run: |
-          ssh -i ~/.ssh/website_key \
-            -o StrictHostKeyChecking=no \
-            ${{ secrets.WEBSITE_SSH_USER }}@${{ secrets.VPS_HOST }} \
-            "chown -R mypaylink:mypaylink /home/mypaylink/htdocs/mypaylink.appsite && chmod -R u+rwX /home/mypaylink/htdocs/mypaylink.appsite && echo 'Permissions repaired'"
+      - name: Deploy marketing site (local rsync on VPS)
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.WEBSITE_SSH_USER }}
+          key: ${{ secrets.WEBSITE_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
 
-      - name: Deploy marketing site files
-        run: |
-          rsync -rlvz --delete \
-            --no-times \
-            --exclude='.git' \
-            --exclude='node_modules' \
-            -e "ssh -i ~/.ssh/website_key -o StrictHostKeyChecking=no" \
-            public-site/public/ \
-            ${{ secrets.WEBSITE_SSH_USER }}@${{ secrets.VPS_HOST }}:/home/mypaylink/htdocs/mypaylink.appsite/
-          echo "Marketing site deployed successfully"
+            STAGING="/tmp/paylink-public-staging"
+            WEB_ROOT="/home/mypaylink/htdocs/mypaylink.appsite"
+
+            echo "=== Marketing Site Deploy ==="
+
+            # Verify staged files exist (populated by deploy-app job)
+            if [ ! -d "$STAGING" ]; then
+              echo "ERROR: Staging directory $STAGING not found. App deploy may not have run."
+              exit 1
+            fi
+
+            echo "Staged files found: $(ls $STAGING | wc -l) items"
+
+            # Repair destination ownership and permissions
+            chown -R mypaylink:mypaylink "$WEB_ROOT" 2>/dev/null || true
+            chmod -R u+rwX "$WEB_ROOT" 2>/dev/null || true
+
+            # Local rsync from staging to web root (no cross-machine permission issues)
+            rsync -rltvz --delete \
+              --no-times \
+              --exclude='.git' \
+              --exclude='node_modules' \
+              "$STAGING/" "$WEB_ROOT/"
+
+            echo "Deployed files: $(ls $WEB_ROOT | wc -l) items in web root"
+
+            # Spot-check: confirm old links are gone from live index.html
+            if grep -q 'app\.mypaylink\.app' "$WEB_ROOT/index.html" 2>/dev/null; then
+              echo "WARNING: app.mypaylink.app still found in deployed index.html"
+            else
+              echo "OK: No legacy app.mypaylink.app links in index.html"
+            fi
+
+            if grep -q 'href="/clock"' "$WEB_ROOT/index.html" 2>/dev/null; then
+              echo "WARNING: /clock link still found in deployed index.html"
+            else
+              echo "OK: No legacy /clock links in index.html"
+            fi
+
+            # Clean up staging area
+            rm -rf "$STAGING"
+
+            echo "=== Marketing Site Deploy Complete ==="
