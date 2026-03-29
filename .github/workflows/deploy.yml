@@ -4,11 +4,17 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Reason for manual deploy (optional)"
+        required: false
+        default: "Manual trigger"
 
 jobs:
   deploy-app:
     runs-on: ubuntu-latest
-    name: Deploy App (app.mypaylink.app)
+    name: Deploy App (mypaylink.app)
 
     steps:
       - name: Deploy via SSH
@@ -82,18 +88,22 @@ jobs:
             echo "6. Copying session table SQL..."
             cp node_modules/connect-pg-simple/table.sql dist/
 
-            # Step 7: Restart app
+            # Step 7: Restart app (restart if running, fresh start if not)
             echo "7. Restarting app..."
-            pm2 delete paylink 2>/dev/null || true
-            fuser -k 8000/tcp 2>/dev/null || true
-            sleep 3
-            cd "$APP_DIR" && pm2 start dist/index.cjs \
-              --name paylink \
-              --cwd "$APP_DIR" \
-              --interpreter node \
-              --node-args="-r dotenv/config" \
-              --update-env \
-              -- dotenv_config_path="$ENV_FILE"
+            cd "$APP_DIR"
+            if pm2 describe paylink > /dev/null 2>&1; then
+              pm2 restart paylink --update-env
+            else
+              fuser -k 8000/tcp 2>/dev/null || true
+              sleep 2
+              pm2 start dist/index.cjs \
+                --name paylink \
+                --cwd "$APP_DIR" \
+                --interpreter node \
+                --node-args="-r dotenv/config" \
+                --update-env \
+                -- dotenv_config_path="$ENV_FILE"
+            fi
             pm2 save --force
 
             # Step 8: Health check
