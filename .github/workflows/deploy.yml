@@ -87,22 +87,26 @@ jobs:
             echo "5. Copying session table SQL..."
             cp node_modules/connect-pg-simple/table.sql dist/
 
-            # Step 6: Restart app (restart if running, fresh start if not)
-            echo "6. Restarting app..."
+            # Step 6: Start app as paylinkssh (always clean delete + fresh start)
+            echo "6. Starting app as paylinkssh..."
             cd "$APP_DIR"
-            if pm2 describe paylink > /dev/null 2>&1; then
-              pm2 restart paylink --update-env
-            else
-              fuser -k 8000/tcp 2>/dev/null || true
-              sleep 2
-              pm2 start dist/index.cjs \
-                --name paylink \
-                --cwd "$APP_DIR" \
-                --interpreter node \
-                --node-args="-r dotenv/config" \
-                --update-env \
-                -- dotenv_config_path="$ENV_FILE"
-            fi
+
+            # Remove from paylinkssh PM2 list if present
+            pm2 delete paylink 2>/dev/null || true
+
+            # Kill any process holding port 8000 (handles root-owned processes too)
+            fuser -k 8000/tcp 2>/dev/null || true
+            # Fallback: pkill by binary path
+            pkill -f "dist/index.cjs" 2>/dev/null || true
+            sleep 3
+
+            pm2 start dist/index.cjs \
+              --name paylink \
+              --cwd "$APP_DIR" \
+              --interpreter node \
+              --node-args="-r dotenv/config" \
+              --update-env \
+              -- dotenv_config_path="$ENV_FILE"
             pm2 save --force
 
             # Step 7: Health check

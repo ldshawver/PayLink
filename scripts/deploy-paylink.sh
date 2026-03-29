@@ -45,19 +45,26 @@ npm run build
 echo "5. Copying session table SQL..."
 cp node_modules/connect-pg-simple/table.sql dist/ 2>/dev/null || true
 
-echo "6. Restarting app..."
-if pm2 describe paylink > /dev/null 2>&1; then
-  pm2 restart paylink --update-env
-else
-  pm2 start dist/index.cjs \
-    --name paylink \
-    --cwd "$APP_DIR" \
-    --interpreter node \
-    --node-args="-r dotenv/config" \
-    --update-env \
-    -- dotenv_config_path="$ENV_FILE"
-fi
-pm2 save
+echo "6. Starting app as paylinkssh (clean delete + fresh start)..."
+cd "$APP_DIR"
+
+# Remove from paylinkssh PM2 list if present
+pm2 delete paylink 2>/dev/null || true
+
+# Kill any process holding port 8000 (handles root-owned processes too)
+fuser -k 8000/tcp 2>/dev/null || true
+# Fallback: pkill by binary path
+pkill -f "dist/index.cjs" 2>/dev/null || true
+sleep 3
+
+pm2 start dist/index.cjs \
+  --name paylink \
+  --cwd "$APP_DIR" \
+  --interpreter node \
+  --node-args="-r dotenv/config" \
+  --update-env \
+  -- dotenv_config_path="$ENV_FILE"
+pm2 save --force
 
 echo "7. Waiting for startup..."
 sleep 12
