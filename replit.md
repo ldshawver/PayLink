@@ -92,6 +92,23 @@ PayLink includes Capacitor configuration for building native Android and iOS app
 -   **API base URL:** `client/src/lib/queryClient.ts` detects native platform via `Capacitor.isNativePlatform()` and prepends the production API URL to all fetch calls
 -   **Asset directories:** `resources/android/` and `resources/ios/` with icon and splash subdirectories; see `resources/ASSET_GENERATION.md`
 -   **Build guide:** `MOBILE_BUILD_GUIDE.md` — complete step-by-step instructions for local Android/iOS builds
+-   **Native Feature Hooks:**
+    -   `use-push-notifications.ts` — Device token registration (Capacitor PushNotifications), permission management, push listener setup
+    -   `use-biometric-auth.ts` — Face ID/Touch ID/Fingerprint via BiometricAuth plugin, signed restore tokens stored in SecureStoragePlugin/keychain
+    -   `use-native-camera.ts` — Camera capture + photo library + file picker via Capacitor Camera plugin
+    -   `use-native-platform.ts` — StatusBar management, keyboard height tracking, haptic feedback (impact/notification), page transition animations, app lifecycle (resume) listener
+-   **Native Backend Endpoints:**
+    -   `POST /api/device-tokens` — Register device push token
+    -   `DELETE /api/device-tokens` — Deactivate device token
+    -   `GET /api/notification-preferences` — Get per-category notification preferences
+    -   `PUT /api/notification-preferences` — Update notification channel toggles (push/email/SMS/in-app)
+    -   `POST /api/notifications/dispatch` — Dispatch notifications with tenant-scoped targeting
+    -   `POST /api/auth/issue-restore-token` — Issue HMAC-signed biometric restore token (requires auth)
+    -   `POST /api/auth/token-restore` — Validate signed restore token and restore session (unauthenticated)
+-   **Native UI Pages:**
+    -   `/notification-settings` — Category-based notification preference toggles with per-channel control
+    -   My Profile > Preferences tab includes Security & Native Features card (biometric toggle, push status)
+-   **NativeFileUpload component** — Drop-in replacement for file inputs; shows Take Photo / Photo Library / Choose File on native, standard file input on web; integrated into company-documents upload
 
 ## External Dependencies
 -   **PostgreSQL:** Primary application database.
