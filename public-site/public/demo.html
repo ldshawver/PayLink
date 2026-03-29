@@ -147,7 +147,7 @@
         btn.disabled = true;
         btn.textContent = 'Loading...';
 
-        fetch('https://app.mypaylink.app/api/demo/login', {
+        fetch('https://app.mypaylink.app/api/demo/provision', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -156,7 +156,7 @@
         .then(function(res) { return res.json().then(function(body) { return { ok: res.ok, body: body }; }); })
         .then(function(result) {
           if (!result.ok) throw new Error(result.body.message || 'Failed to start demo');
-          window.location.href = 'https://app.mypaylink.app';
+          window.location.href = result.body.loginUrl || 'https://app.mypaylink.app';
         })
         .catch(function(err) {
           errorDiv.textContent = err.message;

@@ -12,6 +12,7 @@ import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
 import { computeDispositionDate, getDefaultRetentionPolicySeedData } from "./retentionCalculator";
+import { emitIntegrationEvent } from "./integrationEvents";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -179,7 +180,7 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/analytics/event", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/"];
+  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/"];
   app.use("/api", (req, res, next) => {
     if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
     blockDemoWrites(req, res, next);
@@ -290,7 +291,8 @@ export async function registerRoutes(
   app.use("/api", (req, res, next) => {
     if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
-      || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")) {
+      || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")
+      || req.path === "/demo/provision") {
       return next();
     }
     requireAuth(req, res, next);
@@ -7929,6 +7931,219 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  // ── Demo Provision (public, creates fully seeded demo tenant) ─────────────
+  app.post("/api/demo/provision", async (req, res) => {
+    try {
+      const demoPass = await bcrypt.hash("demo123", 10);
+      const demoExpiration = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const demoUsername = 'demo_' + crypto.randomBytes(4).toString('hex');
+      const portalToken = crypto.randomBytes(32).toString("hex");
+
+      const result = await db.transaction(async (tx) => {
+        const companyResult = await tx.execute(sql`
+          INSERT INTO companies (name, subscription_status, plan_name, is_demo, pay_frequency, overtime_threshold, trial_end)
+          VALUES ('Demo Company', 'active_paid', 'professional', TRUE, 'biweekly', 40, ${demoExpiration})
+          RETURNING id
+        `);
+        const companyId = companyResult.rows[0].id as string;
+
+        const userResult = await tx.execute(sql`
+          INSERT INTO users (username, password, role, company_id)
+          VALUES (${demoUsername}, ${demoPass}, 'admin', ${companyId})
+          RETURNING id, username
+        `);
+        const adminUser = userResult.rows[0] as any;
+
+        const workerData = [
+          { first: "Sarah", last: "Johnson", type: "employee", email: "sarah@demo.paylink.app", rate: "28.00" },
+          { first: "Michael", last: "Chen", type: "employee", email: "michael@demo.paylink.app", rate: "32.00" },
+          { first: "Emily", last: "Rodriguez", type: "contractor", email: "emily@demo.paylink.app", rate: "45.00" },
+        ];
+        const workerIds: string[] = [];
+        for (const w of workerData) {
+          const wResult = await tx.execute(sql`
+            INSERT INTO workers (company_id, first_name, last_name, worker_type, status, hire_date, pay_rate, email, worker_group)
+            VALUES (${companyId}, ${w.first}, ${w.last}, ${w.type}, 'active', '2025-01-15', ${w.rate}, ${w.email}, ${w.type === 'contractor' ? 'hourly_contractor' : 'hourly_employee'})
+            RETURNING id
+          `);
+          workerIds.push(wResult.rows[0].id as string);
+        }
+
+        const folderNames = [
+          { name: "HR Documents", category: "hr", color: "#3B82F6" },
+          { name: "Legal", category: "legal", color: "#8B5CF6" },
+          { name: "Finance", category: "finance", color: "#10B981" },
+        ];
+        const folderIds: Record<string, string> = {};
+        for (const f of folderNames) {
+          const fResult = await tx.execute(sql`
+            INSERT INTO document_folders (company_id, name, category, color)
+            VALUES (${companyId}, ${f.name}, ${f.category}, ${f.color})
+            RETURNING id
+          `);
+          folderIds[f.category] = fResult.rows[0].id as string;
+        }
+
+        const sampleDocs = [
+          { title: "Offer Letter Template", fileName: "offer_letter_template.pdf", folder: "hr", isTemplate: true },
+          { title: "W-4 Tax Withholding Form", fileName: "w4_template.pdf", folder: "hr", isTemplate: true },
+          { title: "I-9 Employment Eligibility", fileName: "i9_template.pdf", folder: "hr", isTemplate: true },
+          { title: "Non-Disclosure Agreement", fileName: "nda_template.pdf", folder: "legal", isTemplate: true },
+        ];
+        for (const doc of sampleDocs) {
+          await tx.execute(sql`
+            INSERT INTO documents (company_id, folder_id, title, file_name, file_url, is_template, status, category)
+            VALUES (${companyId}, ${folderIds[doc.folder]}, ${doc.title}, ${doc.fileName}, ${'/demo/' + doc.fileName}, ${doc.isTemplate}, 'active', ${doc.folder})
+          `);
+        }
+
+        const empPacketResult = await tx.execute(sql`
+          INSERT INTO onboarding_packets (company_id, worker_id, template_name, status, assigned_by)
+          VALUES (${companyId}, ${workerIds[0]}, 'Standard Onboarding', 'in_progress', ${adminUser.id})
+          RETURNING id
+        `);
+        const empPacketId = empPacketResult.rows[0].id as string;
+
+        const empSteps = [
+          { name: "Offer Letter", type: "document_sign", desc: "Sign the employment offer letter" },
+          { name: "W-4 Tax Withholding", type: "document_upload", desc: "Complete W-4 federal tax withholding form" },
+          { name: "I-9 Verification", type: "document_upload", desc: "Complete employment eligibility verification" },
+          { name: "Direct Deposit Setup", type: "document_upload", desc: "Provide banking information for direct deposit" },
+          { name: "Employee Handbook", type: "document_sign", desc: "Read and sign the employee handbook" },
+          { name: "Benefits Enrollment", type: "task_complete", desc: "Review and select benefit options" },
+        ];
+        for (let i = 0; i < empSteps.length; i++) {
+          const stepStatus = i === 0 ? "completed" : (i === 1 ? "in_progress" : "pending");
+          await tx.execute(sql`
+            INSERT INTO onboarding_packet_steps (packet_id, step_name, step_type, description, sort_order, status, assigned_to)
+            VALUES (${empPacketId}, ${empSteps[i].name}, ${empSteps[i].type}, ${empSteps[i].desc}, ${i}, ${stepStatus}, ${workerIds[0]})
+          `);
+        }
+
+        const conPacketResult = await tx.execute(sql`
+          INSERT INTO onboarding_packets (company_id, worker_id, template_name, status, assigned_by)
+          VALUES (${companyId}, ${workerIds[2]}, 'Contractor Onboarding', 'pending', ${adminUser.id})
+          RETURNING id
+        `);
+        const conPacketId = conPacketResult.rows[0].id as string;
+
+        const conSteps = [
+          { name: "Contractor Agreement", type: "document_sign", desc: "Sign the independent contractor agreement" },
+          { name: "W-9 Form", type: "document_upload", desc: "Complete W-9 tax form" },
+          { name: "NDA", type: "document_sign", desc: "Sign non-disclosure agreement" },
+        ];
+        for (let i = 0; i < conSteps.length; i++) {
+          await tx.execute(sql`
+            INSERT INTO onboarding_packet_steps (packet_id, step_name, step_type, description, sort_order, status, assigned_to)
+            VALUES (${conPacketId}, ${conSteps[i].name}, ${conSteps[i].type}, ${conSteps[i].desc}, ${i}, 'pending', ${workerIds[2]})
+          `);
+        }
+
+        await tx.execute(sql`
+          INSERT INTO portal_access_tokens (company_id, token, token_type, expires_at)
+          VALUES (${companyId}, ${portalToken}, 'onboarding_packet', ${demoExpiration})
+        `);
+
+        await tx.execute(sql`
+          INSERT INTO analytics_events (event_name, page_source, ip_address)
+          VALUES ('demo_provisioned', 'demo', ${req.ip || null})
+        `);
+
+        return { companyId, adminUser };
+      });
+
+      req.session.userId = result.adminUser.id;
+      req.session.username = result.adminUser.username;
+      req.session.isDemo = true;
+
+      const baseUrl = getAppBaseUrl(req);
+
+      res.json({
+        message: "Demo tenant provisioned",
+        companyId: result.companyId,
+        loginUrl: baseUrl,
+        portalUrl: `${baseUrl}/portal?token=${portalToken}`,
+        expiresAt: demoExpiration.toISOString(),
+        user: { id: result.adminUser.id, username: result.adminUser.username, role: "admin", companyId: result.companyId },
+        isDemo: true,
+      });
+    } catch (e) {
+      console.error("Demo provision error:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to provision demo") });
+    }
+  });
+
+  // ── Webhook Config CRUD ───────────────────────────────────────────────
+  app.get("/api/webhook-configs", requireAuth, enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const configs = await storage.getCompanyWebhookConfigs(companyId);
+      res.json(configs);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch webhook configs") }); }
+  });
+
+  app.post("/api/webhook-configs", requireAuth, requireRole("admin"), blockDemoWrites, enforceCompanyScope("body"), async (req, res) => {
+    try {
+      if (!req.body.webhookUrl) return res.status(400).json({ message: "webhookUrl is required" });
+      const { isValidWebhookUrl } = await import("./integrationEvents");
+      if (!isValidWebhookUrl(req.body.webhookUrl)) {
+        return res.status(400).json({ message: "Webhook URL must use HTTPS and not target private/internal networks" });
+      }
+      const hmacSecret = req.body.hmacSecret || crypto.randomBytes(32).toString("hex");
+      const config = await storage.createCompanyWebhookConfig({
+        companyId: (req as any)._companyId,
+        webhookUrl: req.body.webhookUrl,
+        hmacSecret,
+        isActive: req.body.isActive ?? true,
+      });
+      res.status(201).json(config);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create webhook config") }); }
+  });
+
+  app.patch("/api/webhook-configs/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      const config = await storage.getCompanyWebhookConfig(req.params.id);
+      if (!config) return res.status(404).json({ message: "Webhook config not found" });
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (config.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
+      const r = await storage.updateCompanyWebhookConfig(req.params.id, req.body);
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update webhook config") }); }
+  });
+
+  app.delete("/api/webhook-configs/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      const config = await storage.getCompanyWebhookConfig(req.params.id);
+      if (!config) return res.status(404).json({ message: "Webhook config not found" });
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (config.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteCompanyWebhookConfig(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete webhook config") }); }
+  });
+
+  // ── Integration Events ───────────────────────────────────────────────
+  app.get("/api/integration-events", requireAuth, enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const events = await storage.getIntegrationEvents(companyId);
+      res.json(events);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch integration events") }); }
+  });
+
+  app.post("/api/integration-events/:id/retry", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      const event = await storage.getIntegrationEvent(req.params.id);
+      if (!event) return res.status(404).json({ message: "Event not found" });
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (event.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
+      await storage.updateIntegrationEvent(req.params.id, { status: "pending", errorMessage: null });
+      const { retryIntegrationEvent } = await import("./integrationEvents");
+      retryIntegrationEvent(event).catch(() => {});
+      res.json({ message: "Retry queued" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to retry event") }); }
+  });
+
   // ── Subscription / Billing Status Update ───────────────────────────────
   app.post("/api/billing/activate", requireAuth, requireRole("admin"), async (req, res) => {
     try {
@@ -8590,6 +8805,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         ipAddress: req.ip || "",
         details: `Document "${r.title}" created`,
       });
+      emitIntegrationEvent(r.companyId, "document.created", { documentId: r.id, title: r.title, fileName: r.fileName }).catch(() => {});
       res.status(201).json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create document") }); }
   });
@@ -8788,6 +9004,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         ipAddress: req.ip || "",
         details: `Version ${newVersionNum} uploaded: ${req.file.originalname}`,
       });
+      emitIntegrationEvent(doc.companyId, "document.version_uploaded", { documentId: req.params.id, versionNumber: newVersionNum, fileName: req.file.originalname }).catch(() => {});
       res.status(201).json(version);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to upload document version") }); }
   });
@@ -9067,6 +9284,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/onboarding-packets", requireAuth, requireRole("admin", "manager"), blockDemoWrites, enforceCompanyScope("body"), async (req, res) => {
     try {
       const packet = await storage.createOnboardingPacket(req.body);
+      emitIntegrationEvent(packet.companyId, "onboarding_packet.created", { packetId: packet.id, workerId: packet.workerId, templateName: packet.templateName }).catch(() => {});
       const templateSteps: Record<string, Array<{name: string; type: string; desc: string}>> = {
         "Standard Onboarding": [
           { name: "Offer Letter", type: "document_sign", desc: "Sign the employment offer letter" },
@@ -9111,6 +9329,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const r = await storage.updateOnboardingPacket(req.params.id, req.body);
       if (!r) return res.status(404).json({ message: "Packet not found" });
+      emitIntegrationEvent(r.companyId, "onboarding_packet.updated", { packetId: r.id, status: r.status, workerId: r.workerId }).catch(() => {});
       res.json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update onboarding packet") }); }
   });
@@ -10076,6 +10295,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         actorName: req.session?.username || "system",
         details: `Signature package created via ${provider}. Envelope: ${result.providerEnvelopeId}`,
       });
+
+      emitIntegrationEvent(companyId, "signature.requested", { packageId: pkg.id, documentId, provider, status: pkg.status }).catch(() => {});
 
       res.status(201).json(pkg);
     } catch (e) {

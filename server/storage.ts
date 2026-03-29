@@ -152,6 +152,9 @@ import {
   type OnboardingDocument, type InsertOnboardingDocument,
   type EngagementEvent, type InsertEngagementEvent,
   type ProductApiKey, type InsertProductApiKey,
+  companyWebhookConfigs, integrationEvents,
+  type CompanyWebhookConfig, type InsertCompanyWebhookConfig,
+  type IntegrationEvent, type InsertIntegrationEvent,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -712,6 +715,17 @@ export interface IStorage {
   createProductApiKey(data: InsertProductApiKey): Promise<ProductApiKey>;
   updateProductApiKey(id: string, data: Partial<ProductApiKey>): Promise<ProductApiKey | undefined>;
   deleteProductApiKey(id: string): Promise<void>;
+
+  getCompanyWebhookConfigs(companyId: string): Promise<CompanyWebhookConfig[]>;
+  getCompanyWebhookConfig(id: string): Promise<CompanyWebhookConfig | undefined>;
+  createCompanyWebhookConfig(data: InsertCompanyWebhookConfig): Promise<CompanyWebhookConfig>;
+  updateCompanyWebhookConfig(id: string, data: Partial<CompanyWebhookConfig>): Promise<CompanyWebhookConfig | undefined>;
+  deleteCompanyWebhookConfig(id: string): Promise<void>;
+
+  getIntegrationEvents(companyId: string): Promise<IntegrationEvent[]>;
+  getIntegrationEvent(id: string): Promise<IntegrationEvent | undefined>;
+  createIntegrationEvent(data: InsertIntegrationEvent): Promise<IntegrationEvent>;
+  updateIntegrationEvent(id: string, data: Partial<IntegrationEvent>): Promise<IntegrationEvent | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3121,6 +3135,41 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteProductApiKey(id: string): Promise<void> {
     await db.delete(productApiKeys).where(eq(productApiKeys.id, id));
+  }
+
+  async getCompanyWebhookConfigs(companyId: string): Promise<CompanyWebhookConfig[]> {
+    return db.select().from(companyWebhookConfigs).where(eq(companyWebhookConfigs.companyId, companyId)).orderBy(desc(companyWebhookConfigs.createdAt));
+  }
+  async getCompanyWebhookConfig(id: string): Promise<CompanyWebhookConfig | undefined> {
+    const [r] = await db.select().from(companyWebhookConfigs).where(eq(companyWebhookConfigs.id, id));
+    return r;
+  }
+  async createCompanyWebhookConfig(data: InsertCompanyWebhookConfig): Promise<CompanyWebhookConfig> {
+    const [r] = await db.insert(companyWebhookConfigs).values(data).returning();
+    return r;
+  }
+  async updateCompanyWebhookConfig(id: string, data: Partial<CompanyWebhookConfig>): Promise<CompanyWebhookConfig | undefined> {
+    const [r] = await db.update(companyWebhookConfigs).set({ ...data, updatedAt: new Date() }).where(eq(companyWebhookConfigs.id, id)).returning();
+    return r;
+  }
+  async deleteCompanyWebhookConfig(id: string): Promise<void> {
+    await db.delete(companyWebhookConfigs).where(eq(companyWebhookConfigs.id, id));
+  }
+
+  async getIntegrationEvents(companyId: string): Promise<IntegrationEvent[]> {
+    return db.select().from(integrationEvents).where(eq(integrationEvents.companyId, companyId)).orderBy(desc(integrationEvents.createdAt));
+  }
+  async getIntegrationEvent(id: string): Promise<IntegrationEvent | undefined> {
+    const [r] = await db.select().from(integrationEvents).where(eq(integrationEvents.id, id));
+    return r;
+  }
+  async createIntegrationEvent(data: InsertIntegrationEvent): Promise<IntegrationEvent> {
+    const [r] = await db.insert(integrationEvents).values(data).returning();
+    return r;
+  }
+  async updateIntegrationEvent(id: string, data: Partial<IntegrationEvent>): Promise<IntegrationEvent | undefined> {
+    const [r] = await db.update(integrationEvents).set(data).where(eq(integrationEvents.id, id)).returning();
+    return r;
   }
 }
 

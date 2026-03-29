@@ -2589,3 +2589,36 @@ export const productApiKeys = pgTable("product_api_keys", {
 export const insertProductApiKeySchema = createInsertSchema(productApiKeys).omit({ id: true, createdAt: true });
 export type ProductApiKey = typeof productApiKeys.$inferSelect;
 export type InsertProductApiKey = z.infer<typeof insertProductApiKeySchema>;
+
+// ── Company Webhook Config ──────────────────────────────────────────
+export const companyWebhookConfigs = pgTable("company_webhook_configs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  webhookUrl: text("webhook_url").notNull(),
+  hmacSecret: text("hmac_secret").notNull(),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertCompanyWebhookConfigSchema = createInsertSchema(companyWebhookConfigs).omit({ id: true, createdAt: true, updatedAt: true });
+export type CompanyWebhookConfig = typeof companyWebhookConfigs.$inferSelect;
+export type InsertCompanyWebhookConfig = z.infer<typeof insertCompanyWebhookConfigSchema>;
+
+// ── Integration Events ──────────────────────────────────────────
+export const integrationEvents = pgTable("integration_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  eventType: text("event_type").notNull(),
+  payload: text("payload"),
+  status: text("status").notNull().default("pending"),
+  destinationUrl: text("destination_url"),
+  attempts: integer("attempts").default(0),
+  lastAttemptAt: timestamp("last_attempt_at"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertIntegrationEventSchema = createInsertSchema(integrationEvents).omit({ id: true, createdAt: true });
+export type IntegrationEvent = typeof integrationEvents.$inferSelect;
+export type InsertIntegrationEvent = z.infer<typeof insertIntegrationEventSchema>;
