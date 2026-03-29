@@ -30,16 +30,28 @@ git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
 git fetch origin main
 git reset --hard origin/main
 
-echo "3. Installing dependencies..."
+echo "3. Normalizing ownership and permissions..."
+chown -R paylinkssh:mypaylink-app "$APP_DIR" 2>/dev/null || true
+chmod -R u+rwX "$APP_DIR" 2>/dev/null || true
+
+echo "4. Installing dependencies..."
 npm install --production=false
+chmod +x "$APP_DIR/node_modules/.bin/"* 2>/dev/null || true
 
-echo "4. Building..."
+echo "5. Building (removing stale/root-owned dist artifacts)..."
+rm -f "$APP_DIR/dist/index.cjs" 2>/dev/null || true
+chown -R paylinkssh:mypaylink-app "$APP_DIR/dist" 2>/dev/null || true
+chmod -R u+rwX "$APP_DIR/dist" 2>/dev/null || true
+rm -rf "$APP_DIR/dist" 2>/dev/null || true
+mkdir -p "$APP_DIR/dist"
 npm run build
+chown -R paylinkssh:mypaylink-app "$APP_DIR/dist"
+chmod -R u+rwX "$APP_DIR/dist"
 
-echo "5. Copying session table SQL..."
+echo "6. Copying session table SQL..."
 cp node_modules/connect-pg-simple/table.sql dist/ 2>/dev/null || true
 
-echo "6. Restarting app..."
+echo "7. Restarting app..."
 if pm2 describe paylink > /dev/null 2>&1; then
   pm2 restart paylink --update-env
 else
@@ -53,7 +65,7 @@ else
 fi
 pm2 save
 
-echo "7. Waiting for startup..."
+echo "8. Waiting for startup..."
 sleep 12
 
 HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health 2>/dev/null || echo "000")

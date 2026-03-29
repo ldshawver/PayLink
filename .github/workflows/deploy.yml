@@ -68,9 +68,10 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            # Step 3: Normalize permissions
-            echo "3. Normalizing permissions..."
-            chmod -R u+rwX,g+rwX "$APP_DIR" 2>/dev/null || true
+            # Step 3: Normalize ownership and permissions before build
+            echo "3. Normalizing ownership and permissions..."
+            chown -R paylinkssh:mypaylink-app "$APP_DIR" 2>/dev/null || true
+            chmod -R u+rwX "$APP_DIR" 2>/dev/null || true
 
             # Step 4: Install dependencies and fix all binary permissions
             echo "4. Installing dependencies..."
@@ -78,11 +79,16 @@ jobs:
             chmod +x "$APP_DIR/node_modules/.bin/"* 2>/dev/null || true
             find "$APP_DIR/node_modules" -path "*/bin/*" -type f -exec chmod +x {} + 2>/dev/null || true
 
-            # Step 5: Build
+            # Step 5: Build (remove stale/root-owned dist artifacts first)
             echo "5. Building..."
+            rm -f "$APP_DIR/dist/index.cjs" 2>/dev/null || true
+            chown -R paylinkssh:mypaylink-app "$APP_DIR/dist" 2>/dev/null || true
+            chmod -R u+rwX "$APP_DIR/dist" 2>/dev/null || true
             rm -rf "$APP_DIR/dist" 2>/dev/null || true
             mkdir -p "$APP_DIR/dist"
             npm run build
+            chown -R paylinkssh:mypaylink-app "$APP_DIR/dist"
+            chmod -R u+rwX "$APP_DIR/dist"
 
             # Step 6: Copy session table SQL
             echo "6. Copying session table SQL..."
