@@ -189,88 +189,63 @@ jobs:
 
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Deploy marketing site (local rsync on VPS)
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.WEBSITE_SSH_USER }}
-          key: ${{ secrets.WEBSITE_SSH_KEY }}
-          script_stop: true
-          script: |
-            set -e
+      - name: Deploy marketing site (ssh direct)
+        run: |
+          ssh -i ~/.ssh/website_key \
+            -o StrictHostKeyChecking=no \
+            -o BatchMode=yes \
+            ${{ secrets.WEBSITE_SSH_USER }}@${{ secrets.VPS_HOST }} \
+            'bash -se' << 'DEPLOY_SCRIPT'
+          set -ex
 
-            STAGING="/tmp/paylink-public-staging"
-            WEB_ROOT="/home/mypaylink/htdocs/mypaylink.appsite"
+          STAGING="/tmp/paylink-public-staging"
+          WEB_ROOT="/home/mypaylink/htdocs/mypaylink.appsite"
 
-            echo "=== Marketing Site Deploy ==="
+          echo "=== Marketing Site Deploy ==="
+          echo "Running as: $(whoami)"
 
-            # Step 0: Confirm identity
-            CURRENT_USER=$(whoami)
-            echo "SSH connected as: $CURRENT_USER"
-            if [ "$CURRENT_USER" != "mypaylink" ]; then
-              echo "ERROR: Expected to run as 'mypaylink' but got '$CURRENT_USER'."
-              echo "Update the WEBSITE_SSH_USER GitHub secret to exactly 'mypaylink'."
-              exit 1
-            fi
+          # Guard: must be mypaylink
+          if [ "$(whoami)" != "mypaylink" ]; then
+            echo "ERROR: Expected user 'mypaylink', got '$(whoami)'. Update WEBSITE_SSH_USER secret."
+            exit 1
+          fi
 
-            # Step 1: Normalize ownership of web root (running as mypaylink, so chown to self)
-            echo "Normalizing web root ownership..."
-            chown -R mypaylink:mypaylink "$WEB_ROOT"
-            chmod -R u+rwX "$WEB_ROOT"
+          # Normalize web root ownership
+          chown -R mypaylink:mypaylink "$WEB_ROOT"
+          chmod -R u+rwX "$WEB_ROOT"
 
-            # Step 2: Verify write access with a test file
-            echo "Verifying write access to web root..."
-            TEST_FILE="$WEB_ROOT/.write_test_$$"
-            if ! touch "$TEST_FILE" 2>&1; then
-              echo "ERROR: Cannot create files in $WEB_ROOT. Permission denied."
-              echo "  Current user: $CURRENT_USER"
-              echo "  Directory ownership: $(ls -ld $WEB_ROOT)"
-              exit 1
-            fi
-            rm -f "$TEST_FILE"
-            echo "Write access confirmed."
+          # Verify write access
+          touch "$WEB_ROOT/.write_test_$$" && rm -f "$WEB_ROOT/.write_test_$$"
+          echo "Write access confirmed."
 
-            # Step 3: Verify staged files exist and are readable (populated by deploy-app job)
-            if [ ! -d "$STAGING" ]; then
-              echo "ERROR: Staging directory $STAGING not found. App deploy may not have run."
-              exit 1
-            fi
+          # Verify staging exists and is readable
+          if [ ! -d "$STAGING" ]; then
+            echo "ERROR: $STAGING not found — app deploy may not have run."
+            exit 1
+          fi
+          ls "$STAGING" > /dev/null
+          echo "Staging accessible: $(find $STAGING -type f | wc -l) files"
+          echo "Staging permissions: $(ls -ld $STAGING)"
 
-            # Smoke-test: confirm mypaylink can actually read and traverse the staging dir
-            if ! ls "$STAGING" > /dev/null 2>&1; then
-              echo "ERROR: Cannot read staging directory $STAGING as $(whoami)."
-              echo "  Staging dir permissions: $(ls -ld $STAGING 2>/dev/null || echo 'cannot stat')"
-              echo "  /tmp permissions: $(ls -ld /tmp)"
-              exit 1
-            fi
-            STAGED_COUNT=$(find "$STAGING" -type f | wc -l)
-            echo "Staging accessible. Files staged: $STAGED_COUNT"
-            echo "Staging dir: $(ls -ld $STAGING)"
+          # rsync — no metadata flags to avoid mkstemp/set-times permission errors
+          echo "--- rsync command ---"
+          /usr/bin/rsync -rvz --delete \
+            --omit-dir-times \
+            --no-perms \
+            --no-owner \
+            --no-group \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            "$STAGING/" "$WEB_ROOT/"
+          echo "--- rsync complete ---"
 
-            # Step 4: rsync — skip all metadata to prevent mkstemp/set-times errors
-            RSYNC_CMD="rsync -rvz --delete --omit-dir-times --no-perms --no-owner --no-group"
-            echo "Running: $RSYNC_CMD $STAGING/ $WEB_ROOT/"
-            $RSYNC_CMD \
-              --exclude='.git' \
-              --exclude='node_modules' \
-              "$STAGING/" "$WEB_ROOT/"
+          echo "Files in web root: $(ls $WEB_ROOT | wc -l)"
 
-            echo "Deployed files: $(ls $WEB_ROOT | wc -l) items in web root"
+          # Spot checks
+          grep -q 'app\.mypaylink\.app' "$WEB_ROOT/index.html" 2>/dev/null \
+            && echo "WARNING: legacy app.mypaylink.app link found in index.html" \
+            || echo "OK: no legacy subdomain links"
 
-            # Spot-check: confirm old links are gone from live index.html
-            if grep -q 'app\.mypaylink\.app' "$WEB_ROOT/index.html" 2>/dev/null; then
-              echo "WARNING: app.mypaylink.app still found in deployed index.html"
-            else
-              echo "OK: No legacy app.mypaylink.app links in index.html"
-            fi
-
-            if grep -q 'href="/clock"' "$WEB_ROOT/index.html" 2>/dev/null; then
-              echo "WARNING: /clock link still found in deployed index.html"
-            else
-              echo "OK: No legacy /clock links in index.html"
-            fi
-
-            # Clean up staging area
-            rm -rf "$STAGING"
-
-            echo "=== Marketing Site Deploy Complete ==="
+          rm -rf "$STAGING"
+          echo "=== Marketing Site Deploy Complete ==="
+          DEPLOY_SCRIPT
