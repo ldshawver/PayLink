@@ -1960,7 +1960,7 @@ export default function AttendancePage() {
       <Tabs value={currentTab} className="w-full">
         <div className="overflow-x-auto -mx-1 px-1">
         <TabsList className="inline-flex w-max" data-testid="tabs-attendance">
-          <Link href="/attendance?tab=timesheet">
+          <Link href="/app/attendance?tab=timesheet">
             <TabsTrigger value="timesheet" data-testid="tab-timesheet" asChild>
               <span className="flex items-center gap-1.5">
                 <ClipboardList className="h-4 w-4" />
@@ -1968,7 +1968,7 @@ export default function AttendancePage() {
               </span>
             </TabsTrigger>
           </Link>
-          <Link href="/attendance?tab=punches">
+          <Link href="/app/attendance?tab=punches">
             <TabsTrigger value="punches" data-testid="tab-punches" asChild>
               <span className="flex items-center gap-1.5">
                 <Fingerprint className="h-4 w-4" />
@@ -1976,7 +1976,7 @@ export default function AttendancePage() {
               </span>
             </TabsTrigger>
           </Link>
-          <Link href="/attendance?tab=accrual-balances">
+          <Link href="/app/attendance?tab=accrual-balances">
             <TabsTrigger value="accrual-balances" data-testid="tab-accrual-balances" asChild>
               <span className="flex items-center gap-1.5">
                 <CalendarClock className="h-4 w-4" />
@@ -1984,7 +1984,7 @@ export default function AttendancePage() {
               </span>
             </TabsTrigger>
           </Link>
-          <Link href="/attendance?tab=accruals">
+          <Link href="/app/attendance?tab=accruals">
             <TabsTrigger value="accruals" data-testid="tab-accruals" asChild>
               <span className="flex items-center gap-1.5">
                 <BookOpen className="h-4 w-4" />
@@ -1992,7 +1992,7 @@ export default function AttendancePage() {
               </span>
             </TabsTrigger>
           </Link>
-          <Link href="/attendance?tab=pending-approvals">
+          <Link href="/app/attendance?tab=pending-approvals">
             <TabsTrigger value="pending-approvals" data-testid="tab-pending-approvals" asChild>
               <span className="flex items-center gap-1.5">
                 <AlertTriangle className="h-4 w-4" />
@@ -2000,7 +2000,7 @@ export default function AttendancePage() {
               </span>
             </TabsTrigger>
           </Link>
-          <Link href="/attendance?tab=time-off">
+          <Link href="/app/attendance?tab=time-off">
             <TabsTrigger value="time-off" data-testid="tab-time-off" asChild>
               <span className="flex items-center gap-1.5">
                 <CalendarOff className="h-4 w-4" />
@@ -2008,7 +2008,7 @@ export default function AttendancePage() {
               </span>
             </TabsTrigger>
           </Link>
-          <Link href="/attendance?tab=schedule-preferences">
+          <Link href="/app/attendance?tab=schedule-preferences">
             <TabsTrigger value="schedule-preferences" data-testid="tab-schedule-preferences" asChild>
               <span className="flex items-center gap-1.5">
                 <SlidersHorizontal className="h-4 w-4" />

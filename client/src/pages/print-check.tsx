@@ -1036,7 +1036,7 @@ export default function PrintCheckPage() {
         <p className="text-muted-foreground" data-testid="text-not-processed">
           This payroll run has not been processed yet. Please process it first before printing checks.
         </p>
-        <Link href="/payroll?tab=process">
+        <Link href="/app/payroll?tab=process">
           <Button variant="outline" data-testid="button-back-payroll">
             <ArrowLeft className="mr-2 h-4 w-4" />Back to Payroll
           </Button>
@@ -1056,7 +1056,7 @@ export default function PrintCheckPage() {
   return (
     <div>
       <div className="p-4 flex items-center gap-3 print-hide flex-wrap" data-testid="div-print-controls">
-        <Link href="/payroll?tab=process">
+        <Link href="/app/payroll?tab=process">
           <Button variant="outline" data-testid="button-back-payroll">
             <ArrowLeft className="mr-2 h-4 w-4" />Back to Payroll
           </Button>

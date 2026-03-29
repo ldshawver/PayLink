@@ -32,7 +32,7 @@ function useTabParam(defaultTab: string): [string, (tab: string) => void] {
   const params = new URLSearchParams(search);
   const tab = params.get("tab") || defaultTab;
   const setTab = (newTab: string) => {
-    setLocation(`/company?tab=${newTab}`);
+    setLocation(`/app/company?tab=${newTab}`);
   };
   return [tab, setTab];
 }
@@ -4119,13 +4119,13 @@ function QuickStartTab() {
   const [, setLocation] = useLocation();
 
   const steps = [
-    { label: "Add Company Information", done: (companies?.length || 0) > 0, link: "/company?tab=info", icon: Building2 },
-    { label: "Set Up Departments", done: (departments?.length || 0) > 0, link: "/company?tab=departments", icon: FolderKanban },
-    { label: "Configure Jobs", done: (jobs?.length || 0) > 0, link: "/company?tab=jobs", icon: Briefcase },
-    { label: "Add Employees", done: (workers?.length || 0) > 0, link: "/employees", icon: Users },
-    { label: "Set Pay Policies", done: (policyGroups?.length || 0) > 0, link: "/policy", icon: Shield },
-    { label: "Configure Pay Periods", done: (payPeriods?.length || 0) > 0, link: "/payroll?tab=pay-periods", icon: DollarSign },
-    { label: "Configure Permission Groups", done: (rolesData?.length || 0) >= 5, link: "/company?tab=permissions", icon: Lock },
+    { label: "Add Company Information", done: (companies?.length || 0) > 0, link: "/app/company?tab=info", icon: Building2 },
+    { label: "Set Up Departments", done: (departments?.length || 0) > 0, link: "/app/company?tab=departments", icon: FolderKanban },
+    { label: "Configure Jobs", done: (jobs?.length || 0) > 0, link: "/app/company?tab=jobs", icon: Briefcase },
+    { label: "Add Employees", done: (workers?.length || 0) > 0, link: "/app/employee", icon: Users },
+    { label: "Set Pay Policies", done: (policyGroups?.length || 0) > 0, link: "/app/policy", icon: Shield },
+    { label: "Configure Pay Periods", done: (payPeriods?.length || 0) > 0, link: "/app/payroll?tab=pay-periods", icon: DollarSign },
+    { label: "Configure Permission Groups", done: (rolesData?.length || 0) >= 5, link: "/app/company?tab=permissions", icon: Lock },
   ];
 
   const completed = steps.filter(s => s.done).length;

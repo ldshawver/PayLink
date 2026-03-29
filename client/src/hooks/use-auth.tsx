@@ -51,11 +51,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logoutMutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("POST", "/api/auth/logout");
+      const res = await apiRequest("POST", "/api/auth/logout");
+      return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: { redirectUrl?: string }) => {
       queryClient.setQueryData(["/api/auth/me"], null);
       queryClient.clear();
+      window.location.href = data?.redirectUrl ?? "https://mypaylink.app";
     },
   });
 

@@ -186,6 +186,7 @@ const sessionMiddleware = session({
     httpOnly: true,
     secure: isProduction,
     sameSite: "lax",
+    domain: isProduction ? ".mypaylink.app" : undefined,
   },
 });
 

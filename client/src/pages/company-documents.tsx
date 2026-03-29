@@ -93,12 +93,12 @@ export default function CompanyDocumentsPage() {
 
       <Tabs value={activeTab} className="space-y-4">
         <TabsList className="flex-wrap h-auto gap-1" data-testid="tabs-company-docs">
-          <TabsTrigger value="documents" onClick={() => window.history.replaceState(null, "", "/company-documents?tab=documents")} data-testid="tab-documents">All Documents</TabsTrigger>
-          <TabsTrigger value="collections" onClick={() => window.history.replaceState(null, "", "/company-documents?tab=collections")} data-testid="tab-collections">Collections</TabsTrigger>
-          <TabsTrigger value="onboarding" onClick={() => window.history.replaceState(null, "", "/company-documents?tab=onboarding")} data-testid="tab-onboarding">Onboarding</TabsTrigger>
-          <TabsTrigger value="invoice-approval" onClick={() => window.history.replaceState(null, "", "/company-documents?tab=invoice-approval")} data-testid="tab-invoice-approval">Invoice Approval</TabsTrigger>
-          <TabsTrigger value="retention" onClick={() => window.history.replaceState(null, "", "/company-documents?tab=retention")} data-testid="tab-retention">Retention</TabsTrigger>
-          <TabsTrigger value="audit" onClick={() => window.history.replaceState(null, "", "/company-documents?tab=audit")} data-testid="tab-audit">Audit Log</TabsTrigger>
+          <TabsTrigger value="documents" onClick={() => window.history.replaceState(null, "", "/app/company-documents?tab=documents")} data-testid="tab-documents">All Documents</TabsTrigger>
+          <TabsTrigger value="collections" onClick={() => window.history.replaceState(null, "", "/app/company-documents?tab=collections")} data-testid="tab-collections">Collections</TabsTrigger>
+          <TabsTrigger value="onboarding" onClick={() => window.history.replaceState(null, "", "/app/company-documents?tab=onboarding")} data-testid="tab-onboarding">Onboarding</TabsTrigger>
+          <TabsTrigger value="invoice-approval" onClick={() => window.history.replaceState(null, "", "/app/company-documents?tab=invoice-approval")} data-testid="tab-invoice-approval">Invoice Approval</TabsTrigger>
+          <TabsTrigger value="retention" onClick={() => window.history.replaceState(null, "", "/app/company-documents?tab=retention")} data-testid="tab-retention">Retention</TabsTrigger>
+          <TabsTrigger value="audit" onClick={() => window.history.replaceState(null, "", "/app/company-documents?tab=audit")} data-testid="tab-audit">Audit Log</TabsTrigger>
         </TabsList>
 
         <TabsContent value="documents"><DocumentsTab companyId={companyId} /></TabsContent>

@@ -224,8 +224,17 @@ export async function registerRoutes(
   app.post("/api/auth/logout", (req, res) => {
     req.session.destroy((err) => {
       if (err) return res.status(500).json({ message: "Logout failed" });
-      res.clearCookie("connect.sid");
-      res.json({ message: "Logged out" });
+      const isProduction = process.env.NODE_ENV === "production";
+      res.clearCookie("connect.sid", {
+        path: "/",
+        domain: isProduction ? ".mypaylink.app" : undefined,
+        sameSite: "lax",
+        secure: isProduction,
+      });
+      const baseUrl = process.env.APP_BASE_URL
+        ? process.env.APP_BASE_URL.replace(/\/+$/, "")
+        : `${req.protocol}://${req.get("host")}`;
+      res.json({ message: "Logged out", redirectUrl: baseUrl });
     });
   });
 
@@ -7539,7 +7548,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         temporaryPassword: tempPassword,
         companyId,
         trialEnd: trialEnd.toISOString(),
-        loginUrl: "https://app.mypaylink.app"
+        loginUrl: `${getAppBaseUrl(req)}/app`
       });
     } catch (e) {
       console.error("Trial signup error:", e);

@@ -162,7 +162,7 @@ td { padding: 10px 14px; border: 1px solid #e2e8f0; color: #475569; }
     <strong>Version:</strong> 1.0<br>
     <strong>Date:</strong> March 2026<br>
     <strong>Software Owner:</strong> Adiken Inc.<br>
-    <strong>Platform:</strong> app.mypaylink.app<br>
+    <strong>Platform:</strong> mypaylink.app<br>
     <strong>Confidential</strong> &mdash; For authorized use only
   </div>
   <button class="download-btn no-print" onclick="window.print()" style="margin-top: 40px;">Save as PDF (Ctrl+P)</button>
@@ -296,7 +296,7 @@ SESSION_SECRET=your-random-64-char-secret
 NODE_ENV=production
 HOST=127.0.0.1
 PORT=8000
-APP_BASE_URL=https://app.mypaylink.app
+APP_BASE_URL=https://mypaylink.app
 UPLOAD_DIR=/home/paylinkssh/paylink-app/PayLink/uploads</code></pre>
 
 <h3><span class="step-number">2</span>Build &amp; Start</h3>
@@ -321,7 +321,7 @@ curl http://127.0.0.1:8000/ready    # Should return 200 (DB connected)</code></p
 <p>Create <code>/etc/nginx/sites-available/paylink-app</code>:</p>
 <pre><code>server {
     listen 80;
-    server_name app.mypaylink.app;
+    server_name mypaylink.app;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
@@ -339,7 +339,7 @@ curl http://127.0.0.1:8000/ready    # Should return 200 (DB connected)</code></p
 
 # Enable and get SSL
 # sudo ln -s /etc/nginx/sites-available/paylink-app /etc/nginx/sites-enabled/
-# sudo certbot --nginx -d app.mypaylink.app</code></pre>
+# sudo certbot --nginx -d mypaylink.app</code></pre>
 
 <h2>1.6 PM2 Process Management</h2>
 <table>
@@ -354,7 +354,7 @@ curl http://127.0.0.1:8000/ready    # Should return 200 (DB connected)</code></p
 <h2>1.7 DNS Configuration</h2>
 <table>
   <tr><th>Record</th><th>Name</th><th>Value</th><th>Purpose</th></tr>
-  <tr><td>A</td><td>app.mypaylink.app</td><td>YOUR_VPS_IP</td><td>Main application</td></tr>
+  <tr><td>A</td><td>mypaylink.app</td><td>YOUR_VPS_IP</td><td>Main application</td></tr>
   <tr><td>A</td><td>mypaylink.app</td><td>YOUR_VPS_IP</td><td>Marketing site</td></tr>
   <tr><td>CNAME</td><td>www</td><td>mypaylink.app</td><td>WWW redirect</td></tr>
 </table>
@@ -947,7 +947,7 @@ crontab -e
     <p style="margin-top: 24px;">PayLink Installation, Implementation &amp; User Guide v1.0</p>
     <p>Prepared for Adiken Inc. &mdash; March 2026</p>
     <p style="margin-top: 24px; font-size: 0.85rem; color: #64748b;">
-      For support, contact your PayLink administrator or visit app.mypaylink.app
+      For support, contact your PayLink administrator or visit mypaylink.app
     </p>
   </div>
 </div>

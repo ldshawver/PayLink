@@ -129,7 +129,7 @@ function useTabParam(defaultTab: string): [string, (tab: string) => void] {
   const params = new URLSearchParams(search);
   const tab = params.get("tab") || defaultTab;
   const setTab = (newTab: string) => {
-    setLocation(`/schedule?tab=${newTab}`);
+    setLocation(`/app/schedule?tab=${newTab}`);
   };
   return [tab, setTab];
 }
@@ -1119,7 +1119,7 @@ export default function SchedulePage() {
   const handleTabChange = (value: string) => {
     if (value === "templates") value = "recurring";
     setActiveTab(value);
-    setLocation(value === "schedules" ? "/schedule" : `/schedule?tab=${value}`);
+    setLocation(value === "schedules" ? "/app/schedule" : `/app/schedule?tab=${value}`);
   };
 
   const handlePrint = () => {

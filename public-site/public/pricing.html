@@ -30,7 +30,7 @@
       <a href="/security">Security</a>
       <a href="/demo">View Demo</a>
       <a href="/signup">Start Free Trial</a>
-      <a href="https://app.mypaylink.app">Login →</a>
+      <a href="https://mypaylink.app/app">Login →</a>
     </div>
   </nav>
 
@@ -226,7 +226,7 @@
         <div>
           <h4>Access</h4>
           <ul class="footer-links">
-            <li><a href="https://app.mypaylink.app">Login</a></li>
+            <li><a href="https://mypaylink.app/app">Login</a></li>
             <li><a href="/signup">Start Free Trial</a></li>
             <li><a href="/clock">Quick Clock In</a></li>
           </ul>
@@ -250,7 +250,7 @@
   <script src="/js/main.js"></script>
   <script>
     document.addEventListener('DOMContentLoaded', function() {
-      fetch('https://app.mypaylink.app/api/analytics/event', {
+      fetch('https://mypaylink.app/api/analytics/event', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ eventName: 'pricing_page_view', pageSource: 'pricing' })
@@ -258,7 +258,7 @@
 
       document.querySelectorAll('a[href="/signup"]').forEach(function(link) {
         link.addEventListener('click', function() {
-          fetch('https://app.mypaylink.app/api/analytics/event', {
+          fetch('https://mypaylink.app/api/analytics/event', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ eventName: 'start_trial_click', pageSource: 'pricing', metadata: JSON.stringify({ ctaLocation: this.closest('section') ? 'section' : 'nav' }) })
@@ -268,7 +268,7 @@
 
       document.querySelectorAll('a[href="/demo"]').forEach(function(link) {
         link.addEventListener('click', function() {
-          fetch('https://app.mypaylink.app/api/analytics/event', {
+          fetch('https://mypaylink.app/api/analytics/event', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ eventName: 'view_demo_click', pageSource: 'pricing' })

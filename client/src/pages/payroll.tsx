@@ -32,7 +32,7 @@ function useTabParam(): [string, (tab: string) => void] {
   const params = new URLSearchParams(search);
   const tab = params.get("tab") || "process";
   const setTab = (newTab: string) => {
-    setLocation(`/payroll?tab=${newTab}`);
+    setLocation(`/app/payroll?tab=${newTab}`);
   };
   return [tab, setTab];
 }

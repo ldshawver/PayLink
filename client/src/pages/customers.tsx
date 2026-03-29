@@ -411,7 +411,7 @@ export default function CustomersPage() {
       if (target) {
         setSelectedCustomer(target);
         deepLinkHandled.current = true;
-        navigate("/customers", { replace: true });
+        navigate("/app/customers", { replace: true });
       }
     }
   }, [customers, searchParams, navigate]);

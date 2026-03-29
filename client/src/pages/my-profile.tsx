@@ -54,7 +54,7 @@ function useTabParam(defaultTab: string): [string, (tab: string) => void] {
   const [, setLocation] = useLocation();
   const params = new URLSearchParams(search);
   const tab = params.get("tab") || defaultTab;
-  const setTab = (newTab: string) => setLocation(`/my-profile?tab=${newTab}`);
+  const setTab = (newTab: string) => setLocation(`/app/my-profile?tab=${newTab}`);
   return [tab, setTab];
 }
 

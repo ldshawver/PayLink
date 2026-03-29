@@ -78,9 +78,11 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 -   **Schema Design:** Supports an enterprise hierarchy, core operational data, and extended functionalities with granular role-based access control.
 
 **Production Deployment:**
--   **Environment:** Deployed to `app.mypaylink.app` behind an Nginx reverse proxy with SSL termination.
--   **Security:** Enforces secure cookie settings, hides sensitive error details, and uses security headers.
--   **Public Marketing Website:** A separate static site (`mypaylink.app`) is hosted for marketing.
+-   **Environment:** Consolidated under `mypaylink.app` (single-domain setup). Nginx reverse-proxies `/app/*`, `/api/*`, `/clock-in`, `/login`, and related paths to the Node app (port 8000), while all other paths go to the marketing site (port 3000). The legacy `app.mypaylink.app` subdomain 301-redirects to `mypaylink.app/app`.
+-   **URL Structure:** `/login` → login page, `/clock-in` → time clock (both public). All authenticated pages are under `/app/*` (e.g. `/app/dashboard`, `/app/attendance`).
+-   **Security:** Enforces secure cookie settings scoped to `.mypaylink.app` domain in production, hides sensitive error details, and uses security headers.
+-   **Logout:** Redirects to `https://mypaylink.app` (marketing home) after session destruction.
+-   **Public Marketing Website:** A separate static site hosted as the marketing/public site, running on port 3000.
 
 ## Mobile App (Capacitor)
 PayLink includes Capacitor configuration for building native Android and iOS apps from the web codebase.

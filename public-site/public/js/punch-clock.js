@@ -73,7 +73,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     setTimeout(function() {
-      window.location.href = 'https://app.mypaylink.app';
+      window.location.href = 'https://mypaylink.app/clock-in';
     }, 800);
   }
 

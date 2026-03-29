@@ -3,12 +3,17 @@
 ## Architecture
 
 ```
-app.mypaylink.app       -> Nginx (SSL) -> 127.0.0.1:8000 (PayLink app)
-mypaylink.app           -> Nginx (SSL) -> public marketing site (future)
+mypaylink.app/app/*      -> Nginx (SSL) -> 127.0.0.1:8000 (PayLink app)
+mypaylink.app/api/*      -> Nginx (SSL) -> 127.0.0.1:8000 (PayLink app)
+mypaylink.app/clock-in   -> Nginx (SSL) -> 127.0.0.1:8000 (PayLink app)
+mypaylink.app/login      -> Nginx (SSL) -> 127.0.0.1:8000 (PayLink app)
+mypaylink.app/           -> Nginx (SSL) -> 127.0.0.1:3000 (marketing site)
+app.mypaylink.app        -> 301 redirect to mypaylink.app/app (legacy)
 ```
 
 The PayLink app runs on `127.0.0.1:8000` (not publicly accessible).
-Nginx terminates SSL and reverse-proxies `app.mypaylink.app` traffic to it.
+The public marketing site runs on `127.0.0.1:3000`.
+Nginx terminates SSL and reverse-proxies path-based routes under `mypaylink.app`.
 
 ## Prerequisites
 
@@ -35,7 +40,7 @@ nano .env    # Fill in production values
 | `PORT` | Yes | `8000` (must match Nginx upstream) |
 | `DATABASE_URL` | Yes | `postgresql://lshawver:PASSWORD@127.0.0.1:5432/paylink` |
 | `SESSION_SECRET` | Yes | Generate with `openssl rand -hex 32` |
-| `APP_BASE_URL` | Recommended | `https://app.mypaylink.app` (used in email links) |
+| `APP_BASE_URL` | Recommended | `https://mypaylink.app` (used in email links) |
 | `UPLOAD_DIR` | Recommended | Absolute path to uploads directory |
 | `SMTP_HOST` | Optional | SMTP server for email notifications |
 | `SMTP_PORT` | Optional | SMTP port (587 for STARTTLS, 465 for implicit TLS) |
@@ -96,25 +101,28 @@ All commands must be run from: `/home/paylinkssh/paylink-app/PayLink`
 
 ## 3. Nginx Configuration
 
-### Secure App (app.mypaylink.app)
+### Primary Domain: mypaylink.app (Single-Domain Setup)
+
+All traffic is served under `mypaylink.app`. The Node app handles `/app/*`, `/api/*`, `/clock-in`, `/login`, and related paths. Everything else falls through to the marketing site.
 
 ```nginx
 server {
     listen 80;
-    server_name app.mypaylink.app;
-    return 301 https://$server_name$request_uri;
+    server_name mypaylink.app www.mypaylink.app;
+    return 301 https://mypaylink.app$request_uri;
 }
 
 server {
     listen 443 ssl http2;
-    server_name app.mypaylink.app;
+    server_name mypaylink.app www.mypaylink.app;
 
-    ssl_certificate /etc/letsencrypt/live/app.mypaylink.app/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/app.mypaylink.app/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/mypaylink.app/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mypaylink.app/privkey.pem;
 
     client_max_body_size 10m;
 
-    location / {
+    # Node app proxy (app, API, auth, timeclock, invoices, uploads, portal)
+    location ~ ^/(app|api|clock-in|login|pay|portal|uploads|health|ready|print-check)(/.*)?$ {
         proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
 
@@ -129,6 +137,42 @@ server {
         proxy_read_timeout 120s;
         proxy_send_timeout 120s;
     }
+
+    # Marketing/public site (everything else)
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+    }
+}
+```
+
+### Legacy: app.mypaylink.app (redirect to mypaylink.app/app)
+
+Keep this block to redirect any users or bookmarks pointing to the old subdomain.
+
+```nginx
+server {
+    listen 80;
+    server_name app.mypaylink.app;
+    return 301 https://mypaylink.app/app$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name app.mypaylink.app;
+
+    ssl_certificate /etc/letsencrypt/live/app.mypaylink.app/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/app.mypaylink.app/privkey.pem;
+
+    return 301 https://mypaylink.app/app$request_uri;
 }
 ```
 
@@ -138,6 +182,7 @@ server {
 - WebSocket upgrade headers support live reload during development
 - `proxy_read_timeout 120s` accommodates AI receipt scanning (OpenAI calls)
 - `X-Forwarded-Proto` and `X-Forwarded-Host` are required for correct absolute URL generation and secure cookies
+- Session cookies are scoped to `.mypaylink.app` in production so they work across both the app and any subdomains
 
 ### Recommended Rate Limiting
 
@@ -148,7 +193,7 @@ limit_req_zone $binary_remote_addr zone=login:10m rate=5r/m;
 limit_req_zone $binary_remote_addr zone=api:10m rate=30r/s;
 ```
 
-Add to the server block:
+Add inside the `mypaylink.app` server block:
 
 ```nginx
 location /api/auth/login {
@@ -158,29 +203,6 @@ location /api/auth/login {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
-
-### Public Website (mypaylink.app) — Future
-
-```nginx
-server {
-    listen 80;
-    server_name mypaylink.app www.mypaylink.app;
-    return 301 https://$server_name$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name mypaylink.app www.mypaylink.app;
-
-    ssl_certificate /etc/letsencrypt/live/mypaylink.app/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/mypaylink.app/privkey.pem;
-
-    # For now, redirect to the app
-    location / {
-        return 302 https://app.mypaylink.app;
-    }
 }
 ```
 

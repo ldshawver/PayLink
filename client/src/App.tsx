@@ -52,7 +52,7 @@ function RoleGuard({ roles, children }: { roles: string[]; children: React.React
   const allowed = roles.includes(userRole);
 
   if (!allowed) {
-    setTimeout(() => setLocation("/"), 0);
+    setTimeout(() => setLocation("/app"), 0);
     return null;
   }
   return <>{children}</>;
@@ -61,28 +61,29 @@ function RoleGuard({ roles, children }: { roles: string[]; children: React.React
 function AuthenticatedRouter() {
   return (
     <Switch>
-      <Route path="/" component={Dashboard} />
-      <Route path="/onboarding" component={OnboardingWizard} />
-      <Route path="/attendance" component={AttendancePage} />
-      <Route path="/schedule" component={SchedulePage} />
-      <Route path="/employee">{() => <RoleGuard roles={["admin", "manager"]}><EmployeePage /></RoleGuard>}</Route>
-      <Route path="/company">{() => <RoleGuard roles={["admin", "manager"]}><CompanyPage /></RoleGuard>}</Route>
-      <Route path="/company-documents">{() => <RoleGuard roles={["admin", "manager"]}><CompanyDocumentsPage /></RoleGuard>}</Route>
-      <Route path="/payroll">{() => <RoleGuard roles={["admin", "manager"]}><PayrollPage /></RoleGuard>}</Route>
-      <Route path="/policy">{() => <RoleGuard roles={["admin"]}><PolicyPage /></RoleGuard>}</Route>
-      <Route path="/hr">{() => <RoleGuard roles={["admin", "manager"]}><HRPage /></RoleGuard>}</Route>
-      <Route path="/reports">{() => <RoleGuard roles={["admin", "manager"]}><ReportsPage /></RoleGuard>}</Route>
-      <Route path="/expenses" component={ExpensesPage} />
-      <Route path="/payroll-audit">{() => <RoleGuard roles={["admin", "manager"]}><PayrollAuditPage /></RoleGuard>}</Route>
-      <Route path="/customers">{() => <RoleGuard roles={["admin", "manager"]}><CustomersPage /></RoleGuard>}</Route>
-      <Route path="/invoices">{() => <RoleGuard roles={["admin", "manager"]}><InvoicesPage /></RoleGuard>}</Route>
-      <Route path="/billing">{() => <RoleGuard roles={["admin"]}><BillingPage /></RoleGuard>}</Route>
-      <Route path="/deal-pipeline">{() => <RoleGuard roles={["admin", "manager"]}><DealPipelinePage /></RoleGuard>}</Route>
-      <Route path="/onboarding-projects">{() => <RoleGuard roles={["admin", "manager"]}><OnboardingProjectsPage /></RoleGuard>}</Route>
-      <Route path="/onboarding-templates">{() => <RoleGuard roles={["admin", "manager"]}><OnboardingTemplatesPage /></RoleGuard>}</Route>
-      <Route path="/engagement-feed">{() => <RoleGuard roles={["admin", "manager"]}><EngagementFeedPage /></RoleGuard>}</Route>
-      <Route path="/print-expense-check" component={PrintExpenseCheckPage} />
-      <Route path="/my-profile" component={MyProfilePage} />
+      <Route path="/app" component={Dashboard} />
+      <Route path="/app/dashboard" component={Dashboard} />
+      <Route path="/app/onboarding" component={OnboardingWizard} />
+      <Route path="/app/attendance" component={AttendancePage} />
+      <Route path="/app/schedule" component={SchedulePage} />
+      <Route path="/app/employee">{() => <RoleGuard roles={["admin", "manager"]}><EmployeePage /></RoleGuard>}</Route>
+      <Route path="/app/company">{() => <RoleGuard roles={["admin", "manager"]}><CompanyPage /></RoleGuard>}</Route>
+      <Route path="/app/company-documents">{() => <RoleGuard roles={["admin", "manager"]}><CompanyDocumentsPage /></RoleGuard>}</Route>
+      <Route path="/app/payroll">{() => <RoleGuard roles={["admin", "manager"]}><PayrollPage /></RoleGuard>}</Route>
+      <Route path="/app/policy">{() => <RoleGuard roles={["admin"]}><PolicyPage /></RoleGuard>}</Route>
+      <Route path="/app/hr">{() => <RoleGuard roles={["admin", "manager"]}><HRPage /></RoleGuard>}</Route>
+      <Route path="/app/reports">{() => <RoleGuard roles={["admin", "manager"]}><ReportsPage /></RoleGuard>}</Route>
+      <Route path="/app/expenses" component={ExpensesPage} />
+      <Route path="/app/payroll-audit">{() => <RoleGuard roles={["admin", "manager"]}><PayrollAuditPage /></RoleGuard>}</Route>
+      <Route path="/app/customers">{() => <RoleGuard roles={["admin", "manager"]}><CustomersPage /></RoleGuard>}</Route>
+      <Route path="/app/invoices">{() => <RoleGuard roles={["admin", "manager"]}><InvoicesPage /></RoleGuard>}</Route>
+      <Route path="/app/billing">{() => <RoleGuard roles={["admin"]}><BillingPage /></RoleGuard>}</Route>
+      <Route path="/app/deal-pipeline">{() => <RoleGuard roles={["admin", "manager"]}><DealPipelinePage /></RoleGuard>}</Route>
+      <Route path="/app/onboarding-projects">{() => <RoleGuard roles={["admin", "manager"]}><OnboardingProjectsPage /></RoleGuard>}</Route>
+      <Route path="/app/onboarding-templates">{() => <RoleGuard roles={["admin", "manager"]}><OnboardingTemplatesPage /></RoleGuard>}</Route>
+      <Route path="/app/engagement-feed">{() => <RoleGuard roles={["admin", "manager"]}><EngagementFeedPage /></RoleGuard>}</Route>
+      <Route path="/app/print-expense-check" component={PrintExpenseCheckPage} />
+      <Route path="/app/my-profile" component={MyProfilePage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -160,8 +161,8 @@ function OnboardingRedirect({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!isTrial || progressLoading || !progress) return;
-    if (!progress.onboarding_wizard_completed && location !== "/onboarding") {
-      setLocation("/onboarding");
+    if (!progress.onboarding_wizard_completed && location !== "/app/onboarding") {
+      setLocation("/app/onboarding");
     }
   }, [isTrial, progressLoading, progress, location, setLocation]);
 
@@ -180,13 +181,22 @@ function AppContent() {
     return <PayInvoicePage />;
   }
 
-  if (location === "/time-clock") {
+  if (location === "/clock-in" || location === "/time-clock") {
     return <TimeClock />;
   }
 
-  if (location.startsWith("/print-check/")) {
+  if (location === "/login") {
+    if (!isLoading && user) {
+      return <RedirectToApp />;
+    }
+    return <LoginPage />;
+  }
+
+  if (location.startsWith("/app/print-check/")) {
     if (isLoading) return null;
-    if (!user) return <LoginPage />;
+    if (!user) {
+      return <RedirectToLogin />;
+    }
     return <RoleGuard roles={["admin", "manager"]}><PrintCheckPage /></RoleGuard>;
   }
 
@@ -199,13 +209,37 @@ function AppContent() {
   }
 
   if (!user) {
-    return <LoginPage />;
+    return <RedirectToLogin />;
   }
 
   return (
     <OnboardingRedirect>
       <AuthenticatedLayout />
     </OnboardingRedirect>
+  );
+}
+
+function RedirectToLogin() {
+  const [, setLocation] = useLocation();
+  useEffect(() => {
+    setLocation("/login");
+  }, [setLocation]);
+  return (
+    <div className="flex items-center justify-center min-h-screen">
+      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
+
+function RedirectToApp() {
+  const [, setLocation] = useLocation();
+  useEffect(() => {
+    setLocation("/app");
+  }, [setLocation]);
+  return (
+    <div className="flex items-center justify-center min-h-screen">
+      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+    </div>
   );
 }
 

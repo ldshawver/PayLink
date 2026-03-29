@@ -30,12 +30,12 @@ interface OnboardingData {
 }
 
 const steps = [
-  { key: "step_company_details", label: "Set up company details", desc: "Add your company name, EIN, and address", icon: Building2, route: "/company" },
-  { key: "step_first_employee", label: "Add your first employee", desc: "Enter employee info, pay rate, and tax details", icon: UserPlus, route: "/employee" },
-  { key: "step_pay_schedule", label: "Configure pay schedule", desc: "Set your pay frequency (weekly, biweekly, etc.)", icon: Calendar, route: "/company" },
-  { key: "step_payroll_config", label: "Set up payroll", desc: "Configure tax settings and deductions", icon: Settings, route: "/payroll" },
-  { key: "step_time_clock", label: "Try the time clock", desc: "Clock in and see how attendance tracking works", icon: Clock, route: "/attendance" },
-  { key: "step_payroll_preview", label: "Preview a payroll run", desc: "Create a draft payroll to see calculations", icon: DollarSign, route: "/payroll" },
+  { key: "step_company_details", label: "Set up company details", desc: "Add your company name, EIN, and address", icon: Building2, route: "/app/company" },
+  { key: "step_first_employee", label: "Add your first employee", desc: "Enter employee info, pay rate, and tax details", icon: UserPlus, route: "/app/employee" },
+  { key: "step_pay_schedule", label: "Configure pay schedule", desc: "Set your pay frequency (weekly, biweekly, etc.)", icon: Calendar, route: "/app/company" },
+  { key: "step_payroll_config", label: "Set up payroll", desc: "Configure tax settings and deductions", icon: Settings, route: "/app/payroll" },
+  { key: "step_time_clock", label: "Try the time clock", desc: "Clock in and see how attendance tracking works", icon: Clock, route: "/app/attendance" },
+  { key: "step_payroll_preview", label: "Preview a payroll run", desc: "Create a draft payroll to see calculations", icon: DollarSign, route: "/app/payroll" },
 ];
 
 export function OnboardingChecklist() {

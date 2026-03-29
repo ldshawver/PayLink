@@ -274,7 +274,7 @@ export default function PrintExpenseCheckPage() {
     return (
       <div className="p-6 text-center space-y-4">
         <p className="text-muted-foreground" data-testid="text-no-expense-checks">No expense receipts found for the provided IDs.</p>
-        <Link href="/expenses">
+        <Link href="/app/expenses">
           <Button variant="outline">
             <ArrowLeft className="mr-2 h-4 w-4" />Back to Expenses
           </Button>
@@ -288,7 +288,7 @@ export default function PrintExpenseCheckPage() {
   return (
     <div>
       <div className="p-4 flex items-center gap-3 print-hide flex-wrap" data-testid="div-print-controls">
-        <Link href="/expenses">
+        <Link href="/app/expenses">
           <Button variant="outline" data-testid="button-back-expenses">
             <ArrowLeft className="mr-2 h-4 w-4" />Back to Expenses
           </Button>

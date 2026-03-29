@@ -41,7 +41,7 @@ function useTabParam(): [string, (tab: string) => void] {
   const params = new URLSearchParams(search);
   const tab = params.get("tab") || "saved";
   const setTab = (newTab: string) => {
-    setLocation(`/reports?tab=${newTab}`);
+    setLocation(`/app/reports?tab=${newTab}`);
   };
   return [tab, setTab];
 }

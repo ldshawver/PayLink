@@ -746,7 +746,7 @@ export default function OnboardingWizard() {
 
   useEffect(() => {
     if (progress?.onboarding_wizard_completed) {
-      setLocation("/");
+      setLocation("/app");
     }
   }, [progress, setLocation]);
 
@@ -815,7 +815,7 @@ export default function OnboardingWizard() {
     onSuccess: () => {
       toast({ title: "Setup Complete!", description: "Welcome to PayLink! Your dashboard is ready." });
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding/progress"] });
-      setLocation("/");
+      setLocation("/app");
     },
     onError: (e: any) => {
       toast({ title: "Error", description: e.message || "Failed to complete wizard", variant: "destructive" });
