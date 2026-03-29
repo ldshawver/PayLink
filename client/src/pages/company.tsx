@@ -963,7 +963,11 @@ function BranchesTab() {
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: divisionsList } = useQuery<Division[]>({ queryKey: ["/api/divisions"] });
 
-  const toPayload = (data: typeof form) => ({ ...data, companyId: data.companyId === "__universal__" ? null : (data.companyId || null) });
+  const toPayload = (data: typeof form) => ({
+    ...data,
+    companyId: data.companyId === "__universal__" ? null : (data.companyId || null),
+    divisionId: data.divisionId || null,
+  });
 
   const addMutation = useMutation({
     mutationFn: async (data: typeof form) => {
@@ -1200,14 +1204,20 @@ function DepartmentsTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<Department | null>(null);
-  const emptyForm = { companyId: "__universal__", divisionId: "", name: "", code: "" };
+  const emptyForm = { companyId: "__universal__", divisionId: "", name: "", code: "", managerId: "", parentId: "" };
   const [form, setForm] = useState(emptyForm);
 
   const { data: departments, isLoading } = useQuery<Department[]>({ queryKey: ["/api/departments"] });
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: divisionsList } = useQuery<Division[]>({ queryKey: ["/api/divisions"] });
+  const { data: workers } = useQuery<any[]>({ queryKey: ["/api/workers"] });
 
-  const toPayload = (data: typeof form) => ({ ...data, companyId: data.companyId === "__universal__" ? null : (data.companyId || null) });
+  const toPayload = (data: typeof form) => ({
+    ...data,
+    companyId: data.companyId === "__universal__" ? null : (data.companyId || null),
+    managerId: data.managerId || null,
+    parentId: data.parentId || null,
+  });
 
   const addMutation = useMutation({
     mutationFn: async (data: typeof form) => {
@@ -1254,6 +1264,8 @@ function DepartmentsTab() {
       divisionId: item.divisionId || "",
       name: item.name || "",
       code: item.code || "",
+      managerId: item.managerId || "",
+      parentId: item.parentId || "",
     });
     setEditOpen(true);
   };
@@ -1263,12 +1275,18 @@ function DepartmentsTab() {
   }
 
   const filteredDivisions = (form.companyId && form.companyId !== "__universal__") ? divisionsList?.filter((d) => d.companyId === form.companyId) : divisionsList;
+  const filteredWorkers = (form.companyId && form.companyId !== "__universal__") ? workers?.filter((w) => w.companyId === form.companyId) : workers;
+  const filteredParentDepts = departments?.filter((d) => {
+    if (editItem && d.id === editItem.id) return false;
+    if (form.companyId && form.companyId !== "__universal__") return d.companyId === form.companyId;
+    return true;
+  });
 
   const departmentFormFields = (suffix: string) => (
     <div className="grid gap-4">
       <div className="grid gap-2">
         <Label>Company</Label>
-        <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v, divisionId: "" })}>
+        <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v, divisionId: "", managerId: "", parentId: "" })}>
           <SelectTrigger data-testid={`select-department-company${suffix}`}>
             <SelectValue placeholder="Select company" />
           </SelectTrigger>
@@ -1304,6 +1322,36 @@ function DepartmentsTab() {
           <Input data-testid={`input-department-code${suffix}`} value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
         </div>
       </div>
+      <div className="grid gap-2">
+        <Label>Manager</Label>
+        <Select value={form.managerId} onValueChange={(v) => setForm({ ...form, managerId: v === "__none__" ? "" : v })}>
+          <SelectTrigger data-testid={`select-department-manager${suffix}`}>
+            <SelectValue placeholder="Select manager (optional)" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">None</SelectItem>
+            {filteredWorkers?.map((w) => (
+              <SelectItem key={w.id} value={w.id}>
+                {w.firstName} {w.lastName}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="grid gap-2">
+        <Label>Parent Department</Label>
+        <Select value={form.parentId} onValueChange={(v) => setForm({ ...form, parentId: v === "__none__" ? "" : v })}>
+          <SelectTrigger data-testid={`select-department-parent${suffix}`}>
+            <SelectValue placeholder="Select parent department (optional)" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">None</SelectItem>
+            {filteredParentDepts?.map((d) => (
+              <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
     </div>
   );
 
@@ -1315,7 +1363,7 @@ function DepartmentsTab() {
           <DialogTrigger asChild>
             <Button data-testid="button-add-department"><Plus className="mr-2 h-4 w-4" />Add Department</Button>
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader><DialogTitle>Add Department</DialogTitle></DialogHeader>
             {departmentFormFields("")}
             <Button
@@ -1331,7 +1379,7 @@ function DepartmentsTab() {
       </div>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Department</DialogTitle></DialogHeader>
           {departmentFormFields("-edit")}
           <Button
@@ -1354,6 +1402,7 @@ function DepartmentsTab() {
                 <TableHead>Code</TableHead>
                 <TableHead>Division</TableHead>
                 <TableHead>Manager</TableHead>
+                <TableHead>Parent Dept</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead className="w-24"></TableHead>
               </TableRow>
@@ -1361,12 +1410,15 @@ function DepartmentsTab() {
             <TableBody>
               {departments?.map((d) => {
                 const division = divisionsList?.find((div) => div.id === d.divisionId);
+                const manager = workers?.find((w) => w.id === d.managerId);
+                const parentDept = departments?.find((pd) => pd.id === d.parentId);
                 return (
                   <TableRow key={d.id} data-testid={`row-department-${d.id}`}>
                     <TableCell className="font-medium">{d.name}</TableCell>
                     <TableCell>{d.code || "-"}</TableCell>
                     <TableCell>{division?.name || "-"}</TableCell>
-                    <TableCell>{d.managerId || "-"}</TableCell>
+                    <TableCell data-testid={`text-department-manager-${d.id}`}>{manager ? `${manager.firstName} ${manager.lastName}` : "-"}</TableCell>
+                    <TableCell>{parentDept?.name || "-"}</TableCell>
                     <TableCell>
                       <Badge variant={d.isActive ? "default" : "secondary"}>
                         {d.isActive ? "Active" : "Inactive"}
@@ -1391,7 +1443,7 @@ function DepartmentsTab() {
               })}
               {departments?.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No departments found.</TableCell>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">No departments found.</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -1789,7 +1841,14 @@ function PositionsTab() {
   const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: departments } = useQuery<Department[]>({ queryKey: ["/api/departments"] });
 
-  const toPayload = (data: typeof form) => ({ ...data, companyId: data.companyId === "__universal__" ? null : (data.companyId || null) });
+  const toPayload = (data: typeof form) => ({
+    ...data,
+    companyId: data.companyId === "__universal__" ? null : (data.companyId || null),
+    departmentId: data.departmentId || null,
+    reportsToPositionId: data.reportsToPositionId || null,
+    salaryRangeMin: data.salaryRangeMin || null,
+    salaryRangeMax: data.salaryRangeMax || null,
+  });
 
   const addMutation = useMutation({
     mutationFn: async (data: typeof form) => {
@@ -1867,11 +1926,12 @@ function PositionsTab() {
       </div>
       <div className="grid gap-2">
         <Label>Department</Label>
-        <Select value={form.departmentId} onValueChange={(v) => setForm({ ...form, departmentId: v })}>
+        <Select value={form.departmentId} onValueChange={(v) => setForm({ ...form, departmentId: v === "__none__" ? "" : v })}>
           <SelectTrigger data-testid={`select-position-department${suffix}`}>
-            <SelectValue placeholder="Select department" />
+            <SelectValue placeholder="Select department (optional)" />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="__none__">None</SelectItem>
             {filteredDepts?.map((d) => (
               <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
             ))}
@@ -1888,12 +1948,13 @@ function PositionsTab() {
       </div>
       <div className="grid gap-2">
         <Label>Reports To</Label>
-        <Select value={form.reportsToPositionId} onValueChange={(v) => setForm({ ...form, reportsToPositionId: v })}>
+        <Select value={form.reportsToPositionId} onValueChange={(v) => setForm({ ...form, reportsToPositionId: v === "__none__" ? "" : v })}>
           <SelectTrigger data-testid={`select-position-reports-to${suffix}`}>
-            <SelectValue placeholder="Select position" />
+            <SelectValue placeholder="Select position (optional)" />
           </SelectTrigger>
           <SelectContent>
-            {positionsList?.map((p) => (
+            <SelectItem value="__none__">None</SelectItem>
+            {positionsList?.filter((p) => !editItem || p.id !== editItem.id).map((p) => (
               <SelectItem key={p.id} value={p.id}>{p.title}</SelectItem>
             ))}
           </SelectContent>
@@ -2213,7 +2274,13 @@ function JobsTab() {
   const { data: costCentersList } = useQuery<CostCenter[]>({ queryKey: ["/api/cost-centers"] });
   const { data: departmentsList } = useQuery<Department[]>({ queryKey: ["/api/departments"] });
 
-  const toPayload = (data: typeof form) => ({ ...data, companyId: data.companyId === "__universal__" ? null : (data.companyId || null) });
+  const toPayload = (data: typeof form) => ({
+    ...data,
+    companyId: data.companyId === "__universal__" ? null : (data.companyId || null),
+    costCenterId: data.costCenterId || null,
+    departmentId: data.departmentId || null,
+    defaultWage: data.defaultWage || null,
+  });
 
   const addMutation = useMutation({
     mutationFn: async (data: typeof form) => {
