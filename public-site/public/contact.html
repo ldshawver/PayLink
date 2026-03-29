@@ -143,13 +143,54 @@
 
   <script src="/js/main.js"></script>
   <script>
-    function handleSubmit(e) {
+    async function handleSubmit(e) {
       e.preventDefault();
-      var msg = document.getElementById('formMessage');
-      msg.style.display = 'block';
-      msg.style.color = 'var(--teal-light)';
-      msg.textContent = 'Thank you! We\'ll be in touch within 24 hours to schedule your demo.';
-      document.getElementById('contactForm').reset();
+      var form = document.getElementById('contactForm');
+      var btn  = form.querySelector('button[type="submit"]');
+      var msg  = document.getElementById('formMessage');
+
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+      msg.style.display = 'none';
+
+      try {
+        var payload = {
+          firstName:  (form.firstName.value  || '').trim(),
+          lastName:   (form.lastName.value   || '').trim(),
+          email:      (form.email.value      || '').trim(),
+          phone:      (form.phone.value      || '').trim(),
+          company:    (form.company.value    || '').trim(),
+          employees:  (form.employees.value  || '').trim(),
+          interest:   (form.interest.value   || '').trim(),
+          message:    (form.message.value    || '').trim(),
+          sourcePage: window.location.href,
+        };
+
+        var res  = await fetch('/api/license/request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        var data = await res.json();
+
+        msg.style.display = 'block';
+        if (res.ok) {
+          msg.style.color   = 'var(--teal-light)';
+          msg.textContent   = data.message || 'Thank you! We\'ll be in touch within 24 hours.';
+          form.reset();
+        } else {
+          msg.style.color   = '#f87171';
+          msg.textContent   = data.message || 'Something went wrong. Please try again or email info@mypaylink.app.';
+        }
+      } catch (err) {
+        msg.style.display  = 'block';
+        msg.style.color    = '#f87171';
+        msg.textContent    = 'Network error. Please try again or email info@mypaylink.app.';
+      } finally {
+        btn.disabled    = false;
+        btn.textContent = 'Submit Request →';
+      }
+
       return false;
     }
   </script>

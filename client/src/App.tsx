@@ -36,6 +36,7 @@ import DealPipelinePage from "@/pages/deal-pipeline";
 import OnboardingProjectsPage from "@/pages/onboarding-projects";
 import OnboardingTemplatesPage from "@/pages/onboarding-templates";
 import EngagementFeedPage from "@/pages/engagement-feed";
+import LicenseRequestsPage from "@/pages/license-requests";
 import PortalOnboardingPage from "@/pages/portal-onboarding";
 import LoginPage from "@/pages/login";
 import NotificationSettingsPage from "@/pages/notification-settings";
@@ -86,6 +87,7 @@ function AuthenticatedRouter() {
       <Route path="/app/onboarding-projects">{() => <RoleGuard roles={["admin", "manager"]}><OnboardingProjectsPage /></RoleGuard>}</Route>
       <Route path="/app/onboarding-templates">{() => <RoleGuard roles={["admin", "manager"]}><OnboardingTemplatesPage /></RoleGuard>}</Route>
       <Route path="/app/engagement-feed">{() => <RoleGuard roles={["admin", "manager"]}><EngagementFeedPage /></RoleGuard>}</Route>
+      <Route path="/app/license-requests">{() => <RoleGuard roles={["admin"]}><LicenseRequestsPage /></RoleGuard>}</Route>
       <Route path="/app/print-expense-check" component={PrintExpenseCheckPage} />
       <Route path="/app/my-profile" component={MyProfilePage} />
       <Route path="/app/notification-settings" component={NotificationSettingsPage} />

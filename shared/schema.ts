@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, boolean, timestamp, numeric, date, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, numeric, date, pgEnum, serial } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -2647,3 +2647,26 @@ export const integrationEvents = pgTable("integration_events", {
 export const insertIntegrationEventSchema = createInsertSchema(integrationEvents).omit({ id: true, createdAt: true });
 export type IntegrationEvent = typeof integrationEvents.$inferSelect;
 export type InsertIntegrationEvent = z.infer<typeof insertIntegrationEventSchema>;
+
+// ── License Requests ────────────────────────────────────────────
+export const licenseRequests = pgTable("license_requests", {
+  id: serial("id").primaryKey(),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  company: text("company"),
+  employees: text("employees"),
+  interest: text("interest"),
+  message: text("message"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  sourcePage: text("source_page"),
+  status: text("status").notNull().default("pending"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertLicenseRequestSchema = createInsertSchema(licenseRequests).omit({ id: true, createdAt: true });
+export type LicenseRequest = typeof licenseRequests.$inferSelect;
+export type InsertLicenseRequest = z.infer<typeof insertLicenseRequestSchema>;

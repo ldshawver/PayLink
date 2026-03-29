@@ -302,6 +302,7 @@ export async function registerRoutes(
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
       || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
+      || req.path === "/license/request"
       || req.path.startsWith("/portal/")) {
       return next();
     }
@@ -11161,6 +11162,125 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const events = await storage.getWebhookEventsByCompany(companyId, provider);
       res.json(events);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch webhook events") }); }
+  });
+
+  // ── License Requests ───────────────────────────────────────────────────────
+
+  // Public endpoint — no auth required
+  app.post("/api/license/request", async (req, res) => {
+    try {
+      // Normalize
+      const email = (req.body.email || "").trim().toLowerCase();
+      const interest = (req.body.interest || "").trim().toLowerCase();
+      const firstName = (req.body.firstName || "").trim();
+      const lastName = (req.body.lastName || "").trim();
+      const company = (req.body.company || "").trim();
+      const employees = (req.body.employees || "").trim();
+      const phone = (req.body.phone || "").trim();
+      const message = (req.body.message || "").trim();
+      const sourcePage = (req.body.sourcePage || req.get("referer") || "").trim();
+
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ message: "A valid email address is required." });
+      }
+      if (!interest) {
+        return res.status(400).json({ message: "Please select an area of interest." });
+      }
+
+      // Duplicate suppression — same email + interest within 2 hours
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      const existing = await db.execute(sql`
+        SELECT id FROM license_requests
+        WHERE email = ${email}
+          AND interest = ${interest}
+          AND created_at > ${twoHoursAgo}
+        LIMIT 1
+      `);
+      if ((existing.rows ?? existing).length > 0) {
+        // Respond generically — don't reveal that a record exists
+        return res.json({ message: "Thank you! Your request has been received. We'll be in touch within 24 hours." });
+      }
+
+      // Persist
+      const ipAddress = (req.headers["x-forwarded-for"] as string || req.socket.remoteAddress || "").split(",")[0].trim();
+      const userAgent = req.get("user-agent") || "";
+
+      await db.execute(sql`
+        INSERT INTO license_requests
+          (first_name, last_name, email, phone, company, employees, interest, message, ip_address, user_agent, source_page, status)
+        VALUES
+          (${firstName || null}, ${lastName || null}, ${email}, ${phone || null},
+           ${company || null}, ${employees || null}, ${interest}, ${message || null},
+           ${ipAddress || null}, ${userAgent || null}, ${sourcePage || null}, 'pending')
+      `);
+
+      // SMTP notification — best-effort only; DB persistence is source of truth
+      try {
+        const { getTransporter } = await import("./notifications.js");
+        const smtp = getTransporter();
+        if (smtp) {
+          const interestLabel = interest.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+          const nameLabel = [firstName, lastName].filter(Boolean).join(" ") || "(not provided)";
+          await smtp.transporter.sendMail({
+            from: smtp.fromAddress,
+            to: smtp.fromAddress,
+            subject: `New License Request — ${interestLabel}`,
+            text: [
+              `New license request received on PayLink.`,
+              ``,
+              `Name:     ${nameLabel}`,
+              `Email:    ${email}`,
+              `Phone:    ${phone || "(not provided)"}`,
+              `Company:  ${company || "(not provided)"}`,
+              `Size:     ${employees || "(not provided)"}`,
+              `Interest: ${interestLabel}`,
+              `Source:   ${sourcePage || "(not provided)"}`,
+              `IP:       ${ipAddress}`,
+              ``,
+              `Message:`,
+              message || "(none)",
+            ].join("\n"),
+          });
+        }
+      } catch (mailErr) {
+        console.warn("[license/request] SMTP notification failed (non-fatal):", mailErr);
+      }
+
+      res.json({ message: "Thank you! Your request has been received. We'll be in touch within 24 hours." });
+    } catch (err) {
+      console.error("[license/request]", err);
+      res.status(500).json({ message: "Something went wrong. Please try again or email us directly at info@mypaylink.app." });
+    }
+  });
+
+  // Admin — view all requests
+  app.get("/api/admin/license-requests", requireRole("admin"), async (req, res) => {
+    try {
+      const rows = await db.execute(sql`
+        SELECT * FROM license_requests ORDER BY created_at DESC
+      `);
+      res.json(rows.rows ?? rows);
+    } catch (err) {
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to fetch license requests") });
+    }
+  });
+
+  // Admin — update request status
+  app.patch("/api/admin/license-requests/:id/status", requireRole("admin"), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const status = (req.body.status || "").trim();
+      const notes = (req.body.notes ?? null);
+      if (!["pending", "contacted", "fulfilled", "rejected"].includes(status)) {
+        return res.status(400).json({ message: "Invalid status value." });
+      }
+      await db.execute(sql`
+        UPDATE license_requests SET status = ${status}, notes = ${notes} WHERE id = ${id}
+      `);
+      res.json({ message: "Status updated." });
+    } catch (err) {
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to update request") });
+    }
   });
 
   return httpServer;

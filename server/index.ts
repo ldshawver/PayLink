@@ -1332,6 +1332,24 @@ app.use((req, res, next) => {
     )`);
     await run("webhook_events.provider_event_id unique", sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_events_provider_event_id ON webhook_events(provider_event_id) WHERE provider_event_id IS NOT NULL`);
 
+    await run("license_requests table", sql`CREATE TABLE IF NOT EXISTS license_requests (
+      id SERIAL PRIMARY KEY,
+      first_name TEXT,
+      last_name TEXT,
+      email TEXT NOT NULL,
+      phone TEXT,
+      company TEXT,
+      employees TEXT,
+      interest TEXT,
+      message TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      source_page TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
     await run("document_signature_requests.provider", sql`ALTER TABLE document_signature_requests ADD COLUMN IF NOT EXISTS provider TEXT`);
     await run("document_signature_requests.provider_object_id", sql`ALTER TABLE document_signature_requests ADD COLUMN IF NOT EXISTS provider_object_id TEXT`);
     await run("document_signers.routing_order", sql`ALTER TABLE document_signers ADD COLUMN IF NOT EXISTS routing_order INTEGER DEFAULT 1`);

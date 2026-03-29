@@ -277,6 +277,7 @@ const navSections: NavSection[] = [
       { title: "Onboarding Projects", url: "/app/onboarding-projects", icon: ClipboardCheck },
       { title: "Templates", url: "/app/onboarding-templates", icon: LayoutTemplate },
       { title: "Engagement Feed", url: "/app/engagement-feed", icon: Rss },
+      { title: "License Requests", url: "/app/license-requests", icon: FileText, roles: ["admin"] },
     ],
   },
   {

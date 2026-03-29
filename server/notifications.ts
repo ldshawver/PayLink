@@ -18,7 +18,7 @@ export interface ScheduleNotificationPayload {
   scheduleViewUrl: string;
 }
 
-function getTransporter() {
+export function getTransporter() {
   const host = process.env.SMTP_HOST;
   const port = parseInt(process.env.SMTP_PORT || "587");
   const user = process.env.SMTP_USER;
