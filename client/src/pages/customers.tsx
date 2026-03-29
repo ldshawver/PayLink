@@ -309,15 +309,15 @@ function CustomerDetailView({ customer, companyId, onBack, onEdit }: {
 }) {
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-4">
         <Button variant="ghost" onClick={onBack} data-testid="button-back-customers">
           <MapPin className="h-4 w-4 mr-2" /> Back to Directory
         </Button>
-        <div className="flex-1">
-          <h1 className="text-2xl font-bold" data-testid="text-customer-detail-name">{customer.customerName}</h1>
-          <p className="text-muted-foreground">{customer.businessName || "No business name"}</p>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-2xl font-bold truncate" data-testid="text-customer-detail-name">{customer.customerName}</h1>
+          <p className="text-muted-foreground truncate">{customer.businessName || "No business name"}</p>
         </div>
-        <Button variant="outline" onClick={() => onEdit(customer)} data-testid="button-edit-customer-detail">
+        <Button variant="outline" onClick={() => onEdit(customer)} data-testid="button-edit-customer-detail" className="w-full sm:w-auto">
           <Edit className="h-4 w-4 mr-2" /> Edit
         </Button>
       </div>
@@ -329,7 +329,7 @@ function CustomerDetailView({ customer, companyId, onBack, onEdit }: {
         </TabsList>
 
         <TabsContent value="info" className="mt-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Card>
               <CardContent className="p-4 space-y-3">
                 <h3 className="font-semibold">Contact Information</h3>
@@ -505,17 +505,17 @@ export default function CustomersPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Customers & Vendors</h1>
           <p className="text-muted-foreground">Manage your customers and vendors</p>
         </div>
-        <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-add-customer">
+        <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-add-customer" className="w-full sm:w-auto">
           <Plus className="h-4 w-4 mr-2" /> Add Customer / Vendor
         </Button>
       </div>
 
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4 flex items-center gap-3">
             <div className="h-10 w-10 rounded-lg bg-teal-100 dark:bg-teal-900/30 flex items-center justify-center">
@@ -562,14 +562,14 @@ export default function CustomersPage() {
         </Card>
       </div>
 
-      <div className="flex gap-3">
-        <div className="relative flex-1">
+      <div className="flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search customers & vendors..." value={search} onChange={e => setSearch(e.target.value)}
             className="pl-10" data-testid="input-search-customers" />
         </div>
         <Select value={typeFilter} onValueChange={setTypeFilter}>
-          <SelectTrigger className="w-40" data-testid="select-type-filter">
+          <SelectTrigger className="w-full sm:w-40" data-testid="select-type-filter">
             <SelectValue placeholder="All types" />
           </SelectTrigger>
           <SelectContent>
@@ -579,7 +579,7 @@ export default function CustomersPage() {
           </SelectContent>
         </Select>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-40" data-testid="select-status-filter">
+          <SelectTrigger className="w-full sm:w-40" data-testid="select-status-filter">
             <SelectValue placeholder="All statuses" />
           </SelectTrigger>
           <SelectContent>
@@ -630,18 +630,18 @@ export default function CustomersPage() {
                           {customer.status}
                         </Badge>
                       </div>
-                      <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground mt-1">
                         {customer.businessName && (
                           <span className="flex items-center gap-1"><Building2 className="h-3 w-3" /> {customer.businessName}</span>
                         )}
                         {customer.email && (
-                          <span className="flex items-center gap-1"><Mail className="h-3 w-3" /> {customer.email}</span>
+                          <span className="flex items-center gap-1 hidden sm:flex"><Mail className="h-3 w-3" /> {customer.email}</span>
                         )}
                         {customer.phone && (
-                          <span className="flex items-center gap-1"><Phone className="h-3 w-3" /> {customer.phone}</span>
+                          <span className="flex items-center gap-1 hidden sm:flex"><Phone className="h-3 w-3" /> {customer.phone}</span>
                         )}
                         {customer.billingCity && (
-                          <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {customer.billingCity}, {customer.billingState}</span>
+                          <span className="flex items-center gap-1 hidden sm:flex"><MapPin className="h-3 w-3" /> {customer.billingCity}, {customer.billingState}</span>
                         )}
                       </div>
                     </div>

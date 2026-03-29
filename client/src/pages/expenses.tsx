@@ -495,14 +495,14 @@ export default function ExpensesPage() {
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-page-title">
             <ReceiptIcon className="h-6 w-6" /> Expenses & Invoices
           </h1>
           <p className="text-sm text-muted-foreground mt-1">Manage expenses, reimbursements, and contractor invoices</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button onClick={() => setExpenseDialogOpen(true)} data-testid="button-new-expense">
             <Plus className="h-4 w-4 mr-1" /> New Expense
           </Button>
@@ -827,7 +827,7 @@ export default function ExpensesPage() {
         {isAdmin && (
           <TabsContent value="export" className="space-y-4">
             <h3 className="text-lg font-semibold">Accounting Export</h3>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Card>
                 <CardHeader><CardTitle className="text-sm flex items-center gap-2"><DollarSign className="h-4 w-4" /> Expense Export</CardTitle></CardHeader>
                 <CardContent>

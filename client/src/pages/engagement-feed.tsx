@@ -89,7 +89,7 @@ export default function EngagementFeedPage() {
         <p className="text-muted-foreground">Chronological stream of customer engagement events</p>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card>
           <CardContent className="p-4 flex items-center gap-3">
             <div className="h-10 w-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
@@ -125,14 +125,14 @@ export default function EngagementFeedPage() {
         </Card>
       </div>
 
-      <div className="flex gap-3">
-        <div className="relative flex-1">
+      <div className="flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search events..." value={search} onChange={e => setSearch(e.target.value)}
             className="pl-10" data-testid="input-search-events" />
         </div>
         <Select value={typeFilter} onValueChange={setTypeFilter}>
-          <SelectTrigger className="w-44" data-testid="select-filter-type">
+          <SelectTrigger className="w-full sm:w-44" data-testid="select-filter-type">
             <SelectValue placeholder="All types" />
           </SelectTrigger>
           <SelectContent>
@@ -143,7 +143,7 @@ export default function EngagementFeedPage() {
           </SelectContent>
         </Select>
         <Select value={productFilter} onValueChange={setProductFilter}>
-          <SelectTrigger className="w-44" data-testid="select-filter-product">
+          <SelectTrigger className="w-full sm:w-44" data-testid="select-filter-product">
             <SelectValue placeholder="All products" />
           </SelectTrigger>
           <SelectContent>

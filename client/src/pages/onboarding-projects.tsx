@@ -207,16 +207,16 @@ function ProjectDetailView({ projectId, onBack }: { projectId: number; onBack: (
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-4">
         <Button variant="ghost" onClick={onBack} data-testid="button-back-projects">
           <ArrowLeft className="h-4 w-4 mr-2" /> Back
         </Button>
-        <div className="flex-1">
-          <h1 className="text-2xl font-bold" data-testid="text-project-title">{project.title}</h1>
-          <p className="text-muted-foreground">{project.customerName} • {project.product}</p>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-2xl font-bold truncate" data-testid="text-project-title">{project.title}</h1>
+          <p className="text-muted-foreground truncate">{project.customerName} • {project.product}</p>
         </div>
         <Select value={project.status} onValueChange={v => updateStatusMutation.mutate(v)}>
-          <SelectTrigger className="w-40" data-testid="select-update-status">
+          <SelectTrigger className="w-full sm:w-40" data-testid="select-update-status">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -227,7 +227,7 @@ function ProjectDetailView({ projectId, onBack }: { projectId: number; onBack: (
         </Select>
       </div>
 
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="text-xs text-muted-foreground">Status</div>
@@ -493,17 +493,17 @@ export default function OnboardingProjectsPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Onboarding Projects</h1>
           <p className="text-muted-foreground">Manage customer onboarding projects</p>
         </div>
-        <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-add-project">
+        <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-add-project" className="w-full sm:w-auto">
           <Plus className="h-4 w-4 mr-2" /> New Project
         </Button>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card>
           <CardContent className="p-4 flex items-center gap-3">
             <div className="h-10 w-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
@@ -539,14 +539,14 @@ export default function OnboardingProjectsPage() {
         </Card>
       </div>
 
-      <div className="flex gap-3">
-        <div className="relative flex-1">
+      <div className="flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search projects..." value={search} onChange={e => setSearch(e.target.value)}
             className="pl-10" data-testid="input-search-projects" />
         </div>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-40" data-testid="select-filter-status">
+          <SelectTrigger className="w-full sm:w-40" data-testid="select-filter-status">
             <SelectValue placeholder="All statuses" />
           </SelectTrigger>
           <SelectContent>
@@ -557,7 +557,7 @@ export default function OnboardingProjectsPage() {
           </SelectContent>
         </Select>
         <Select value={productFilter} onValueChange={setProductFilter}>
-          <SelectTrigger className="w-40" data-testid="select-filter-product">
+          <SelectTrigger className="w-full sm:w-40" data-testid="select-filter-product">
             <SelectValue placeholder="All products" />
           </SelectTrigger>
           <SelectContent>

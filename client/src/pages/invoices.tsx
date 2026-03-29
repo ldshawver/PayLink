@@ -339,7 +339,7 @@ function PaymentMethodSettings({ companyId }: { companyId: string }) {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-4 flex-shrink-0">
+                  <div className="flex items-center gap-4 flex-shrink-0 flex-wrap">
                     <div className="flex items-center gap-2">
                       <Label className="text-xs text-muted-foreground">Fee %</Label>
                       <Input
@@ -709,17 +709,17 @@ export default function InvoicesPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Invoicing</h1>
           <p className="text-muted-foreground">Create and manage invoices with multiple payment methods</p>
         </div>
-        <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-create-invoice">
+        <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-create-invoice" className="w-full sm:w-auto">
           <Plus className="h-4 w-4 mr-2" /> New Invoice
         </Button>
       </div>
 
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Card><CardContent className="p-4">
           <div className="text-xs text-muted-foreground">Total Invoices</div>
           <div className="text-2xl font-bold mt-1" data-testid="text-total-invoices">{stats.total}</div>
