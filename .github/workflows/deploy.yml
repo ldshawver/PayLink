@@ -12,9 +12,9 @@ on:
         default: "Manual trigger"
 
 jobs:
-  deploy-app:
+  deploy:
     runs-on: ubuntu-latest
-    name: Deploy App (mypaylink.app)
+    name: Deploy App + Marketing Site
 
     steps:
       - name: Deploy via SSH
@@ -24,19 +24,21 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script_stop: true
-          command_timeout: 10m
+          command_timeout: 15m
           script: |
             set -e
 
             APP_DIR="/home/paylinkssh/paylink-app/PayLink"
             ENV_FILE="/etc/paylink/.env"
             BACKUP_DIR="/home/paylinkssh/backups"
+            WEB_SOURCE="$APP_DIR/public-site/public"
+            WEB_ROOT="/home/mypaylink/htdocs/mypaylink.appsite"
 
             echo "=========================================="
-            echo "PayLink App Deploy - $(date)"
+            echo "PayLink Deploy - $(date)"
             echo "=========================================="
 
-            # Step 0: Validate env file exists and has required vars
+            # Step 0: Validate env file
             echo "0. Validating environment..."
             if [ ! -f "$ENV_FILE" ]; then
               echo "ERROR: $ENV_FILE does not exist. Cannot deploy."
@@ -61,7 +63,7 @@ jobs:
             PGPASSWORD="$DB_PW" pg_dump -U "$DB_USER" -h "$DB_HOST" "$DB_NAME" > "$BACKUP_FILE"
             echo "   Saved: $BACKUP_FILE"
 
-            # Step 2: Sync latest code (hard reset to match repo exactly)
+            # Step 2: Sync latest code
             cd "$APP_DIR"
             echo "2. Syncing latest code..."
             git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
@@ -74,8 +76,8 @@ jobs:
             chmod +x "$APP_DIR/node_modules/.bin/"* 2>/dev/null || true
             find "$APP_DIR/node_modules" -path "*/bin/*" -type f -exec chmod +x {} + 2>/dev/null || true
 
-            # Step 4: Normalize ownership and permissions, then build
-            echo "4. Normalizing ownership and building..."
+            # Step 4: Normalize ownership and build
+            echo "4. Building..."
             cd "$APP_DIR"
             chown -R paylinkssh:mypaylink-app "$APP_DIR"
             chmod -R u+rwX "$APP_DIR"
@@ -87,16 +89,11 @@ jobs:
             echo "5. Copying session table SQL..."
             cp node_modules/connect-pg-simple/table.sql dist/
 
-            # Step 6: Start app as paylinkssh (always clean delete + fresh start)
-            echo "6. Starting app as paylinkssh..."
+            # Step 6: Restart app
+            echo "6. Restarting app..."
             cd "$APP_DIR"
-
-            # Remove from paylinkssh PM2 list if present
             pm2 delete paylink 2>/dev/null || true
-
-            # Kill any process holding port 8000 (handles root-owned processes too)
             fuser -k 8000/tcp 2>/dev/null || true
-            # Fallback: pkill by binary path
             pkill -f "dist/index.cjs" 2>/dev/null || true
             sleep 3
 
@@ -110,15 +107,11 @@ jobs:
             pm2 save --force
 
             # Step 7: Health check
-            echo "7. Waiting for app to start..."
+            echo "7. Health check..."
             sleep 10
-
             HEALTH=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health)
             READY=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/ready)
-
-            echo "   Health check: $HEALTH"
-            echo "   Ready check: $READY"
-
+            echo "   Health: $HEALTH | Ready: $READY"
             if [ "$HEALTH" != "200" ] || [ "$READY" != "200" ]; then
               echo "ERROR: Health checks failed!"
               pm2 logs paylink --lines 50 --nostream
@@ -128,124 +121,63 @@ jobs:
             # Cleanup old backups (keep last 10)
             ls -t "$BACKUP_DIR"/paylink_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
 
-            # Step 8: Install/reload Nginx config
+            # Step 8: Apply Nginx config
             echo "8. Applying Nginx config..."
             NGINX_CONF="$APP_DIR/scripts/nginx-mypaylink.conf"
             NGINX_AVAIL="/etc/nginx/sites-available/mypaylink.app"
             NGINX_ENABLED="/etc/nginx/sites-enabled/mypaylink.app"
-
             if [ -f "$NGINX_CONF" ]; then
               sudo cp "$NGINX_CONF" "$NGINX_AVAIL"
               sudo ln -sf "$NGINX_AVAIL" "$NGINX_ENABLED" 2>/dev/null || true
               if sudo nginx -t 2>&1; then
                 sudo systemctl reload nginx
-                echo "   Nginx reloaded successfully"
+                echo "   Nginx reloaded"
               else
-                echo "   WARNING: nginx -t failed — config not applied. Review $NGINX_CONF"
+                echo "   WARNING: nginx -t failed — config not applied"
               fi
             else
-              echo "   WARNING: Nginx config file not found at $NGINX_CONF"
+              echo "   WARNING: Nginx config not found at $NGINX_CONF"
             fi
 
-            # Stage public-site files in /tmp for website deploy job
-            # Uses /tmp (world-writable) so the mypaylink SSH user can read the source
-            echo "Staging public-site files for website deploy..."
-            rm -rf /tmp/paylink-public-staging
-            mkdir -m 755 /tmp/paylink-public-staging
-            cp -r "$APP_DIR/public-site/public/." /tmp/paylink-public-staging/
-            # a+rX: add read for all users; X = execute only on directories (not files)
-            chmod -R a+rX /tmp/paylink-public-staging
-            echo "Staged $(find /tmp/paylink-public-staging -type f | wc -l) files into /tmp/paylink-public-staging"
-            echo "Staging dir permissions: $(ls -ld /tmp/paylink-public-staging)"
+            # Step 9: Deploy marketing site
+            # Source lives in the repo already cloned on this VPS — no cross-job state needed.
+            echo "9. Deploying marketing site..."
+            echo "   Source : $WEB_SOURCE"
+            echo "   Dest   : $WEB_ROOT"
+
+            if [ ! -d "$WEB_SOURCE" ]; then
+              echo "ERROR: $WEB_SOURCE does not exist after git reset."
+              exit 1
+            fi
+
+            echo "   Source file count: $(find $WEB_SOURCE -type f | wc -l)"
+
+            # Run rsync as mypaylink so it has native write access to its own web root.
+            # --no-perms/--no-owner/--no-group: do not attempt to set metadata (avoids
+            # mkstemp Permission denied and failed-to-set-times errors).
+            sudo -u mypaylink /usr/bin/rsync -rvz --delete \
+              --omit-dir-times \
+              --no-perms \
+              --no-owner \
+              --no-group \
+              --exclude='.git' \
+              --exclude='node_modules' \
+              "$WEB_SOURCE/" "$WEB_ROOT/"
+
+            echo "   Deployed $(ls $WEB_ROOT | wc -l) items to web root"
+
+            # Spot-checks on live index.html
+            if grep -q 'app\.mypaylink\.app' "$WEB_ROOT/index.html" 2>/dev/null; then
+              echo "   WARNING: legacy app.mypaylink.app link still in index.html"
+            else
+              echo "   OK: no legacy subdomain links in index.html"
+            fi
+            if grep -q 'href="/clock"' "$WEB_ROOT/index.html" 2>/dev/null; then
+              echo "   WARNING: legacy /clock link still in index.html"
+            else
+              echo "   OK: no legacy /clock links in index.html"
+            fi
 
             echo "=========================================="
-            echo "App Deploy Complete - Health: $HEALTH | Ready: $READY"
+            echo "Deploy Complete - App: $HEALTH/$READY | Site: deployed"
             echo "=========================================="
-
-  deploy-website:
-    runs-on: ubuntu-latest
-    name: Deploy Marketing Site (mypaylink.app public)
-    needs: deploy-app
-
-    steps:
-      - name: Setup website SSH key
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.WEBSITE_SSH_KEY }}" | tr -d '\r' > ~/.ssh/website_key
-          chmod 600 ~/.ssh/website_key
-
-          # Diagnostics: confirm the key file looks correct
-          echo "Key file size: $(wc -c < ~/.ssh/website_key) bytes"
-          echo "First line: $(head -1 ~/.ssh/website_key)"
-          echo "Last line:  $(tail -1 ~/.ssh/website_key)"
-
-          # Validate the key — fail immediately with a clear message if invalid
-          if ! ssh-keygen -y -f ~/.ssh/website_key > /dev/null; then
-            echo "ERROR: WEBSITE_SSH_KEY failed validation. The secret may be empty, corrupted, or contain Windows line endings."
-            echo "Key byte count: $(wc -c < ~/.ssh/website_key)"
-            exit 1
-          fi
-          echo "SSH key validated successfully."
-
-          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Deploy marketing site (ssh direct)
-        run: |
-          ssh -i ~/.ssh/website_key \
-            -o StrictHostKeyChecking=no \
-            -o BatchMode=yes \
-            ${{ secrets.WEBSITE_SSH_USER }}@${{ secrets.VPS_HOST }} \
-            'bash -se' << 'DEPLOY_SCRIPT'
-          set -ex
-
-          STAGING="/tmp/paylink-public-staging"
-          WEB_ROOT="/home/mypaylink/htdocs/mypaylink.appsite"
-
-          echo "=== Marketing Site Deploy ==="
-          echo "Running as: $(whoami)"
-
-          # Guard: must be mypaylink
-          if [ "$(whoami)" != "mypaylink" ]; then
-            echo "ERROR: Expected user 'mypaylink', got '$(whoami)'. Update WEBSITE_SSH_USER secret."
-            exit 1
-          fi
-
-          # Normalize web root ownership
-          chown -R mypaylink:mypaylink "$WEB_ROOT"
-          chmod -R u+rwX "$WEB_ROOT"
-
-          # Verify write access
-          touch "$WEB_ROOT/.write_test_$$" && rm -f "$WEB_ROOT/.write_test_$$"
-          echo "Write access confirmed."
-
-          # Verify staging exists and is readable
-          if [ ! -d "$STAGING" ]; then
-            echo "ERROR: $STAGING not found — app deploy may not have run."
-            exit 1
-          fi
-          ls "$STAGING" > /dev/null
-          echo "Staging accessible: $(find $STAGING -type f | wc -l) files"
-          echo "Staging permissions: $(ls -ld $STAGING)"
-
-          # rsync — no metadata flags to avoid mkstemp/set-times permission errors
-          echo "--- rsync command ---"
-          /usr/bin/rsync -rvz --delete \
-            --omit-dir-times \
-            --no-perms \
-            --no-owner \
-            --no-group \
-            --exclude='.git' \
-            --exclude='node_modules' \
-            "$STAGING/" "$WEB_ROOT/"
-          echo "--- rsync complete ---"
-
-          echo "Files in web root: $(ls $WEB_ROOT | wc -l)"
-
-          # Spot checks
-          grep -q 'app\.mypaylink\.app' "$WEB_ROOT/index.html" 2>/dev/null \
-            && echo "WARNING: legacy app.mypaylink.app link found in index.html" \
-            || echo "OK: no legacy subdomain links"
-
-          rm -rf "$STAGING"
-          echo "=== Marketing Site Deploy Complete ==="
-          DEPLOY_SCRIPT
