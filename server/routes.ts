@@ -995,6 +995,25 @@ export async function registerRoutes(
 
       const updatedRun = await storage.getPayrollRun(run.id);
       const finalItems = await storage.getPayrollItems(run.id);
+
+      try {
+        const users = await storage.getUsers();
+        const companyUsers = users.filter(u => u.companyId === run.companyId && u.isActive !== false);
+        for (const u of companyUsers) {
+          await storage.createNotification({
+            companyId: run.companyId,
+            userId: u.id,
+            type: "payroll_processed",
+            title: "Payroll Processed",
+            message: `Payroll for ${run.periodStart} – ${run.periodEnd} has been processed.`,
+            actionUrl: "/payroll",
+            isRead: false,
+          });
+        }
+      } catch (notifErr) {
+        console.error("Failed to dispatch payroll notifications:", notifErr);
+      }
+
       res.json({ run: updatedRun, items: finalItems });
     } catch (error) {
       console.error("Payroll processing error:", error);
@@ -1783,6 +1802,28 @@ export async function registerRoutes(
         const sent = emailResult.sent || smsResult.sent;
         if (sent) notified++;
         notificationResults.push({ worker: workerName, email: emailResult, sms: smsResult });
+      }
+
+      try {
+        const users = await storage.getUsers();
+        const workerIds = Object.keys(byWorker);
+        const workerUserMap = users.filter(u => u.workerId && workerIds.includes(u.workerId));
+        for (const u of workerUserMap) {
+          const companyId = targetSchedules[0]?.companyId;
+          if (companyId) {
+            await storage.createNotification({
+              companyId,
+              userId: u.id,
+              type: "schedule_published",
+              title: "New Schedule Published",
+              message: "Your schedule has been published. Check your upcoming shifts.",
+              actionUrl: "/schedule",
+              isRead: false,
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.error("Failed to dispatch schedule notifications:", notifErr);
       }
 
       console.log(`[Publish] Published ${targetSchedules.length} schedules, notified ${notified} workers`);
@@ -7018,6 +7059,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         console.warn("Time-off review notification error:", notifyErr);
       }
 
+      try {
+        const users = await storage.getUsers();
+        const workerUser = users.find(u => u.workerId === item.workerId);
+        if (workerUser) {
+          const statusText = decision === "approved" ? "approved" : "denied";
+          await storage.createNotification({
+            companyId: workerUser.companyId || "",
+            userId: workerUser.id,
+            type: "time_off_approved",
+            title: `Time-Off Request ${statusText.charAt(0).toUpperCase() + statusText.slice(1)}`,
+            message: `Your time-off request from ${item.startDate} to ${item.endDate} has been ${statusText}.`,
+            actionUrl: "/attendance?tab=time-off",
+            isRead: false,
+          });
+        }
+      } catch (notifErr) {
+        console.error("Failed to dispatch time-off notification:", notifErr);
+      }
+
       res.json(item);
     } catch (e) { res.status(500).json({ message: "Failed to review time-off request" }); }
   });
@@ -10911,8 +10971,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/auth/issue-restore-token", requireAuth, async (req, res) => {
     try {
       const userId = req.session.userId!;
+      const sessionSecret = process.env.SESSION_SECRET;
+      if (!sessionSecret) return res.status(500).json({ message: "Server configuration error" });
       const payload = JSON.stringify({ userId, iat: Date.now(), exp: Date.now() + 30 * 24 * 60 * 60 * 1000 });
-      const hmac = crypto.createHmac("sha256", process.env.SESSION_SECRET || "paylink-restore-secret");
+      const hmac = crypto.createHmac("sha256", sessionSecret);
       hmac.update(payload);
       const signature = hmac.digest("hex");
       const restoreToken = Buffer.from(payload).toString("base64") + "." + signature;
@@ -10933,7 +10995,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (parts.length !== 2) return res.status(401).json({ message: "Invalid token format" });
       const [payloadB64, signature] = parts;
 
-      const hmac = crypto.createHmac("sha256", process.env.SESSION_SECRET || "paylink-restore-secret");
+      const sessionSecret = process.env.SESSION_SECRET;
+      if (!sessionSecret) return res.status(500).json({ message: "Server configuration error" });
+      const hmac = crypto.createHmac("sha256", sessionSecret);
       hmac.update(Buffer.from(payloadB64, "base64").toString());
       const expectedSig = hmac.digest("hex");
       if (signature !== expectedSig) {

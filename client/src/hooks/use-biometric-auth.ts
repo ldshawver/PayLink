@@ -9,46 +9,47 @@ function isNativeApp(): boolean {
 const BIOMETRIC_ENABLED_KEY = "paylink_biometric_enabled";
 const RESTORE_TOKEN_KEY = "paylink_restore_token";
 
-async function nativeKeychainGet(key: string): Promise<string | null> {
-  if (!isNativeApp()) return localStorage.getItem(key);
-  const SecureStorage = (window as any).Capacitor?.Plugins?.SecureStoragePlugin;
-  if (SecureStorage) {
-    try {
-      const result = await SecureStorage.get({ key });
-      return result?.value || null;
-    } catch {
-      return null;
+async function secureGet(key: string): Promise<string | null> {
+  if (isNativeApp()) {
+    const SecureStorage = (window as any).Capacitor?.Plugins?.SecureStoragePlugin;
+    if (SecureStorage) {
+      try {
+        const result = await SecureStorage.get({ key });
+        return result?.value || null;
+      } catch {
+        return null;
+      }
     }
   }
-  return localStorage.getItem(key);
+  if (key === BIOMETRIC_ENABLED_KEY) {
+    return localStorage.getItem(key);
+  }
+  return null;
 }
 
-async function nativeKeychainSet(key: string, value: string): Promise<void> {
-  if (!isNativeApp()) {
+async function secureSet(key: string, value: string): Promise<void> {
+  if (isNativeApp()) {
+    const SecureStorage = (window as any).Capacitor?.Plugins?.SecureStoragePlugin;
+    if (SecureStorage) {
+      try {
+        await SecureStorage.set({ key, value });
+        return;
+      } catch { /* fallback only for non-secret keys */ }
+    }
+  }
+  if (key === BIOMETRIC_ENABLED_KEY) {
     localStorage.setItem(key, value);
-    return;
   }
-  const SecureStorage = (window as any).Capacitor?.Plugins?.SecureStoragePlugin;
-  if (SecureStorage) {
-    try {
-      await SecureStorage.set({ key, value });
-      return;
-    } catch { /* fallback */ }
-  }
-  localStorage.setItem(key, value);
 }
 
-async function nativeKeychainRemove(key: string): Promise<void> {
-  if (!isNativeApp()) {
-    localStorage.removeItem(key);
-    return;
-  }
-  const SecureStorage = (window as any).Capacitor?.Plugins?.SecureStoragePlugin;
-  if (SecureStorage) {
-    try {
-      await SecureStorage.remove({ key });
-      return;
-    } catch { /* fallback */ }
+async function secureRemove(key: string): Promise<void> {
+  if (isNativeApp()) {
+    const SecureStorage = (window as any).Capacitor?.Plugins?.SecureStoragePlugin;
+    if (SecureStorage) {
+      try {
+        await SecureStorage.remove({ key });
+      } catch { /* ignore */ }
+    }
   }
   localStorage.removeItem(key);
 }
@@ -90,7 +91,7 @@ export function useBiometricAuth() {
   }, []);
 
   const checkEnabled = useCallback(async () => {
-    const enabled = await nativeKeychainGet(BIOMETRIC_ENABLED_KEY);
+    const enabled = await secureGet(BIOMETRIC_ENABLED_KEY);
     setIsEnabled(enabled === "true");
   }, []);
 
@@ -126,8 +127,8 @@ export function useBiometricAuth() {
     try {
       const res = await apiRequest("POST", "/api/auth/issue-restore-token");
       const { restoreToken } = await res.json();
-      await nativeKeychainSet(BIOMETRIC_ENABLED_KEY, "true");
-      await nativeKeychainSet(RESTORE_TOKEN_KEY, restoreToken);
+      await secureSet(BIOMETRIC_ENABLED_KEY, "true");
+      await secureSet(RESTORE_TOKEN_KEY, restoreToken);
       setIsEnabled(true);
     } catch (err) {
       console.error("Failed to enable biometric:", err);
@@ -136,8 +137,8 @@ export function useBiometricAuth() {
   }, []);
 
   const disableBiometric = useCallback(async () => {
-    await nativeKeychainRemove(BIOMETRIC_ENABLED_KEY);
-    await nativeKeychainRemove(RESTORE_TOKEN_KEY);
+    await secureRemove(BIOMETRIC_ENABLED_KEY);
+    await secureRemove(RESTORE_TOKEN_KEY);
     setIsEnabled(false);
   }, []);
 
@@ -146,7 +147,7 @@ export function useBiometricAuth() {
     const authenticated = await authenticate();
     if (!authenticated) return false;
 
-    const restoreToken = await nativeKeychainGet(RESTORE_TOKEN_KEY);
+    const restoreToken = await secureGet(RESTORE_TOKEN_KEY);
     if (!restoreToken) return false;
 
     try {
