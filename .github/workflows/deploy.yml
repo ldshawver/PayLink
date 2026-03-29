@@ -185,21 +185,45 @@ jobs:
 
             echo "=== Marketing Site Deploy ==="
 
-            # Verify staged files exist (populated by deploy-app job)
+            # Step 0: Confirm identity
+            CURRENT_USER=$(whoami)
+            echo "SSH connected as: $CURRENT_USER"
+            if [ "$CURRENT_USER" != "mypaylink" ]; then
+              echo "ERROR: Expected to run as 'mypaylink' but got '$CURRENT_USER'."
+              echo "Update the WEBSITE_SSH_USER GitHub secret to exactly 'mypaylink'."
+              exit 1
+            fi
+
+            # Step 1: Normalize ownership of web root (running as mypaylink, so chown to self)
+            echo "Normalizing web root ownership..."
+            chown -R mypaylink:mypaylink "$WEB_ROOT"
+            chmod -R u+rwX "$WEB_ROOT"
+
+            # Step 2: Verify write access with a test file
+            echo "Verifying write access to web root..."
+            TEST_FILE="$WEB_ROOT/.write_test_$$"
+            if ! touch "$TEST_FILE" 2>&1; then
+              echo "ERROR: Cannot create files in $WEB_ROOT. Permission denied."
+              echo "  Current user: $CURRENT_USER"
+              echo "  Directory ownership: $(ls -ld $WEB_ROOT)"
+              exit 1
+            fi
+            rm -f "$TEST_FILE"
+            echo "Write access confirmed."
+
+            # Step 3: Verify staged files exist (populated by deploy-app job)
             if [ ! -d "$STAGING" ]; then
               echo "ERROR: Staging directory $STAGING not found. App deploy may not have run."
               exit 1
             fi
-
             echo "Staged files found: $(ls $STAGING | wc -l) items"
 
-            # Repair destination ownership and permissions
-            chown -R mypaylink:mypaylink "$WEB_ROOT" 2>/dev/null || true
-            chmod -R u+rwX "$WEB_ROOT" 2>/dev/null || true
-
-            # Local rsync from staging to web root (no cross-machine permission issues)
-            rsync -rltvz --delete \
-              --no-times \
+            # Step 4: rsync — skip all metadata to prevent mkstemp/set-times errors
+            rsync -rvz --delete \
+              --omit-dir-times \
+              --no-perms \
+              --no-owner \
+              --no-group \
               --exclude='.git' \
               --exclude='node_modules' \
               "$STAGING/" "$WEB_ROOT/"
