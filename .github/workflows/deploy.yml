@@ -76,10 +76,9 @@ jobs:
             chmod +x "$APP_DIR/node_modules/.bin/"* 2>/dev/null || true
             find "$APP_DIR/node_modules" -path "*/bin/*" -type f -exec chmod +x {} + 2>/dev/null || true
 
-            # Step 4: Normalize ownership and build
+            # Step 4: Build
             echo "4. Building..."
             cd "$APP_DIR"
-            chown -R paylinkssh:mypaylink-app "$APP_DIR"
             chmod -R u+rwX "$APP_DIR"
             rm -rf "$APP_DIR/dist"
             mkdir -p "$APP_DIR/dist"
@@ -155,7 +154,7 @@ jobs:
             # Run rsync as mypaylink so it has native write access to its own web root.
             # --no-perms/--no-owner/--no-group: do not attempt to set metadata (avoids
             # mkstemp Permission denied and failed-to-set-times errors).
-            sudo -u mypaylink /usr/bin/rsync -rvz --delete \
+            sudo -u mypaylink /usr/bin/rsync -rv --delete \
               --omit-dir-times \
               --no-perms \
               --no-owner \
