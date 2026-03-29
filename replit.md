@@ -90,6 +90,14 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
     -   **Notifications System:** Company/user-scoped notification tracking.
     -   **Customer Onboarding Hub:** Deal pipeline (Lead → Qualified → Proposal → Negotiation → Closed Won → Closed Lost) with automatic onboarding project creation on "Closed Won". Product-specific onboarding templates with task checklists. Onboarding task tracking with progress percentage. Engagement events for customer activity (internal + webhook). Public webhook endpoint (`POST /api/webhooks/product-events`) authenticated via product API keys. Tables: `deals`, `onboarding_templates`, `onboarding_template_tasks`, `customer_onboarding_projects`, `onboarding_tasks`, `onboarding_documents`, `engagement_events`, `product_api_keys`.
 
+**Responsive Components:**
+-   `ResponsiveTabs` (`client/src/components/responsive-tabs.tsx`): Horizontally scrollable tab strip on mobile, dropdown fallback when >6 tabs. Integrates with `useTabParam` pattern.
+-   `ResponsivePageHeader` (`client/src/components/responsive-page-header.tsx`): Stacks title/subtitle and action buttons vertically on mobile.
+-   `ResponsiveTableOrCards` (`client/src/components/responsive-table-or-cards.tsx`): Data table on desktop, card/list layout on mobile. Generic column definitions.
+-   `ResponsiveFormGrid` (`client/src/components/responsive-form-grid.tsx`): Multi-column grid on desktop, single-column stack on mobile. Includes `FormFieldWrapper`.
+-   `ResponsiveModal` (`client/src/components/responsive-modal.tsx`): Dialog on desktop, bottom-sheet drawer on mobile.
+-   `ResponsiveFilterBar` (`client/src/components/responsive-filter-bar.tsx`): Expandable filter panel on desktop, bottom-sheet drawer on mobile.
+
 **Database:**
 -   **Type:** PostgreSQL, managed with Drizzle ORM.
 -   **Schema Design:** Supports an enterprise hierarchy (enterprises, companies, divisions, positions, cost centers, jobs), core operational data (workers, time punches, schedules, payroll runs), and extended functionalities (accruals, policies, HR records). Granular role-based access control is implemented via dedicated tables. Universal entities can be assigned globally or to specific companies.

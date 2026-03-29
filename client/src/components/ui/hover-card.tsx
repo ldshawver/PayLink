@@ -5,9 +5,64 @@ import * as HoverCardPrimitive from "@radix-ui/react-hover-card"
 
 import { cn } from "@/lib/utils"
 
-const HoverCard = HoverCardPrimitive.Root
+function HoverCard({
+  open: controlledOpen,
+  onOpenChange: controlledOnChange,
+  openDelay = 200,
+  closeDelay = 300,
+  children,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof HoverCardPrimitive.Root>) {
+  const [internalOpen, setInternalOpen] = React.useState(false)
+  const isControlled = controlledOpen !== undefined
+  const open = isControlled ? controlledOpen : internalOpen
+  const onOpenChange = isControlled ? controlledOnChange! : setInternalOpen
 
-const HoverCardTrigger = HoverCardPrimitive.Trigger
+  const contextValue = React.useMemo(
+    () => ({ open, onOpenChange }),
+    [open, onOpenChange]
+  )
+
+  return (
+    <HoverCardTouchContext.Provider value={contextValue}>
+      <HoverCardPrimitive.Root
+        open={open}
+        onOpenChange={onOpenChange}
+        openDelay={openDelay}
+        closeDelay={closeDelay}
+        {...props}
+      >
+        {children}
+      </HoverCardPrimitive.Root>
+    </HoverCardTouchContext.Provider>
+  )
+}
+
+const HoverCardTouchContext = React.createContext<{
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}>({ open: false, onOpenChange: () => {} })
+
+const HoverCardTrigger = React.forwardRef<
+  React.ElementRef<typeof HoverCardPrimitive.Trigger>,
+  React.ComponentPropsWithoutRef<typeof HoverCardPrimitive.Trigger>
+>(({ onClick, ...props }, ref) => {
+  const { open, onOpenChange } = React.useContext(HoverCardTouchContext)
+
+  return (
+    <HoverCardPrimitive.Trigger
+      ref={ref}
+      onClick={(e: React.MouseEvent<HTMLAnchorElement>) => {
+        if ("ontouchstart" in window || navigator.maxTouchPoints > 0) {
+          onOpenChange(!open)
+        }
+        onClick?.(e)
+      }}
+      {...props}
+    />
+  )
+})
+HoverCardTrigger.displayName = "HoverCardTrigger"
 
 const HoverCardContent = React.forwardRef<
   React.ElementRef<typeof HoverCardPrimitive.Content>,

@@ -7,9 +7,67 @@ import { cn } from "@/lib/utils"
 
 const TooltipProvider = TooltipPrimitive.Provider
 
-const Tooltip = TooltipPrimitive.Root
+const TooltipTouchContext = React.createContext<{
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}>({ open: false, onOpenChange: () => {} })
 
-const TooltipTrigger = TooltipPrimitive.Trigger
+function Tooltip({
+  open: controlledOpen,
+  onOpenChange: controlledOnChange,
+  delayDuration,
+  children,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Root>) {
+  const [internalOpen, setInternalOpen] = React.useState(false)
+  const isControlled = controlledOpen !== undefined
+  const open = isControlled ? controlledOpen : internalOpen
+  const setOpen = isControlled ? controlledOnChange! : setInternalOpen
+
+  const contextValue = React.useMemo(
+    () => ({ open, onOpenChange: setOpen }),
+    [open, setOpen]
+  )
+
+  return (
+    <TooltipTouchContext.Provider value={contextValue}>
+      <TooltipPrimitive.Root
+        open={open}
+        onOpenChange={setOpen}
+        delayDuration={delayDuration}
+        {...props}
+      >
+        {children}
+      </TooltipPrimitive.Root>
+    </TooltipTouchContext.Provider>
+  )
+}
+
+const TooltipTrigger = React.forwardRef<
+  React.ElementRef<typeof TooltipPrimitive.Trigger>,
+  React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Trigger>
+>(({ onClick, ...props }, ref) => {
+  const { open, onOpenChange } = React.useContext(TooltipTouchContext)
+
+  return (
+    <TooltipPrimitive.Trigger
+      ref={ref}
+      onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
+        if ("ontouchstart" in window || navigator.maxTouchPoints > 0) {
+          const target = e.currentTarget as HTMLElement
+          const isLink = target.tagName === "A" || target.closest("a")
+          if (!isLink) {
+            e.preventDefault()
+          }
+          onOpenChange(!open)
+        }
+        onClick?.(e)
+      }}
+      {...props}
+    />
+  )
+})
+TooltipTrigger.displayName = "TooltipTrigger"
 
 const TooltipContent = React.forwardRef<
   React.ElementRef<typeof TooltipPrimitive.Content>,
