@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useSearch, useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import { useBiometricAuth } from "@/hooks/use-biometric-auth";
+import { usePushNotifications } from "@/hooks/use-push-notifications";
+import { useHaptics } from "@/hooks/use-native-platform";
 import type { Worker, WorkerDocument, Review, Qualification, WorkerLanguage, WorkerMembership } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -202,7 +205,102 @@ function PreferencesTab({ worker }: { worker: Worker | null }) {
       <Button onClick={save} disabled={mutation.isPending} data-testid="button-save-preferences">
         {mutation.isPending ? "Saving..." : "Save Preferences"}
       </Button>
+
+      <NativeSecuritySettings />
     </div>
+  );
+}
+
+function NativeSecuritySettings() {
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const {
+    isAvailable: biometricAvailable,
+    isEnabled: biometricEnabled,
+    biometricType,
+    enableBiometric,
+    disableBiometric,
+    isNativeApp,
+  } = useBiometricAuth();
+  const {
+    permissionState,
+    requestPermission,
+    registerToken,
+  } = usePushNotifications();
+
+  const haptics = useHaptics();
+
+  const handleBiometricToggle = useCallback(async (enabled: boolean) => {
+    haptics.impact("medium");
+    if (enabled) {
+      if (user?.id) {
+        await enableBiometric(user.id);
+        haptics.notification("success");
+        toast({ title: `${biometricType} enabled`, description: "You can now use biometric unlock" });
+      }
+    } else {
+      await disableBiometric();
+      toast({ title: `${biometricType} disabled` });
+    }
+  }, [user, enableBiometric, disableBiometric, biometricType, toast, haptics]);
+
+  const handlePushToggle = useCallback(async () => {
+    const granted = await requestPermission();
+    if (granted) {
+      await registerToken();
+      haptics.notification("success");
+      toast({ title: "Push notifications enabled" });
+    } else {
+      haptics.notification("error");
+      toast({ title: "Permission denied", variant: "destructive" });
+    }
+  }, [requestPermission, registerToken, toast, haptics]);
+
+  if (!biometricAvailable && !isNativeApp && permissionState === "unsupported") return null;
+
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Security & Native Features</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        {(biometricAvailable || isNativeApp) && (
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">{biometricType} Unlock</p>
+              <p className="text-xs text-muted-foreground">
+                {biometricAvailable
+                  ? `Use ${biometricType} to unlock the app instead of entering your password`
+                  : "Biometric authentication is not available on this device"}
+              </p>
+            </div>
+            <Switch
+              checked={biometricEnabled}
+              onCheckedChange={handleBiometricToggle}
+              disabled={!biometricAvailable}
+              data-testid="switch-biometric"
+            />
+          </div>
+        )}
+        {permissionState !== "unsupported" && (
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Push Notifications</p>
+              <p className="text-xs text-muted-foreground">
+                {permissionState === "granted"
+                  ? "Push notifications are enabled for this device"
+                  : "Enable push notifications to stay informed in real-time"}
+              </p>
+            </div>
+            {permissionState === "granted" ? (
+              <Badge variant="outline" className="text-green-600 border-green-300 text-xs">Enabled</Badge>
+            ) : (
+              <Button size="sm" variant="outline" onClick={handlePushToggle} data-testid="button-enable-push-profile">
+                Enable
+              </Button>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

@@ -152,9 +152,10 @@ import {
   type OnboardingDocument, type InsertOnboardingDocument,
   type EngagementEvent, type InsertEngagementEvent,
   type ProductApiKey, type InsertProductApiKey,
-  companyWebhookConfigs, integrationEvents,
+  companyWebhookConfigs, integrationEvents, deviceTokens,
   type CompanyWebhookConfig, type InsertCompanyWebhookConfig,
   type IntegrationEvent, type InsertIntegrationEvent,
+  type DeviceToken, type InsertDeviceToken,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -728,6 +729,11 @@ export interface IStorage {
   getIntegrationEvent(id: string): Promise<IntegrationEvent | undefined>;
   createIntegrationEvent(data: InsertIntegrationEvent): Promise<IntegrationEvent>;
   updateIntegrationEvent(id: string, data: Partial<IntegrationEvent>): Promise<IntegrationEvent | undefined>;
+
+  getDeviceTokens(userId: string): Promise<DeviceToken[]>;
+  getDeviceTokensByUsers(userIds: string[]): Promise<DeviceToken[]>;
+  registerDeviceToken(data: InsertDeviceToken): Promise<DeviceToken>;
+  deactivateDeviceToken(userId: string, token: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3179,6 +3185,30 @@ export class DatabaseStorage implements IStorage {
   async updateIntegrationEvent(id: string, data: Partial<IntegrationEvent>): Promise<IntegrationEvent | undefined> {
     const [r] = await db.update(integrationEvents).set(data).where(eq(integrationEvents.id, id)).returning();
     return r;
+  }
+
+  async getDeviceTokens(userId: string): Promise<DeviceToken[]> {
+    return db.select().from(deviceTokens).where(and(eq(deviceTokens.userId, userId), eq(deviceTokens.isActive, true)));
+  }
+  async getDeviceTokensByUsers(userIds: string[]): Promise<DeviceToken[]> {
+    if (userIds.length === 0) return [];
+    return db.select().from(deviceTokens).where(and(inArray(deviceTokens.userId, userIds), eq(deviceTokens.isActive, true)));
+  }
+  async registerDeviceToken(data: InsertDeviceToken): Promise<DeviceToken> {
+    const existing = await db.select().from(deviceTokens).where(
+      and(eq(deviceTokens.userId, data.userId), eq(deviceTokens.token, data.token))
+    );
+    if (existing.length > 0) {
+      const [r] = await db.update(deviceTokens).set({ isActive: true, platform: data.platform, updatedAt: new Date() }).where(eq(deviceTokens.id, existing[0].id)).returning();
+      return r;
+    }
+    const [r] = await db.insert(deviceTokens).values(data).returning();
+    return r;
+  }
+  async deactivateDeviceToken(userId: string, token: string): Promise<void> {
+    await db.update(deviceTokens).set({ isActive: false, updatedAt: new Date() }).where(
+      and(eq(deviceTokens.userId, userId), eq(deviceTokens.token, token))
+    );
   }
 }
 

@@ -1564,6 +1564,7 @@ export const notificationPreferences = pgTable("notification_preferences", {
   emailEnabled: boolean("email_enabled").notNull().default(true),
   smsEnabled: boolean("sms_enabled").notNull().default(true),
   inAppEnabled: boolean("in_app_enabled").notNull().default(true),
+  pushEnabled: boolean("push_enabled").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -2598,6 +2599,21 @@ export const productApiKeys = pgTable("product_api_keys", {
 export const insertProductApiKeySchema = createInsertSchema(productApiKeys).omit({ id: true, createdAt: true });
 export type ProductApiKey = typeof productApiKeys.$inferSelect;
 export type InsertProductApiKey = z.infer<typeof insertProductApiKeySchema>;
+
+// ── Device Tokens (Push Notifications) ──────────────────────────────────
+export const deviceTokens = pgTable("device_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  token: text("token").notNull(),
+  platform: text("platform").notNull().default("web"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertDeviceTokenSchema = createInsertSchema(deviceTokens).omit({ id: true, createdAt: true, updatedAt: true });
+export type DeviceToken = typeof deviceTokens.$inferSelect;
+export type InsertDeviceToken = z.infer<typeof insertDeviceTokenSchema>;
 
 // ── Company Webhook Config ──────────────────────────────────────────
 export const companyWebhookConfigs = pgTable("company_webhook_configs", {

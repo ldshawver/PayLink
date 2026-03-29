@@ -298,7 +298,7 @@ export async function registerRoutes(
   });
 
   app.use("/api", (req, res, next) => {
-    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches"
+    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
       || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
@@ -10798,6 +10798,177 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) {
       console.error(`E-sign webhook error (${provider}):`, e);
       res.status(500).json({ message: "Webhook processing failed" });
+    }
+  });
+
+  // ── Push Notification Device Tokens ──────────────────────────────────
+  app.post("/api/device-tokens", requireAuth, async (req, res) => {
+    try {
+      const { token, platform } = req.body;
+      if (!token) return res.status(400).json({ message: "Token is required" });
+      const deviceToken = await storage.registerDeviceToken({
+        userId: req.session.userId!,
+        token,
+        platform: platform || "web",
+        isActive: true,
+      });
+      res.status(201).json(deviceToken);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to register device token") });
+    }
+  });
+
+  app.delete("/api/device-tokens", requireAuth, async (req, res) => {
+    try {
+      const { token } = req.body;
+      if (!token) return res.status(400).json({ message: "Token is required" });
+      await storage.deactivateDeviceToken(req.session.userId!, token);
+      res.json({ message: "Token deactivated" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to deactivate device token") });
+    }
+  });
+
+  app.get("/api/device-tokens", requireAuth, async (req, res) => {
+    try {
+      const tokens = await storage.getDeviceTokens(req.session.userId!);
+      res.json(tokens);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to fetch device tokens") });
+    }
+  });
+
+  // ── Notification Preferences (Push) ──────────────────────────────────
+  app.get("/api/notification-preferences", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.json([]);
+      const prefs = await storage.getNotificationPreferences(user.workerId);
+      res.json(prefs);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to fetch notification preferences") });
+    }
+  });
+
+  app.put("/api/notification-preferences", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(400).json({ message: "No worker profile linked" });
+      const { eventType, emailEnabled, smsEnabled, inAppEnabled, pushEnabled } = req.body;
+      if (!eventType) return res.status(400).json({ message: "eventType is required" });
+      const pref = await storage.upsertNotificationPreference({
+        workerId: user.workerId,
+        eventType,
+        emailEnabled: emailEnabled ?? true,
+        smsEnabled: smsEnabled ?? true,
+        inAppEnabled: inAppEnabled ?? true,
+        pushEnabled: pushEnabled ?? true,
+      });
+      res.json(pref);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to update notification preferences") });
+    }
+  });
+
+  // ── Notification Dispatch ──────────────────────────────────────────
+  app.post("/api/notifications/dispatch", requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { title, body, type, targetUserIds, data: notifData } = req.body;
+      if (!title || !type) return res.status(400).json({ message: "Title and type are required" });
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+
+      const dispatched: any[] = [];
+      const userIds = targetUserIds || [];
+
+      const allUsers = await storage.getUsers();
+      const companyUserIds = new Set(allUsers.filter(u => u.companyId === companyId).map(u => u.id));
+      const validUserIds = userIds.filter((id: string) => companyUserIds.has(id));
+
+      for (const userId of validUserIds) {
+        const notification = await storage.createNotification({
+          companyId,
+          userId,
+          type,
+          title,
+          message: body || "",
+          actionUrl: notifData?.actionUrl || null,
+          isRead: false,
+        });
+        dispatched.push(notification);
+      }
+
+      const tokens = validUserIds.length > 0 ? await storage.getDeviceTokensByUsers(validUserIds) : [];
+
+      res.json({
+        dispatched: dispatched.length,
+        pushTargets: tokens.length,
+        message: `Dispatched ${dispatched.length} notifications to ${tokens.length} devices`,
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to dispatch notifications") });
+    }
+  });
+
+  // ── Biometric Auth: Issue Restore Token ──────────────────────────────
+  app.post("/api/auth/issue-restore-token", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session.userId!;
+      const payload = JSON.stringify({ userId, iat: Date.now(), exp: Date.now() + 30 * 24 * 60 * 60 * 1000 });
+      const hmac = crypto.createHmac("sha256", process.env.SESSION_SECRET || "paylink-restore-secret");
+      hmac.update(payload);
+      const signature = hmac.digest("hex");
+      const restoreToken = Buffer.from(payload).toString("base64") + "." + signature;
+      res.json({ restoreToken });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: safeErrorMessage(error, "Failed to issue restore token") });
+    }
+  });
+
+  app.post("/api/auth/token-restore", async (req, res) => {
+    try {
+      const { restoreToken } = req.body;
+      if (!restoreToken || typeof restoreToken !== "string") {
+        return res.status(400).json({ message: "Restore token required" });
+      }
+      const parts = restoreToken.split(".");
+      if (parts.length !== 2) return res.status(401).json({ message: "Invalid token format" });
+      const [payloadB64, signature] = parts;
+
+      const hmac = crypto.createHmac("sha256", process.env.SESSION_SECRET || "paylink-restore-secret");
+      hmac.update(Buffer.from(payloadB64, "base64").toString());
+      const expectedSig = hmac.digest("hex");
+      if (signature !== expectedSig) {
+        return res.status(401).json({ message: "Invalid restore token" });
+      }
+
+      const payload = JSON.parse(Buffer.from(payloadB64, "base64").toString());
+      if (!payload.userId || !payload.exp || Date.now() > payload.exp) {
+        return res.status(401).json({ message: "Token expired" });
+      }
+
+      const user = await storage.getUser(payload.userId);
+      if (!user || user.isActive === false) {
+        return res.status(401).json({ message: "User not found or inactive" });
+      }
+      req.session.userId = user.id;
+      req.session.username = user.username;
+      let workerInfo = null;
+      if (user.workerId) {
+        const w = await storage.getWorker(user.workerId);
+        if (w) workerInfo = { id: w.id, firstName: w.firstName, lastName: w.lastName, companyId: w.companyId };
+      }
+      res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: safeErrorMessage(error, "Token restore failed") });
     }
   });
 
