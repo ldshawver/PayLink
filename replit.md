@@ -1,7 +1,7 @@
 # PayLink - HR, Payroll & Time-clock Software
 
 ## Overview
-PayLink is a full-stack HR, Payroll & Time-clock application designed to manage employee and contractor time-tracking, scheduling, payroll, policies, and HR functions for multiple businesses. It aims to streamline human resources and payroll operations with a robust feature set, including detailed employee management, advanced payroll processing, and extensive HR functionalities, all within a scalable architecture. The business vision is to provide a comprehensive solution for HR and payroll challenges, enabling businesses to manage their workforce efficiently.
+PayLink is a comprehensive full-stack HR, Payroll & Time-clock application designed to manage employee and contractor time-tracking, scheduling, payroll, policies, and HR functions for multiple businesses. Its core purpose is to streamline human resources and payroll operations, providing a robust solution for efficient workforce management within a scalable architecture. The project aims to address common HR and payroll challenges, empowering businesses with advanced tools for employee management, payroll processing, and extensive HR functionalities.
 
 ## User Preferences
 When deploying updates to the VPS, ALWAYS follow this exact sequence:
@@ -28,18 +28,6 @@ Production VPS Safety Rules (CRITICAL - NEVER VIOLATE):
 9. Marketing site is static and does not need its own database connection variable. It talks to the app API.
 10. Do not change production ports unless explicitly instructed. PayLink app runs behind reverse proxy on 127.0.0.1:8000.
 
-VPS Deploy Architecture:
-- App repo: /home/paylinkssh/paylink-app/PayLink
-- App SSH user: paylinkssh
-- App domain: app.mypaylink.app (reverse proxy to 127.0.0.1:8000)
-- App site root: /home/mypaylink-app/htdocs/app.mypaylink.app
-- Env file: /etc/paylink/.env (outside git, owned by paylinkssh, chmod 600)
-- Marketing domain: mypaylink.app (port 3000)
-- Marketing site root: /home/mypaylink/htdocs/mypaylink.appsite
-- Marketing site user: mypaylink
-- Marketing SSH user: mypaylinks
-- GitHub secrets needed: VPS_HOST, VPS_USER, VPS_SSH_KEY, WEBSITE_SSH_USER, WEBSITE_SSH_KEY
-
 Schema Change Rules (CRITICAL - NEVER VIOLATE):
 1. NEVER drop existing tables - only add new tables.
 2. NEVER remove columns from existing tables - only add new columns with ALTER TABLE ADD COLUMN IF NOT EXISTS.
@@ -51,74 +39,53 @@ Schema Change Rules (CRITICAL - NEVER VIOLATE):
 8. The VPS database contains REAL production data - treat it as sacred.
 
 ## System Architecture
-PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL database, utilizing a microservices-inspired approach for distinct functionalities.
+PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL database, following a microservices-inspired approach.
 
 **Frontend:**
 -   **Technology Stack:** React + TypeScript, Tailwind CSS, shadcn/ui for components, Wouter for routing, TanStack Query for data fetching.
--   **UI/UX Design:** Features a sidebar with collapsible navigation and a consistent teal-to-blue gradient color theme (primary HSL(180, 55%, 42%)).
+-   **UI/UX Design:** Features a sidebar with collapsible navigation and a consistent teal-to-blue gradient color theme (primary HSL(180, 55%, 42%)). Responsive components ensure adaptability across devices.
+-   **PWA Configuration:** Utilizes `vite-plugin-pwa` for service worker and manifest generation, offering offline capabilities and installability.
 
 **Backend:**
 -   **Framework:** Express.js + TypeScript.
--   **Authentication:** Session-based using `express-session` and `connect-pg-simple` with `bcrypt` for password hashing. API routes are protected, with exceptions for authentication and time clock functions.
--   **Authorization (RBAC):** Role-based access control is implemented at both frontend and backend levels, managing navigation visibility and protecting API write operations based on user roles (admin, manager, employee).
--   **API Design:** RESTful API endpoints for comprehensive management of companies, workers, time, payroll, and HR. Specialized endpoints exist for payroll summaries and time clock punches.
+-   **Authentication:** Session-based using `express-session` and `connect-pg-simple` with `bcrypt`.
+-   **Authorization (RBAC):** Role-based access control (admin, manager, employee) at both frontend and backend for navigation visibility and API protection.
+-   **API Design:** RESTful API endpoints for managing companies, workers, time, payroll, and HR functions. Includes specialized endpoints for payroll summaries and time clock punches.
 -   **Key Features:**
-    -   **Time & Attendance:** Time tracking, accrual management, scheduling with shift marketplace, station-enforced clock in/out, and overtime calculations.
-    -   **Employee Management:** CRUD operations for employees, contacts, wages, pay methods, and documents, including employee self-service.
-    -   **Company Management:** Management of company structure, legal entities, and universal entities (Branches, Departments, Jobs, Positions, Stations, Employee Titles) with CSV import.
-    -   **Payroll Processing:** Multi-step tax wizard, generation of tax forms, pay stub management, complex tax and deduction rules, NACHA ACH direct deposit generation.
-    -   **Policy Management:** Extensive HR and payroll policy engine.
-    -   **HR Functions:** CRUD for reviews, qualifications, skills, education, languages, memberships, and licenses.
-    -   **Reporting:** Various reports (Employee, Timesheet, Payroll, Tax, Expense, Job Cost) with CSV export and saved reports functionality.
-    -   **Expense Management:** CRUD for expense receipts, photo uploads, approval workflows, check printing, and AI-powered receipt scanning for data extraction.
-    -   **User Account Management:** Admin management of user accounts, role assignments, and worker linkages. Supports PIN, username/password, and kiosk login modes.
-    -   **Schedule Publishing & Time-Off:** Managers publish schedules with email/SMS notifications; time-off requests with approval workflows and notifications.
-    -   **Payroll Audit:** Scans for missing data, classification mismatches, and other payroll inconsistencies.
-    -   **Worker Groups:** Seven distinct worker groups (e.g., hourly employee, salaried employee, contractor, volunteer) influencing payroll processing.
-    -   **Shift Marketplace:** Allows employees to post and pick up shifts with manager approval and eligibility checks.
-    -   **SaaS Trial & Billing System:** Manages trial periods, subscription statuses, and soft lockouts for expired trials.
-    -   **Interactive Demo Mode:** Provides a public-facing demo environment with pre-seeded data. Full demo tenant provisioning via `POST /api/demo/provision` creates an isolated company with admin user, sample workers, document folders (HR, Legal, Finance), sample documents, employee and contractor onboarding packets with steps, and a portal access token. Demo tenants have 24-hour expiration.
-    -   **Onboarding Checklist:** Guides new trial accounts through initial setup steps.
-    -   **Analytics Tracking:** Event tracking for signup, trial, and key user actions.
-    -   **Customer & Vendor Management:** Full CRUD for customers and vendors, including a public vendor portal for invoice submission. Customer detail view with Info and Onboarding tabs.
-    -   **Employee Onboarding Workflows:** Template-driven onboarding packet creation (Employee: 6 steps, Contractor: 3 steps) with step dependency enforcement. Admin packet detail UI shows completion %, step statuses, approve/reject actions, and Send Portal Link CTA. `POST /api/onboarding-packets/:id/send-link` generates scoped portal tokens; `POST /api/onboarding-packets/:id/revoke-link` revokes them. External portal at `/portal/onboarding/:token` lets workers complete steps without admin accounts. Portal endpoints (`/api/portal/onboarding/*`) are exempt from global auth middleware. All portal actions are audit-logged. Tables extended: `onboarding_packet_steps` (taskType, dependenciesJson, docType, docStatus, required, signaturePackageId), `portal_access_tokens` (packetId, workerId, isRevoked).
-    -   **Customer Onboarding Hub:** Frontend pages for managing deals (Kanban pipeline), onboarding projects (list + detail with task checklists and engagement timelines), onboarding templates (with nested task editor, training resources, document links), and engagement feed (chronological event stream). Sidebar section "Onboarding Hub" with sub-items. Pages at: /deal-pipeline, /onboarding-projects, /onboarding-templates, /engagement-feed. Types defined in client/src/lib/onboarding-types.ts. Backend APIs pending.
-    -   **Invoicing System:** Create, edit, and manage invoices with line items, statuses, and payment tracking. Multiple payment methods (ACH, Card, Instant Bank, Wire) with configurable per-method fees, fee disclosure at checkout, savings nudges, and a Payment Methods settings tab. API: `GET/POST/PATCH/DELETE /api/payment-method-configs`, `POST /api/payments/calculate-fee`.
-    -   **Document Management:** Handles folders, documents, versioning, signature requests, and audit logs. Hardened with SHA-256 tamper-evident versioning, legal hold enforcement at API level, comprehensive audit logging for all document lifecycle events, and a compliance retention engine with USCIS I-9 and IRS W-4/W-9 rules. Retention calculator module at `server/retentionCalculator.ts`. Disposition review batch endpoint flags documents due for review while respecting legal holds. Default retention policies auto-seeded on company creation. E-signature provider adapter layer supports DocuSign and Adobe Acrobat Sign via a provider-agnostic interface (`server/esign/`). Signature packages track envelopes/agreements, webhook events provide idempotent ingestion, and signed PDFs are automatically stored as new document versions. Tables: `signature_packages`, `webhook_events`. Webhook endpoint: `POST /api/webhooks/esign/:provider`.
-    -   **Integration Event Bus:** Outbound webhook system that emits HMAC-signed events (document.created, document.version_uploaded, onboarding_packet.created/updated, signature.requested) to configured webhook URLs. Per-company webhook config with HMAC secret. Events logged in `integration_events` table for auditability with manual retry support. CRUD: `GET/POST/PATCH/DELETE /api/webhook-configs`, `GET /api/integration-events`, `POST /api/integration-events/:id/retry`. Tables: `company_webhook_configs`, `integration_events`.
+    -   **Time & Attendance:** Time tracking, accrual management, scheduling, shift marketplace, and overtime calculations.
+    -   **Employee Management:** CRUD for employees, contacts, wages, pay methods, and documents, including self-service.
+    -   **Company Management:** Management of company structure, legal entities, and universal entities.
+    -   **Payroll Processing:** Multi-step tax wizard, tax form generation, pay stub management, complex tax/deduction rules, NACHA ACH direct deposit.
+    -   **Policy & HR Management:** Extensive HR and payroll policy engine, CRUD for reviews, qualifications, skills, education, languages, memberships, and licenses.
+    -   **Reporting:** Various reports (Employee, Timesheet, Payroll, Tax, Expense, Job Cost) with CSV export.
+    -   **Expense Management:** CRUD for expense receipts, photo uploads, approval workflows, check printing, and AI-powered receipt scanning.
+    -   **User Account Management:** Admin management of user accounts, roles, and worker linkages. Supports PIN, username/password, and kiosk login.
+    -   **Schedule Publishing & Time-Off:** Managers publish schedules with notifications; time-off requests with approval workflows.
+    -   **Payroll Audit:** Scans for missing data and inconsistencies.
+    -   **Worker Groups:** Seven distinct worker groups influencing payroll.
+    -   **Shift Marketplace:** Allows employees to post/pick up shifts with approval.
+    -   **SaaS Trial & Billing System:** Manages trial periods and subscription statuses.
+    -   **Interactive Demo Mode:** Public-facing demo with pre-seeded data, tenant provisioning, and 24-hour expiration.
+    -   **Onboarding:** Customer Onboarding Hub with deal pipeline, project management, templates, and engagement feed. Employee Onboarding Workflows with template-driven packets and external portal access for workers.
+    -   **Invoicing System:** Create, edit, and manage invoices with line items, statuses, and payment tracking. Supports multiple payment methods with configurable fees.
+    -   **Document Management:** Handles folders, documents, versioning, signature requests, and audit logs. Includes tamper-evident versioning, legal hold, compliance retention, and e-signature provider integration.
+    -   **Integration Event Bus:** Outbound webhook system for events like document creation/updates and signature requests, with HMAC-signed events and audit logging.
     -   **Automation Engine:** Rules-based automation with event logging.
     -   **Notifications System:** Company/user-scoped notification tracking.
-    -   **Customer Onboarding Hub:** Deal pipeline (Lead → Qualified → Proposal → Negotiation → Closed Won → Closed Lost) with automatic onboarding project creation on "Closed Won". Product-specific onboarding templates with task checklists. Onboarding task tracking with progress percentage. Engagement events for customer activity (internal + webhook). Public webhook endpoint (`POST /api/webhooks/product-events`) authenticated via product API keys. Tables: `deals`, `onboarding_templates`, `onboarding_template_tasks`, `customer_onboarding_projects`, `onboarding_tasks`, `onboarding_documents`, `engagement_events`, `product_api_keys`.
-
-**Responsive Components:**
--   `ResponsiveTabs` (`client/src/components/responsive-tabs.tsx`): Horizontally scrollable tab strip on mobile, dropdown fallback when >6 tabs. Integrates with `useTabParam` pattern.
--   `ResponsivePageHeader` (`client/src/components/responsive-page-header.tsx`): Stacks title/subtitle and action buttons vertically on mobile.
--   `ResponsiveTableOrCards` (`client/src/components/responsive-table-or-cards.tsx`): Data table on desktop, card/list layout on mobile. Generic column definitions.
--   `ResponsiveFormGrid` (`client/src/components/responsive-form-grid.tsx`): Multi-column grid on desktop, single-column stack on mobile. Includes `FormFieldWrapper`.
--   `ResponsiveModal` (`client/src/components/responsive-modal.tsx`): Dialog on desktop, bottom-sheet drawer on mobile.
--   `ResponsiveFilterBar` (`client/src/components/responsive-filter-bar.tsx`): Expandable filter panel on desktop, bottom-sheet drawer on mobile.
 
 **Database:**
 -   **Type:** PostgreSQL, managed with Drizzle ORM.
--   **Schema Design:** Supports an enterprise hierarchy (enterprises, companies, divisions, positions, cost centers, jobs), core operational data (workers, time punches, schedules, payroll runs), and extended functionalities (accruals, policies, HR records). Granular role-based access control is implemented via dedicated tables. Universal entities can be assigned globally or to specific companies.
+-   **Schema Design:** Supports an enterprise hierarchy, core operational data, and extended functionalities with granular role-based access control.
 
 **Production Deployment:**
 -   **Environment:** Deployed to `app.mypaylink.app` behind an Nginx reverse proxy with SSL termination.
--   **Security:** Enforces secure cookie settings, hides sensitive error details, and utilizes security headers.
--   **Public Marketing Website:** A separate static HTML/CSS/JS site (`mypaylink.app`) is hosted at `/public-site/` for marketing purposes, running on PM2.
-
-## PWA Configuration
--   **vite-plugin-pwa:** Configured in `vite.config.ts` to auto-generate service worker (Workbox) and web app manifest.
--   **Manifest:** App name "PayLink", standalone display mode, theme color #1a5276, icons at 192x192, 512x512, and maskable 512x512.
--   **Service Worker:** Precaches app shell and static assets. Runtime caching: CacheFirst for Google Fonts, NetworkFirst for API requests (10s timeout, 5min cache expiry).
--   **Icons:** `client/public/pwa-192x192.png`, `client/public/pwa-512x512.png`, `client/public/pwa-maskable-512x512.png`.
--   **Offline Fallback:** `client/public/offline.html` displays when offline and page not cached.
--   **iOS Support:** Apple-specific meta tags in `client/index.html` (apple-mobile-web-app-capable, apple-touch-icon, status-bar-style).
+-   **Security:** Enforces secure cookie settings, hides sensitive error details, and uses security headers.
+-   **Public Marketing Website:** A separate static site (`mypaylink.app`) is hosted for marketing.
 
 ## External Dependencies
--   **PostgreSQL:** Primary database for all application data.
--   **NGINX:** Used as a reverse proxy for production deployments.
--   **PM2:** Node.js process manager for keeping the application and public site running in production.
--   **Nodemailer:** For optional email notifications.
--   **Twilio:** For optional SMS notifications.
+-   **PostgreSQL:** Primary application database.
+-   **NGINX:** Reverse proxy for production deployments.
+-   **PM2:** Node.js process manager for production.
+-   **Nodemailer:** For email notifications.
+-   **Twilio:** For SMS notifications.
 -   **OpenAI:** Utilized for AI-powered receipt scanning via GPT-4o vision.
