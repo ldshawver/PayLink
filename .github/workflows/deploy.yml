@@ -248,11 +248,9 @@ jobs:
             echo "Staging dir: $(ls -ld $STAGING)"
 
             # Step 4: rsync — skip all metadata to prevent mkstemp/set-times errors
-            rsync -rvz --delete \
-              --omit-dir-times \
-              --no-perms \
-              --no-owner \
-              --no-group \
+            RSYNC_CMD="rsync -rvz --delete --omit-dir-times --no-perms --no-owner --no-group"
+            echo "Running: $RSYNC_CMD $STAGING/ $WEB_ROOT/"
+            $RSYNC_CMD \
               --exclude='.git' \
               --exclude='node_modules' \
               "$STAGING/" "$WEB_ROOT/"
