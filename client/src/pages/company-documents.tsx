@@ -213,26 +213,28 @@ function DocumentsTab({ companyId }: { companyId?: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search documents..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9" data-testid="input-search-docs" />
         </div>
-        <Select value={filterCategory} onValueChange={setFilterCategory}>
-          <SelectTrigger className="w-[160px]" data-testid="select-filter-category"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Collections</SelectItem>
-            {COLLECTIONS.map(c => <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Select value={filterClassification} onValueChange={setFilterClassification}>
-          <SelectTrigger className="w-[160px]" data-testid="select-filter-classification"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Classifications</SelectItem>
-            {CLASSIFICATIONS.map(c => <SelectItem key={c} value={c}>{c.replace("_", "/").replace(/\b\w/g, l => l.toUpperCase())}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Button onClick={() => setShowUpload(true)} data-testid="button-upload-doc"><Upload className="h-4 w-4 mr-2" />Upload Document</Button>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Select value={filterCategory} onValueChange={setFilterCategory}>
+            <SelectTrigger className="w-full sm:w-[160px]" data-testid="select-filter-category"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Collections</SelectItem>
+              {COLLECTIONS.map(c => <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={filterClassification} onValueChange={setFilterClassification}>
+            <SelectTrigger className="w-full sm:w-[160px]" data-testid="select-filter-classification"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Classifications</SelectItem>
+              {CLASSIFICATIONS.map(c => <SelectItem key={c} value={c}>{c.replace("_", "/").replace(/\b\w/g, l => l.toUpperCase())}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button className="w-full sm:w-auto" onClick={() => setShowUpload(true)} data-testid="button-upload-doc"><Upload className="h-4 w-4 mr-2" />Upload Document</Button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -244,7 +246,45 @@ function DocumentsTab({ companyId }: { companyId?: string }) {
           <p className="text-sm mt-1">Upload your first company document to get started.</p>
         </CardContent></Card>
       ) : (
-        <div className="border rounded-lg overflow-hidden">
+        <>
+        <div className="space-y-3 sm:hidden">
+          {filtered.map(doc => (
+            <Card key={doc.id} data-testid={`card-document-${doc.id}`}>
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-3 min-w-0">
+                    <div className="h-9 w-9 rounded bg-primary/10 flex items-center justify-center shrink-0">
+                      <FileText className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="min-w-0">
+                      <button className="font-medium hover:underline text-left truncate block max-w-full" onClick={() => setShowDetail(doc)} data-testid={`link-doc-mobile-${doc.id}`}>{doc.title}</button>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                        <Badge variant="secondary" className="text-[10px]">{doc.category || "—"}</Badge>
+                        {doc.documentType && <span className="text-xs text-muted-foreground">{doc.documentType}</span>}
+                        {doc.legalHold && <Badge variant="destructive" className="text-[10px] px-1.5 py-0">Legal Hold</Badge>}
+                      </div>
+                      <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground">
+                        {classificationBadge(doc.classification)}
+                        <span>{formatFileSize(doc.fileSize)}</span>
+                        <span>{formatDate(doc.updatedAt)}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="shrink-0" data-testid={`button-doc-menu-mobile-${doc.id}`}><MoreVertical className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => setShowDetail(doc)}><Eye className="h-4 w-4 mr-2" />View Details</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => window.open(doc.fileUrl, "_blank")}><Download className="h-4 w-4 mr-2" />Download</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setEditDoc(doc)}><Edit className="h-4 w-4 mr-2" />Edit Metadata</DropdownMenuItem>
+                      <DropdownMenuItem className="text-destructive" onClick={() => { if (doc.legalHold) { toast({ title: "Cannot delete", description: "Document is on legal hold", variant: "destructive" }); return; } deleteMutation.mutate(doc.id); }}><Trash2 className="h-4 w-4 mr-2" />Delete</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+        <div className="hidden sm:block border rounded-lg overflow-hidden overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr className="border-b bg-muted/50">
               <th className="text-left p-3 font-medium">Document</th>
@@ -293,6 +333,7 @@ function DocumentsTab({ companyId }: { companyId?: string }) {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       <Dialog open={showUpload} onOpenChange={setShowUpload}>
@@ -305,7 +346,7 @@ function DocumentsTab({ companyId }: { companyId?: string }) {
             </div>
             <div><Label>Title</Label><Input value={uploadForm.title} onChange={e => setUploadForm(p => ({...p, title: e.target.value}))} data-testid="input-doc-title" /></div>
             <div><Label>Description</Label><Textarea value={uploadForm.description} onChange={e => setUploadForm(p => ({...p, description: e.target.value}))} rows={2} data-testid="input-doc-desc" /></div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label>Collection</Label>
                 <Select value={uploadForm.category} onValueChange={v => setUploadForm(p => ({...p, category: v}))}>
@@ -371,7 +412,7 @@ function EditDocForm({ doc, onSave, isPending }: { doc: Document; onSave: (d: Pa
     <div className="space-y-4">
       <div><Label>Title</Label><Input value={form.title} onChange={e => setForm(p => ({...p, title: e.target.value}))} data-testid="input-edit-title" /></div>
       <div><Label>Description</Label><Textarea value={form.description} onChange={e => setForm(p => ({...p, description: e.target.value}))} rows={2} /></div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div><Label>Collection</Label>
           <Select value={form.category} onValueChange={v => setForm(p => ({...p, category: v}))}>
             <SelectTrigger><SelectValue /></SelectTrigger>
@@ -455,7 +496,7 @@ function DocumentDetailDialog({ doc, companyId, onClose }: { doc: Document; comp
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><FileText className="h-5 w-5" />{doc.title}</DialogTitle></DialogHeader>
         <div className="space-y-6">
-          <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
             <div><span className="text-muted-foreground">Collection:</span> <Badge variant="secondary">{doc.category || "—"}</Badge></div>
             <div><span className="text-muted-foreground">Classification:</span> {classificationBadge(doc.classification)}</div>
             <div><span className="text-muted-foreground">Type:</span> {doc.documentType || "—"}</div>
@@ -1123,7 +1164,7 @@ function InvoiceApprovalTab({ companyId }: { companyId?: string }) {
               <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" onChange={e => setInvoiceFile(e.target.files?.[0] || null)} className="block w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-medium file:bg-primary/10 file:text-primary mt-1" data-testid="input-invoice-file" />
             </div>
             <div><Label>Vendor Name</Label><Input value={newInvoice.vendorName} onChange={e => setNewInvoice(p => ({...p, vendorName: e.target.value}))} data-testid="input-invoice-vendor" /></div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><Label>Invoice #</Label><Input value={newInvoice.invoiceNumber} onChange={e => setNewInvoice(p => ({...p, invoiceNumber: e.target.value}))} data-testid="input-invoice-number" /></div>
               <div><Label>Total Amount</Label><Input type="number" step="0.01" value={newInvoice.totalAmount} onChange={e => setNewInvoice(p => ({...p, totalAmount: e.target.value}))} data-testid="input-invoice-amount" /></div>
             </div>
@@ -1246,7 +1287,7 @@ function RetentionTab({ companyId, userRole }: { companyId?: string; userRole?: 
                 <SelectContent>{DOCUMENT_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><Label>Retention Years</Label><Input type="number" min={0} value={newPolicy.retentionYears} onChange={e => setNewPolicy(p => ({...p, retentionYears: parseInt(e.target.value) || 0}))} /></div>
               <div><Label>Retention Months</Label><Input type="number" min={0} max={11} value={newPolicy.retentionMonths} onChange={e => setNewPolicy(p => ({...p, retentionMonths: parseInt(e.target.value) || 0}))} /></div>
             </div>

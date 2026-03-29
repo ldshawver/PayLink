@@ -71,7 +71,7 @@ function ProjectForm({ project, customers, onSave, onCancel }: {
         <Label>Project Title *</Label>
         <Input data-testid="input-project-title" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label>Product</Label>
           <Select value={form.product} onValueChange={v => setForm({ ...form, product: v })}>
@@ -103,7 +103,7 @@ function ProjectForm({ project, customers, onSave, onCancel }: {
         <Label>Assigned To</Label>
         <Input data-testid="input-project-assigned" value={form.assignedTo} onChange={e => setForm({ ...form, assignedTo: e.target.value })} />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label>Start Date</Label>
           <Input data-testid="input-project-start" type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })} />

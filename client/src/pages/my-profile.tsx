@@ -754,7 +754,7 @@ function MembershipsTab({ worker }: { worker: Worker | null }) {
               <Label>Member Number</Label>
               <Input value={form.membershipNumber} onChange={(e) => setForm({ ...form, membershipNumber: e.target.value })} placeholder="Optional" data-testid="input-membership-number" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label>Start Date</Label>
                 <Input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} data-testid="input-membership-start" />

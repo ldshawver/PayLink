@@ -74,7 +74,7 @@ export default function BillingPage() {
   const projectedMonthly = basePrice + (billableCount * perEmployee);
 
   return (
-    <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-bold" data-testid="text-billing-title">Billing & Subscription</h1>
         <p className="text-muted-foreground mt-1">Manage your PayLink subscription and billing details</p>

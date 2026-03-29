@@ -4040,7 +4040,7 @@ function ImportTab() {
               </div>
               <div className="grid gap-3 max-h-96 overflow-y-auto">
                 {(targetFields[importType] || []).map(f => (
-                  <div key={f.label} className="grid grid-cols-2 gap-3 items-center">
+                  <div key={f.label} className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
                     <Label className="text-sm">{f.label} {f.required && <span className="text-red-500">*</span>}</Label>
                     <Select value={columnMap[f.label] || "__skip__"} onValueChange={(v) => setColumnMap({ ...columnMap, [f.label]: v === "__skip__" ? "" : v })}>
                       <SelectTrigger data-testid={`select-map-${f.label}`}><SelectValue placeholder="Skip" /></SelectTrigger>

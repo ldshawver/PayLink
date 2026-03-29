@@ -624,8 +624,8 @@ function TimeClockPanel() {
 
 export default function LoginPage() {
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-background via-background to-muted/50">
-      <div className="w-full max-w-md space-y-6 px-4">
+    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-background via-background to-muted/50 p-4">
+      <div className="w-full max-w-md space-y-6">
         <div className="flex flex-col items-center gap-3">
           <img src={paylinkLogo} alt="PayLink" className="h-24 w-24 object-contain" />
           <div className="text-center">
@@ -639,7 +639,7 @@ export default function LoginPage() {
         </div>
 
         <Card>
-          <CardContent className="p-6">
+          <CardContent className="p-4 sm:p-6">
             <Tabs defaultValue="employee" className="w-full">
               <TabsList className="grid w-full grid-cols-3 mb-5" data-testid="tabs-login-mode">
                 <TabsTrigger value="employee" data-testid="tab-employee-login">

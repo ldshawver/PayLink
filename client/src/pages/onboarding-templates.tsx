@@ -90,7 +90,7 @@ function TemplateEditor({ template, onSave, onCancel }: {
           <Label>Template Name *</Label>
           <Input data-testid="input-template-name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <Label>Product</Label>
             <Select value={form.product} onValueChange={v => setForm({ ...form, product: v })}>
@@ -143,7 +143,7 @@ function TemplateEditor({ template, onSave, onCancel }: {
                         onChange={e => updateTask(index, "title", e.target.value)}
                         data-testid={`input-task-title-${index}`}
                       />
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <Input
                           placeholder="Description"
                           value={task.description}

@@ -59,7 +59,7 @@ function CustomerForm({ customer, onSave, onCancel }: {
           </SelectContent>
         </Select>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label>Contact Name *</Label>
           <Input data-testid="input-customer-name" value={form.customerName} onChange={e => setForm({ ...form, customerName: e.target.value })} />
@@ -69,7 +69,7 @@ function CustomerForm({ customer, onSave, onCancel }: {
           <Input data-testid="input-customer-company" value={form.businessName} onChange={e => setForm({ ...form, businessName: e.target.value })} />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label>Email</Label>
           <Input data-testid="input-customer-email" type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
@@ -79,7 +79,7 @@ function CustomerForm({ customer, onSave, onCancel }: {
           <Input data-testid="input-customer-phone" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label>Billing Contact</Label>
           <Input data-testid="input-billing-contact" value={form.billingContactName} onChange={e => setForm({ ...form, billingContactName: e.target.value })} />
@@ -89,7 +89,7 @@ function CustomerForm({ customer, onSave, onCancel }: {
           <Input data-testid="input-billing-email" type="email" value={form.billingEmail} onChange={e => setForm({ ...form, billingEmail: e.target.value })} />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label>{isVendor ? "Remit-To Address" : "Billing Address"}</Label>
           <Input data-testid="input-customer-address" value={form.billingAddress} onChange={e => setForm({ ...form, billingAddress: e.target.value })} />
@@ -99,7 +99,7 @@ function CustomerForm({ customer, onSave, onCancel }: {
           <Input data-testid="input-customer-city" value={form.billingCity} onChange={e => setForm({ ...form, billingCity: e.target.value })} />
         </div>
       </div>
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div>
           <Label>State</Label>
           <Input data-testid="input-customer-state" value={form.billingState} onChange={e => setForm({ ...form, billingState: e.target.value })} />
@@ -113,7 +113,7 @@ function CustomerForm({ customer, onSave, onCancel }: {
           <Input data-testid="input-customer-country" value={form.billingCountry} onChange={e => setForm({ ...form, billingCountry: e.target.value })} />
         </div>
       </div>
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div>
           <Label>Tax ID / EIN</Label>
           <Input data-testid="input-customer-taxid" value={form.taxId} onChange={e => setForm({ ...form, taxId: e.target.value })} />

@@ -138,7 +138,7 @@ function ExpenseSubmitForm({ categories, companies, jobs, costCenters, onClose }
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <Label>Company</Label>
           <Select value={form.companyId} onValueChange={v => setForm(f => ({ ...f, companyId: v }))}>
@@ -162,7 +162,7 @@ function ExpenseSubmitForm({ categories, companies, jobs, costCenters, onClose }
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div>
           <Label>Date</Label>
           <Input type="date" value={form.expenseDate} onChange={e => setForm(f => ({ ...f, expenseDate: e.target.value }))} data-testid="input-expense-date" />
@@ -186,7 +186,7 @@ function ExpenseSubmitForm({ categories, companies, jobs, costCenters, onClose }
         <Textarea placeholder="Why is this expense needed?" rows={2} value={form.businessPurpose} onChange={e => setForm(f => ({ ...f, businessPurpose: e.target.value }))} data-testid="input-expense-purpose" />
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div>
           <Label>Payment Method</Label>
           <Select value={form.paymentMethodUsed || "__none__"} onValueChange={v => setForm(f => ({ ...f, paymentMethodUsed: v === "__none__" ? "" : v }))}>
@@ -329,7 +329,7 @@ function InvoiceSubmitForm({ companies, jobs, costCenters, onClose }: any) {
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div><Label>Company</Label>
           <Select value={form.companyId} onValueChange={v => setForm(f => ({ ...f, companyId: v }))}>
             <SelectTrigger data-testid="select-invoice-company"><SelectValue placeholder="Select" /></SelectTrigger>
@@ -341,7 +341,7 @@ function InvoiceSubmitForm({ companies, jobs, costCenters, onClose }: any) {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div><Label>Invoice Date</Label>
           <Input type="date" value={form.invoiceDate} onChange={e => setForm(f => ({ ...f, invoiceDate: e.target.value }))} data-testid="input-invoice-date" />
         </div>
@@ -360,7 +360,7 @@ function InvoiceSubmitForm({ companies, jobs, costCenters, onClose }: any) {
         <Input placeholder="Proposal # or reference" value={form.proposalReference} onChange={e => setForm(f => ({ ...f, proposalReference: e.target.value }))} data-testid="input-proposal-ref" />
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div><Label>Payment Terms</Label>
           <Select value={form.paymentTerms} onValueChange={v => setForm(f => ({ ...f, paymentTerms: v }))}>
             <SelectTrigger data-testid="select-payment-terms"><SelectValue /></SelectTrigger>
@@ -573,28 +573,58 @@ export default function ExpensesPage() {
               <p className="text-sm mt-1">Click "New Expense" to submit your first expense.</p>
             </CardContent></Card>
           ) : (
-            <Table data-testid="table-my-expenses">
-              <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Vendor</TableHead><TableHead>Category</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead><TableHead>Reimb.</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>
-              <TableBody>
+            <>
+              <div className="space-y-3 sm:hidden">
                 {myExpenses.map((e: any) => (
-                  <TableRow key={e.id} data-testid={`row-expense-${e.id}`}>
-                    <TableCell>{e.expenseDate}</TableCell>
-                    <TableCell className="font-medium">{e.vendor || "—"}</TableCell>
-                    <TableCell>{e.categoryName || "—"}</TableCell>
-                    <TableCell className="font-mono">{formatCurrency(e.amount)}</TableCell>
-                    <TableCell>{statusBadge(e.status)}</TableCell>
-                    <TableCell>{e.reimbursementRequested ? <Badge variant="secondary">Yes</Badge> : "—"}</TableCell>
-                    <TableCell>
-                      {e.status === "draft" && (
-                        <Button size="sm" variant="outline" onClick={() => submitMutation.mutate({ type: "expense", id: e.id })} data-testid={`button-submit-${e.id}`}>
-                          <Send className="h-3 w-3 mr-1" /> Submit
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
+                  <Card key={e.id} data-testid={`card-expense-${e.id}`}>
+                    <CardContent className="p-4">
+                      <div className="flex items-start justify-between mb-2">
+                        <div>
+                          <p className="font-medium">{e.vendor || "—"}</p>
+                          <p className="text-xs text-muted-foreground">{e.expenseDate} · {e.categoryName || "—"}</p>
+                        </div>
+                        <p className="font-mono font-semibold">{formatCurrency(e.amount)}</p>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {statusBadge(e.status)}
+                          {e.reimbursementRequested && <Badge variant="secondary">Reimb.</Badge>}
+                        </div>
+                        {e.status === "draft" && (
+                          <Button size="sm" variant="outline" onClick={() => submitMutation.mutate({ type: "expense", id: e.id })} data-testid={`button-submit-mobile-${e.id}`}>
+                            <Send className="h-3 w-3 mr-1" /> Submit
+                          </Button>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
                 ))}
-              </TableBody>
-            </Table>
+              </div>
+              <div className="hidden sm:block overflow-x-auto">
+                <Table data-testid="table-my-expenses">
+                  <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Vendor</TableHead><TableHead>Category</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead><TableHead>Reimb.</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {myExpenses.map((e: any) => (
+                      <TableRow key={e.id} data-testid={`row-expense-${e.id}`}>
+                        <TableCell>{e.expenseDate}</TableCell>
+                        <TableCell className="font-medium">{e.vendor || "—"}</TableCell>
+                        <TableCell>{e.categoryName || "—"}</TableCell>
+                        <TableCell className="font-mono">{formatCurrency(e.amount)}</TableCell>
+                        <TableCell>{statusBadge(e.status)}</TableCell>
+                        <TableCell>{e.reimbursementRequested ? <Badge variant="secondary">Yes</Badge> : "—"}</TableCell>
+                        <TableCell>
+                          {e.status === "draft" && (
+                            <Button size="sm" variant="outline" onClick={() => submitMutation.mutate({ type: "expense", id: e.id })} data-testid={`button-submit-${e.id}`}>
+                              <Send className="h-3 w-3 mr-1" /> Submit
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
         </TabsContent>
 
@@ -606,22 +636,43 @@ export default function ExpensesPage() {
                 <Download className="h-4 w-4 mr-1" /> Export CSV
               </Button>
             </div>
-            <Table data-testid="table-all-expenses">
-              <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Submitter</TableHead><TableHead>Vendor</TableHead><TableHead>Category</TableHead><TableHead>Company</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-              <TableBody>
-                {allExpenses.map((e: any) => (
-                  <TableRow key={e.id} data-testid={`row-all-expense-${e.id}`}>
-                    <TableCell>{e.expenseDate}</TableCell>
-                    <TableCell>{getWorkerName(e.submitterId)}</TableCell>
-                    <TableCell>{e.vendor || "—"}</TableCell>
-                    <TableCell>{e.categoryName || "—"}</TableCell>
-                    <TableCell>{companies.find((c: any) => c.id === e.companyId)?.name || "—"}</TableCell>
-                    <TableCell className="font-mono">{formatCurrency(e.amount)}</TableCell>
-                    <TableCell>{statusBadge(e.status)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <div className="space-y-3 sm:hidden">
+              {allExpenses.map((e: any) => (
+                <Card key={e.id} data-testid={`card-all-expense-${e.id}`}>
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between mb-1">
+                      <div>
+                        <p className="font-medium">{e.vendor || "—"}</p>
+                        <p className="text-xs text-muted-foreground">{getWorkerName(e.submitterId)} · {e.expenseDate}</p>
+                      </div>
+                      <p className="font-mono font-semibold">{formatCurrency(e.amount)}</p>
+                    </div>
+                    <div className="flex items-center gap-2 mt-2">
+                      {statusBadge(e.status)}
+                      <span className="text-xs text-muted-foreground">{e.categoryName || "—"}</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+            <div className="hidden sm:block overflow-x-auto">
+              <Table data-testid="table-all-expenses">
+                <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Submitter</TableHead><TableHead>Vendor</TableHead><TableHead>Category</TableHead><TableHead>Company</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {allExpenses.map((e: any) => (
+                    <TableRow key={e.id} data-testid={`row-all-expense-${e.id}`}>
+                      <TableCell>{e.expenseDate}</TableCell>
+                      <TableCell>{getWorkerName(e.submitterId)}</TableCell>
+                      <TableCell>{e.vendor || "—"}</TableCell>
+                      <TableCell>{e.categoryName || "—"}</TableCell>
+                      <TableCell>{companies.find((c: any) => c.id === e.companyId)?.name || "—"}</TableCell>
+                      <TableCell className="font-mono">{formatCurrency(e.amount)}</TableCell>
+                      <TableCell>{statusBadge(e.status)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           </TabsContent>
         )}
 

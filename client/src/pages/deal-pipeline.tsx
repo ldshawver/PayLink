@@ -65,7 +65,7 @@ function DealForm({ deal, customers, onSave, onCancel }: {
         <Label>Deal Title *</Label>
         <Input data-testid="input-deal-title" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label>Value ($)</Label>
           <Input data-testid="input-deal-value" type="number" value={form.value} onChange={e => setForm({ ...form, value: e.target.value })} />
@@ -84,7 +84,7 @@ function DealForm({ deal, customers, onSave, onCancel }: {
           </Select>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label>Product</Label>
           <Select value={form.product} onValueChange={v => setForm({ ...form, product: v })}>

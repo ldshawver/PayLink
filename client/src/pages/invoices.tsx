@@ -474,7 +474,7 @@ function InvoiceForm({ invoice, customers, companyId, onSave, onCancel }: {
 
   return (
     <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label>Customer *</Label>
           <Select value={form.customerId} onValueChange={v => setForm({ ...form, customerId: v })}>
@@ -493,7 +493,7 @@ function InvoiceForm({ invoice, customers, companyId, onSave, onCancel }: {
           <Input data-testid="input-invoice-number" value={form.invoiceNumber} onChange={e => setForm({ ...form, invoiceNumber: e.target.value })} />
         </div>
       </div>
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div>
           <Label>Issue Date</Label>
           <Input data-testid="input-issue-date" type="date" value={form.issueDate} onChange={e => setForm({ ...form, issueDate: e.target.value })} />
@@ -568,7 +568,7 @@ function InvoiceForm({ invoice, customers, companyId, onSave, onCancel }: {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label>Notes</Label>
           <Textarea data-testid="input-invoice-notes" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={2} />
@@ -749,14 +749,14 @@ export default function InvoicesPage() {
         </TabsList>
 
         <TabsContent value="invoices" className="space-y-4">
-          <div className="flex gap-3">
+          <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input placeholder="Search invoices..." value={search} onChange={e => setSearch(e.target.value)}
                 className="pl-10" data-testid="input-search-invoices" />
             </div>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-40" data-testid="select-invoice-filter">
+              <SelectTrigger className="w-full sm:w-40" data-testid="select-invoice-filter">
                 <SelectValue placeholder="All statuses" />
               </SelectTrigger>
               <SelectContent>
@@ -794,20 +794,20 @@ export default function InvoicesPage() {
                 return (
                   <Card key={invoice.id} className="hover:shadow-md transition-shadow" data-testid={`card-invoice-${invoice.id}`}>
                     <CardContent className="p-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4 flex-1">
-                          <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-teal-500 to-blue-500 flex items-center justify-center text-white">
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                        <div className="flex items-center gap-4 flex-1 min-w-0">
+                          <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-teal-500 to-blue-500 flex items-center justify-center text-white shrink-0">
                             <FileText className="h-5 w-5" />
                           </div>
-                          <div>
-                            <div className="flex items-center gap-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-semibold" data-testid={`text-invoice-number-${invoice.id}`}>{invoice.invoiceNumber}</span>
                               <Badge className={sc.color}>
                                 <StatusIcon className="h-3 w-3 mr-1" />
                                 {invoice.status}
                               </Badge>
                             </div>
-                            <div className="text-sm text-muted-foreground flex items-center gap-3 mt-1">
+                            <div className="text-sm text-muted-foreground flex items-center gap-3 mt-1 flex-wrap">
                               {customer && <span>{customer.customerName}</span>}
                               {invoice.dueDate && (
                                 <span className="flex items-center gap-1">
@@ -817,8 +817,8 @@ export default function InvoicesPage() {
                             </div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-right">
+                        <div className="flex items-center gap-4 justify-between sm:justify-end">
+                          <div className="text-left sm:text-right">
                             <div className="font-bold text-lg" data-testid={`text-invoice-total-${invoice.id}`}>${parseFloat(invoice.totalAmount || "0").toFixed(2)}</div>
                             {parseFloat(invoice.amountPaid || "0") > 0 && parseFloat(invoice.amountPaid || "0") < parseFloat(invoice.totalAmount || "0") && (
                               <div className="text-xs text-muted-foreground">Paid: ${parseFloat(invoice.amountPaid || "0").toFixed(2)}</div>
