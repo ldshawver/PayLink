@@ -148,10 +148,15 @@ jobs:
             fi
 
             # Stage public-site files in /tmp for website deploy job
+            # Uses /tmp (world-writable) so the mypaylink SSH user can read the source
             echo "Staging public-site files for website deploy..."
             rm -rf /tmp/paylink-public-staging
-            cp -r "$APP_DIR/public-site/public" /tmp/paylink-public-staging
-            chmod -R 755 /tmp/paylink-public-staging
+            mkdir -m 755 /tmp/paylink-public-staging
+            cp -r "$APP_DIR/public-site/public/." /tmp/paylink-public-staging/
+            # a+rX: add read for all users; X = execute only on directories (not files)
+            chmod -R a+rX /tmp/paylink-public-staging
+            echo "Staged $(find /tmp/paylink-public-staging -type f | wc -l) files into /tmp/paylink-public-staging"
+            echo "Staging dir permissions: $(ls -ld /tmp/paylink-public-staging)"
 
             echo "=========================================="
             echo "App Deploy Complete - Health: $HEALTH | Ready: $READY"
@@ -211,12 +216,22 @@ jobs:
             rm -f "$TEST_FILE"
             echo "Write access confirmed."
 
-            # Step 3: Verify staged files exist (populated by deploy-app job)
+            # Step 3: Verify staged files exist and are readable (populated by deploy-app job)
             if [ ! -d "$STAGING" ]; then
               echo "ERROR: Staging directory $STAGING not found. App deploy may not have run."
               exit 1
             fi
-            echo "Staged files found: $(ls $STAGING | wc -l) items"
+
+            # Smoke-test: confirm mypaylink can actually read and traverse the staging dir
+            if ! ls "$STAGING" > /dev/null 2>&1; then
+              echo "ERROR: Cannot read staging directory $STAGING as $(whoami)."
+              echo "  Staging dir permissions: $(ls -ld $STAGING 2>/dev/null || echo 'cannot stat')"
+              echo "  /tmp permissions: $(ls -ld /tmp)"
+              exit 1
+            fi
+            STAGED_COUNT=$(find "$STAGING" -type f | wc -l)
+            echo "Staging accessible. Files staged: $STAGED_COUNT"
+            echo "Staging dir: $(ls -ld $STAGING)"
 
             # Step 4: rsync — skip all metadata to prevent mkstemp/set-times errors
             rsync -rvz --delete \
