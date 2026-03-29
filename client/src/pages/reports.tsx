@@ -2616,7 +2616,6 @@ function JobCostReportSection() {
               </TableRow>
             </TableBody>
           </Table>
-          </div>
         </CardContent></Card>
       )}
     </div>
