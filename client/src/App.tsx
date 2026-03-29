@@ -288,7 +288,11 @@ function AppContent() {
   }
 
   if (!user) {
-    return <RedirectToLogin />;
+    return (
+      <BiometricGate>
+        <RedirectToLogin />
+      </BiometricGate>
+    );
   }
 
   return (
