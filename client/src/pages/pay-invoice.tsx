@@ -331,7 +331,7 @@ export default function PayInvoicePage() {
   const total = amount + fee;
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 py-8 px-4">
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 py-6 sm:py-8 px-3 sm:px-4">
       <div className="max-w-lg mx-auto">
         <div className="text-center mb-6">
           <h1 className="text-xl font-bold" data-testid="text-company-name">{invoice.companyName}</h1>

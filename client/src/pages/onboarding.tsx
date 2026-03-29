@@ -654,7 +654,7 @@ function Step5Preview({ onBack, onFinish, isSaving }: {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="bg-gradient-to-br from-teal-50 to-teal-100 dark:from-teal-950/30 dark:to-teal-900/20 rounded-lg p-3 text-center">
             <p className="text-xs text-muted-foreground">Total Gross</p>
             <p className="text-lg font-bold text-teal-700 dark:text-teal-300" data-testid="text-total-gross">{fmt(preview.totalGross)}</p>

@@ -179,7 +179,7 @@ function StageColumn({ stage, deals, onEdit, onDrop, onDragStart, onDragOver, is
   const stageValue = deals.reduce((sum, d) => sum + d.value, 0);
 
   return (
-    <div className="min-w-[200px] flex-shrink-0" data-testid={`column-${stage.value}`}>
+    <div className="w-full sm:min-w-[200px] sm:flex-shrink-0" data-testid={`column-${stage.value}`}>
       <div className="mb-3">
         <div className="flex items-center justify-between">
           <Badge className={stage.color} data-testid={`badge-stage-${stage.value}`}>
@@ -360,7 +360,7 @@ export default function DealPipelinePage() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : (
-        <div className="flex gap-3 overflow-x-auto pb-4" data-testid="kanban-board">
+        <div className="flex flex-col sm:flex-row gap-3 sm:overflow-x-auto pb-4" data-testid="kanban-board">
           {DEAL_STAGES.map(stage => (
             <StageColumn
               key={stage.value}

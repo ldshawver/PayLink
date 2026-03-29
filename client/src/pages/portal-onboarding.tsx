@@ -184,8 +184,8 @@ export default function PortalOnboardingPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800">
       <header className="bg-white dark:bg-gray-900 border-b shadow-sm">
-        <div className="max-w-3xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
+        <div className="max-w-3xl mx-auto px-3 sm:px-4 py-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h1 className="text-xl font-bold text-primary" data-testid="text-company-name">{companyName}</h1>
               <p className="text-sm text-muted-foreground">Employee Onboarding Portal</p>
