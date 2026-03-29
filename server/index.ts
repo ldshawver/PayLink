@@ -1274,6 +1274,13 @@ app.use((req, res, next) => {
   }
 
   try {
+    const { seedCompanyLogos } = await import("./seedCompanyLogos");
+    await seedCompanyLogos();
+  } catch (e) {
+    console.log("Company logo seed skipped or failed:", (e as Error).message);
+  }
+
+  try {
     const { runMigrations } = await import('stripe-replit-sync');
     const { getStripeSync } = await import('./stripeClient');
     console.log('Initializing Stripe schema...');
