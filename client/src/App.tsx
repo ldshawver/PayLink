@@ -212,26 +212,32 @@ function NativeFeatureInit() {
   return null;
 }
 
+let biometricRestoreAttemptedThisSession = false;
+
 function BiometricGate({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
   const { isEnabled, isAvailable, restoreSession } = useBiometricAuth();
-  const [biometricAttempted, setBiometricAttempted] = useState(false);
   const [restoring, setRestoring] = useState(false);
+
+  const runRestore = useCallback(() => {
+    if (biometricRestoreAttemptedThisSession) return;
+    biometricRestoreAttemptedThisSession = true;
+    setRestoring(true);
+    restoreSession().finally(() => setRestoring(false));
+  }, [restoreSession]);
 
   useAppLifecycle(useCallback(() => {
     if (!user && isEnabled && isAvailable) {
-      setRestoring(true);
-      restoreSession().finally(() => setRestoring(false));
+      biometricRestoreAttemptedThisSession = false;
+      runRestore();
     }
-  }, [user, isEnabled, isAvailable, restoreSession]));
+  }, [user, isEnabled, isAvailable, runRestore]));
 
   useEffect(() => {
-    if (!isLoading && !user && isEnabled && isAvailable && !biometricAttempted) {
-      setBiometricAttempted(true);
-      setRestoring(true);
-      restoreSession().finally(() => setRestoring(false));
+    if (!isLoading && !user && isEnabled && isAvailable) {
+      runRestore();
     }
-  }, [isLoading, user, isEnabled, isAvailable, biometricAttempted, restoreSession]);
+  }, [isLoading, user, isEnabled, isAvailable, runRestore]);
 
   if (restoring) {
     return (
@@ -288,7 +294,11 @@ function AppContent() {
   }
 
   if (!user) {
-    return <RedirectToLogin />;
+    return (
+      <BiometricGate>
+        <RedirectToLogin />
+      </BiometricGate>
+    );
   }
 
   return (
