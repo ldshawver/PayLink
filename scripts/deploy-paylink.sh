@@ -25,9 +25,10 @@ pg_dump "$DATABASE_URL" > "$BACKUP_FILE"
 echo "   Saved: $BACKUP_FILE"
 
 cd "$APP_DIR"
-echo "2. Pulling latest code..."
+echo "2. Syncing latest code (hard reset to match repo)..."
 git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
-git pull origin main
+git fetch origin main
+git reset --hard origin/main
 
 echo "3. Installing dependencies..."
 npm install --production=false
