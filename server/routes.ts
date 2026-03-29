@@ -7,9 +7,11 @@ import { sendScheduleEmailNotification, sendScheduleSmsNotification } from "./no
 import path from "path";
 import { db } from "./db";
 import { sql, eq } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
+import fs from "fs";
+import { computeDispositionDate, getDefaultRetentionPolicySeedData } from "./retentionCalculator";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -71,6 +73,16 @@ const documentUpload = multer({
     else cb(new Error("Only image and document files are allowed"));
   },
 });
+
+function computeFileSha256(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(filePath);
+    stream.on("data", (chunk: Buffer | string) => hash.update(chunk));
+    stream.on("end", () => resolve(hash.digest("hex")));
+    stream.on("error", reject);
+  });
+}
 
 function getWeekStart(dateStr: string): string {
   const [y, m, d] = dateStr.split("-").map(Number);
@@ -455,6 +467,14 @@ export async function registerRoutes(
       if (data.enterpriseId === "") data.enterpriseId = null;
       if (data.legalEntityId === "") data.legalEntityId = null;
       const company = await storage.createCompany(data);
+      try {
+        const seedData = getDefaultRetentionPolicySeedData(company.id);
+        for (const policy of seedData) {
+          await storage.createDocumentRetentionPolicy(policy);
+        }
+      } catch (seedErr) {
+        console.error("Failed to seed default retention policies for company", company.id, seedErr);
+      }
       res.status(201).json(company);
     } catch (error) {
       console.error(error);
@@ -8539,13 +8559,37 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const r = await storage.getDocument(req.params.id);
       if (!r) return res.status(404).json({ message: "Document not found" });
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (r.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
+      const isDownload = req.query.download === "true";
+      const user = await storage.getUser((req.session as any)?.userId);
+      await storage.createDocumentAuditLog({
+        documentId: req.params.id,
+        companyId: r.companyId,
+        action: isDownload ? "downloaded" : "viewed",
+        actorId: (req.session as any)?.userId,
+        actorName: user?.username || "",
+        ipAddress: req.ip || "",
+        details: `Document "${r.title}" ${isDownload ? "downloaded" : "viewed"}`,
+      });
       res.json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch document") }); }
   });
 
   app.post("/api/documents", requireAuth, requireRole("admin", "manager"), blockDemoWrites, enforceCompanyScope("body"), async (req, res) => {
     try {
-      const r = await storage.createDocument({ ...req.body, companyId: (req as any)._companyId });
+      const companyId = (req as any)._companyId;
+      const r = await storage.createDocument({ ...req.body, companyId });
+      const user = await storage.getUser((req.session as any)?.userId);
+      await storage.createDocumentAuditLog({
+        documentId: r.id,
+        companyId,
+        action: "created",
+        actorId: (req.session as any)?.userId,
+        actorName: user?.username || "",
+        ipAddress: req.ip || "",
+        details: `Document "${r.title}" created`,
+      });
       res.status(201).json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create document") }); }
   });
@@ -8556,7 +8600,60 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!doc) return res.status(404).json({ message: "Document not found" });
       const sessionCompanyId = await getSessionCompanyId(req);
       if (doc.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
+      let effectiveLegalHold = doc.legalHold || false;
+      if (!effectiveLegalHold && doc.folderId) {
+        const folder = await storage.getDocumentFolder(doc.folderId);
+        if (folder?.legalHold) effectiveLegalHold = true;
+      }
+      if (effectiveLegalHold) {
+        const blockedStatuses = ["archived", "disposed", "deleted"];
+        const blockedDispositionStatuses = ["disposed", "archived", "deleted", "pending_review"];
+        if (req.body.status && blockedStatuses.includes(req.body.status)) {
+          return res.status(403).json({ message: "Cannot archive or dispose document under legal hold" });
+        }
+        if (req.body.dispositionStatus && blockedDispositionStatuses.includes(req.body.dispositionStatus)) {
+          return res.status(403).json({ message: "Cannot change disposition status of document under legal hold" });
+        }
+        if (req.body.dispositionDate !== undefined) {
+          return res.status(403).json({ message: "Cannot set disposition date on document under legal hold" });
+        }
+      }
       const r = await storage.updateDocument(req.params.id, req.body);
+      const user = await storage.getUser((req.session as any)?.userId);
+      const changedFields = Object.keys(req.body);
+      if (changedFields.includes("legalHold")) {
+        await storage.createDocumentAuditLog({
+          documentId: req.params.id,
+          companyId: doc.companyId,
+          action: req.body.legalHold ? "legal_hold_enabled" : "legal_hold_disabled",
+          actorId: (req.session as any)?.userId,
+          actorName: user?.username || "",
+          ipAddress: req.ip || "",
+          details: `Legal hold ${req.body.legalHold ? "enabled" : "disabled"} on "${doc.title}"`,
+        });
+      }
+      if (changedFields.includes("folderId") && req.body.folderId !== doc.folderId) {
+        await storage.createDocumentAuditLog({
+          documentId: req.params.id,
+          companyId: doc.companyId,
+          action: "moved",
+          actorId: (req.session as any)?.userId,
+          actorName: user?.username || "",
+          ipAddress: req.ip || "",
+          details: `Document "${doc.title}" moved to folder ${req.body.folderId || "root"}`,
+        });
+      }
+      if (!changedFields.includes("legalHold") && !changedFields.includes("folderId")) {
+        await storage.createDocumentAuditLog({
+          documentId: req.params.id,
+          companyId: doc.companyId,
+          action: "updated",
+          actorId: (req.session as any)?.userId,
+          actorName: user?.username || "",
+          ipAddress: req.ip || "",
+          details: `Document "${doc.title}" updated: ${changedFields.join(", ")}`,
+        });
+      }
       res.json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update document") }); }
   });
@@ -8567,6 +8664,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!doc) return res.status(404).json({ message: "Document not found" });
       const sessionCompanyId = await getSessionCompanyId(req);
       if (doc.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
+      if (doc.legalHold) return res.status(403).json({ message: "Cannot delete document under legal hold" });
+      if (doc.folderId) {
+        const folder = await storage.getDocumentFolder(doc.folderId);
+        if (folder?.legalHold) return res.status(403).json({ message: "Cannot delete document in a folder under legal hold" });
+      }
+      const user = await storage.getUser((req.session as any)?.userId);
+      await storage.createDocumentAuditLog({
+        documentId: req.params.id,
+        companyId: doc.companyId,
+        action: "deleted",
+        actorId: (req.session as any)?.userId,
+        actorName: user?.username || "",
+        ipAddress: req.ip || "",
+        details: `Document "${doc.title}" (id: ${doc.id}) deleted permanently`,
+      });
       await storage.deleteDocument(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete document") }); }
@@ -8586,7 +8698,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/document-folders/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
+      const folder = await storage.getDocumentFolder(req.params.id);
+      if (!folder) return res.status(404).json({ message: "Folder not found" });
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (folder.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
+      if (folder.legalHold) return res.status(403).json({ message: "Cannot delete folder under legal hold" });
       await storage.deleteDocumentFolder(req.params.id);
+      const user = await storage.getUser((req.session as any)?.userId);
+      await storage.createDocumentAuditLog({
+        companyId: folder.companyId,
+        action: "folder_deleted",
+        actorId: (req.session as any)?.userId,
+        actorName: user?.username || "",
+        ipAddress: req.ip || "",
+        details: `Folder "${folder.name}" deleted`,
+      });
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete folder") }); }
   });
@@ -8602,7 +8728,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/document-versions", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
     try {
+      if (!req.body.sha256 || typeof req.body.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(req.body.sha256)) {
+        return res.status(400).json({ message: "Valid SHA-256 hash (64 hex chars) is required for document version integrity. Use the /api/documents/:id/upload endpoint for file uploads." });
+      }
       const r = await storage.createDocumentVersion(req.body);
+      const doc = r.documentId ? await storage.getDocument(r.documentId) : null;
+      if (doc) {
+        const user = await storage.getUser((req.session as any)?.userId);
+        await storage.createDocumentAuditLog({
+          documentId: r.documentId,
+          companyId: doc.companyId,
+          action: "version_created",
+          actorId: (req.session as any)?.userId,
+          actorName: user?.username || "",
+          ipAddress: req.ip || "",
+          details: `Version ${r.versionNumber} created for "${doc.title}" (sha256: ${r.sha256})`,
+        });
+      }
       res.status(201).json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create version") }); }
   });
@@ -8617,12 +8759,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (doc.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
       const versions = await storage.getDocumentVersions(req.params.id);
       const newVersionNum = versions.length > 0 ? Math.max(...versions.map(v => v.versionNumber)) + 1 : 1;
+      const sha256Hash = await computeFileSha256(req.file.path);
+      if (!sha256Hash) return res.status(500).json({ message: "Failed to compute file integrity hash" });
       const version = await storage.createDocumentVersion({
         documentId: req.params.id,
         versionNumber: newVersionNum,
         fileName: req.file.originalname,
         fileUrl,
         fileSize: req.file.size,
+        sha256: sha256Hash,
         changeNote: req.body.changeNote || "",
         uploadedBy: (req.session as any)?.username || "",
       });
@@ -8689,14 +8834,39 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/document-acls", requireAuth, requireRole("admin"), blockDemoWrites, enforceCompanyScope("body"), async (req, res) => {
     try {
-      const r = await storage.createDocumentAcl({ ...req.body, companyId: (req as any)._companyId });
+      const companyId = (req as any)._companyId;
+      const r = await storage.createDocumentAcl({ ...req.body, companyId });
+      const user = await storage.getUser((req.session as any)?.userId);
+      await storage.createDocumentAuditLog({
+        documentId: req.body.documentId || null,
+        companyId,
+        action: "acl_granted",
+        actorId: (req.session as any)?.userId,
+        actorName: user?.username || "",
+        ipAddress: req.ip || "",
+        details: `ACL granted: ${req.body.permission} to ${req.body.principalType}:${req.body.principalId}`,
+      });
       res.status(201).json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create ACL") }); }
   });
 
   app.delete("/api/document-acls/:id", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
     try {
+      const acl = await storage.getDocumentAcl(req.params.id);
+      if (!acl) return res.status(404).json({ message: "ACL not found" });
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (acl.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
       await storage.deleteDocumentAcl(req.params.id);
+      const user = await storage.getUser((req.session as any)?.userId);
+      await storage.createDocumentAuditLog({
+        documentId: acl.documentId || undefined,
+        companyId: acl.companyId,
+        action: "acl_revoked",
+        actorId: (req.session as any)?.userId,
+        actorName: user?.username || "",
+        ipAddress: req.ip || "",
+        details: `ACL entry ${req.params.id} revoked (${acl.permission} for ${acl.principalType}:${acl.principalId})`,
+      });
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete ACL") }); }
   });
@@ -8729,6 +8899,161 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await storage.deleteDocumentRetentionPolicy(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete retention policy") }); }
+  });
+
+  app.post("/api/document-retention-policies/seed", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existing = await storage.getDocumentRetentionPolicies(companyId);
+      const seedData = getDefaultRetentionPolicySeedData(companyId);
+      const created: DocumentRetentionPolicy[] = [];
+      for (const policy of seedData) {
+        const alreadyExists = existing.some(e => e.documentType === policy.documentType);
+        if (!alreadyExists) {
+          const r = await storage.createDocumentRetentionPolicy(policy);
+          created.push(r);
+        }
+      }
+      const user = await storage.getUser((req.session as any)?.userId);
+      await storage.createDocumentAuditLog({
+        companyId,
+        action: "retention_policies_seeded",
+        actorId: (req.session as any)?.userId,
+        actorName: user?.username || "",
+        ipAddress: req.ip || "",
+        details: `${created.length} default retention policies seeded`,
+      });
+      res.status(201).json({ seeded: created.length, policies: created });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to seed retention policies") }); }
+  });
+
+  app.post("/api/document-retention/disposition-review", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const allDocs = await storage.getDocuments(companyId);
+      const policies = await storage.getDocumentRetentionPolicies(companyId);
+      const now = new Date();
+      const flagged: Array<{ documentId: string; title: string; dispositionDate: string }> = [];
+      const skippedLegalHold: Array<{ documentId: string; title: string; reason: string }> = [];
+
+      for (const doc of allDocs) {
+        if (doc.dispositionStatus === "disposed" || doc.dispositionStatus === "archived") continue;
+
+        let dispositionDate: Date | null = doc.dispositionDate ? new Date(doc.dispositionDate) : null;
+
+        if (!dispositionDate) {
+          const matchingPolicy = policies.find(p => p.documentType === doc.documentType && p.isActive);
+          if (matchingPolicy) {
+            const worker = doc.assignedToWorkerId ? await storage.getWorker(doc.assignedToWorkerId) : null;
+            dispositionDate = computeDispositionDate(
+              doc.documentType,
+              worker?.hireDate || null,
+              worker?.terminationDate || null,
+              doc.createdAt,
+              { retentionYears: matchingPolicy.retentionYears, retentionMonths: matchingPolicy.retentionMonths, retentionRule: matchingPolicy.retentionRule }
+            );
+          }
+        }
+
+        if (dispositionDate && dispositionDate <= now) {
+          if (doc.legalHold) {
+            skippedLegalHold.push({ documentId: doc.id, title: doc.title, reason: "legal_hold" });
+            continue;
+          }
+          if (doc.folderId) {
+            const folder = await storage.getDocumentFolder(doc.folderId);
+            if (folder?.legalHold) {
+              skippedLegalHold.push({ documentId: doc.id, title: doc.title, reason: "folder_legal_hold" });
+              continue;
+            }
+          }
+
+          await storage.updateDocument(doc.id, {
+            dispositionDate,
+            dispositionStatus: "pending_review",
+          });
+
+          await storage.createDocumentAuditLog({
+            documentId: doc.id,
+            companyId,
+            action: "disposition_flagged",
+            actorId: "system",
+            actorName: "Retention Engine",
+            details: `Document flagged for disposition review. Retention expired: ${dispositionDate.toISOString()}`,
+          });
+
+          flagged.push({ documentId: doc.id, title: doc.title, dispositionDate: dispositionDate.toISOString() });
+        }
+      }
+
+      const user = await storage.getUser((req.session as any)?.userId);
+      await storage.createDocumentAuditLog({
+        companyId,
+        action: "disposition_review_batch",
+        actorId: (req.session as any)?.userId,
+        actorName: user?.username || "",
+        ipAddress: req.ip || "",
+        details: `Disposition review completed: ${flagged.length} flagged, ${skippedLegalHold.length} skipped (legal hold)`,
+      });
+
+      res.json({ flagged: flagged.length, skippedLegalHold: skippedLegalHold.length, documents: flagged, skipped: skippedLegalHold });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to run disposition review") }); }
+  });
+
+  app.post("/api/documents/:id/disposition", requireAuth, requireRole("admin"), blockDemoWrites, async (req, res) => {
+    try {
+      const doc = await storage.getDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Document not found" });
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (doc.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
+      if (doc.legalHold) return res.status(403).json({ message: "Cannot dispose document under legal hold" });
+      if (doc.folderId) {
+        const folder = await storage.getDocumentFolder(doc.folderId);
+        if (folder?.legalHold) return res.status(403).json({ message: "Cannot dispose document in a folder under legal hold" });
+      }
+
+      const action = req.body.action;
+      if (!["reviewed", "archived", "deleted"].includes(action)) {
+        return res.status(400).json({ message: "Invalid disposition action. Must be one of: reviewed, archived, deleted" });
+      }
+
+      const user = await storage.getUser((req.session as any)?.userId);
+      await storage.createDocumentAuditLog({
+        documentId: req.params.id,
+        companyId: doc.companyId,
+        action: `disposition_${action}`,
+        actorId: (req.session as any)?.userId,
+        actorName: user?.username || "",
+        ipAddress: req.ip || "",
+        details: `Document "${doc.title}" (id: ${doc.id}) disposition action: ${action}`,
+      });
+
+      if (action === "deleted") {
+        await storage.deleteDocument(req.params.id);
+      } else {
+        await storage.updateDocument(req.params.id, {
+          dispositionStatus: action,
+          status: action === "archived" ? "archived" : doc.status,
+        });
+      }
+
+      res.json({ message: `Document disposition: ${action}` });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to process disposition") }); }
+  });
+
+  app.get("/api/document-retention/compute", requireAuth, async (req, res) => {
+    try {
+      const { documentType, hireDate, terminationDate, createdAt } = req.query;
+      const result = computeDispositionDate(
+        documentType as string,
+        hireDate as string || null,
+        terminationDate as string || null,
+        createdAt as string || null
+      );
+      res.json({ documentType, dispositionDate: result ? result.toISOString() : null });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to compute disposition date") }); }
   });
 
   app.get("/api/onboarding-packets", requireAuth, enforceCompanyScope("query"), async (req, res) => {

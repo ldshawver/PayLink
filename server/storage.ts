@@ -589,6 +589,7 @@ export interface IStorage {
   deleteRecurringBillingProfile(id: string): Promise<void>;
 
   getDocumentFolders(companyId: string): Promise<DocumentFolder[]>;
+  getDocumentFolder(id: string): Promise<DocumentFolder | undefined>;
   createDocumentFolder(data: InsertDocumentFolder): Promise<DocumentFolder>;
   updateDocumentFolder(id: string, data: Partial<DocumentFolder>): Promise<DocumentFolder | undefined>;
   deleteDocumentFolder(id: string): Promise<void>;
@@ -628,6 +629,7 @@ export interface IStorage {
   updateWebhookEvent(id: string, data: Partial<WebhookEvent>): Promise<WebhookEvent | undefined>;
 
   getDocumentAcls(companyId: string): Promise<DocumentAcl[]>;
+  getDocumentAcl(id: string): Promise<DocumentAcl | undefined>;
   createDocumentAcl(data: InsertDocumentAcl): Promise<DocumentAcl>;
   deleteDocumentAcl(id: string): Promise<void>;
 
@@ -2687,6 +2689,10 @@ export class DatabaseStorage implements IStorage {
   async getDocumentFolders(companyId: string): Promise<DocumentFolder[]> {
     return db.select().from(documentFolders).where(eq(documentFolders.companyId, companyId)).orderBy(documentFolders.sortOrder);
   }
+  async getDocumentFolder(id: string): Promise<DocumentFolder | undefined> {
+    const [r] = await db.select().from(documentFolders).where(eq(documentFolders.id, id));
+    return r;
+  }
   async createDocumentFolder(data: InsertDocumentFolder): Promise<DocumentFolder> {
     const [r] = await db.insert(documentFolders).values(data).returning();
     return r;
@@ -2884,6 +2890,10 @@ export class DatabaseStorage implements IStorage {
 
   async getDocumentAcls(companyId: string): Promise<DocumentAcl[]> {
     return db.select().from(documentAcls).where(eq(documentAcls.companyId, companyId));
+  }
+  async getDocumentAcl(id: string): Promise<DocumentAcl | undefined> {
+    const [r] = await db.select().from(documentAcls).where(eq(documentAcls.id, id));
+    return r;
   }
   async createDocumentAcl(data: InsertDocumentAcl): Promise<DocumentAcl> {
     const [r] = await db.insert(documentAcls).values(data).returning();

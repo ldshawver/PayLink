@@ -2130,6 +2130,7 @@ export const documentVersions = pgTable("document_versions", {
   fileName: text("file_name").notNull(),
   fileUrl: text("file_url").notNull(),
   fileSize: integer("file_size"),
+  sha256: text("sha256").notNull(),
   changeNote: text("change_note"),
   uploadedBy: varchar("uploaded_by"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -2224,7 +2225,7 @@ export type InsertWebhookEvent = z.infer<typeof insertWebhookEventSchema>;
 // ── Document Audit Log ──────────────────────────────────────────
 export const documentAuditLogs = pgTable("document_audit_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  documentId: varchar("document_id").references(() => documents.id),
+  documentId: varchar("document_id").references(() => documents.id, { onDelete: "set null" }),
   signatureRequestId: varchar("signature_request_id"),
   companyId: varchar("company_id").notNull(),
   action: text("action").notNull(),
