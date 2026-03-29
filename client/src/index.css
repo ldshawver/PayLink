@@ -312,3 +312,26 @@
     inset: -1px;
   }
 }
+
+.page-transition-container {
+  will-change: opacity, transform;
+}
+
+:root {
+  --keyboard-height: 0px;
+}
+
+html.keyboard-open body {
+  padding-bottom: var(--keyboard-height);
+}
+
+html.keyboard-open main {
+  max-height: calc(100vh - var(--keyboard-height));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-transition-container {
+    transition: none !important;
+    transform: none !important;
+  }
+}

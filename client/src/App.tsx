@@ -38,12 +38,16 @@ import OnboardingTemplatesPage from "@/pages/onboarding-templates";
 import EngagementFeedPage from "@/pages/engagement-feed";
 import PortalOnboardingPage from "@/pages/portal-onboarding";
 import LoginPage from "@/pages/login";
+import NotificationSettingsPage from "@/pages/notification-settings";
 import { Loader2, Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useTrial } from "@/hooks/use-trial";
 import { TrialBanner } from "@/components/trial-banner";
 import { UpgradeModal } from "@/components/upgrade-modal";
+import { usePushNotifications } from "@/hooks/use-push-notifications";
+import { useBiometricAuth } from "@/hooks/use-biometric-auth";
+import { useKeyboardManager, usePageTransition, useAppLifecycle } from "@/hooks/use-native-platform";
 
 function RoleGuard({ roles, children }: { roles: string[]; children: React.ReactNode }) {
   const { user } = useAuth();
@@ -83,6 +87,7 @@ function AuthenticatedRouter() {
       <Route path="/engagement-feed">{() => <RoleGuard roles={["admin", "manager"]}><EngagementFeedPage /></RoleGuard>}</Route>
       <Route path="/print-expense-check" component={PrintExpenseCheckPage} />
       <Route path="/my-profile" component={MyProfilePage} />
+      <Route path="/notification-settings" component={NotificationSettingsPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -130,6 +135,14 @@ function AuthenticatedLayout() {
     "--sidebar-width": "16rem",
     "--sidebar-width-icon": "3rem",
   };
+  const [location] = useLocation();
+  const { containerRef, animateTransition } = usePageTransition();
+
+  useKeyboardManager();
+
+  useEffect(() => {
+    animateTransition(location);
+  }, [location, animateTransition]);
 
   return (
     <SidebarProvider style={style as React.CSSProperties}>
@@ -139,7 +152,9 @@ function AuthenticatedLayout() {
           <TrialBanner />
           <MobileHeader />
           <main className="flex-1 overflow-y-auto overflow-x-hidden">
-            <AuthenticatedRouter />
+            <div ref={containerRef} className="page-transition-container">
+              <AuthenticatedRouter />
+            </div>
           </main>
           <UpgradeModal />
         </div>
@@ -166,6 +181,31 @@ function OnboardingRedirect({ children }: { children: React.ReactNode }) {
   }, [isTrial, progressLoading, progress, location, setLocation]);
 
   return <>{children}</>;
+}
+
+function NativeFeatureInit() {
+  const { user } = useAuth();
+  const { setupPushListeners, requestPermission, registerToken, permissionState } = usePushNotifications();
+  const { isEnabled, restoreSession, enableBiometric, isAvailable } = useBiometricAuth();
+
+  useEffect(() => {
+    const cleanup = setupPushListeners();
+    return cleanup;
+  }, [setupPushListeners]);
+
+  useEffect(() => {
+    if (user && permissionState === "granted") {
+      registerToken();
+    }
+  }, [user, permissionState, registerToken]);
+
+  useAppLifecycle(() => {
+    if (!user && isEnabled) {
+      restoreSession();
+    }
+  });
+
+  return null;
 }
 
 function AppContent() {
@@ -204,6 +244,7 @@ function AppContent() {
 
   return (
     <OnboardingRedirect>
+      <NativeFeatureInit />
       <AuthenticatedLayout />
     </OnboardingRedirect>
   );

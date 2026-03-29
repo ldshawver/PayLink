@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useSearch } from "wouter";
+import { NativeFileUpload } from "@/components/native-file-upload";
 import {
   FolderOpen, FileText, Upload, Search, Plus, Trash2, Edit, Eye, Download,
   Shield, Clock, Filter, MoreVertical, ChevronRight, Tag, Lock, AlertTriangle,
@@ -342,7 +343,14 @@ function DocumentsTab({ companyId }: { companyId?: string }) {
           <div className="space-y-4">
             <div>
               <Label>File</Label>
-              <input type="file" ref={fileInputRef} onChange={e => { setSelectedFile(e.target.files?.[0] || null); if (e.target.files?.[0] && !uploadForm.title) setUploadForm(p => ({...p, title: e.target.files![0].name.replace(/\.[^.]+$/, "")})); }} className="block w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-medium file:bg-primary/10 file:text-primary hover:file:bg-primary/20 mt-1" data-testid="input-file-upload" />
+              <div className="flex items-center gap-3 mt-1">
+                <NativeFileUpload
+                  onFileSelected={(file) => { setSelectedFile(file); if (!uploadForm.title) setUploadForm(p => ({...p, title: file.name.replace(/\.[^.]+$/, "")})); }}
+                  accept="image/*,.pdf,.doc,.docx"
+                  label="Choose File"
+                />
+                {selectedFile && <span className="text-sm text-muted-foreground truncate">{selectedFile.name}</span>}
+              </div>
             </div>
             <div><Label>Title</Label><Input value={uploadForm.title} onChange={e => setUploadForm(p => ({...p, title: e.target.value}))} data-testid="input-doc-title" /></div>
             <div><Label>Description</Label><Textarea value={uploadForm.description} onChange={e => setUploadForm(p => ({...p, description: e.target.value}))} rows={2} data-testid="input-doc-desc" /></div>

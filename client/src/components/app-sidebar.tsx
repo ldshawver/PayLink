@@ -63,6 +63,7 @@ import {
   ClipboardCheck,
   LayoutTemplate,
   Rss,
+  Bell,
 } from "lucide-react";
 import {
   Sidebar,
@@ -323,6 +324,7 @@ const navSections: NavSection[] = [
       { title: "Qualifications", url: "/my-profile?tab=qualifications", icon: Zap },
       { title: "Languages", url: "/my-profile?tab=languages", icon: Languages },
       { title: "Memberships", url: "/my-profile?tab=memberships", icon: IdCard },
+      { title: "Notifications", url: "/notification-settings", icon: Bell },
     ],
   },
 ];
