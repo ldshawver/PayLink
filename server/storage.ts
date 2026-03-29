@@ -117,6 +117,8 @@ import {
   documentSignatureRequests, documentSigners, documentAuditLogs,
   automationRules, automationEvents, notifications, portalAccessTokens,
   documentAcls, documentRetentionPolicies, onboardingPackets, onboardingPacketSteps, invoiceApprovalWorkflows,
+  deals, onboardingTemplates, onboardingTemplateTasks, customerOnboardingProjects,
+  onboardingTasks, onboardingDocuments, engagementEvents, productApiKeys,
   type Customer, type InsertCustomer,
   type Invoice, type InsertInvoice,
   type InvoiceLineItem, type InsertInvoiceLineItem,
@@ -139,6 +141,14 @@ import {
   type OnboardingPacket, type InsertOnboardingPacket,
   type OnboardingPacketStep, type InsertOnboardingPacketStep,
   type InvoiceApprovalWorkflow, type InsertInvoiceApprovalWorkflow,
+  type Deal, type InsertDeal,
+  type OnboardingTemplate, type InsertOnboardingTemplate,
+  type OnboardingTemplateTask, type InsertOnboardingTemplateTask,
+  type CustomerOnboardingProject, type InsertCustomerOnboardingProject,
+  type OnboardingTask, type InsertOnboardingTask,
+  type OnboardingDocument, type InsertOnboardingDocument,
+  type EngagementEvent, type InsertEngagementEvent,
+  type ProductApiKey, type InsertProductApiKey,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -640,6 +650,51 @@ export interface IStorage {
 
   createPortalAccessToken(data: any): Promise<any>;
   getPortalAccessTokenByToken(token: string): Promise<any>;
+
+  getDeals(companyId: string): Promise<Deal[]>;
+  getDeal(id: string): Promise<Deal | undefined>;
+  createDeal(data: InsertDeal): Promise<Deal>;
+  updateDeal(id: string, data: Partial<Deal>): Promise<Deal | undefined>;
+  deleteDeal(id: string): Promise<void>;
+
+  getOnboardingTemplates(companyId: string): Promise<OnboardingTemplate[]>;
+  getOnboardingTemplate(id: string): Promise<OnboardingTemplate | undefined>;
+  createOnboardingTemplate(data: InsertOnboardingTemplate): Promise<OnboardingTemplate>;
+  updateOnboardingTemplate(id: string, data: Partial<OnboardingTemplate>): Promise<OnboardingTemplate | undefined>;
+  deleteOnboardingTemplate(id: string): Promise<void>;
+
+  getOnboardingTemplateTasks(templateId: string): Promise<OnboardingTemplateTask[]>;
+  createOnboardingTemplateTask(data: InsertOnboardingTemplateTask): Promise<OnboardingTemplateTask>;
+  updateOnboardingTemplateTask(id: string, data: Partial<OnboardingTemplateTask>): Promise<OnboardingTemplateTask | undefined>;
+  deleteOnboardingTemplateTask(id: string): Promise<void>;
+
+  getCustomerOnboardingProjects(companyId: string): Promise<CustomerOnboardingProject[]>;
+  getCustomerOnboardingProject(id: string): Promise<CustomerOnboardingProject | undefined>;
+  createCustomerOnboardingProject(data: InsertCustomerOnboardingProject): Promise<CustomerOnboardingProject>;
+  updateCustomerOnboardingProject(id: string, data: Partial<CustomerOnboardingProject>): Promise<CustomerOnboardingProject | undefined>;
+  deleteCustomerOnboardingProject(id: string): Promise<void>;
+
+  getOnboardingTasks(projectId: string): Promise<OnboardingTask[]>;
+  getOnboardingTask(id: string): Promise<OnboardingTask | undefined>;
+  createOnboardingTask(data: InsertOnboardingTask): Promise<OnboardingTask>;
+  updateOnboardingTask(id: string, data: Partial<OnboardingTask>): Promise<OnboardingTask | undefined>;
+  deleteOnboardingTask(id: string): Promise<void>;
+
+  getOnboardingDocuments(companyId: string, projectId?: string, templateId?: string): Promise<OnboardingDocument[]>;
+  createOnboardingDocument(data: InsertOnboardingDocument): Promise<OnboardingDocument>;
+  updateOnboardingDocument(id: string, data: Partial<OnboardingDocument>): Promise<OnboardingDocument | undefined>;
+  deleteOnboardingDocument(id: string): Promise<void>;
+
+  getEngagementEvents(companyId: string, customerId?: string): Promise<EngagementEvent[]>;
+  getEngagementEvent(id: string): Promise<EngagementEvent | undefined>;
+  createEngagementEvent(data: InsertEngagementEvent): Promise<EngagementEvent>;
+  deleteEngagementEvent(id: string): Promise<void>;
+
+  getProductApiKeys(companyId: string): Promise<ProductApiKey[]>;
+  getProductApiKeyByKey(apiKey: string): Promise<ProductApiKey | undefined>;
+  createProductApiKey(data: InsertProductApiKey): Promise<ProductApiKey>;
+  updateProductApiKey(id: string, data: Partial<ProductApiKey>): Promise<ProductApiKey | undefined>;
+  deleteProductApiKey(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2822,6 +2877,167 @@ export class DatabaseStorage implements IStorage {
   async updateInvoiceApprovalWorkflow(id: string, data: Partial<InvoiceApprovalWorkflow>): Promise<InvoiceApprovalWorkflow | undefined> {
     const [r] = await db.update(invoiceApprovalWorkflows).set({ ...data, updatedAt: new Date() }).where(eq(invoiceApprovalWorkflows.id, id)).returning();
     return r;
+  }
+
+  async getDeals(companyId: string): Promise<Deal[]> {
+    return db.select().from(deals).where(eq(deals.companyId, companyId)).orderBy(desc(deals.createdAt));
+  }
+  async getDeal(id: string): Promise<Deal | undefined> {
+    const [r] = await db.select().from(deals).where(eq(deals.id, id));
+    return r;
+  }
+  async createDeal(data: InsertDeal): Promise<Deal> {
+    const [r] = await db.insert(deals).values(data).returning();
+    return r;
+  }
+  async updateDeal(id: string, data: Partial<Deal>): Promise<Deal | undefined> {
+    const [r] = await db.update(deals).set({ ...data, updatedAt: new Date() }).where(eq(deals.id, id)).returning();
+    return r;
+  }
+  async deleteDeal(id: string): Promise<void> {
+    await db.update(customerOnboardingProjects).set({ dealId: null }).where(eq(customerOnboardingProjects.dealId, id));
+    await db.delete(deals).where(eq(deals.id, id));
+  }
+
+  async getOnboardingTemplates(companyId: string): Promise<OnboardingTemplate[]> {
+    return db.select().from(onboardingTemplates).where(eq(onboardingTemplates.companyId, companyId)).orderBy(desc(onboardingTemplates.createdAt));
+  }
+  async getOnboardingTemplate(id: string): Promise<OnboardingTemplate | undefined> {
+    const [r] = await db.select().from(onboardingTemplates).where(eq(onboardingTemplates.id, id));
+    return r;
+  }
+  async createOnboardingTemplate(data: InsertOnboardingTemplate): Promise<OnboardingTemplate> {
+    const [r] = await db.insert(onboardingTemplates).values(data).returning();
+    return r;
+  }
+  async updateOnboardingTemplate(id: string, data: Partial<OnboardingTemplate>): Promise<OnboardingTemplate | undefined> {
+    const [r] = await db.update(onboardingTemplates).set({ ...data, updatedAt: new Date() }).where(eq(onboardingTemplates.id, id)).returning();
+    return r;
+  }
+  async deleteOnboardingTemplate(id: string): Promise<void> {
+    const templateTasks = await db.select().from(onboardingTemplateTasks).where(eq(onboardingTemplateTasks.templateId, id));
+    for (const tt of templateTasks) {
+      await db.update(onboardingTasks).set({ templateTaskId: null }).where(eq(onboardingTasks.templateTaskId, tt.id));
+    }
+    await db.delete(onboardingTemplateTasks).where(eq(onboardingTemplateTasks.templateId, id));
+    await db.update(customerOnboardingProjects).set({ templateId: null }).where(eq(customerOnboardingProjects.templateId, id));
+    await db.update(onboardingDocuments).set({ templateId: null }).where(eq(onboardingDocuments.templateId, id));
+    await db.delete(onboardingTemplates).where(eq(onboardingTemplates.id, id));
+  }
+
+  async getOnboardingTemplateTasks(templateId: string): Promise<OnboardingTemplateTask[]> {
+    return db.select().from(onboardingTemplateTasks).where(eq(onboardingTemplateTasks.templateId, templateId)).orderBy(onboardingTemplateTasks.sortOrder);
+  }
+  async createOnboardingTemplateTask(data: InsertOnboardingTemplateTask): Promise<OnboardingTemplateTask> {
+    const [r] = await db.insert(onboardingTemplateTasks).values(data).returning();
+    return r;
+  }
+  async updateOnboardingTemplateTask(id: string, data: Partial<OnboardingTemplateTask>): Promise<OnboardingTemplateTask | undefined> {
+    const [r] = await db.update(onboardingTemplateTasks).set(data).where(eq(onboardingTemplateTasks.id, id)).returning();
+    return r;
+  }
+  async deleteOnboardingTemplateTask(id: string): Promise<void> {
+    await db.update(onboardingTasks).set({ templateTaskId: null }).where(eq(onboardingTasks.templateTaskId, id));
+    await db.delete(onboardingTemplateTasks).where(eq(onboardingTemplateTasks.id, id));
+  }
+
+  async getCustomerOnboardingProjects(companyId: string): Promise<CustomerOnboardingProject[]> {
+    return db.select().from(customerOnboardingProjects).where(eq(customerOnboardingProjects.companyId, companyId)).orderBy(desc(customerOnboardingProjects.createdAt));
+  }
+  async getCustomerOnboardingProject(id: string): Promise<CustomerOnboardingProject | undefined> {
+    const [r] = await db.select().from(customerOnboardingProjects).where(eq(customerOnboardingProjects.id, id));
+    return r;
+  }
+  async createCustomerOnboardingProject(data: InsertCustomerOnboardingProject): Promise<CustomerOnboardingProject> {
+    const [r] = await db.insert(customerOnboardingProjects).values(data).returning();
+    return r;
+  }
+  async updateCustomerOnboardingProject(id: string, data: Partial<CustomerOnboardingProject>): Promise<CustomerOnboardingProject | undefined> {
+    const [r] = await db.update(customerOnboardingProjects).set({ ...data, updatedAt: new Date() }).where(eq(customerOnboardingProjects.id, id)).returning();
+    return r;
+  }
+  async deleteCustomerOnboardingProject(id: string): Promise<void> {
+    await db.delete(onboardingTasks).where(eq(onboardingTasks.projectId, id));
+    await db.delete(onboardingDocuments).where(eq(onboardingDocuments.projectId, id));
+    await db.update(engagementEvents).set({ projectId: null }).where(eq(engagementEvents.projectId, id));
+    await db.delete(customerOnboardingProjects).where(eq(customerOnboardingProjects.id, id));
+  }
+
+  async getOnboardingTasks(projectId: string): Promise<OnboardingTask[]> {
+    return db.select().from(onboardingTasks).where(eq(onboardingTasks.projectId, projectId)).orderBy(onboardingTasks.sortOrder);
+  }
+  async getOnboardingTask(id: string): Promise<OnboardingTask | undefined> {
+    const [r] = await db.select().from(onboardingTasks).where(eq(onboardingTasks.id, id));
+    return r;
+  }
+  async createOnboardingTask(data: InsertOnboardingTask): Promise<OnboardingTask> {
+    const [r] = await db.insert(onboardingTasks).values(data).returning();
+    return r;
+  }
+  async updateOnboardingTask(id: string, data: Partial<OnboardingTask>): Promise<OnboardingTask | undefined> {
+    const [r] = await db.update(onboardingTasks).set({ ...data, updatedAt: new Date() }).where(eq(onboardingTasks.id, id)).returning();
+    return r;
+  }
+  async deleteOnboardingTask(id: string): Promise<void> {
+    await db.delete(onboardingTasks).where(eq(onboardingTasks.id, id));
+  }
+
+  async getOnboardingDocuments(companyId: string, projectId?: string, templateId?: string): Promise<OnboardingDocument[]> {
+    if (projectId) {
+      return db.select().from(onboardingDocuments).where(and(eq(onboardingDocuments.companyId, companyId), eq(onboardingDocuments.projectId, projectId))).orderBy(onboardingDocuments.sortOrder);
+    }
+    if (templateId) {
+      return db.select().from(onboardingDocuments).where(and(eq(onboardingDocuments.companyId, companyId), eq(onboardingDocuments.templateId, templateId))).orderBy(onboardingDocuments.sortOrder);
+    }
+    return db.select().from(onboardingDocuments).where(eq(onboardingDocuments.companyId, companyId)).orderBy(onboardingDocuments.sortOrder);
+  }
+  async createOnboardingDocument(data: InsertOnboardingDocument): Promise<OnboardingDocument> {
+    const [r] = await db.insert(onboardingDocuments).values(data).returning();
+    return r;
+  }
+  async updateOnboardingDocument(id: string, data: Partial<OnboardingDocument>): Promise<OnboardingDocument | undefined> {
+    const [r] = await db.update(onboardingDocuments).set({ ...data, updatedAt: new Date() }).where(eq(onboardingDocuments.id, id)).returning();
+    return r;
+  }
+  async deleteOnboardingDocument(id: string): Promise<void> {
+    await db.delete(onboardingDocuments).where(eq(onboardingDocuments.id, id));
+  }
+
+  async getEngagementEvents(companyId: string, customerId?: string): Promise<EngagementEvent[]> {
+    if (customerId) {
+      return db.select().from(engagementEvents).where(and(eq(engagementEvents.companyId, companyId), eq(engagementEvents.customerId, customerId))).orderBy(desc(engagementEvents.createdAt));
+    }
+    return db.select().from(engagementEvents).where(eq(engagementEvents.companyId, companyId)).orderBy(desc(engagementEvents.createdAt));
+  }
+  async getEngagementEvent(id: string): Promise<EngagementEvent | undefined> {
+    const [r] = await db.select().from(engagementEvents).where(eq(engagementEvents.id, id));
+    return r;
+  }
+  async createEngagementEvent(data: InsertEngagementEvent): Promise<EngagementEvent> {
+    const [r] = await db.insert(engagementEvents).values(data).returning();
+    return r;
+  }
+  async deleteEngagementEvent(id: string): Promise<void> {
+    await db.delete(engagementEvents).where(eq(engagementEvents.id, id));
+  }
+
+  async getProductApiKeys(companyId: string): Promise<ProductApiKey[]> {
+    return db.select().from(productApiKeys).where(eq(productApiKeys.companyId, companyId)).orderBy(desc(productApiKeys.createdAt));
+  }
+  async getProductApiKeyByKey(apiKey: string): Promise<ProductApiKey | undefined> {
+    const [r] = await db.select().from(productApiKeys).where(eq(productApiKeys.apiKey, apiKey));
+    return r;
+  }
+  async createProductApiKey(data: InsertProductApiKey): Promise<ProductApiKey> {
+    const [r] = await db.insert(productApiKeys).values(data).returning();
+    return r;
+  }
+  async updateProductApiKey(id: string, data: Partial<ProductApiKey>): Promise<ProductApiKey | undefined> {
+    const [r] = await db.update(productApiKeys).set(data).where(eq(productApiKeys.id, id)).returning();
+    return r;
+  }
+  async deleteProductApiKey(id: string): Promise<void> {
+    await db.delete(productApiKeys).where(eq(productApiKeys.id, id));
   }
 }
 

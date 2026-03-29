@@ -85,6 +85,7 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
     -   **Document Management:** Handles folders, documents, versioning, signature requests, and audit logs.
     -   **Automation Engine:** Rules-based automation with event logging.
     -   **Notifications System:** Company/user-scoped notification tracking.
+    -   **Customer Onboarding Hub:** Deal pipeline (Lead → Qualified → Proposal → Negotiation → Closed Won → Closed Lost) with automatic onboarding project creation on "Closed Won". Product-specific onboarding templates with task checklists. Onboarding task tracking with progress percentage. Engagement events for customer activity (internal + webhook). Public webhook endpoint (`POST /api/webhooks/product-events`) authenticated via product API keys. Tables: `deals`, `onboarding_templates`, `onboarding_template_tasks`, `customer_onboarding_projects`, `onboarding_tasks`, `onboarding_documents`, `engagement_events`, `product_api_keys`.
 
 **Database:**
 -   **Type:** PostgreSQL, managed with Drizzle ORM.

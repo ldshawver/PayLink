@@ -6,8 +6,9 @@ import multer from "multer";
 import { sendScheduleEmailNotification, sendScheduleSmsNotification } from "./notifications";
 import path from "path";
 import { db } from "./db";
-import { sql } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema } from "@shared/schema";
+import { sql, eq } from "drizzle-orm";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys } from "@shared/schema";
+import crypto from "crypto";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -145,7 +146,7 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/analytics/event", "/billing/activate"];
+  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/analytics/event", "/billing/activate", "/webhooks/product-events"];
   app.use("/api", (req, res, next) => {
     if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
     blockDemoWrites(req, res, next);
@@ -255,7 +256,8 @@ export async function registerRoutes(
 
   app.use("/api", (req, res, next) => {
     if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches"
-      || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")) {
+      || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
+      || req.path === "/webhooks/product-events") {
       return next();
     }
     requireAuth(req, res, next);
@@ -8966,6 +8968,654 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       res.status(201).json({ message: "Invoice submitted successfully", invoiceId: invoice.id });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to submit invoice") }); }
+  });
+
+  // ── Deals (Pipeline) ──────────────────────────────────────────
+
+  async function recalcProjectProgress(projectId: string) {
+    const allTasks = await storage.getOnboardingTasks(projectId);
+    const totalTasks = allTasks.length;
+    const completedTasks = allTasks.filter(t => t.status === "completed").length;
+    const progressPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+    let projectStatus = "in_progress";
+    if (totalTasks === 0 || completedTasks === 0) projectStatus = "not_started";
+    else if (completedTasks === totalTasks) projectStatus = "completed";
+    await storage.updateCustomerOnboardingProject(projectId, {
+      progressPercentage,
+      status: projectStatus,
+      ...(projectStatus === "completed" ? { completedAt: new Date() } : {}),
+    });
+  }
+
+  app.get("/api/deals", requireAuth, enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const deals = await storage.getDeals(companyId);
+      res.json(deals);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch deals") }); }
+  });
+
+  app.get("/api/deals/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const deal = await storage.getDeal(req.params.id);
+      if (!deal) return res.status(404).json({ message: "Deal not found" });
+      if (deal.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      res.json(deal);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch deal") }); }
+  });
+
+  app.post("/api/deals", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      if (req.body.customerId) {
+        const customer = await storage.getCustomer(req.body.customerId);
+        if (!customer || customer.companyId !== companyId) return res.status(403).json({ message: "Customer does not belong to your company" });
+      }
+      const data = { ...req.body, companyId };
+      const deal = await storage.createDeal(data);
+      res.status(201).json(deal);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create deal") }); }
+  });
+
+  app.patch("/api/deals/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existing = await storage.getDeal(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Deal not found" });
+      if (existing.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+
+      const validDealStages = ["lead", "qualified", "proposal", "negotiation", "closed_won", "closed_lost"];
+      if (req.body.stage && !validDealStages.includes(req.body.stage)) {
+        return res.status(400).json({ message: `Invalid stage. Must be one of: ${validDealStages.join(", ")}` });
+      }
+      const previousStage = existing.stage;
+      const newStage = req.body.stage;
+      const allowedFields = ["title", "description", "stage", "productName", "value", "currency", "assignedTo", "expectedCloseDate", "lostReason", "notes"];
+      const data: Record<string, any> = {};
+      for (const key of allowedFields) { if (req.body[key] !== undefined) data[key] = req.body[key]; }
+      if (newStage === "closed_won" && previousStage !== "closed_won") {
+        data.closedAt = new Date();
+      }
+      if (newStage === "closed_lost" && previousStage !== "closed_lost") {
+        data.closedAt = new Date();
+      }
+
+      const deal = await storage.updateDeal(req.params.id, data);
+
+      if (newStage === "closed_won" && previousStage !== "closed_won" && deal) {
+        const existingProjects = await storage.getCustomerOnboardingProjects(companyId);
+        const alreadyOnboarded = existingProjects.some(p => p.dealId === deal.id);
+        if (!alreadyOnboarded) {
+        let templateId: string | null = null;
+        if (deal.productName) {
+          const templates = await storage.getOnboardingTemplates(companyId);
+          const matched = templates.find(t => t.productName === deal.productName && t.isActive);
+          if (matched) templateId = matched.id;
+        }
+
+        const project = await storage.createCustomerOnboardingProject({
+          companyId,
+          customerId: deal.customerId,
+          dealId: deal.id,
+          templateId,
+          productName: deal.productName || undefined,
+          title: `Onboarding: ${deal.title}`,
+          status: "not_started",
+          progressPercentage: 0,
+          assignedTo: deal.assignedTo || undefined,
+          createdBy: req.session?.userId || undefined,
+        });
+
+        if (templateId) {
+          const templateTasks = await storage.getOnboardingTemplateTasks(templateId);
+          for (const tt of templateTasks) {
+            await storage.createOnboardingTask({
+              projectId: project.id,
+              templateTaskId: tt.id,
+              title: tt.title,
+              description: tt.description || undefined,
+              category: tt.category || undefined,
+              sortOrder: tt.sortOrder ?? 0,
+              status: "pending",
+              isMandatory: tt.isMandatory ?? true,
+            });
+          }
+
+          const templateDocs = await storage.getOnboardingDocuments(companyId, undefined, templateId);
+          for (const doc of templateDocs) {
+            await storage.createOnboardingDocument({
+              projectId: project.id,
+              templateId: doc.templateId || undefined,
+              companyId,
+              title: doc.title,
+              description: doc.description || undefined,
+              documentType: doc.documentType,
+              url: doc.url || undefined,
+              fileSize: doc.fileSize ?? undefined,
+              sortOrder: doc.sortOrder ?? 0,
+              createdBy: req.session?.userId || undefined,
+            });
+          }
+        }
+        }
+      }
+
+      res.json(deal);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update deal") }); }
+  });
+
+  app.delete("/api/deals/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existing = await storage.getDeal(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Deal not found" });
+      if (existing.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteDeal(req.params.id);
+      res.json({ message: "Deal deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete deal") }); }
+  });
+
+  // ── Onboarding Templates ──────────────────────────────────────────
+
+  app.get("/api/onboarding-templates", requireAuth, enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const templates = await storage.getOnboardingTemplates(companyId);
+      res.json(templates);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch onboarding templates") }); }
+  });
+
+  app.get("/api/onboarding-templates/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const template = await storage.getOnboardingTemplate(req.params.id);
+      if (!template) return res.status(404).json({ message: "Template not found" });
+      if (template.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      const tasks = await storage.getOnboardingTemplateTasks(req.params.id);
+      res.json({ ...template, tasks });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch onboarding template") }); }
+  });
+
+  app.post("/api/onboarding-templates", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const { tasks, ...templateData } = req.body;
+      const template = await storage.createOnboardingTemplate({ ...templateData, companyId, createdBy: req.session?.userId });
+      if (tasks && Array.isArray(tasks)) {
+        for (let i = 0; i < tasks.length; i++) {
+          await storage.createOnboardingTemplateTask({ ...tasks[i], templateId: template.id, sortOrder: tasks[i].sortOrder ?? i });
+        }
+      }
+      const createdTasks = await storage.getOnboardingTemplateTasks(template.id);
+      res.status(201).json({ ...template, tasks: createdTasks });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create onboarding template") }); }
+  });
+
+  app.patch("/api/onboarding-templates/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existing = await storage.getOnboardingTemplate(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Template not found" });
+      if (existing.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      const { tasks, ...rawTemplateData } = req.body;
+      const templateAllowed = ["name", "description", "productName", "isActive"];
+      const templateData: Record<string, any> = {};
+      for (const key of templateAllowed) { if (rawTemplateData[key] !== undefined) templateData[key] = rawTemplateData[key]; }
+      const template = await storage.updateOnboardingTemplate(req.params.id, templateData);
+      if (tasks && Array.isArray(tasks)) {
+        const existingTasks = await storage.getOnboardingTemplateTasks(req.params.id);
+        const existingTaskIds = new Set(existingTasks.map((et) => et.id));
+        const incomingIds = tasks.filter((t: any) => t.id).map((t: any) => t.id);
+        for (const incomingId of incomingIds) {
+          if (!existingTaskIds.has(incomingId)) {
+            return res.status(403).json({ message: "Task ID does not belong to this template" });
+          }
+        }
+        for (const et of existingTasks) {
+          if (!incomingIds.includes(et.id)) {
+            await storage.deleteOnboardingTemplateTask(et.id);
+          }
+        }
+        const taskFieldAllowlist = ["title", "description", "category", "sortOrder", "isMandatory", "estimatedMinutes", "resourceUrl", "resourceType"];
+        for (let i = 0; i < tasks.length; i++) {
+          const t = tasks[i];
+          const safeFields: Record<string, any> = { sortOrder: t.sortOrder ?? i };
+          for (const key of taskFieldAllowlist) { if (t[key] !== undefined) safeFields[key] = t[key]; }
+          if (t.id) {
+            await storage.updateOnboardingTemplateTask(t.id, safeFields);
+          } else {
+            await storage.createOnboardingTemplateTask({ ...safeFields, templateId: req.params.id });
+          }
+        }
+      }
+      const updatedTasks = await storage.getOnboardingTemplateTasks(req.params.id);
+      res.json({ ...template, tasks: updatedTasks });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update onboarding template") }); }
+  });
+
+  app.delete("/api/onboarding-templates/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existing = await storage.getOnboardingTemplate(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Template not found" });
+      if (existing.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteOnboardingTemplate(req.params.id);
+      res.json({ message: "Template deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete onboarding template") }); }
+  });
+
+  // ── Onboarding Template Tasks ──────────────────────────────────────────
+
+  app.get("/api/onboarding-templates/:templateId/tasks", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const template = await storage.getOnboardingTemplate(req.params.templateId);
+      if (!template) return res.status(404).json({ message: "Template not found" });
+      if (template.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      const tasks = await storage.getOnboardingTemplateTasks(req.params.templateId);
+      res.json(tasks);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch template tasks") }); }
+  });
+
+  app.post("/api/onboarding-templates/:templateId/tasks", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const template = await storage.getOnboardingTemplate(req.params.templateId);
+      if (!template) return res.status(404).json({ message: "Template not found" });
+      if (template.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      const task = await storage.createOnboardingTemplateTask({ ...req.body, templateId: req.params.templateId });
+      res.status(201).json(task);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create template task") }); }
+  });
+
+  app.patch("/api/onboarding-template-tasks/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existingTask = (await db.select().from(onboardingTemplateTasks).where(eq(onboardingTemplateTasks.id, req.params.id)))[0];
+      if (!existingTask) return res.status(404).json({ message: "Template task not found" });
+      const template = await storage.getOnboardingTemplate(existingTask.templateId);
+      if (!template || template.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      const taskAllowed = ["title", "description", "category", "sortOrder", "isMandatory", "estimatedMinutes", "resourceUrl", "resourceType"];
+      const taskData: Record<string, any> = {};
+      for (const key of taskAllowed) { if (req.body[key] !== undefined) taskData[key] = req.body[key]; }
+      const task = await storage.updateOnboardingTemplateTask(req.params.id, taskData);
+      res.json(task);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update template task") }); }
+  });
+
+  app.delete("/api/onboarding-template-tasks/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existingTask = (await db.select().from(onboardingTemplateTasks).where(eq(onboardingTemplateTasks.id, req.params.id)))[0];
+      if (!existingTask) return res.status(404).json({ message: "Template task not found" });
+      const template = await storage.getOnboardingTemplate(existingTask.templateId);
+      if (!template || template.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteOnboardingTemplateTask(req.params.id);
+      res.json({ message: "Template task deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete template task") }); }
+  });
+
+  // ── Customer Onboarding Projects ──────────────────────────────────────────
+
+  app.get("/api/onboarding-projects", requireAuth, enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const projects = await storage.getCustomerOnboardingProjects(companyId);
+      res.json(projects);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch onboarding projects") }); }
+  });
+
+  app.get("/api/onboarding-projects/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const project = await storage.getCustomerOnboardingProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Onboarding project not found" });
+      if (project.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      const tasks = await storage.getOnboardingTasks(req.params.id);
+      const totalTasks = tasks.length;
+      const completedTasks = tasks.filter(t => t.status === "completed").length;
+      const progressPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+      res.json({ ...project, tasks, progressPercentage, totalTasks, completedTasks });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch onboarding project") }); }
+  });
+
+  app.post("/api/onboarding-projects", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      if (req.body.customerId) {
+        const customer = await storage.getCustomer(req.body.customerId);
+        if (!customer || customer.companyId !== companyId) return res.status(403).json({ message: "Customer does not belong to your company" });
+      }
+      if (req.body.dealId) {
+        const deal = await storage.getDeal(req.body.dealId);
+        if (!deal || deal.companyId !== companyId) return res.status(403).json({ message: "Deal does not belong to your company" });
+      }
+      if (req.body.templateId) {
+        const template = await storage.getOnboardingTemplate(req.body.templateId);
+        if (!template || template.companyId !== companyId) return res.status(403).json({ message: "Template does not belong to your company" });
+      }
+      const project = await storage.createCustomerOnboardingProject({ ...req.body, companyId, createdBy: req.session?.userId });
+      res.status(201).json(project);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create onboarding project") }); }
+  });
+
+  app.patch("/api/onboarding-projects/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existing = await storage.getCustomerOnboardingProject(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Onboarding project not found" });
+      if (existing.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      const validProjectStatuses = ["not_started", "in_progress", "completed", "on_hold", "cancelled"];
+      if (req.body.status && !validProjectStatuses.includes(req.body.status)) {
+        return res.status(400).json({ message: `Invalid status. Must be one of: ${validProjectStatuses.join(", ")}` });
+      }
+      const projectAllowed = ["title", "status", "productName", "assignedTo", "startDate", "targetCompletionDate", "notes"];
+      const projectData: Record<string, any> = {};
+      for (const key of projectAllowed) { if (req.body[key] !== undefined) projectData[key] = req.body[key]; }
+      const project = await storage.updateCustomerOnboardingProject(req.params.id, projectData);
+      res.json(project);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update onboarding project") }); }
+  });
+
+  app.delete("/api/onboarding-projects/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existing = await storage.getCustomerOnboardingProject(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Onboarding project not found" });
+      if (existing.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteCustomerOnboardingProject(req.params.id);
+      res.json({ message: "Onboarding project deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete onboarding project") }); }
+  });
+
+  // ── Onboarding Tasks ──────────────────────────────────────────
+
+  app.get("/api/onboarding-projects/:projectId/tasks", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const project = await storage.getCustomerOnboardingProject(req.params.projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      const tasks = await storage.getOnboardingTasks(req.params.projectId);
+      res.json(tasks);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch onboarding tasks") }); }
+  });
+
+  app.post("/api/onboarding-projects/:projectId/tasks", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const project = await storage.getCustomerOnboardingProject(req.params.projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      const task = await storage.createOnboardingTask({ ...req.body, projectId: req.params.projectId });
+      await recalcProjectProgress(req.params.projectId);
+      res.status(201).json(task);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create onboarding task") }); }
+  });
+
+  app.patch("/api/onboarding-tasks/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existingTask = await storage.getOnboardingTask(req.params.id);
+      if (!existingTask) return res.status(404).json({ message: "Onboarding task not found" });
+      const project = await storage.getCustomerOnboardingProject(existingTask.projectId);
+      if (project && project.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      const validTaskStatuses = ["pending", "in_progress", "completed", "skipped", "blocked"];
+      if (req.body.status && !validTaskStatuses.includes(req.body.status)) {
+        return res.status(400).json({ message: `Invalid status. Must be one of: ${validTaskStatuses.join(", ")}` });
+      }
+      const onboardingTaskAllowed = ["title", "description", "category", "sortOrder", "status", "isMandatory", "assignedTo", "dueDate", "notes"];
+      const data: Record<string, any> = {};
+      for (const key of onboardingTaskAllowed) { if (req.body[key] !== undefined) data[key] = req.body[key]; }
+      if (data.status === "completed" && !data.completedAt) {
+        data.completedAt = new Date();
+        data.completedBy = req.session?.userId;
+      }
+      const task = await storage.updateOnboardingTask(req.params.id, data);
+      if (!task) return res.status(404).json({ message: "Onboarding task not found" });
+      await recalcProjectProgress(task.projectId);
+      res.json(task);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update onboarding task") }); }
+  });
+
+  app.delete("/api/onboarding-tasks/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existingTask = await storage.getOnboardingTask(req.params.id);
+      if (!existingTask) return res.status(404).json({ message: "Onboarding task not found" });
+      const project = await storage.getCustomerOnboardingProject(existingTask.projectId);
+      if (project && project.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      const taskProjectId = existingTask.projectId;
+      await storage.deleteOnboardingTask(req.params.id);
+      await recalcProjectProgress(taskProjectId);
+      res.json({ message: "Onboarding task deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete onboarding task") }); }
+  });
+
+  // ── Onboarding Documents ──────────────────────────────────────────
+
+  app.get("/api/onboarding-documents", requireAuth, enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const projectId = req.query.projectId as string | undefined;
+      const templateId = req.query.templateId as string | undefined;
+      const docs = await storage.getOnboardingDocuments(companyId, projectId, templateId);
+      res.json(docs);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch onboarding documents") }); }
+  });
+
+  app.post("/api/onboarding-documents", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      if (req.body.projectId) {
+        const project = await storage.getCustomerOnboardingProject(req.body.projectId);
+        if (!project || project.companyId !== companyId) return res.status(403).json({ message: "Project does not belong to your company" });
+      }
+      if (req.body.templateId) {
+        const template = await storage.getOnboardingTemplate(req.body.templateId);
+        if (!template || template.companyId !== companyId) return res.status(403).json({ message: "Template does not belong to your company" });
+      }
+      const doc = await storage.createOnboardingDocument({ ...req.body, companyId, createdBy: req.session?.userId });
+      res.status(201).json(doc);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create onboarding document") }); }
+  });
+
+  app.patch("/api/onboarding-documents/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existingDoc = (await db.select().from(onboardingDocuments).where(eq(onboardingDocuments.id, req.params.id)))[0];
+      if (!existingDoc) return res.status(404).json({ message: "Onboarding document not found" });
+      if (existingDoc.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      const docAllowed = ["title", "description", "documentType", "url", "fileSize", "sortOrder"];
+      const docData: Record<string, any> = {};
+      for (const key of docAllowed) { if (req.body[key] !== undefined) docData[key] = req.body[key]; }
+      const doc = await storage.updateOnboardingDocument(req.params.id, docData);
+      res.json(doc);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update onboarding document") }); }
+  });
+
+  app.delete("/api/onboarding-documents/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existingDoc = (await db.select().from(onboardingDocuments).where(eq(onboardingDocuments.id, req.params.id)))[0];
+      if (!existingDoc) return res.status(404).json({ message: "Onboarding document not found" });
+      if (existingDoc.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteOnboardingDocument(req.params.id);
+      res.json({ message: "Onboarding document deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete onboarding document") }); }
+  });
+
+  // ── Engagement Events ──────────────────────────────────────────
+
+  app.get("/api/engagement-events", requireAuth, enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const customerId = req.query.customerId as string | undefined;
+      const events = await storage.getEngagementEvents(companyId, customerId);
+      res.json(events);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch engagement events") }); }
+  });
+
+  app.get("/api/engagement-events/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const event = await storage.getEngagementEvent(req.params.id);
+      if (!event) return res.status(404).json({ message: "Engagement event not found" });
+      if (event.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      res.json(event);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch engagement event") }); }
+  });
+
+  app.post("/api/engagement-events", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      if (req.body.customerId) {
+        const customer = await storage.getCustomer(req.body.customerId);
+        if (!customer || customer.companyId !== companyId) return res.status(403).json({ message: "Customer does not belong to your company" });
+      }
+      if (req.body.projectId) {
+        const project = await storage.getCustomerOnboardingProject(req.body.projectId);
+        if (!project || project.companyId !== companyId) return res.status(403).json({ message: "Project does not belong to your company" });
+      }
+      const event = await storage.createEngagementEvent({ ...req.body, companyId, eventSource: "internal" });
+      res.status(201).json(event);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create engagement event") }); }
+  });
+
+  app.delete("/api/engagement-events/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const event = await storage.getEngagementEvent(req.params.id);
+      if (!event) return res.status(404).json({ message: "Engagement event not found" });
+      if (event.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteEngagementEvent(req.params.id);
+      res.json({ message: "Engagement event deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete engagement event") }); }
+  });
+
+  // ── Public Webhook for Product Events ──────────────────────────────────────────
+
+  app.post("/api/webhooks/product-events", async (req, res) => {
+    try {
+      const apiKey = req.headers["x-api-key"] as string;
+      if (!apiKey) return res.status(401).json({ message: "API key required" });
+
+      const keyRecord = await storage.getProductApiKeyByKey(apiKey);
+      if (!keyRecord) return res.status(401).json({ message: "Invalid API key" });
+      if (!keyRecord.isActive) return res.status(403).json({ message: "API key is disabled" });
+
+      await storage.updateProductApiKey(keyRecord.id, { lastUsedAt: new Date() });
+
+      const { customerId, eventType, productName, metadata, description, occurredAt, projectId } = req.body;
+      if (!customerId || !eventType) {
+        return res.status(400).json({ message: "customerId and eventType are required" });
+      }
+
+      const customer = await storage.getCustomer(customerId);
+      if (!customer || customer.companyId !== keyRecord.companyId) {
+        return res.status(400).json({ message: "Customer not found or does not belong to the API key's company" });
+      }
+
+      if (projectId) {
+        const project = await storage.getCustomerOnboardingProject(projectId);
+        if (!project || project.companyId !== keyRecord.companyId) {
+          return res.status(400).json({ message: "Project not found or does not belong to the API key's company" });
+        }
+      }
+
+      const event = await storage.createEngagementEvent({
+        companyId: keyRecord.companyId,
+        customerId,
+        eventType,
+        eventSource: "webhook",
+        productName: productName || keyRecord.productName,
+        metadata: metadata ? (typeof metadata === "string" ? metadata : JSON.stringify(metadata)) : undefined,
+        description,
+        occurredAt: occurredAt ? new Date(occurredAt) : new Date(),
+        projectId: projectId || undefined,
+      });
+
+      res.status(201).json({ message: "Event recorded", eventId: event.id });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to process webhook event") }); }
+  });
+
+  // ── Product API Keys ──────────────────────────────────────────
+
+  app.get("/api/product-api-keys", requireAuth, enforceCompanyScope("query"), async (req, res) => {
+    try {
+      const companyId = (req as any)._companyId;
+      const keys = await storage.getProductApiKeys(companyId);
+      res.json(keys);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch product API keys") }); }
+  });
+
+  app.post("/api/product-api-keys", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const apiKey = `pk_${crypto.randomBytes(32).toString("hex")}`;
+      const key = await storage.createProductApiKey({
+        ...req.body,
+        companyId,
+        apiKey,
+        createdBy: req.session?.userId,
+      });
+      res.status(201).json(key);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create product API key") }); }
+  });
+
+  app.patch("/api/product-api-keys/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existingKey = (await db.select().from(productApiKeys).where(eq(productApiKeys.id, req.params.id)))[0];
+      if (!existingKey) return res.status(404).json({ message: "API key not found" });
+      if (existingKey.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      const keyAllowed = ["label", "isActive", "productName"];
+      const keyData: Record<string, any> = {};
+      for (const key of keyAllowed) { if (req.body[key] !== undefined) keyData[key] = req.body[key]; }
+      const updatedKey = await storage.updateProductApiKey(req.params.id, keyData);
+      res.json(updatedKey);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update product API key") }); }
+  });
+
+  app.delete("/api/product-api-keys/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const existingKey = (await db.select().from(productApiKeys).where(eq(productApiKeys.id, req.params.id)))[0];
+      if (!existingKey) return res.status(404).json({ message: "API key not found" });
+      if (existingKey.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      await storage.deleteProductApiKey(req.params.id);
+      res.json({ message: "API key deleted" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete product API key") }); }
   });
 
   return httpServer;

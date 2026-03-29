@@ -2376,3 +2376,170 @@ export const invoiceApprovalWorkflows = pgTable("invoice_approval_workflows", {
 export const insertInvoiceApprovalWorkflowSchema = createInsertSchema(invoiceApprovalWorkflows).omit({ id: true, createdAt: true, updatedAt: true });
 export type InvoiceApprovalWorkflow = typeof invoiceApprovalWorkflows.$inferSelect;
 export type InsertInvoiceApprovalWorkflow = z.infer<typeof insertInvoiceApprovalWorkflowSchema>;
+
+// ── Deals (Pipeline) ──────────────────────────────────────────
+export const deals = pgTable("deals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  customerId: varchar("customer_id").notNull().references(() => customers.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  stage: text("stage").notNull().default("lead"),
+  productName: text("product_name"),
+  value: numeric("value").default("0"),
+  currency: text("currency").default("USD"),
+  assignedTo: varchar("assigned_to"),
+  expectedCloseDate: date("expected_close_date"),
+  closedAt: timestamp("closed_at"),
+  lostReason: text("lost_reason"),
+  notes: text("notes"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertDealSchema = createInsertSchema(deals).omit({ id: true, createdAt: true, updatedAt: true });
+export type Deal = typeof deals.$inferSelect;
+export type InsertDeal = z.infer<typeof insertDealSchema>;
+
+// ── Onboarding Templates ──────────────────────────────────────────
+export const onboardingTemplates = pgTable("onboarding_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  productName: text("product_name"),
+  isActive: boolean("is_active").default(true),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertOnboardingTemplateSchema = createInsertSchema(onboardingTemplates).omit({ id: true, createdAt: true, updatedAt: true });
+export type OnboardingTemplate = typeof onboardingTemplates.$inferSelect;
+export type InsertOnboardingTemplate = z.infer<typeof insertOnboardingTemplateSchema>;
+
+// ── Onboarding Template Tasks ──────────────────────────────────────────
+export const onboardingTemplateTasks = pgTable("onboarding_template_tasks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  templateId: varchar("template_id").notNull().references(() => onboardingTemplates.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  category: text("category"),
+  sortOrder: integer("sort_order").default(0),
+  isMandatory: boolean("is_mandatory").default(true),
+  estimatedMinutes: integer("estimated_minutes"),
+  resourceUrl: text("resource_url"),
+  resourceType: text("resource_type"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertOnboardingTemplateTaskSchema = createInsertSchema(onboardingTemplateTasks).omit({ id: true, createdAt: true });
+export type OnboardingTemplateTask = typeof onboardingTemplateTasks.$inferSelect;
+export type InsertOnboardingTemplateTask = z.infer<typeof insertOnboardingTemplateTaskSchema>;
+
+// ── Customer Onboarding Projects ──────────────────────────────────────────
+export const customerOnboardingProjects = pgTable("customer_onboarding_projects", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  customerId: varchar("customer_id").notNull().references(() => customers.id),
+  dealId: varchar("deal_id").references(() => deals.id),
+  templateId: varchar("template_id").references(() => onboardingTemplates.id),
+  productName: text("product_name"),
+  title: text("title").notNull(),
+  status: text("status").notNull().default("not_started"),
+  progressPercentage: integer("progress_percentage").default(0),
+  assignedTo: varchar("assigned_to"),
+  startDate: date("start_date"),
+  targetCompletionDate: date("target_completion_date"),
+  completedAt: timestamp("completed_at"),
+  notes: text("notes"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertCustomerOnboardingProjectSchema = createInsertSchema(customerOnboardingProjects).omit({ id: true, createdAt: true, updatedAt: true });
+export type CustomerOnboardingProject = typeof customerOnboardingProjects.$inferSelect;
+export type InsertCustomerOnboardingProject = z.infer<typeof insertCustomerOnboardingProjectSchema>;
+
+// ── Onboarding Tasks ──────────────────────────────────────────
+export const onboardingTasks = pgTable("onboarding_tasks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => customerOnboardingProjects.id),
+  templateTaskId: varchar("template_task_id").references(() => onboardingTemplateTasks.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  category: text("category"),
+  sortOrder: integer("sort_order").default(0),
+  status: text("status").notNull().default("pending"),
+  isMandatory: boolean("is_mandatory").default(true),
+  assignedTo: varchar("assigned_to"),
+  dueDate: date("due_date"),
+  completedAt: timestamp("completed_at"),
+  completedBy: varchar("completed_by"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertOnboardingTaskSchema = createInsertSchema(onboardingTasks).omit({ id: true, createdAt: true, updatedAt: true });
+export type OnboardingTask = typeof onboardingTasks.$inferSelect;
+export type InsertOnboardingTask = z.infer<typeof insertOnboardingTaskSchema>;
+
+// ── Onboarding Documents ──────────────────────────────────────────
+export const onboardingDocuments = pgTable("onboarding_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").references(() => customerOnboardingProjects.id),
+  templateId: varchar("template_id").references(() => onboardingTemplates.id),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  documentType: text("document_type").notNull().default("document"),
+  url: text("url"),
+  fileSize: integer("file_size"),
+  sortOrder: integer("sort_order").default(0),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertOnboardingDocumentSchema = createInsertSchema(onboardingDocuments).omit({ id: true, createdAt: true, updatedAt: true });
+export type OnboardingDocument = typeof onboardingDocuments.$inferSelect;
+export type InsertOnboardingDocument = z.infer<typeof insertOnboardingDocumentSchema>;
+
+// ── Engagement Events ──────────────────────────────────────────
+export const engagementEvents = pgTable("engagement_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  customerId: varchar("customer_id").notNull().references(() => customers.id),
+  projectId: varchar("project_id").references(() => customerOnboardingProjects.id),
+  eventType: text("event_type").notNull(),
+  eventSource: text("event_source").notNull().default("internal"),
+  productName: text("product_name"),
+  metadata: text("metadata"),
+  description: text("description"),
+  occurredAt: timestamp("occurred_at").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertEngagementEventSchema = createInsertSchema(engagementEvents).omit({ id: true, createdAt: true });
+export type EngagementEvent = typeof engagementEvents.$inferSelect;
+export type InsertEngagementEvent = z.infer<typeof insertEngagementEventSchema>;
+
+// ── Product API Keys ──────────────────────────────────────────
+export const productApiKeys = pgTable("product_api_keys", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  productName: text("product_name").notNull(),
+  apiKey: text("api_key").notNull(),
+  label: text("label"),
+  isActive: boolean("is_active").default(true),
+  lastUsedAt: timestamp("last_used_at"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertProductApiKeySchema = createInsertSchema(productApiKeys).omit({ id: true, createdAt: true });
+export type ProductApiKey = typeof productApiKeys.$inferSelect;
+export type InsertProductApiKey = z.infer<typeof insertProductApiKeySchema>;

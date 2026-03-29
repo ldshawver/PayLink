@@ -1137,6 +1137,133 @@ app.use((req, res, next) => {
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    await run("deals table", sql`CREATE TABLE IF NOT EXISTS deals (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      customer_id VARCHAR NOT NULL REFERENCES customers(id),
+      title TEXT NOT NULL,
+      description TEXT,
+      stage TEXT NOT NULL DEFAULT 'lead',
+      product_name TEXT,
+      value NUMERIC DEFAULT '0',
+      currency TEXT DEFAULT 'USD',
+      assigned_to VARCHAR,
+      expected_close_date DATE,
+      closed_at TIMESTAMP,
+      lost_reason TEXT,
+      notes TEXT,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("onboarding_templates table", sql`CREATE TABLE IF NOT EXISTS onboarding_templates (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      name TEXT NOT NULL,
+      description TEXT,
+      product_name TEXT,
+      is_active BOOLEAN DEFAULT TRUE,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("onboarding_template_tasks table", sql`CREATE TABLE IF NOT EXISTS onboarding_template_tasks (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      template_id VARCHAR NOT NULL REFERENCES onboarding_templates(id),
+      title TEXT NOT NULL,
+      description TEXT,
+      category TEXT,
+      sort_order INTEGER DEFAULT 0,
+      is_mandatory BOOLEAN DEFAULT TRUE,
+      estimated_minutes INTEGER,
+      resource_url TEXT,
+      resource_type TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("customer_onboarding_projects table", sql`CREATE TABLE IF NOT EXISTS customer_onboarding_projects (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      customer_id VARCHAR NOT NULL REFERENCES customers(id),
+      deal_id VARCHAR REFERENCES deals(id),
+      template_id VARCHAR REFERENCES onboarding_templates(id),
+      product_name TEXT,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'not_started',
+      progress_percentage INTEGER DEFAULT 0,
+      assigned_to VARCHAR,
+      start_date DATE,
+      target_completion_date DATE,
+      completed_at TIMESTAMP,
+      notes TEXT,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("onboarding_tasks table", sql`CREATE TABLE IF NOT EXISTS onboarding_tasks (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      project_id VARCHAR NOT NULL REFERENCES customer_onboarding_projects(id),
+      template_task_id VARCHAR REFERENCES onboarding_template_tasks(id),
+      title TEXT NOT NULL,
+      description TEXT,
+      category TEXT,
+      sort_order INTEGER DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      is_mandatory BOOLEAN DEFAULT TRUE,
+      assigned_to VARCHAR,
+      due_date DATE,
+      completed_at TIMESTAMP,
+      completed_by VARCHAR,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("onboarding_documents table", sql`CREATE TABLE IF NOT EXISTS onboarding_documents (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      project_id VARCHAR REFERENCES customer_onboarding_projects(id),
+      template_id VARCHAR REFERENCES onboarding_templates(id),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      title TEXT NOT NULL,
+      description TEXT,
+      document_type TEXT NOT NULL DEFAULT 'document',
+      url TEXT,
+      file_size INTEGER,
+      sort_order INTEGER DEFAULT 0,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("engagement_events table", sql`CREATE TABLE IF NOT EXISTS engagement_events (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      customer_id VARCHAR NOT NULL REFERENCES customers(id),
+      project_id VARCHAR REFERENCES customer_onboarding_projects(id),
+      event_type TEXT NOT NULL,
+      event_source TEXT NOT NULL DEFAULT 'internal',
+      product_name TEXT,
+      metadata TEXT,
+      description TEXT,
+      occurred_at TIMESTAMP DEFAULT NOW(),
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("product_api_keys table", sql`CREATE TABLE IF NOT EXISTS product_api_keys (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      product_name TEXT NOT NULL,
+      api_key TEXT NOT NULL,
+      label TEXT,
+      is_active BOOLEAN DEFAULT TRUE,
+      last_used_at TIMESTAMP,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");
