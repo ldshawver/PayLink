@@ -115,6 +115,7 @@ import {
   customers, invoices, invoiceLineItems, invoiceTemplates, payments, savedPaymentMethods, paymentMethodConfigs,
   recurringBillingProfiles, documents, documentFolders, documentVersions,
   documentSignatureRequests, documentSigners, documentAuditLogs,
+  signaturePackages, webhookEvents,
   automationRules, automationEvents, notifications, portalAccessTokens,
   documentAcls, documentRetentionPolicies, onboardingPackets, onboardingPacketSteps, invoiceApprovalWorkflows,
   deals, onboardingTemplates, onboardingTemplateTasks, customerOnboardingProjects,
@@ -133,6 +134,8 @@ import {
   type DocumentSignatureRequest, type InsertDocumentSignatureRequest,
   type DocumentSigner, type InsertDocumentSigner,
   type DocumentAuditLog, type InsertDocumentAuditLog,
+  type SignaturePackage, type InsertSignaturePackage,
+  type WebhookEvent, type InsertWebhookEvent,
   type AutomationRule, type InsertAutomationRule,
   type AutomationEvent, type InsertAutomationEvent,
   type Notification, type InsertNotification,
@@ -611,6 +614,18 @@ export interface IStorage {
   createDocumentAuditLog(data: InsertDocumentAuditLog): Promise<DocumentAuditLog>;
   getDocumentAuditLogs(documentId: string): Promise<DocumentAuditLog[]>;
   getDocumentAuditLogsByCompany(companyId: string): Promise<DocumentAuditLog[]>;
+
+  getSignaturePackages(companyId: string): Promise<SignaturePackage[]>;
+  getSignaturePackage(id: string): Promise<SignaturePackage | undefined>;
+  getSignaturePackageByEnvelopeId(providerEnvelopeId: string, provider?: string): Promise<SignaturePackage | undefined>;
+  createSignaturePackage(data: InsertSignaturePackage): Promise<SignaturePackage>;
+  updateSignaturePackage(id: string, data: Partial<SignaturePackage>): Promise<SignaturePackage | undefined>;
+
+  getWebhookEvents(provider?: string): Promise<WebhookEvent[]>;
+  getWebhookEventsByCompany(companyId: string, provider?: string): Promise<WebhookEvent[]>;
+  getWebhookEventByProviderEventId(providerEventId: string): Promise<WebhookEvent | undefined>;
+  createWebhookEvent(data: InsertWebhookEvent): Promise<WebhookEvent>;
+  updateWebhookEvent(id: string, data: Partial<WebhookEvent>): Promise<WebhookEvent | undefined>;
 
   getDocumentAcls(companyId: string): Promise<DocumentAcl[]>;
   createDocumentAcl(data: InsertDocumentAcl): Promise<DocumentAcl>;
@@ -2750,6 +2765,64 @@ export class DatabaseStorage implements IStorage {
   }
   async getDocumentAuditLogs(documentId: string): Promise<DocumentAuditLog[]> {
     return db.select().from(documentAuditLogs).where(eq(documentAuditLogs.documentId, documentId)).orderBy(desc(documentAuditLogs.createdAt));
+  }
+
+  // ── Signature Packages ──────────────────────────────────────────
+  async getSignaturePackages(companyId: string): Promise<SignaturePackage[]> {
+    return db.select().from(signaturePackages).where(eq(signaturePackages.companyId, companyId)).orderBy(desc(signaturePackages.createdAt));
+  }
+  async getSignaturePackage(id: string): Promise<SignaturePackage | undefined> {
+    const [r] = await db.select().from(signaturePackages).where(eq(signaturePackages.id, id));
+    return r;
+  }
+  async getSignaturePackageByEnvelopeId(providerEnvelopeId: string, provider?: string): Promise<SignaturePackage | undefined> {
+    const conditions = [eq(signaturePackages.providerEnvelopeId, providerEnvelopeId)];
+    if (provider) {
+      conditions.push(eq(signaturePackages.provider, provider));
+    }
+    const [r] = await db.select().from(signaturePackages).where(and(...conditions));
+    return r;
+  }
+  async createSignaturePackage(data: InsertSignaturePackage): Promise<SignaturePackage> {
+    const [r] = await db.insert(signaturePackages).values(data).returning();
+    return r;
+  }
+  async updateSignaturePackage(id: string, data: Partial<SignaturePackage>): Promise<SignaturePackage | undefined> {
+    const [r] = await db.update(signaturePackages).set({ ...data, updatedAt: new Date() }).where(eq(signaturePackages.id, id)).returning();
+    return r;
+  }
+
+  // ── Webhook Events ──────────────────────────────────────────
+  async getWebhookEvents(provider?: string): Promise<WebhookEvent[]> {
+    if (provider) {
+      return db.select().from(webhookEvents).where(eq(webhookEvents.provider, provider)).orderBy(desc(webhookEvents.createdAt));
+    }
+    return db.select().from(webhookEvents).orderBy(desc(webhookEvents.createdAt));
+  }
+  async getWebhookEventsByCompany(companyId: string, provider?: string): Promise<WebhookEvent[]> {
+    const companyEnvelopeIds = await db
+      .select({ providerEnvelopeId: signaturePackages.providerEnvelopeId })
+      .from(signaturePackages)
+      .where(eq(signaturePackages.companyId, companyId));
+    const envelopeIds = companyEnvelopeIds.map(r => r.providerEnvelopeId).filter(Boolean) as string[];
+    if (envelopeIds.length === 0) return [];
+    const conditions = [inArray(webhookEvents.envelopeId, envelopeIds)];
+    if (provider) {
+      conditions.push(eq(webhookEvents.provider, provider));
+    }
+    return db.select().from(webhookEvents).where(and(...conditions)).orderBy(desc(webhookEvents.createdAt));
+  }
+  async getWebhookEventByProviderEventId(providerEventId: string): Promise<WebhookEvent | undefined> {
+    const [r] = await db.select().from(webhookEvents).where(eq(webhookEvents.providerEventId, providerEventId));
+    return r;
+  }
+  async createWebhookEvent(data: InsertWebhookEvent): Promise<WebhookEvent> {
+    const [r] = await db.insert(webhookEvents).values(data).returning();
+    return r;
+  }
+  async updateWebhookEvent(id: string, data: Partial<WebhookEvent>): Promise<WebhookEvent | undefined> {
+    const [r] = await db.update(webhookEvents).set(data).where(eq(webhookEvents.id, id)).returning();
+    return r;
   }
 
   // ── Automation Rules ──────────────────────────────────────────

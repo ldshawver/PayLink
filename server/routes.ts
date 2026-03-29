@@ -7,8 +7,9 @@ import { sendScheduleEmailNotification, sendScheduleSmsNotification } from "./no
 import path from "path";
 import { db } from "./db";
 import { sql, eq } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents } from "@shared/schema";
 import crypto from "crypto";
+import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -22,6 +23,26 @@ function getAppBaseUrl(req: Request): string {
   const proto = req.headers["x-forwarded-proto"] || req.protocol || "http";
   const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:5000";
   return `${proto}://${host}`;
+}
+
+async function getCompanyESignConfig(companyId: string): Promise<CompanyESignConfig | undefined> {
+  const apiKeys = await storage.getProductApiKeys(companyId);
+  const docusignKey = apiKeys.find(k => k.productName === "docusign" && k.isActive);
+  const acrobatKey = apiKeys.find(k => k.productName === "acrobat_sign" && k.isActive);
+  if (!docusignKey && !acrobatKey) return undefined;
+
+  const config: CompanyESignConfig = {};
+  if (docusignKey) {
+    try {
+      config.docusign = JSON.parse(docusignKey.apiKey);
+    } catch { /* fall back to env vars */ }
+  }
+  if (acrobatKey) {
+    try {
+      config.acrobat_sign = JSON.parse(acrobatKey.apiKey);
+    } catch { /* fall back to env vars */ }
+  }
+  return Object.keys(config).length > 0 ? config : undefined;
 }
 
 const resolvedUploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads");
@@ -146,7 +167,7 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/analytics/event", "/billing/activate", "/webhooks/product-events"];
+  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/analytics/event", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/"];
   app.use("/api", (req, res, next) => {
     if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
     blockDemoWrites(req, res, next);
@@ -257,7 +278,7 @@ export async function registerRoutes(
   app.use("/api", (req, res, next) => {
     if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
-      || req.path === "/webhooks/product-events") {
+      || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")) {
       return next();
     }
     requireAuth(req, res, next);
@@ -9616,6 +9637,378 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await storage.deleteProductApiKey(req.params.id);
       res.json({ message: "API key deleted" });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete product API key") }); }
+  });
+
+  // ── E-Signature Provider Routes ──────────────────────────────────────────
+
+  app.get("/api/esign/providers", requireAuth, async (_req, res) => {
+    res.json({ providers: getSupportedProviders() });
+  });
+
+  app.get("/api/signature-packages", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const packages = await storage.getSignaturePackages(companyId);
+      res.json(packages);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch signature packages") }); }
+  });
+
+  app.get("/api/signature-packages/:id", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const pkg = await storage.getSignaturePackage(req.params.id);
+      if (!pkg) return res.status(404).json({ message: "Signature package not found" });
+      if (pkg.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      res.json(pkg);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch signature package") }); }
+  });
+
+  app.post("/api/signature-packages", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+
+      const { provider, documentId, subject, message, signers } = req.body;
+      if (!provider || !documentId || !subject || !signers?.length) {
+        return res.status(400).json({ message: "provider, documentId, subject, and signers are required" });
+      }
+
+      const doc = await storage.getDocument(documentId);
+      if (!doc) return res.status(404).json({ message: "Document not found" });
+      if (doc.companyId !== companyId) return res.status(403).json({ message: "Access denied: document belongs to another company" });
+
+      let adapter;
+      try {
+        adapter = getESignAdapter(provider);
+      } catch {
+        return res.status(400).json({ message: `Unsupported e-signature provider: ${provider}` });
+      }
+      const companyConfig = await getCompanyESignConfig(companyId);
+
+      const baseUrl = getAppBaseUrl(req);
+      const returnUrl = `${baseUrl}/documents/${documentId}`;
+
+      const sigRequest = await storage.createDocumentSignatureRequest({
+        documentId,
+        companyId,
+        provider,
+        status: "draft",
+        message: message || subject,
+        createdBy: req.session?.userId,
+      });
+
+      for (let i = 0; i < signers.length; i++) {
+        const signer = signers[i];
+        await storage.createDocumentSigner({
+          signatureRequestId: sigRequest.id,
+          signerName: signer.name,
+          signerEmail: signer.email,
+          routingOrder: signer.routingOrder ?? (i + 1),
+          status: "pending",
+        });
+      }
+
+      const result = await adapter.createPackage({
+        companyId,
+        documentUrl: doc.fileUrl,
+        documentName: doc.fileName,
+        subject,
+        message,
+        signers: signers.map((s: { name: string; email: string; routingOrder?: number }) => ({
+          name: s.name,
+          email: s.email,
+          routingOrder: s.routingOrder,
+        })),
+        returnUrl,
+      }, companyConfig);
+
+      await storage.updateDocumentSignatureRequest(sigRequest.id, {
+        providerObjectId: result.providerEnvelopeId,
+        status: "sent",
+        sentAt: new Date(),
+      });
+
+      const pkg = await storage.createSignaturePackage({
+        companyId,
+        signatureRequestId: sigRequest.id,
+        provider,
+        providerEnvelopeId: result.providerEnvelopeId,
+        status: result.status,
+        documentIds: documentId,
+        subject,
+        message,
+        sentAt: new Date(),
+        createdBy: req.session?.userId,
+      });
+
+      await storage.createDocumentAuditLog({
+        documentId,
+        companyId,
+        action: "signature_requested",
+        actorId: req.session?.userId,
+        actorName: req.session?.username || "system",
+        details: `Signature package created via ${provider}. Envelope: ${result.providerEnvelopeId}`,
+      });
+
+      res.status(201).json(pkg);
+    } catch (e) {
+      console.error("Failed to create signature package:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to create signature package") });
+    }
+  });
+
+  app.post("/api/signature-packages/:id/signing-url", requireAuth, async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const pkg = await storage.getSignaturePackage(req.params.id);
+      if (!pkg) return res.status(404).json({ message: "Signature package not found" });
+      if (pkg.companyId !== companyId) return res.status(403).json({ message: "Access denied" });
+      if (!pkg.providerEnvelopeId) return res.status(400).json({ message: "Package has no provider envelope" });
+
+      const { signerEmail, signerName } = req.body;
+      if (!signerEmail || !signerName) {
+        return res.status(400).json({ message: "signerEmail and signerName are required" });
+      }
+
+      const adapter = getESignAdapter(pkg.provider);
+      const companyConfig = await getCompanyESignConfig(companyId);
+      const baseUrl = getAppBaseUrl(req);
+      const returnUrl = `${baseUrl}/signing-complete?packageId=${pkg.id}`;
+
+      const result = await adapter.getEmbeddedSigningUrl({
+        providerEnvelopeId: pkg.providerEnvelopeId,
+        signerEmail,
+        signerName,
+        returnUrl,
+      }, companyConfig);
+
+      res.json(result);
+    } catch (e) {
+      console.error("Failed to get signing URL:", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to get embedded signing URL") });
+    }
+  });
+
+  app.get("/api/webhooks/esign/:provider", async (req, res) => {
+    const { provider } = req.params;
+    if (provider === "acrobat_sign") {
+      const adapter = getESignAdapter(provider) as AcrobatSignAdapter;
+      const voiResult = adapter.handleVerificationOfIntent(req.headers as Record<string, string | string[] | undefined>);
+      if (voiResult) {
+        res.setHeader("X-AdobeSign-ClientId", voiResult.clientId);
+        return res.status(200).json({ xAdobeSignClientId: voiResult.clientId });
+      }
+    }
+    res.status(200).json({ status: "ok" });
+  });
+
+  app.post("/api/webhooks/esign/:provider", async (req, res) => {
+    const { provider } = req.params;
+    try {
+      let adapter;
+      try {
+        adapter = getESignAdapter(provider);
+      } catch {
+        return res.status(400).json({ message: `Unsupported e-signature provider: ${provider}` });
+      }
+
+      if (provider === "acrobat_sign") {
+        const acrobatAdapter = adapter as AcrobatSignAdapter;
+        const rawBodyForVoi = req.rawBody || (typeof req.body === "string" ? req.body : JSON.stringify(req.body));
+        const voiEnvelopeId = acrobatAdapter.extractEnvelopeIdFromPayload(rawBodyForVoi);
+        let voiCompanyConfig: CompanyESignConfig | undefined;
+        if (voiEnvelopeId) {
+          const voiPkg = await storage.getSignaturePackageByEnvelopeId(voiEnvelopeId, provider);
+          if (voiPkg) {
+            voiCompanyConfig = await getCompanyESignConfig(voiPkg.companyId);
+          }
+        }
+        const voiResult = acrobatAdapter.handleVerificationOfIntent(
+          req.headers as Record<string, string | string[] | undefined>,
+          voiCompanyConfig
+        );
+        if (voiResult) {
+          res.setHeader("X-AdobeSign-ClientId", voiResult.clientId);
+          return res.status(200).json({ xAdobeSignClientId: voiResult.clientId });
+        }
+      }
+      const rawBody = req.rawBody || (typeof req.body === "string" ? req.body : JSON.stringify(req.body));
+
+      let webhookCompanyConfig: CompanyESignConfig | undefined;
+      const preExtractedEnvelopeId = adapter.extractEnvelopeIdFromPayload(rawBody);
+      if (preExtractedEnvelopeId) {
+        const existingPkg = await storage.getSignaturePackageByEnvelopeId(preExtractedEnvelopeId, provider);
+        if (existingPkg) {
+          webhookCompanyConfig = await getCompanyESignConfig(existingPkg.companyId);
+        }
+      }
+
+      const verification = await adapter.verifyWebhook(
+        req.headers as Record<string, string | string[] | undefined>,
+        rawBody,
+        webhookCompanyConfig
+      );
+
+      if (!verification.valid) {
+        console.warn(`Invalid ${provider} webhook signature`);
+        return res.status(401).json({ message: "Invalid webhook signature" });
+      }
+
+      const payloadHash = crypto.createHash("sha256").update(rawBody.toString()).digest("hex").substring(0, 16);
+      const signerContext = verification.signerEmail ? `_${verification.signerEmail}` : "";
+      const providerEventId = verification.envelopeId
+        ? `${provider}_${verification.eventType}_${verification.envelopeId}${signerContext}_${payloadHash}`
+        : `${provider}_${verification.eventType}_${payloadHash}`;
+
+      const existingEvent = await storage.getWebhookEventByProviderEventId(providerEventId);
+      if (existingEvent) {
+        return res.status(200).json({ message: "Event already processed" });
+      }
+
+      const webhookEvent = await storage.createWebhookEvent({
+        provider,
+        eventType: verification.eventType || "unknown",
+        providerEventId,
+        envelopeId: verification.envelopeId,
+        payload: verification.rawPayload,
+        status: "received",
+      });
+
+      try {
+        if (verification.envelopeId) {
+          const pkg = await storage.getSignaturePackageByEnvelopeId(verification.envelopeId, provider);
+
+          if (pkg) {
+            const statusMap: Record<string, string> = {
+              completed: "completed",
+              signed: "completed",
+              declined: "declined",
+              voided: "voided",
+              sent: "sent",
+              delivered: "delivered",
+              AGREEMENT_WORKFLOW_COMPLETED: "completed",
+              AGREEMENT_ACTION_COMPLETED: "signed",
+            };
+
+            const newStatus = statusMap[verification.envelopeStatus || ""]
+              || statusMap[verification.eventType || ""]
+              || verification.envelopeStatus
+              || pkg.status;
+
+            await storage.updateSignaturePackage(pkg.id, {
+              status: newStatus,
+              ...(newStatus === "completed" ? { completedAt: new Date() } : {}),
+            });
+
+            if (pkg.signatureRequestId) {
+              await storage.updateDocumentSignatureRequest(pkg.signatureRequestId, {
+                status: newStatus,
+                ...(newStatus === "completed" ? { completedAt: new Date() } : {}),
+              });
+
+              if (verification.signerEmail) {
+                const signers = await storage.getDocumentSigners(pkg.signatureRequestId);
+                const matchedSigner = signers.find(s => s.signerEmail === verification.signerEmail);
+                if (matchedSigner) {
+                  const signerStatusMap: Record<string, string> = {
+                    completed: "signed",
+                    signed: "signed",
+                    sent: "sent",
+                    delivered: "viewed",
+                    declined: "declined",
+                  };
+                  const newSignerStatus = signerStatusMap[verification.signerStatus || ""]
+                    || signerStatusMap[verification.envelopeStatus || ""]
+                    || verification.signerStatus
+                    || matchedSigner.status;
+                  await storage.updateDocumentSigner(matchedSigner.id, {
+                    status: newSignerStatus,
+                    ...(newSignerStatus === "signed" ? { signedAt: new Date() } : {}),
+                  });
+                }
+              }
+            }
+
+            if (newStatus === "completed") {
+              try {
+                const pkgCompanyConfig = await getCompanyESignConfig(pkg.companyId);
+                const pdfResult = await adapter.downloadFinalPdf(verification.envelopeId, pkgCompanyConfig);
+                const fs = await import("fs");
+                const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads");
+                const pdfFileName = `signed_${verification.envelopeId}_${Date.now()}.pdf`;
+                const pdfPath = path.join(uploadDir, pdfFileName);
+                fs.writeFileSync(pdfPath, pdfResult.buffer);
+
+                const docIds = pkg.documentIds?.split(",") || [];
+                for (const docId of docIds) {
+                  const doc = await storage.getDocument(docId.trim());
+                  if (doc) {
+                    const existingVersions = await storage.getDocumentVersions(docId.trim());
+                    const nextVersion = existingVersions.length > 0
+                      ? Math.max(...existingVersions.map(v => v.versionNumber)) + 1
+                      : 1;
+
+                    const version = await storage.createDocumentVersion({
+                      documentId: docId.trim(),
+                      versionNumber: nextVersion,
+                      fileName: pdfResult.fileName,
+                      fileUrl: `/uploads/${pdfFileName}`,
+                      fileSize: pdfResult.buffer.length,
+                      changeNote: `Signed document via ${provider} (envelope: ${verification.envelopeId})`,
+                      uploadedBy: "system",
+                    });
+
+                    await storage.updateDocument(docId.trim(), {
+                      currentVersionId: version.id,
+                    });
+
+                    await storage.createDocumentAuditLog({
+                      documentId: docId.trim(),
+                      companyId: pkg.companyId,
+                      action: "signed_document_stored",
+                      actorName: "system",
+                      actorEmail: verification.signerEmail,
+                      details: `Signed PDF stored as version ${nextVersion} via ${provider}. Envelope: ${verification.envelopeId}`,
+                    });
+                  }
+                }
+              } catch (downloadErr) {
+                console.error("Failed to download/store signed PDF:", downloadErr);
+              }
+            }
+          }
+        }
+
+        await storage.updateWebhookEvent(webhookEvent.id, {
+          status: "processed",
+          processedAt: new Date(),
+        });
+      } catch (processErr) {
+        console.error("Webhook processing error:", processErr);
+        await storage.updateWebhookEvent(webhookEvent.id, {
+          status: "error",
+          error: processErr instanceof Error ? processErr.message : String(processErr),
+        });
+      }
+
+      res.status(200).json({ message: "Webhook received" });
+    } catch (e) {
+      console.error(`E-sign webhook error (${provider}):`, e);
+      res.status(500).json({ message: "Webhook processing failed" });
+    }
+  });
+
+  app.get("/api/webhook-events", requireRole("admin"), async (req, res) => {
+    try {
+      const companyId = req.session?.companyId;
+      if (!companyId) return res.status(403).json({ message: "No company context" });
+      const provider = req.query.provider as string | undefined;
+      const events = await storage.getWebhookEventsByCompany(companyId, provider);
+      res.json(events);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch webhook events") }); }
   });
 
   return httpServer;

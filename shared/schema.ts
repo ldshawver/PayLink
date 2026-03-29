@@ -2144,6 +2144,8 @@ export const documentSignatureRequests = pgTable("document_signature_requests", 
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   documentId: varchar("document_id").notNull().references(() => documents.id),
   companyId: varchar("company_id").notNull().references(() => companies.id),
+  provider: text("provider"),
+  providerObjectId: text("provider_object_id"),
   status: text("status").notNull().default("draft"),
   sentAt: timestamp("sent_at"),
   completedAt: timestamp("completed_at"),
@@ -2165,6 +2167,7 @@ export const documentSigners = pgTable("document_signers", {
   signerName: text("signer_name").notNull(),
   signerEmail: text("signer_email").notNull(),
   status: text("status").notNull().default("pending"),
+  routingOrder: integer("routing_order").default(1),
   signedAt: timestamp("signed_at"),
   ipAddress: text("ip_address"),
   signatureData: text("signature_data"),
@@ -2175,6 +2178,48 @@ export const documentSigners = pgTable("document_signers", {
 export const insertDocumentSignerSchema = createInsertSchema(documentSigners).omit({ id: true, createdAt: true });
 export type DocumentSigner = typeof documentSigners.$inferSelect;
 export type InsertDocumentSigner = z.infer<typeof insertDocumentSignerSchema>;
+
+// ── Signature Packages ──────────────────────────────────────────
+export const signaturePackages = pgTable("signature_packages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  signatureRequestId: varchar("signature_request_id").references(() => documentSignatureRequests.id),
+  provider: text("provider").notNull(),
+  providerEnvelopeId: text("provider_envelope_id"),
+  status: text("status").notNull().default("created"),
+  documentIds: text("document_ids"),
+  subject: text("subject"),
+  message: text("message"),
+  metadata: text("metadata"),
+  sentAt: timestamp("sent_at"),
+  completedAt: timestamp("completed_at"),
+  expiresAt: timestamp("expires_at"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertSignaturePackageSchema = createInsertSchema(signaturePackages).omit({ id: true, createdAt: true, updatedAt: true });
+export type SignaturePackage = typeof signaturePackages.$inferSelect;
+export type InsertSignaturePackage = z.infer<typeof insertSignaturePackageSchema>;
+
+// ── Webhook Events ──────────────────────────────────────────
+export const webhookEvents = pgTable("webhook_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  provider: text("provider").notNull(),
+  eventType: text("event_type").notNull(),
+  providerEventId: text("provider_event_id"),
+  envelopeId: text("envelope_id"),
+  payload: text("payload"),
+  status: text("status").notNull().default("received"),
+  processedAt: timestamp("processed_at"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertWebhookEventSchema = createInsertSchema(webhookEvents).omit({ id: true, createdAt: true });
+export type WebhookEvent = typeof webhookEvents.$inferSelect;
+export type InsertWebhookEvent = z.infer<typeof insertWebhookEventSchema>;
 
 // ── Document Audit Log ──────────────────────────────────────────
 export const documentAuditLogs = pgTable("document_audit_logs", {

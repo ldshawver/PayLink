@@ -1264,6 +1264,45 @@ app.use((req, res, next) => {
       created_by VARCHAR,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    await run("signature_packages table", sql`CREATE TABLE IF NOT EXISTS signature_packages (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      signature_request_id VARCHAR,
+      provider TEXT NOT NULL,
+      provider_envelope_id TEXT,
+      status TEXT NOT NULL DEFAULT 'created',
+      document_ids TEXT,
+      subject TEXT,
+      message TEXT,
+      metadata TEXT,
+      sent_at TIMESTAMP,
+      completed_at TIMESTAMP,
+      expires_at TIMESTAMP,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("signature_packages.metadata", sql`ALTER TABLE signature_packages ADD COLUMN IF NOT EXISTS metadata TEXT`);
+    await run("signature_packages.expires_at", sql`ALTER TABLE signature_packages ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP`);
+
+    await run("webhook_events table", sql`CREATE TABLE IF NOT EXISTS webhook_events (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      provider TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      provider_event_id TEXT UNIQUE,
+      envelope_id TEXT,
+      payload TEXT,
+      status TEXT NOT NULL DEFAULT 'received',
+      processed_at TIMESTAMP,
+      error TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("webhook_events.provider_event_id unique", sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_events_provider_event_id ON webhook_events(provider_event_id) WHERE provider_event_id IS NOT NULL`);
+
+    await run("document_signature_requests.provider", sql`ALTER TABLE document_signature_requests ADD COLUMN IF NOT EXISTS provider TEXT`);
+    await run("document_signature_requests.provider_object_id", sql`ALTER TABLE document_signature_requests ADD COLUMN IF NOT EXISTS provider_object_id TEXT`);
+    await run("document_signers.routing_order", sql`ALTER TABLE document_signers ADD COLUMN IF NOT EXISTS routing_order INTEGER DEFAULT 1`);
   }
 
   const { seedDatabase } = await import("./seed");
