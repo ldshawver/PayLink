@@ -80,7 +80,8 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
     -   **Interactive Demo Mode:** Provides a public-facing demo environment with pre-seeded data.
     -   **Onboarding Checklist:** Guides new trial accounts through initial setup steps.
     -   **Analytics Tracking:** Event tracking for signup, trial, and key user actions.
-    -   **Customer & Vendor Management:** Full CRUD for customers and vendors, including a public vendor portal for invoice submission.
+    -   **Customer & Vendor Management:** Full CRUD for customers and vendors, including a public vendor portal for invoice submission. Customer detail view with Info and Onboarding tabs.
+    -   **Customer Onboarding Hub:** Frontend pages for managing deals (Kanban pipeline), onboarding projects (list + detail with task checklists and engagement timelines), onboarding templates (with nested task editor, training resources, document links), and engagement feed (chronological event stream). Sidebar section "Onboarding Hub" with sub-items. Pages at: /deal-pipeline, /onboarding-projects, /onboarding-templates, /engagement-feed. Types defined in client/src/lib/onboarding-types.ts. Backend APIs pending.
     -   **Invoicing System:** Create, edit, and manage invoices with line items, statuses, and payment tracking. Multiple payment methods (ACH, Card, Instant Bank, Wire) with configurable per-method fees, fee disclosure at checkout, savings nudges, and a Payment Methods settings tab. API: `GET/POST/PATCH/DELETE /api/payment-method-configs`, `POST /api/payments/calculate-fee`.
     -   **Document Management:** Handles folders, documents, versioning, signature requests, and audit logs.
     -   **Automation Engine:** Rules-based automation with event logging.

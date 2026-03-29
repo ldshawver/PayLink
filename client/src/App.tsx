@@ -32,6 +32,10 @@ import InvoicesPage from "@/pages/invoices";
 import PayInvoicePage from "@/pages/pay-invoice";
 import BillingPage from "@/pages/billing";
 import CompanyDocumentsPage from "@/pages/company-documents";
+import DealPipelinePage from "@/pages/deal-pipeline";
+import OnboardingProjectsPage from "@/pages/onboarding-projects";
+import OnboardingTemplatesPage from "@/pages/onboarding-templates";
+import EngagementFeedPage from "@/pages/engagement-feed";
 import LoginPage from "@/pages/login";
 import { Loader2, Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -72,6 +76,10 @@ function AuthenticatedRouter() {
       <Route path="/customers">{() => <RoleGuard roles={["admin", "manager"]}><CustomersPage /></RoleGuard>}</Route>
       <Route path="/invoices">{() => <RoleGuard roles={["admin", "manager"]}><InvoicesPage /></RoleGuard>}</Route>
       <Route path="/billing">{() => <RoleGuard roles={["admin"]}><BillingPage /></RoleGuard>}</Route>
+      <Route path="/deal-pipeline">{() => <RoleGuard roles={["admin", "manager"]}><DealPipelinePage /></RoleGuard>}</Route>
+      <Route path="/onboarding-projects">{() => <RoleGuard roles={["admin", "manager"]}><OnboardingProjectsPage /></RoleGuard>}</Route>
+      <Route path="/onboarding-templates">{() => <RoleGuard roles={["admin", "manager"]}><OnboardingTemplatesPage /></RoleGuard>}</Route>
+      <Route path="/engagement-feed">{() => <RoleGuard roles={["admin", "manager"]}><EngagementFeedPage /></RoleGuard>}</Route>
       <Route path="/print-expense-check" component={PrintExpenseCheckPage} />
       <Route path="/my-profile" component={MyProfilePage} />
       <Route component={NotFound} />

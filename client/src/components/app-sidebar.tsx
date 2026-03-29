@@ -58,6 +58,11 @@ import {
   FilePlus2,
   FolderClosed,
   Workflow,
+  Rocket,
+  Kanban,
+  ClipboardCheck,
+  LayoutTemplate,
+  Rss,
 } from "lucide-react";
 import {
   Sidebar,
@@ -262,6 +267,18 @@ const navSections: NavSection[] = [
     ],
   },
   {
+    label: "Onboarding Hub",
+    icon: Rocket,
+    url: "/deal-pipeline",
+    roles: ["admin", "manager"],
+    items: [
+      { title: "Deal Pipeline", url: "/deal-pipeline", icon: Kanban },
+      { title: "Onboarding Projects", url: "/onboarding-projects", icon: ClipboardCheck },
+      { title: "Templates", url: "/onboarding-templates", icon: LayoutTemplate },
+      { title: "Engagement Feed", url: "/engagement-feed", icon: Rss },
+    ],
+  },
+  {
     label: "Invoicing",
     icon: FilePlus2,
     url: "/invoices",
@@ -356,7 +373,15 @@ export function AppSidebar() {
   const isActive = (url: string) => {
     if (url === "/") return locationPath === "/";
     const basePath = url.split("?")[0];
-    return locationPath.startsWith(basePath);
+    if (locationPath.startsWith(basePath)) return true;
+    const section = visibleSections.find(s => s.url === url);
+    if (section && section.items.length > 0) {
+      return section.items.some(item => {
+        const itemPath = item.url.split("?")[0];
+        return locationPath.startsWith(itemPath);
+      });
+    }
+    return false;
   };
 
   const isSubItemActive = (itemUrl: string) => {

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
+import { useSearch, useLocation } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -11,12 +12,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Search, Edit, Trash2, Building2, Mail, Phone, MapPin, Users, Loader2, Store, Truck } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Progress } from "@/components/ui/progress";
+import { Plus, Search, Edit, Trash2, Building2, Mail, Phone, MapPin, Users, Loader2, Store, Truck, Rocket, Activity, ClipboardList, Calendar, User, CheckCircle2 } from "lucide-react";
 import type { Customer } from "@shared/schema";
+import type { OnboardingProject, EngagementEvent, Deal } from "@/lib/onboarding-types";
+import { PROJECT_STATUSES, EVENT_TYPES } from "@/lib/onboarding-types";
 
 function CustomerForm({ customer, onSave, onCancel }: {
   customer?: Customer;
-  onSave: (data: any) => void;
+  onSave: (data: Record<string, string>) => void;
   onCancel: () => void;
 }) {
   const [form, setForm] = useState({
@@ -157,14 +162,238 @@ function CustomerForm({ customer, onSave, onCancel }: {
   );
 }
 
+function CustomerOnboardingTab({ customerId, companyId }: { customerId: string; companyId: string }) {
+  const { data: projects = [], isLoading: loadingProjects } = useQuery<OnboardingProject[]>({
+    queryKey: [`/api/onboarding-projects?customerId=${customerId}`],
+    enabled: !!customerId,
+  });
+
+  const { data: events = [], isLoading: loadingEvents } = useQuery<EngagementEvent[]>({
+    queryKey: [`/api/engagement-events?customerId=${customerId}`],
+    enabled: !!customerId,
+  });
+
+  const { data: deals = [], isLoading: loadingDeals } = useQuery<Deal[]>({
+    queryKey: [`/api/deals?customerId=${customerId}`],
+    enabled: !!customerId,
+  });
+
+  if (loadingProjects || loadingEvents || loadingDeals) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+          <ClipboardList className="h-5 w-5" /> Onboarding Projects
+        </h3>
+        {projects.length === 0 ? (
+          <Card>
+            <CardContent className="py-6 text-center text-muted-foreground">
+              No onboarding projects for this customer
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {projects.map(project => {
+              const statusInfo = PROJECT_STATUSES.find(s => s.value === project.status);
+              return (
+                <Card key={project.id} data-testid={`card-customer-project-${project.id}`}>
+                  <CardContent className="p-3 flex items-center justify-between">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div>
+                        <p className="font-medium text-sm">{project.title}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <Badge className={statusInfo?.color} variant="secondary">{statusInfo?.label}</Badge>
+                          <Badge variant="outline" className="text-xs">{project.product}</Badge>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <div className="w-20">
+                        <Progress value={project.progress} className="h-2" />
+                        <span className="text-xs text-muted-foreground">{project.progress}%</span>
+                      </div>
+                      {project.assignedTo && (
+                        <span className="text-xs text-muted-foreground flex items-center gap-1">
+                          <User className="h-3 w-3" /> {project.assignedTo}
+                        </span>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+          <Rocket className="h-5 w-5" /> Deal History
+        </h3>
+        {deals.length === 0 ? (
+          <Card>
+            <CardContent className="py-6 text-center text-muted-foreground">
+              No deals for this customer
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {deals.map(deal => (
+              <Card key={deal.id} data-testid={`card-customer-deal-${deal.id}`}>
+                <CardContent className="p-3 flex items-center justify-between">
+                  <div>
+                    <p className="font-medium text-sm">{deal.title}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <Badge variant="outline" className="text-xs">{deal.stage.replace("_", " ")}</Badge>
+                      <span className="text-sm font-semibold text-emerald-600">${deal.value.toLocaleString()}</span>
+                    </div>
+                  </div>
+                  <span className="text-xs text-muted-foreground">{deal.product}</span>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+          <Activity className="h-5 w-5" /> Engagement Timeline
+        </h3>
+        {events.length === 0 ? (
+          <Card>
+            <CardContent className="py-6 text-center text-muted-foreground">
+              No engagement events for this customer
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {events.slice(0, 20).map(event => {
+              const eventTypeLabel = EVENT_TYPES.find(t => t.value === event.eventType)?.label || event.eventType;
+              return (
+                <Card key={event.id} data-testid={`card-customer-event-${event.id}`}>
+                  <CardContent className="p-3 flex items-center justify-between">
+                    <div>
+                      <p className="font-medium text-sm">{event.title}</p>
+                      {event.description && (
+                        <p className="text-xs text-muted-foreground mt-0.5">{event.description}</p>
+                      )}
+                      <Badge variant="outline" className="text-xs mt-1">{eventTypeLabel}</Badge>
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(event.createdAt).toLocaleDateString()}
+                    </span>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CustomerDetailView({ customer, companyId, onBack, onEdit }: {
+  customer: Customer;
+  companyId: string;
+  onBack: () => void;
+  onEdit: (c: Customer) => void;
+}) {
+  return (
+    <div className="p-6 space-y-6">
+      <div className="flex items-center gap-4">
+        <Button variant="ghost" onClick={onBack} data-testid="button-back-customers">
+          <MapPin className="h-4 w-4 mr-2" /> Back to Directory
+        </Button>
+        <div className="flex-1">
+          <h1 className="text-2xl font-bold" data-testid="text-customer-detail-name">{customer.customerName}</h1>
+          <p className="text-muted-foreground">{customer.businessName || "No business name"}</p>
+        </div>
+        <Button variant="outline" onClick={() => onEdit(customer)} data-testid="button-edit-customer-detail">
+          <Edit className="h-4 w-4 mr-2" /> Edit
+        </Button>
+      </div>
+
+      <Tabs defaultValue="info">
+        <TabsList data-testid="tabs-customer-detail">
+          <TabsTrigger value="info" data-testid="tab-customer-info">Info</TabsTrigger>
+          <TabsTrigger value="onboarding" data-testid="tab-customer-onboarding">Onboarding</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="info" className="mt-4">
+          <div className="grid grid-cols-2 gap-4">
+            <Card>
+              <CardContent className="p-4 space-y-3">
+                <h3 className="font-semibold">Contact Information</h3>
+                {customer.email && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <Mail className="h-4 w-4 text-muted-foreground" />
+                    <span>{customer.email}</span>
+                  </div>
+                )}
+                {customer.phone && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <Phone className="h-4 w-4 text-muted-foreground" />
+                    <span>{customer.phone}</span>
+                  </div>
+                )}
+                {customer.billingContactName && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <User className="h-4 w-4 text-muted-foreground" />
+                    <span>Billing: {customer.billingContactName}</span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4 space-y-3">
+                <h3 className="font-semibold">Billing Address</h3>
+                <p className="text-sm text-muted-foreground">
+                  {customer.billingAddress || "No address"}<br />
+                  {customer.billingCity && `${customer.billingCity}, `}{customer.billingState} {customer.billingZip}<br />
+                  {customer.billingCountry}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+          {customer.notes && (
+            <Card className="mt-4">
+              <CardContent className="p-4">
+                <h3 className="font-semibold mb-2">Notes</h3>
+                <p className="text-sm text-muted-foreground">{customer.notes}</p>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        <TabsContent value="onboarding" className="mt-4">
+          <CustomerOnboardingTab customerId={customer.id} companyId={companyId} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
 export default function CustomersPage() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const searchParams = useSearch();
+  const [, navigate] = useLocation();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Customer | undefined>();
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const deepLinkHandled = useRef(false);
 
   const companyId = user?.companyId;
 
@@ -173,8 +402,22 @@ export default function CustomersPage() {
     enabled: !!companyId,
   });
 
+  useEffect(() => {
+    if (deepLinkHandled.current || customers.length === 0 || !searchParams) return;
+    const params = new URLSearchParams(searchParams);
+    const deepLinkId = params.get("id");
+    if (deepLinkId) {
+      const target = customers.find(c => c.id === deepLinkId);
+      if (target) {
+        setSelectedCustomer(target);
+        deepLinkHandled.current = true;
+        navigate("/customers", { replace: true });
+      }
+    }
+  }, [customers, searchParams, navigate]);
+
   const createMutation = useMutation({
-    mutationFn: (data: any) => apiRequest("POST", "/api/customers", { ...data, companyId }),
+    mutationFn: (data: Record<string, string>) => apiRequest("POST", "/api/customers", { ...data, companyId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/customers?companyId=${companyId}`] });
       toast({ title: "Record created" });
@@ -184,7 +427,7 @@ export default function CustomersPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => apiRequest("PATCH", `/api/customers/${id}`, data),
+    mutationFn: ({ id, data }: { id: string; data: Record<string, string> }) => apiRequest("PATCH", `/api/customers/${id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/customers?companyId=${companyId}`] });
       toast({ title: "Record updated" });
@@ -229,6 +472,36 @@ export default function CustomersPage() {
     vendorCount: customers.filter(c => c.customerType === "vendor").length,
     active: customers.filter(c => c.status === "active").length,
   };
+
+  if (selectedCustomer && companyId) {
+    return (
+      <>
+        <CustomerDetailView
+          customer={selectedCustomer}
+          companyId={companyId}
+          onBack={() => setSelectedCustomer(null)}
+          onEdit={(c) => { setEditing(c); setDialogOpen(true); }}
+        />
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Edit Record</DialogTitle>
+            </DialogHeader>
+            <CustomerForm
+              customer={editing}
+              onSave={data => {
+                if (editing) {
+                  updateMutation.mutate({ id: editing.id, data });
+                  setSelectedCustomer({ ...selectedCustomer, ...data });
+                }
+              }}
+              onCancel={() => { setDialogOpen(false); setEditing(undefined); }}
+            />
+          </DialogContent>
+        </Dialog>
+      </>
+    );
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -336,7 +609,7 @@ export default function CustomersPage() {
       ) : (
         <div className="grid gap-3">
           {filtered.map(customer => (
-            <Card key={customer.id} className="hover:shadow-md transition-shadow" data-testid={`card-customer-${customer.id}`}>
+            <Card key={customer.id} className="hover:shadow-md transition-shadow cursor-pointer" onClick={() => setSelectedCustomer(customer)} data-testid={`card-customer-${customer.id}`}>
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-4 flex-1 min-w-0">
@@ -374,11 +647,12 @@ export default function CustomersPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <Button variant="ghost" size="sm" onClick={() => { setEditing(customer); setDialogOpen(true); }}
+                    <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); setEditing(customer); setDialogOpen(true); }}
                       data-testid={`button-edit-${customer.id}`}>
                       <Edit className="h-4 w-4" />
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => {
+                    <Button variant="ghost" size="sm" onClick={(e) => {
+                      e.stopPropagation();
                       if (confirm("Delete this record?")) deleteMutation.mutate(customer.id);
                     }} data-testid={`button-delete-${customer.id}`}>
                       <Trash2 className="h-4 w-4 text-red-500" />
