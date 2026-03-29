@@ -216,7 +216,7 @@ function PolicyGroupsTab() {
                 </div>
                 <div className="border-t pt-3">
                   <Label className="text-sm font-medium mb-2 block">Linked Policies</Label>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <PolicyLinkSelect label="Regular Time" value={form.regularTimePolicyId} onChange={(v) => setForm({ ...form, regularTimePolicyId: v })} items={regularTimePolicies || []} testId="select-pg-regular-time" />
                     <PolicyLinkSelect label="Overtime" value={form.overtimePolicyId} onChange={(v) => setForm({ ...form, overtimePolicyId: v })} items={overtimePolicies || []} testId="select-pg-overtime" />
                     <PolicyLinkSelect label="Premium" value={form.premiumPolicyId} onChange={(v) => setForm({ ...form, premiumPolicyId: v })} items={premiumPolicies || []} testId="select-pg-premium" />
@@ -239,7 +239,7 @@ function PolicyGroupsTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -411,7 +411,7 @@ function PayCodesTab() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label>Code</Label>
                     <Input data-testid="input-pay-code-code" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
@@ -421,7 +421,7 @@ function PayCodesTab() {
                     <Input data-testid="input-pay-code-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label>Type</Label>
                     <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
@@ -452,7 +452,7 @@ function PayCodesTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -626,7 +626,7 @@ function AccrualAccountsTab() {
                   <Label>Name</Label>
                   <Input data-testid="input-accrual-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label>Type</Label>
                     <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
@@ -646,7 +646,7 @@ function AccrualAccountsTab() {
                     <Input data-testid="input-accrual-rate" type="number" step="0.01" value={form.accrualRate} onChange={(e) => setForm({ ...form, accrualRate: e.target.value })} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label>Frequency</Label>
                     <Select value={form.accrualFrequency} onValueChange={(v) => setForm({ ...form, accrualFrequency: v })}>
@@ -674,7 +674,7 @@ function AccrualAccountsTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -865,7 +865,7 @@ function HolidaysTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1044,7 +1044,7 @@ function PayFormulasTab() {
                   <Label>Name</Label>
                   <Input data-testid="input-pay-formula-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label>Pay Type</Label>
                     <Select value={form.payType} onValueChange={(v) => setForm({ ...form, payType: v })}>
@@ -1073,7 +1073,7 @@ function PayFormulasTab() {
                     </Select>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label>Accrual Rate</Label>
                     <Input data-testid="input-pay-formula-accrual-rate" type="number" step="0.01" value={form.accrualRate} onChange={(e) => setForm({ ...form, accrualRate: e.target.value })} />
@@ -1092,7 +1092,7 @@ function PayFormulasTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1272,7 +1272,7 @@ function ContributingPayCodesTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1432,7 +1432,7 @@ function ContributingShiftsTab() {
                 <DialogTitle>{editItem ? "Edit Contributing Shift" : "Add Contributing Shift"}</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label>Company</Label>
                     <Select value={form.companyId} onValueChange={(v) => setForm({ ...form, companyId: v })}>
@@ -1476,7 +1476,7 @@ function ContributingShiftsTab() {
                     ))}
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label>Filter Type</Label>
                     <Select value={form.filterType} onValueChange={(v) => setForm({ ...form, filterType: v })}>
@@ -1533,7 +1533,7 @@ function ContributingShiftsTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1710,7 +1710,7 @@ function RegularTimePoliciesTab() {
                 <Label>Name</Label>
                 <Input data-testid="input-regular-time-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Calculation Order</Label>
                   <Input data-testid="input-regular-time-order" type="number" value={form.calculationOrder} onChange={(e) => setForm({ ...form, calculationOrder: e.target.value })} />
@@ -1720,7 +1720,7 @@ function RegularTimePoliciesTab() {
                   <Input data-testid="input-regular-time-max" type="number" step="0.01" value={form.maxTime} onChange={(e) => setForm({ ...form, maxTime: e.target.value })} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Pay Code ID</Label>
                   <Input data-testid="input-regular-time-pay-code" value={form.payCodeId} onChange={(e) => setForm({ ...form, payCodeId: e.target.value })} />
@@ -1739,7 +1739,7 @@ function RegularTimePoliciesTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1910,7 +1910,7 @@ function OvertimePoliciesTab() {
                 <Label>Name</Label>
                 <Input data-testid="input-overtime-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Type</Label>
                   <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
@@ -1930,7 +1930,7 @@ function OvertimePoliciesTab() {
                   <Input data-testid="input-overtime-pay-code" value={form.payCodeId} onChange={(e) => setForm({ ...form, payCodeId: e.target.value })} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Trigger Time (hours)</Label>
                   <Input data-testid="input-overtime-trigger" type="number" step="0.01" value={form.triggerTime} onChange={(e) => setForm({ ...form, triggerTime: e.target.value })} />
@@ -1949,7 +1949,7 @@ function OvertimePoliciesTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -2126,7 +2126,7 @@ function PremiumPoliciesTab() {
                 <Label>Name</Label>
                 <Input data-testid="input-premium-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Type</Label>
                   <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
@@ -2158,7 +2158,7 @@ function PremiumPoliciesTab() {
                   </Select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Daily Trigger Hours</Label>
                   <Input data-testid="input-premium-daily-hours" type="number" step="0.01" value={form.dailyTriggerHours} onChange={(e) => setForm({ ...form, dailyTriggerHours: e.target.value })} />
@@ -2186,7 +2186,7 @@ function PremiumPoliciesTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -2358,7 +2358,7 @@ function MealPoliciesTab() {
                 <Label>Name</Label>
                 <Input data-testid="input-meal-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Type</Label>
                   <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
@@ -2386,7 +2386,7 @@ function MealPoliciesTab() {
                   </Select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Active After (hours)</Label>
                   <Input data-testid="input-meal-active-after" type="number" step="0.01" value={form.activeAfter} onChange={(e) => setForm({ ...form, activeAfter: e.target.value })} />
@@ -2405,7 +2405,7 @@ function MealPoliciesTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -2579,7 +2579,7 @@ function BreakPoliciesTab() {
                 <Label>Name</Label>
                 <Input data-testid="input-break-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Type</Label>
                   <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
@@ -2607,7 +2607,7 @@ function BreakPoliciesTab() {
                   </Select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Active After (hours)</Label>
                   <Input data-testid="input-break-active-after" type="number" step="0.01" value={form.activeAfter} onChange={(e) => setForm({ ...form, activeAfter: e.target.value })} />
@@ -2626,7 +2626,7 @@ function BreakPoliciesTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -2799,7 +2799,7 @@ function SchedulePoliciesTab() {
                 <Label>Name</Label>
                 <Input data-testid="input-schedule-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Regular Time Action</Label>
                   <Select value={form.regularTimePolicyAction} onValueChange={(v) => setForm({ ...form, regularTimePolicyAction: v })}>
@@ -2825,7 +2825,7 @@ function SchedulePoliciesTab() {
                   </Select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Premium Action</Label>
                   <Select value={form.premiumPolicyAction} onValueChange={(v) => setForm({ ...form, premiumPolicyAction: v })}>
@@ -2852,7 +2852,7 @@ function SchedulePoliciesTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -3035,7 +3035,7 @@ function ExceptionPoliciesTab() {
                 <Label>Name</Label>
                 <Input data-testid="input-exception-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Exception Type</Label>
                   <Select value={form.exceptionType} onValueChange={(v) => setForm({ ...form, exceptionType: v })}>
@@ -3071,7 +3071,7 @@ function ExceptionPoliciesTab() {
                   </Select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Grace (minutes)</Label>
                   <Input data-testid="input-exception-grace" type="number" value={form.grace} onChange={(e) => setForm({ ...form, grace: e.target.value })} />
@@ -3099,7 +3099,7 @@ function ExceptionPoliciesTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -3274,7 +3274,7 @@ function AccrualPoliciesTab() {
                 <Label>Name</Label>
                 <Input data-testid="input-accrual-policy-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Type</Label>
                   <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
@@ -3302,7 +3302,7 @@ function AccrualPoliciesTab() {
                   </Select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Apply Frequency</Label>
                   <Select value={form.applyFrequency} onValueChange={(v) => setForm({ ...form, applyFrequency: v })}>
@@ -3331,7 +3331,7 @@ function AccrualPoliciesTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -3505,7 +3505,7 @@ function AbsencePoliciesTab() {
                 <Label>Name</Label>
                 <Input data-testid="input-absence-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Type</Label>
                   <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
@@ -3531,7 +3531,7 @@ function AbsencePoliciesTab() {
                   </Select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Rate Factor</Label>
                   <Input data-testid="input-absence-rate-factor" type="number" step="0.01" value={form.rateFactor} onChange={(e) => setForm({ ...form, rateFactor: e.target.value })} />
@@ -3550,7 +3550,7 @@ function AbsencePoliciesTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -3725,7 +3725,7 @@ function HolidayPoliciesTab() {
                 <Label>Name</Label>
                 <Input data-testid="input-holiday-policy-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Default Schedule</Label>
                   <Select value={form.defaultSchedule} onValueChange={(v) => setForm({ ...form, defaultSchedule: v })}>
@@ -3744,7 +3744,7 @@ function HolidayPoliciesTab() {
                   <Input data-testid="input-holiday-policy-eligible" type="number" value={form.eligibleAfterDays} onChange={(e) => setForm({ ...form, eligibleAfterDays: e.target.value })} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Worked on Holiday</Label>
                   <Select value={form.workedOnHolidayType} onValueChange={(v) => setForm({ ...form, workedOnHolidayType: v })}>
@@ -3790,7 +3790,7 @@ function HolidayPoliciesTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -3970,7 +3970,7 @@ function RoundingPoliciesTab() {
                 <Label>Name</Label>
                 <Input data-testid="input-rounding-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Round Type</Label>
                   <Select value={form.roundType} onValueChange={(v) => setForm({ ...form, roundType: v })}>
@@ -4000,7 +4000,7 @@ function RoundingPoliciesTab() {
                   </div>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Interval (minutes)</Label>
                   <Input data-testid="input-rounding-interval" type="number" value={form.interval} onChange={(e) => setForm({ ...form, interval: e.target.value })} />
@@ -4019,7 +4019,7 @@ function RoundingPoliciesTab() {
         </div>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -4074,7 +4074,8 @@ export default function PolicyPage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="flex flex-wrap h-auto gap-1 mb-4">
+        <div className="overflow-x-auto -mx-1 px-1 mb-4">
+        <TabsList className="inline-flex w-max h-auto gap-1">
           <TabsTrigger value="groups" className="text-xs" data-testid="tab-groups">Policy Groups</TabsTrigger>
           <TabsTrigger value="pay-codes" className="text-xs" data-testid="tab-pay-codes">Pay Codes</TabsTrigger>
           <TabsTrigger value="pay-formulas" className="text-xs" data-testid="tab-pay-formulas">Pay Formulas</TabsTrigger>
@@ -4094,6 +4095,7 @@ export default function PolicyPage() {
           <TabsTrigger value="absence" className="text-xs" data-testid="tab-absence">Absence Policies</TabsTrigger>
           <TabsTrigger value="holiday-policies" className="text-xs" data-testid="tab-holiday-policies">Holiday Policies</TabsTrigger>
         </TabsList>
+        </div>
 
         <TabsContent value="groups"><PolicyGroupsTab /></TabsContent>
         <TabsContent value="pay-codes"><PayCodesTab /></TabsContent>

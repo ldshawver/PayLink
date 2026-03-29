@@ -507,7 +507,7 @@ function PayrollRunCard({
       <Dialog open={!!editItem} onOpenChange={(o) => !o && setEditItem(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle>Edit Payroll Item — {editItem ? getWorkerName(editItem.workerId) : ""}</DialogTitle></DialogHeader>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {[
               { label: "Pay Rate", key: "payRate" },
               { label: "Regular Hours", key: "regularHours" },
@@ -533,7 +533,7 @@ function PayrollRunCard({
               </div>
             ))}
           </div>
-          <div className="grid grid-cols-2 gap-3 mt-2 border-t pt-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2 border-t pt-3">
             <div className="grid gap-1">
               <Label className="text-xs">Payment Method</Label>
               <Select value={editForm.paymentMethod} onValueChange={v => setEditForm(f => ({ ...f, paymentMethod: v === "none" ? "" : v }))}>
@@ -1099,7 +1099,7 @@ function TaxesDeductionsTab() {
                   <Label>Name</Label>
                   <Input data-testid="input-td-name" value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Type</Label>
                     <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
@@ -1121,7 +1121,7 @@ function TaxesDeductionsTab() {
                     </Select>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Calculation</Label>
                     <Select value={formData.calculationType} onValueChange={v => setFormData(p => ({ ...p, calculationType: v }))}>
@@ -1144,7 +1144,7 @@ function TaxesDeductionsTab() {
                     </Select>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Rate</Label>
                     <Input type="number" step="0.01" data-testid="input-td-rate" value={formData.rate} onChange={e => setFormData(p => ({ ...p, rate: e.target.value }))} placeholder={formData.calculationType === "percentage" ? "e.g. 6.2" : "e.g. 150.00"} />
@@ -2390,7 +2390,7 @@ function PayStubAccountsTab() {
             <DialogContent className="max-w-lg">
               <DialogHeader><DialogTitle>Add Pay Stub Account</DialogTitle></DialogHeader>
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Company</Label>
                     <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v }))}>
@@ -2415,7 +2415,7 @@ function PayStubAccountsTab() {
                   <Label>Name</Label>
                   <Input data-testid="input-psa-name" value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} />
                 </div>
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                   <div className="space-y-2">
                     <Label>Type</Label>
                     <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
@@ -2446,7 +2446,7 @@ function PayStubAccountsTab() {
                     <Input type="number" data-testid="input-psa-display-order" value={formData.displayOrder} onChange={e => setFormData(p => ({ ...p, displayOrder: Number(e.target.value) }))} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Debit Account (GL)</Label>
                     <Input data-testid="input-psa-debit" value={formData.debitAccount} onChange={e => setFormData(p => ({ ...p, debitAccount: e.target.value }))} placeholder="Optional" />
@@ -2627,7 +2627,7 @@ function PayStubAccountsTab() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label>Type</Label>
                 <Select value={editFormData.type} onValueChange={v => setEditFormData(p => ({ ...p, type: v }))}>
@@ -2658,7 +2658,7 @@ function PayStubAccountsTab() {
                 <Input type="number" data-testid="input-edit-psa-display-order" value={editFormData.displayOrder} onChange={e => setEditFormData(p => ({ ...p, displayOrder: Number(e.target.value) }))} />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Debit Account (GL)</Label>
                 <Input data-testid="input-edit-psa-debit" value={editFormData.debitAccount} onChange={e => setEditFormData(p => ({ ...p, debitAccount: e.target.value }))} placeholder="Optional" />
@@ -3589,7 +3589,7 @@ function CheckLayoutTab() {
                 </div>
                 <div className="grid gap-2">
                   <Label>Template Type</Label>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     {Object.entries(TEMPLATE_PRESETS).map(([key, preset]) => (
                       <button
                         key={key}
@@ -3605,7 +3605,7 @@ function CheckLayoutTab() {
                 </div>
                 <div className="grid gap-2">
                   <Label>Layout Options</Label>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {layoutFields.map(f => (
                       <div key={f.key} className="flex items-center justify-between rounded-md border px-3 py-2">
                         <span className="text-sm">{f.label}</span>
@@ -3699,7 +3699,7 @@ function CheckLayoutTab() {
               </div>
               <div className="grid gap-2">
                 <Label>Template Type</Label>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {Object.entries(TEMPLATE_PRESETS).map(([key, preset]) => (
                     <button
                       key={key}
@@ -3715,7 +3715,7 @@ function CheckLayoutTab() {
               </div>
               <div className="grid gap-2">
                 <Label>Layout Options</Label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {layoutFields.map(f => (
                     <div key={f.key} className="flex items-center justify-between rounded-md border px-3 py-2">
                       <span className="text-sm">{f.label}</span>
@@ -3831,7 +3831,7 @@ function PaymentMethodsTab() {
             <DialogContent className="max-w-lg">
               <DialogHeader><DialogTitle>{editingMethod ? "Edit Payment Method" : "Add Payment Method"}</DialogTitle></DialogHeader>
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Code</Label>
                     <Input placeholder="e.g. ACH" value={formData.code} onChange={e => setFormData(p => ({ ...p, code: e.target.value.toUpperCase() }))} data-testid="input-pm-code" />
@@ -3841,7 +3841,7 @@ function PaymentMethodsTab() {
                     <Input placeholder="e.g. ACH Direct Deposit" value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} data-testid="input-pm-name" />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Category</Label>
                     <Select value={formData.category} onValueChange={v => setFormData(p => ({ ...p, category: v }))}>
@@ -3862,13 +3862,13 @@ function PaymentMethodsTab() {
                     </Select>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Sort Order</Label>
                     <Input type="number" value={formData.sortOrder} onChange={e => setFormData(p => ({ ...p, sortOrder: Number(e.target.value) }))} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {([
                     { key: "isDigitalWallet", label: "Digital Wallet" },
                     { key: "isBankBased", label: "Bank-Based" },
@@ -4029,7 +4029,7 @@ function FundingAccountsTab() {
             <DialogContent className="max-w-lg">
               <DialogHeader><DialogTitle>{editingAccount ? "Edit Funding Account" : "Add Funding Account"}</DialogTitle></DialogHeader>
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Account Code</Label>
                     <Input placeholder="e.g. PC-001" value={formData.accountCode} onChange={e => setFormData(p => ({ ...p, accountCode: e.target.value }))} />
@@ -4039,7 +4039,7 @@ function FundingAccountsTab() {
                     <Input placeholder="e.g. Payroll Checking" value={formData.accountName} onChange={e => setFormData(p => ({ ...p, accountName: e.target.value }))} data-testid="input-fa-name" />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Account Type</Label>
                     <Select value={formData.accountType} onValueChange={v => setFormData(p => ({ ...p, accountType: v }))}>
@@ -4060,7 +4060,7 @@ function FundingAccountsTab() {
                     </Select>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Institution Name</Label>
                     <Input placeholder="e.g. Chase Bank" value={formData.institutionName} onChange={e => setFormData(p => ({ ...p, institutionName: e.target.value }))} />
@@ -4070,7 +4070,7 @@ function FundingAccountsTab() {
                     <Input placeholder="e.g. ••••4321" value={formData.maskedIdentifier} onChange={e => setFormData(p => ({ ...p, maskedIdentifier: e.target.value }))} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Currency</Label>
                     <Select value={formData.currency} onValueChange={v => setFormData(p => ({ ...p, currency: v }))}>
@@ -4309,7 +4309,7 @@ function PaymentRecordsTab() {
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader><DialogTitle>{editingRecord ? "Edit Payment Record" : "Record Payroll Payment"}</DialogTitle></DialogHeader>
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Company</Label>
                   <Select value={formData.companyId || "none"} onValueChange={v => setFormData(p => ({ ...p, companyId: v === "none" ? null : v }))}>
@@ -4325,12 +4325,12 @@ function PaymentRecordsTab() {
                   </Select>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 <div className="space-y-2"><Label>Pay Date</Label><Input type="date" value={formData.payDate} onChange={e => setFormData(p => ({ ...p, payDate: e.target.value }))} /></div>
                 <div className="space-y-2"><Label>Period Start</Label><Input type="date" value={formData.payPeriodStart} onChange={e => setFormData(p => ({ ...p, payPeriodStart: e.target.value }))} /></div>
                 <div className="space-y-2"><Label>Period End</Label><Input type="date" value={formData.payPeriodEnd} onChange={e => setFormData(p => ({ ...p, payPeriodEnd: e.target.value }))} /></div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Payment Method</Label>
                   <Select value={formData.paymentMethodId || "none"} onValueChange={v => { const m = methods.find(m => m.id === v); setFormData(p => ({ ...p, paymentMethodId: v === "none" ? null : v, paymentMethodCode: m?.code || "" })); }}>
@@ -4346,12 +4346,12 @@ function PaymentRecordsTab() {
                   </Select>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 <div className="space-y-2"><Label>Gross Pay</Label><Input type="number" value={formData.grossPayAmount} onChange={e => setFormData(p => ({ ...p, grossPayAmount: e.target.value }))} /></div>
                 <div className="space-y-2"><Label>Tax Withheld</Label><Input type="number" value={formData.employeeTaxWithheld} onChange={e => setFormData(p => ({ ...p, employeeTaxWithheld: e.target.value }))} /></div>
                 <div className="space-y-2"><Label>Net Pay</Label><Input type="number" value={formData.netPayAmount} onChange={e => setFormData(p => ({ ...p, netPayAmount: e.target.value }))} /></div>
               </div>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 <div className="space-y-2">
                   <Label>Status</Label>
                   <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>

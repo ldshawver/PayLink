@@ -282,7 +282,8 @@ export default function Timesheets() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
+        <div className="overflow-x-auto -mx-1 px-1">
+        <TabsList className="inline-flex w-max">
           <TabsTrigger value="timesheets" data-testid="tab-timesheets">
             Timesheets {pendingCount > 0 && (
               <Badge variant="secondary" className="ml-2 text-xs">{pendingCount}</Badge>
@@ -294,6 +295,7 @@ export default function Timesheets() {
             )}
           </TabsTrigger>
         </TabsList>
+        </div>
 
         <TabsContent value="timesheets">
           <Card>
@@ -531,7 +533,7 @@ export default function Timesheets() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label>Start Date</Label>
                 <Input

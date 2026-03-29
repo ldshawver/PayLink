@@ -90,7 +90,7 @@ type WorkerFormValues = z.infer<typeof workerFormSchema>;
 function WorkerFormFields({ form, companies }: { form: any; companies: Company[] | undefined }) {
   return (
     <>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <FormField
           control={form.control}
           name="firstName"
@@ -118,7 +118,7 @@ function WorkerFormFields({ form, companies }: { form: any; companies: Company[]
           )}
         />
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <FormField
           control={form.control}
           name="email"
@@ -214,7 +214,7 @@ function WorkerFormFields({ form, companies }: { form: any; companies: Company[]
           )}
         />
       )}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <FormField
           control={form.control}
           name="jobTitle"
@@ -242,7 +242,7 @@ function WorkerFormFields({ form, companies }: { form: any; companies: Company[]
           )}
         />
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <FormField
           control={form.control}
           name="payRate"
@@ -291,7 +291,7 @@ function WorkerFormFields({ form, companies }: { form: any; companies: Company[]
           </FormItem>
         )}
       />
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <FormField
           control={form.control}
           name="address"
@@ -319,7 +319,7 @@ function WorkerFormFields({ form, companies }: { form: any; companies: Company[]
           )}
         />
       </div>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <FormField
           control={form.control}
           name="city"

@@ -254,7 +254,7 @@ function EmployeeTab() {
           <h3 className="text-sm font-semibold flex items-center gap-2 text-muted-foreground">
             <Briefcase className="h-4 w-4" /> Employment
           </h3>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Company</Label>
               <Select value={form.companyId} onValueChange={v => setForm(f => ({ ...f, companyId: v }))}>
@@ -281,7 +281,7 @@ function EmployeeTab() {
               </Select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Worker Group</Label>
               <Select value={form.workerGroup || "hourly_employee"} onValueChange={v => {
@@ -308,7 +308,7 @@ function EmployeeTab() {
                 onChange={e => setForm(f => ({ ...f, employeeNumber: e.target.value }))} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>PIN (Time Clock)</Label>
               <Input data-testid="input-pin" type="password" placeholder="4-digit PIN" value={form.pin}
@@ -336,7 +336,7 @@ function EmployeeTab() {
           <h3 className="text-sm font-semibold flex items-center gap-2 text-muted-foreground">
             <Users className="h-4 w-4" /> Identity
           </h3>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>First Name</Label>
               <Input data-testid="input-firstName" value={form.firstName}
@@ -353,7 +353,7 @@ function EmployeeTab() {
                 onChange={e => setForm(f => ({ ...f, lastName: e.target.value }))} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Gender</Label>
               <Select value={form.gender} onValueChange={v => setForm(f => ({ ...f, gender: v }))}>
@@ -371,7 +371,7 @@ function EmployeeTab() {
                 onChange={e => setForm(f => ({ ...f, birthDate: e.target.value }))} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>SSN</Label>
               <Input data-testid="input-ssn" value={form.ssn}
@@ -383,7 +383,7 @@ function EmployeeTab() {
                 onChange={e => setForm(f => ({ ...f, ethnicity: e.target.value }))} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Title</Label>
               <Select value={form.titleId} onValueChange={v => setForm(f => ({ ...f, titleId: v }))}>
@@ -421,7 +421,7 @@ function EmployeeTab() {
           <h3 className="text-sm font-semibold flex items-center gap-2 text-muted-foreground">
             <Mail className="h-4 w-4" /> Contact
           </h3>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Work Email</Label>
               <Input data-testid="input-workEmail" type="email" value={form.workEmail}
@@ -433,7 +433,7 @@ function EmployeeTab() {
                 onChange={e => setForm(f => ({ ...f, homeEmail: e.target.value }))} />
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             <div className="space-y-2 col-span-2">
               <Label>Work Phone</Label>
               <Input data-testid="input-workPhone" value={form.workPhone}
@@ -445,7 +445,7 @@ function EmployeeTab() {
                 onChange={e => setForm(f => ({ ...f, workPhoneExt: e.target.value }))} />
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Home Phone</Label>
               <Input data-testid="input-homePhone" value={form.homePhone}
@@ -462,7 +462,7 @@ function EmployeeTab() {
                 onChange={e => setForm(f => ({ ...f, fax: e.target.value }))} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Address</Label>
               <Input data-testid="input-address" value={form.address}
@@ -474,7 +474,7 @@ function EmployeeTab() {
                 onChange={e => setForm(f => ({ ...f, address2: e.target.value }))} />
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>City</Label>
               <Input data-testid="input-city" value={form.city}
@@ -502,7 +502,7 @@ function EmployeeTab() {
           <h3 className="text-sm font-semibold flex items-center gap-2 text-muted-foreground">
             <DollarSign className="h-4 w-4" /> Payroll
           </h3>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Pay Rate</Label>
               <Input data-testid="input-payRate" type="number" value={form.payRate}
@@ -519,7 +519,7 @@ function EmployeeTab() {
               </Select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Currency</Label>
               <Select value={form.currency} onValueChange={v => setForm(f => ({ ...f, currency: v }))}>
@@ -546,7 +546,7 @@ function EmployeeTab() {
               </Select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Department</Label>
               <Select value={form.defaultDepartmentId} onValueChange={v => setForm(f => ({ ...f, defaultDepartmentId: v }))}>
@@ -590,7 +590,7 @@ function EmployeeTab() {
           <h3 className="text-sm font-semibold flex items-center gap-2 text-muted-foreground">
             <UserPlus className="h-4 w-4" /> Emergency Contact
           </h3>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Contact Name</Label>
               <Input data-testid="input-emergencyContactName" value={form.emergencyContactName}
@@ -604,7 +604,7 @@ function EmployeeTab() {
                 placeholder="e.g. Spouse, Parent" />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Phone</Label>
               <Input data-testid="input-emergencyContactPhone" value={form.emergencyContactPhone}
@@ -813,7 +813,7 @@ function EmployeeContactsTab() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Contact Type</Label>
                   <Select value={form.contactType} onValueChange={v => setForm(f => ({ ...f, contactType: v }))}>
@@ -831,7 +831,7 @@ function EmployeeContactsTab() {
                     onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Relationship</Label>
                   <Input data-testid="input-contact-relationship" value={form.relationship}
@@ -980,7 +980,7 @@ function PreferencesTab() {
 
         {selectedWorker && (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Language</Label>
                 <Select value={prefData.language} onValueChange={v => setPrefData(p => ({ ...p, language: v }))}>
@@ -1004,7 +1004,7 @@ function PreferencesTab() {
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Time Format</Label>
                 <Select value={prefData.timeFormat} onValueChange={v => setPrefData(p => ({ ...p, timeFormat: v }))}>
@@ -1439,7 +1439,7 @@ function WagesTab() {
   function renderWageForm(isEdit: boolean) {
     return (
       <div className="grid gap-4 py-4">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Employee</Label>
             <Select value={form.workerId} onValueChange={v => setForm(f => ({ ...f, workerId: v }))}>
@@ -1463,7 +1463,7 @@ function WagesTab() {
             </Select>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Wage Type</Label>
             <Select value={form.wageType} onValueChange={v => setForm(f => ({ ...f, wageType: v }))}>
@@ -1481,7 +1481,7 @@ function WagesTab() {
               onChange={e => setForm(f => ({ ...f, wage: e.target.value }))} />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Effective Date</Label>
             <Input data-testid="input-wage-effectiveDate" type="date" value={form.effectiveDate}
@@ -1493,7 +1493,7 @@ function WagesTab() {
               onChange={e => setForm(f => ({ ...f, averageHoursPerWeek: e.target.value }))} />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Labor Burden %</Label>
             <Input data-testid="input-laborBurdenPercent" type="number" value={form.laborBurdenPercent}
@@ -1682,7 +1682,7 @@ function PayMethodsTab() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Method Type</Label>
                   <Select value={form.methodType} onValueChange={v => setForm(f => ({ ...f, methodType: v }))}>
@@ -1700,7 +1700,7 @@ function PayMethodsTab() {
                     onChange={e => setForm(f => ({ ...f, bankName: e.target.value }))} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Account Type</Label>
                   <Select value={form.accountType} onValueChange={v => setForm(f => ({ ...f, accountType: v }))}>
@@ -1722,7 +1722,7 @@ function PayMethodsTab() {
                 <Input data-testid="input-accountNumber" value={form.accountNumber}
                   onChange={e => setForm(f => ({ ...f, accountNumber: e.target.value }))} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Digital Platform (Optional)</Label>
                   <Select value={form.platform} onValueChange={v => setForm(f => ({ ...f, platform: v === "none" ? "" : v }))}>
@@ -1745,7 +1745,7 @@ function PayMethodsTab() {
                   </div>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Remittance Source</Label>
                   <Select value={form.remittanceSourceId} onValueChange={v => setForm(f => ({ ...f, remittanceSourceId: v }))}>
@@ -1764,7 +1764,7 @@ function PayMethodsTab() {
                     onChange={e => setForm(f => ({ ...f, priority: e.target.value }))} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Amount Type</Label>
                   <Select value={form.amountType} onValueChange={v => setForm(f => ({ ...f, amountType: v }))}>
@@ -2378,7 +2378,7 @@ function NewHireDefaultsTab() {
   function renderDefaultForm(isEdit: boolean) {
     return (
       <div className="grid gap-4 py-4">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Company</Label>
             <Select value={form.companyId} onValueChange={v => setForm(f => ({ ...f, companyId: v }))}>
@@ -2398,7 +2398,7 @@ function NewHireDefaultsTab() {
               onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Default Worker Type</Label>
             <Select value={form.defaultWorkerType} onValueChange={v => setForm(f => ({ ...f, defaultWorkerType: v }))}>
@@ -2420,7 +2420,7 @@ function NewHireDefaultsTab() {
             </Select>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Default Department</Label>
             <Input data-testid="input-defaultDepartment" value={form.defaultDepartment}
@@ -2439,7 +2439,7 @@ function NewHireDefaultsTab() {
             </Select>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Default Policy Group</Label>
             <Select value={form.defaultPolicyGroupId || "none"} onValueChange={v => setForm(f => ({ ...f, defaultPolicyGroupId: v }))}>
@@ -2465,7 +2465,7 @@ function NewHireDefaultsTab() {
             </Select>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Default Currency</Label>
             <Select value={form.defaultCurrency} onValueChange={v => setForm(f => ({ ...f, defaultCurrency: v }))}>
@@ -2969,7 +2969,8 @@ export default function EmployeePage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <TabsList className="flex flex-wrap" data-testid="tabs-employee">
+        <div className="overflow-x-auto -mx-1 px-1">
+        <TabsList className="inline-flex w-max" data-testid="tabs-employee">
           <TabsTrigger value="employee" data-testid="tab-employee">
             <Users className="mr-2 h-4 w-4" />Employee
           </TabsTrigger>
@@ -3004,6 +3005,7 @@ export default function EmployeePage() {
             <Shield className="mr-2 h-4 w-4" />User Accounts
           </TabsTrigger>
         </TabsList>
+        </div>
 
         <TabsContent value="employee"><EmployeeTab /></TabsContent>
         <TabsContent value="preferences"><PreferencesTab /></TabsContent>

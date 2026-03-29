@@ -289,7 +289,8 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
       </div>
 
       <Tabs value={marketplaceSubTab} onValueChange={setMarketplaceSubTab}>
-        <TabsList>
+        <div className="overflow-x-auto -mx-1 px-1">
+        <TabsList className="inline-flex w-max">
           <TabsTrigger value="available" data-testid="subtab-available">
             Available Shifts {openListings.length > 0 && <Badge className="ml-1" variant="secondary">{openListings.length}</Badge>}
           </TabsTrigger>
@@ -301,6 +302,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
           {isAdminOrManager && <TabsTrigger value="legacy" data-testid="subtab-legacy">Legacy Offers</TabsTrigger>}
           {isAdminOrManager && <TabsTrigger value="audit-log" data-testid="subtab-audit-log">Audit Log</TabsTrigger>}
         </TabsList>
+        </div>
 
         <TabsContent value="available" className="space-y-4">
           <div className="flex items-center justify-between">
@@ -362,6 +364,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
           {myListings.length === 0 ? (
             <Card><CardContent className="text-center py-8 text-muted-foreground">No posted shifts.</CardContent></Card>
           ) : (
+            <div className="overflow-x-auto">
             <Table data-testid="table-my-listings">
               <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Time</TableHead><TableHead>Status</TableHead><TableHead>Urgency</TableHead><TableHead>Requests</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>
               <TableBody>
@@ -387,6 +390,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                 })}
               </TableBody>
             </Table>
+            </div>
           )}
         </TabsContent>
 
@@ -395,6 +399,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
           {myRequests.length === 0 ? (
             <Card><CardContent className="text-center py-8 text-muted-foreground">No shift requests.</CardContent></Card>
           ) : (
+            <div className="overflow-x-auto">
             <Table data-testid="table-my-requests">
               <TableHeader><TableRow><TableHead>Listing</TableHead><TableHead>Status</TableHead><TableHead>Note</TableHead><TableHead>Reviewed By</TableHead></TableRow></TableHeader>
               <TableBody>
@@ -412,6 +417,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                 })}
               </TableBody>
             </Table>
+            </div>
           )}
         </TabsContent>
 
@@ -477,6 +483,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                 {shiftOffers.length === 0 ? (
                   <p className="text-center text-muted-foreground py-4">No legacy offers.</p>
                 ) : (
+                  <div className="overflow-x-auto">
                   <Table data-testid="table-legacy-offers">
                     <TableHeader><TableRow><TableHead>Offered By</TableHead><TableHead>Date</TableHead><TableHead>Time</TableHead><TableHead>Status</TableHead><TableHead>Claimed By</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>
                     <TableBody>
@@ -510,6 +517,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                       })}
                     </TableBody>
                   </Table>
+                  </div>
                 )}
               </CardContent>
             </Card>
@@ -522,6 +530,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
             {auditLogs.length === 0 ? (
               <Card><CardContent className="text-center py-8 text-muted-foreground">No audit entries yet.</CardContent></Card>
             ) : (
+              <div className="overflow-x-auto">
               <Table data-testid="table-audit-log">
                 <TableHeader><TableRow><TableHead>Time</TableHead><TableHead>Action</TableHead><TableHead>Object</TableHead><TableHead>Actor</TableHead></TableRow></TableHeader>
                 <TableBody>
@@ -535,6 +544,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                   ))}
                 </TableBody>
               </Table>
+              </div>
             )}
           </TabsContent>
         )}
@@ -1173,7 +1183,8 @@ export default function SchedulePage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <TabsList data-testid="tabs-schedule">
+        <div className="overflow-x-auto -mx-1 px-1">
+        <TabsList className="inline-flex w-max" data-testid="tabs-schedule">
           <TabsTrigger value="schedules" data-testid="tab-schedules">
             <Calendar className="h-4 w-4 mr-1" />
             Schedules
@@ -1200,6 +1211,7 @@ export default function SchedulePage() {
             )}
           </TabsTrigger>
         </TabsList>
+        </div>
 
         <Dialog open={offerShiftOpen} onOpenChange={setOfferShiftOpen}>
           <DialogContent>
@@ -1457,7 +1469,7 @@ export default function SchedulePage() {
                             </SelectContent>
                           </Select>
                         </div>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <div>
                             <Label>From Date</Label>
                             <Input
@@ -1923,7 +1935,7 @@ export default function SchedulePage() {
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div>
                         <Label>Start Date</Label>
                         <Input
@@ -2052,7 +2064,7 @@ export default function SchedulePage() {
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div>
                         <Label>Start Time</Label>
                         <Input
@@ -2072,7 +2084,7 @@ export default function SchedulePage() {
                         />
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div>
                         <Label>Effective From</Label>
                         <Input
@@ -2108,7 +2120,7 @@ export default function SchedulePage() {
 
           {recurringViewMode === "list" ? (
           <Card>
-            <CardContent className="pt-4">
+            <CardContent className="pt-4 overflow-x-auto">
               {recurringLoading || workersLoading ? (
                 <div className="space-y-2" data-testid="skeleton-recurring-table">
                   {Array.from({ length: 5 }).map((_, i) => (
@@ -2264,7 +2276,7 @@ export default function SchedulePage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <label className="text-xs font-medium text-muted-foreground">Start Time</label>
                     <input type="time" className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
@@ -2280,7 +2292,7 @@ export default function SchedulePage() {
                       data-testid="input-edit-recurring-end-time" />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <label className="text-xs font-medium text-muted-foreground">Effective From</label>
                     <input type="date" className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
@@ -2579,7 +2591,7 @@ export default function SchedulePage() {
                 data-testid="input-schedule-date"
               />
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div>
                 <Label>Start Time</Label>
                 <Input
@@ -2672,7 +2684,7 @@ export default function SchedulePage() {
               <p className="text-sm text-muted-foreground">
                 {getWorkerName(workers, editingSchedule.workerId)} - {editingSchedule.date}
               </p>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <div>
                   <Label>Start Time</Label>
                   <Input

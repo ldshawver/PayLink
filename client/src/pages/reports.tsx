@@ -161,6 +161,7 @@ function SavedReportViewDialog({ open, onOpenChange, reportId }: { open: boolean
                 <Button variant="outline" size="sm" onClick={() => downloadCSV(headers, rows, `${report?.name || "report"}.csv`)} data-testid="button-export-saved"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
               </div>
             </div>
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>{headers.map((h, i) => <TableHead key={i}>{h}</TableHead>)}</TableRow>
@@ -173,6 +174,7 @@ function SavedReportViewDialog({ open, onOpenChange, reportId }: { open: boolean
                 )}
               </TableBody>
             </Table>
+            </div>
           </div>
         )}
       </DialogContent>
@@ -256,7 +258,7 @@ function SavedReportsTab() {
         </div>
       ) : (
         <Card>
-          <CardContent className="p-0">
+          <CardContent className="p-0 overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -329,6 +331,7 @@ function WhosInDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
         ) : clockedIn.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-clocked-in">No employees currently clocked in.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -347,6 +350,7 @@ function WhosInDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground" data-testid="text-clocked-in-count">
@@ -408,6 +412,7 @@ function EmployeeInfoDialog({ open, onOpenChange }: { open: boolean; onOpenChang
             <Skeleton className="h-8 w-full" />
           </div>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -442,6 +447,7 @@ function EmployeeInfoDialog({ open, onOpenChange }: { open: boolean; onOpenChang
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -487,6 +493,7 @@ function TimesheetSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenC
           <p className="text-muted-foreground py-4" data-testid="text-no-timesheet-data">No timesheet data available.</p>
         ) : (
           <div>
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -503,6 +510,7 @@ function TimesheetSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenC
                 ))}
               </TableBody>
             </Table>
+            </div>
             <div className="flex justify-end mt-3">
               <SaveReportButton reportType="timesheet-summary" category="timesheet" defaultName="Timesheet Summary" headers={["Employee", "Total Hours"]} rows={rows.map(([wId, hrs]) => [getWorkerName(wId), hrs.toFixed(2)])} />
             </div>
@@ -558,6 +566,7 @@ function PayrollExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
         ) : payrollRuns.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-payroll-data">No payroll data available.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -584,6 +593,7 @@ function PayrollExportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -663,6 +673,7 @@ function AuditTrailDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
         ) : sorted.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-audit-data">No audit trail data available.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -685,6 +696,7 @@ function AuditTrailDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -760,6 +772,7 @@ function ScheduleSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenCh
         ) : sorted.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-schedule-data">No schedule data available.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -784,6 +797,7 @@ function ScheduleSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -866,6 +880,7 @@ function TimesheetDetailDialog({ open, onOpenChange }: { open: boolean; onOpenCh
         ) : sorted.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-timesheet-detail-data">No timesheet detail data available.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -900,6 +915,7 @@ function TimesheetDetailDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -966,6 +982,7 @@ function PunchSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenChang
         ) : sorted.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-punch-data">No punch data available.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -988,6 +1005,7 @@ function PunchSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenChang
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -1066,6 +1084,7 @@ function AccrualBalanceSummaryDialog({ open, onOpenChange }: { open: boolean; on
         ) : balances.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-accrual-data">No accrual balance data available.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1096,6 +1115,7 @@ function AccrualBalanceSummaryDialog({ open, onOpenChange }: { open: boolean; on
               })}
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -1176,6 +1196,7 @@ function ExceptionSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenC
         ) : sorted.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-exception-data">No exceptions found.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1204,6 +1225,7 @@ function ExceptionSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenC
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -1273,6 +1295,7 @@ function PaystubSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenCha
         ) : sorted.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-paystub-data">No paystub data available.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1301,6 +1324,7 @@ function PaystubSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenCha
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -1360,6 +1384,7 @@ function GeneralLedgerSummaryDialog({ open, onOpenChange }: { open: boolean; onO
         ) : sorted.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-ledger-data">No general ledger data available.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1390,6 +1415,7 @@ function GeneralLedgerSummaryDialog({ open, onOpenChange }: { open: boolean; onO
               })}
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -1457,6 +1483,7 @@ function TaxSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
         ) : deductions.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-tax-data">No tax/deduction data available.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1498,6 +1525,7 @@ function TaxSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
               })}
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -1572,6 +1600,7 @@ function QualificationSummaryDialog({ open, onOpenChange }: { open: boolean; onO
         ) : qualifications.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-qualification-data">No qualification data available.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1605,6 +1634,7 @@ function QualificationSummaryDialog({ open, onOpenChange }: { open: boolean; onO
               })}
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -1669,6 +1699,7 @@ function ReviewSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
         ) : sorted.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-review-data">No review data available.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1693,6 +1724,7 @@ function ReviewSummaryDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -1856,6 +1888,7 @@ function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
         {companyEmployees.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-w2">No W-2 eligible employees found for {year}.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1895,6 +1928,7 @@ function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
               </TableRow>
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -1956,6 +1990,7 @@ function Form1099NECDialog({ open, onOpenChange }: { open: boolean; onOpenChange
         {filtered.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-1099">No contractors found for the selected period.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1984,6 +2019,7 @@ function Form1099NECDialog({ open, onOpenChange }: { open: boolean; onOpenChange
               </TableRow>
             </TableBody>
           </Table>
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -2044,6 +2080,7 @@ function Form941Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
         </div>
         <div className="border rounded-lg p-4 space-y-3 mt-2">
           <h3 className="font-semibold text-sm">Form 941 — {quarter} {year}</h3>
+          <div className="overflow-x-auto">
           <Table>
             <TableBody>
               <TableRow><TableCell>1. Number of employees who received wages</TableCell><TableCell className="text-right font-medium">{filtered.length}</TableCell></TableRow>
@@ -2060,6 +2097,7 @@ function Form941Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
               <TableRow className="font-bold"><TableCell>10. Total taxes after adjustments</TableCell><TableCell className="text-right">${totalTaxDeposits.toFixed(2)}</TableCell></TableRow>
             </TableBody>
           </Table>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
@@ -2110,6 +2148,7 @@ function Form940Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
         </div>
         <div className="border rounded-lg p-4 space-y-3 mt-2">
           <h3 className="font-semibold text-sm">Form 940 — {year}</h3>
+          <div className="overflow-x-auto">
           <Table>
             <TableBody>
               <TableRow><TableCell>3. Total payments to all employees</TableCell><TableCell className="text-right font-medium">${totalWages.toFixed(2)}</TableCell></TableRow>
@@ -2119,6 +2158,7 @@ function Form940Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
               <TableRow className="font-bold"><TableCell>14. Total FUTA tax</TableCell><TableCell className="text-right">${futaTax.toFixed(2)}</TableCell></TableRow>
             </TableBody>
           </Table>
+          </div>
           <p className="text-xs text-muted-foreground">Remit to: Internal Revenue Service (IRS)</p>
         </div>
       </DialogContent>
@@ -2176,6 +2216,7 @@ function DE9Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: bo
         </div>
         <div className="border rounded-lg p-4 space-y-3 mt-2">
           <h3 className="font-semibold text-sm">California DE 9 — {quarter} {year}</h3>
+          <div className="overflow-x-auto">
           <Table>
             <TableBody>
               <TableRow><TableCell>A. Number of employees</TableCell><TableCell className="text-right font-medium">{filtered.length}</TableCell></TableRow>
@@ -2189,6 +2230,7 @@ function DE9Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: bo
               <TableRow className="font-bold"><TableCell>Total contributions & withholdings</TableCell><TableCell className="text-right">${(pitWithheld + sdiWithheld + suiContrib + ettContrib).toFixed(2)}</TableCell></TableRow>
             </TableBody>
           </Table>
+          </div>
           <p className="text-xs text-muted-foreground">File with: California Employment Development Department (EDD)</p>
         </div>
       </DialogContent>
@@ -2242,6 +2284,7 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
         {filtered.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-de9c">No employees found for the selected period.</p>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -2274,6 +2317,7 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
               </TableRow>
             </TableBody>
           </Table>
+          </div>
         )}
         <p className="text-xs text-muted-foreground mt-2">File with: California Employment Development Department (EDD) — accompanies DE 9</p>
       </DialogContent>
@@ -2328,6 +2372,7 @@ function Form1096Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
         <div className="border rounded-lg p-4 space-y-3 mt-2">
           <h3 className="font-semibold text-sm">Form 1096 — Annual Summary and Transmittal of U.S. Information Returns — {year}</h3>
           <p className="text-xs text-muted-foreground">This form accompanies paper filings of 1099-NEC forms submitted to the IRS.</p>
+          <div className="overflow-x-auto">
           <Table>
             <TableBody>
               <TableRow><TableCell>Filer's name and address</TableCell><TableCell className="text-right font-medium">{companyId !== "all" ? companies.find(c => c.id === companyId)?.name || "—" : "All Companies"}</TableCell></TableRow>
@@ -2337,6 +2382,7 @@ function Form1096Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
               <TableRow className="font-bold"><TableCell>Box 5 — Total amount reported</TableCell><TableCell className="text-right">${totalComp.toFixed(2)}</TableCell></TableRow>
             </TableBody>
           </Table>
+          </div>
           <p className="text-xs text-muted-foreground">File with: Internal Revenue Service (IRS) — accompanies paper 1099-NEC submissions</p>
         </div>
       </DialogContent>
@@ -2504,6 +2550,7 @@ function JobCostReportSection() {
         </CardContent></Card>
       ) : (
         <Card><CardContent className="p-0">
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -2570,6 +2617,7 @@ function JobCostReportSection() {
               </TableRow>
             </TableBody>
           </Table>
+          </div>
         </CardContent></Card>
       )}
     </div>
@@ -2715,7 +2763,7 @@ function ExpenseReportSection() {
                     <p className="font-bold text-lg">${group.total.toFixed(2)}</p>
                   </div>
                 </CardHeader>
-                <CardContent className="p-0">
+                <CardContent className="p-0 overflow-x-auto">
                   <Table>
                     <TableHeader><TableRow>
                       <TableHead>Date</TableHead><TableHead>Vendor</TableHead><TableHead>Employee</TableHead>
@@ -2771,7 +2819,7 @@ function ExpenseReportSection() {
                     <p className="font-bold text-lg">${group.total.toFixed(2)}</p>
                   </div>
                 </CardHeader>
-                <CardContent className="p-0">
+                <CardContent className="p-0 overflow-x-auto">
                   <Table>
                     <TableHeader><TableRow>
                       <TableHead>Date</TableHead><TableHead>Vendor</TableHead><TableHead>Description</TableHead>
@@ -2835,7 +2883,8 @@ export default function ReportsPage() {
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="flex-wrap" data-testid="tabs-reports">
+        <div className="overflow-x-auto -mx-1 px-1">
+        <TabsList className="inline-flex w-max" data-testid="tabs-reports">
           <TabsTrigger value="saved" data-testid="tab-saved">Saved Reports</TabsTrigger>
           <TabsTrigger value="employee" data-testid="tab-employee">Employee Reports</TabsTrigger>
           <TabsTrigger value="timesheet" data-testid="tab-timesheet">Timesheet Reports</TabsTrigger>
@@ -2845,6 +2894,7 @@ export default function ReportsPage() {
           <TabsTrigger value="expense" data-testid="tab-expense">Expense Reports</TabsTrigger>
           <TabsTrigger value="job-cost" data-testid="tab-job-cost">Job Cost</TabsTrigger>
         </TabsList>
+        </div>
 
         <TabsContent value="saved" className="mt-6">
           <SavedReportsTab />

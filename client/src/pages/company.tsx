@@ -161,7 +161,7 @@ function CompanyFormFields({
         <Label htmlFor="company-legalName">Legal Name</Label>
         <Input id="company-legalName" data-testid="input-company-legalName" value={form.legalName} onChange={set("legalName")} />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label htmlFor="company-ein">EIN</Label>
           <Input id="company-ein" data-testid="input-company-ein" value={form.ein} onChange={set("ein")} />
@@ -184,7 +184,7 @@ function CompanyFormFields({
         <Label htmlFor="company-address">Address</Label>
         <Input id="company-address" data-testid="input-company-address" value={form.address} onChange={set("address")} />
       </div>
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
         <div className="grid gap-2">
           <Label htmlFor="company-city">City</Label>
           <Input id="company-city" data-testid="input-company-city" value={form.city} onChange={set("city")} />
@@ -198,7 +198,7 @@ function CompanyFormFields({
           <Input id="company-zip" data-testid="input-company-zip" value={form.zip} onChange={set("zip")} />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label htmlFor="company-phone">Phone</Label>
           <Input id="company-phone" data-testid="input-company-phone" value={form.phone} onChange={set("phone")} />
@@ -217,13 +217,13 @@ function CompanyFormFields({
           </Select>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label htmlFor="next-check-number">Next Check Number</Label>
           <Input id="next-check-number" data-testid="input-next-check-number" type="number" value={form.nextCheckNumber} onChange={set("nextCheckNumber")} placeholder="e.g. 100" />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <FileUploadField
           label="Company Logo"
           value={form.logoUrl || ""}
@@ -557,7 +557,7 @@ function LegalEntityTab() {
           <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader><DialogTitle>Add Legal Entity</DialogTitle></DialogHeader>
             <div className="grid gap-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Status</Label>
                   <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
@@ -602,7 +602,7 @@ function LegalEntityTab() {
                   onChange={set("tradeName")}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label htmlFor="legal-entity-ein">EIN</Label>
                   <Input
@@ -623,7 +623,7 @@ function LegalEntityTab() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label htmlFor="legal-entity-startDate">Start Date</Label>
                   <Input
@@ -654,7 +654,7 @@ function LegalEntityTab() {
                   onChange={set("address")}
                 />
               </div>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                 <div className="grid gap-2">
                   <Label htmlFor="legal-entity-city">City</Label>
                   <Input
@@ -683,7 +683,7 @@ function LegalEntityTab() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label htmlFor="legal-entity-country">Country</Label>
                   <Input
@@ -720,7 +720,7 @@ function LegalEntityTab() {
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Legal Entity</DialogTitle></DialogHeader>
           <div className="grid gap-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="grid gap-2">
                 <Label>Status</Label>
                 <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
@@ -765,7 +765,7 @@ function LegalEntityTab() {
                 onChange={set("tradeName")}
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="grid gap-2">
                 <Label htmlFor="legal-entity-ein-edit">EIN</Label>
                 <Input
@@ -786,7 +786,7 @@ function LegalEntityTab() {
                 />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="grid gap-2">
                 <Label htmlFor="legal-entity-startDate-edit">Start Date</Label>
                 <Input
@@ -817,7 +817,7 @@ function LegalEntityTab() {
                 onChange={set("address")}
               />
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
               <div className="grid gap-2">
                 <Label htmlFor="legal-entity-city-edit">City</Label>
                 <Input
@@ -846,7 +846,7 @@ function LegalEntityTab() {
                 />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="grid gap-2">
                 <Label htmlFor="legal-entity-country-edit">Country</Label>
                 <Input
@@ -1062,7 +1062,7 @@ function BranchesTab() {
             </SelectContent>
           </Select>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="grid gap-2">
             <Label>Name *</Label>
             <Input data-testid={`input-branch-name${suffix}`} value={form.name} onChange={set("name")} />
@@ -1076,7 +1076,7 @@ function BranchesTab() {
           <Label>Address</Label>
           <Input data-testid={`input-branch-address${suffix}`} value={form.address} onChange={set("address")} />
         </div>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
           <div className="grid gap-2">
             <Label>City</Label>
             <Input data-testid={`input-branch-city${suffix}`} value={form.city} onChange={set("city")} />
@@ -1312,7 +1312,7 @@ function DepartmentsTab() {
           </SelectContent>
         </Select>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label>Name *</Label>
           <Input data-testid={`input-department-name${suffix}`} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
@@ -1960,7 +1960,7 @@ function PositionsTab() {
           </SelectContent>
         </Select>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label>Salary Min</Label>
           <Input data-testid={`input-position-salary-min${suffix}`} type="number" value={form.salaryRangeMin} onChange={(e) => setForm({ ...form, salaryRangeMin: e.target.value })} />
@@ -2148,7 +2148,7 @@ function CostCentersTab() {
           </SelectContent>
         </Select>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label>Name *</Label>
           <Input data-testid={`input-cost-center-name${suffix}`} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
@@ -2360,7 +2360,7 @@ function JobsTab() {
           </SelectContent>
         </Select>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label>Department</Label>
           <Select value={form.departmentId} onValueChange={(v) => setForm({ ...form, departmentId: v })}>
@@ -2396,7 +2396,7 @@ function JobsTab() {
         <Label>Description</Label>
         <Input data-testid={`input-job-description${suffix}`} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label>Pay Type</Label>
           <Select value={form.payType} onValueChange={(v) => setForm({ ...form, payType: v })}>
@@ -2416,7 +2416,7 @@ function JobsTab() {
           <Input data-testid={`input-job-wage${suffix}`} type="number" step="0.01" value={form.defaultWage} onChange={(e) => setForm({ ...form, defaultWage: e.target.value })} placeholder="0.00" />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label>Start Date</Label>
           <Input data-testid={`input-job-start-date${suffix}`} type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
@@ -3510,7 +3510,7 @@ function StationsTab() {
         <Label>Station Name *</Label>
         <Input data-testid={`input-station-name${suffix}`} value={form.stationName} onChange={(e) => setForm({ ...form, stationName: e.target.value })} />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label>Location</Label>
           <Input data-testid={`input-station-location${suffix}`} value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="e.g. Building A, Floor 2" />
@@ -3520,7 +3520,7 @@ function StationsTab() {
           <Input data-testid={`input-station-ip${suffix}`} value={form.ipRestriction} onChange={(e) => setForm({ ...form, ipRestriction: e.target.value })} placeholder="e.g. 192.168.1.0/24" />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label>Description</Label>
           <Input data-testid={`input-station-description${suffix}`} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
@@ -3680,7 +3680,7 @@ function SecondaryWageGroupsTab() {
         <Label>Group Name *</Label>
         <Input data-testid={`input-wg-name${suffix}`} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label>Hourly Rate ($)</Label>
           <Input data-testid={`input-wg-hourly${suffix}`} type="number" step="0.01" value={form.hourlyRate} onChange={(e) => setForm({ ...form, hourlyRate: e.target.value })} />
@@ -3795,7 +3795,7 @@ function CurrenciesTab() {
           <SelectContent>{companies?.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}</SelectContent>
         </Select>
       </div>
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
         <div className="grid gap-2">
           <Label>Currency Code *</Label>
           <Input data-testid={`input-currency-code${suffix}`} value={form.currencyCode} onChange={(e) => setForm({ ...form, currencyCode: e.target.value.toUpperCase() })} placeholder="USD" maxLength={3} />
@@ -3809,7 +3809,7 @@ function CurrenciesTab() {
           <Input data-testid={`input-currency-symbol${suffix}`} value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })} placeholder="$" maxLength={5} />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="grid gap-2">
           <Label>Exchange Rate</Label>
           <Input data-testid={`input-currency-rate${suffix}`} type="number" step="0.0001" value={form.exchangeRate} onChange={(e) => setForm({ ...form, exchangeRate: e.target.value })} />
@@ -3999,7 +3999,7 @@ function ImportTab() {
         <CardContent className="pt-6">
           {step === "upload" && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label>Import Type</Label>
                   <Select value={importType} onValueChange={setImportType}>

@@ -399,7 +399,7 @@ function TimesheetTab() {
                 <Label>Date</Label>
                 <Input type="date" value={addForm.date} onChange={e => setAddForm(f => ({ ...f, date: e.target.value }))} data-testid="input-add-entry-date" />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="grid gap-1.5">
                   <Label>Clock In</Label>
                   <Input type="datetime-local" value={addForm.clockIn} onChange={e => {
@@ -433,7 +433,7 @@ function TimesheetTab() {
                   }} data-testid="input-add-entry-clockout" />
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="grid gap-1.5">
                   <Label>Break (min)</Label>
                   <Input type="number" value={addForm.breakMinutes} onChange={e => setAddForm(f => ({ ...f, breakMinutes: e.target.value }))} data-testid="input-add-entry-break" />
@@ -625,7 +625,7 @@ function TimesheetTab() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label>Start Date</Label>
                 <Input type="date" value={convertStart}
@@ -670,7 +670,7 @@ function TimesheetTab() {
                   ? `${workerMap.get(editEntry.workerId)!.firstName} ${workerMap.get(editEntry.workerId)!.lastName}`
                   : "Unknown"} — {editEntry.date}
               </p>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="grid gap-1.5">
                   <Label>Clock In</Label>
                   <Input type="datetime-local" value={editForm.clockIn} onChange={e => setEditForm(f => ({ ...f, clockIn: e.target.value }))} data-testid="input-edit-clockin" />
@@ -687,7 +687,7 @@ function TimesheetTab() {
               <Button variant="outline" size="sm" onClick={handleRecalculate} data-testid="button-recalculate">
                 Recalculate Hours
               </Button>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="grid gap-1.5">
                   <Label>Total Hours</Label>
                   <Input type="number" step="0.01" value={editForm.totalHours} onChange={e => setEditForm(f => ({ ...f, totalHours: e.target.value }))} data-testid="input-edit-total" />
@@ -1610,6 +1610,7 @@ function TimeOffRequestsTab() {
           <p>No time-off requests found</p>
         </div>
       ) : (
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -1655,6 +1656,7 @@ function TimeOffRequestsTab() {
             ))}
           </TableBody>
         </Table>
+        </div>
       )}
 
       {/* Review Dialog */}
@@ -1886,6 +1888,7 @@ function SchedulePreferencesTab() {
           <p>No schedule preferences found</p>
         </div>
       ) : (
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -1919,6 +1922,7 @@ function SchedulePreferencesTab() {
             ))}
           </TableBody>
         </Table>
+        </div>
       )}
 
       <AlertDialog open={!!deleteId} onOpenChange={open => !open && setDeleteId(null)}>
@@ -1954,7 +1958,8 @@ export default function AttendancePage() {
       </div>
 
       <Tabs value={currentTab} className="w-full">
-        <TabsList data-testid="tabs-attendance">
+        <div className="overflow-x-auto -mx-1 px-1">
+        <TabsList className="inline-flex w-max" data-testid="tabs-attendance">
           <Link href="/attendance?tab=timesheet">
             <TabsTrigger value="timesheet" data-testid="tab-timesheet" asChild>
               <span className="flex items-center gap-1.5">
@@ -2012,6 +2017,7 @@ export default function AttendancePage() {
             </TabsTrigger>
           </Link>
         </TabsList>
+        </div>
 
         <TabsContent value="timesheet">
           <Card>

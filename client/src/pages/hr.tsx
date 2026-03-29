@@ -291,7 +291,7 @@ function ReviewsTab() {
       </div>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -575,7 +575,7 @@ function QualificationsTab() {
       </div>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -750,7 +750,7 @@ function SkillsTab() {
         </Dialog>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -895,7 +895,7 @@ function EducationTab() {
         </Dialog>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1031,7 +1031,7 @@ function LicensesTab() {
         </Dialog>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1139,7 +1139,7 @@ function KpiGroupsTab() {
         </Dialog>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1240,7 +1240,7 @@ function QualificationGroupsTab() {
         </Dialog>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1376,7 +1376,7 @@ function LanguagesTab() {
         </Dialog>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1518,7 +1518,7 @@ function MembershipsTab() {
         </Dialog>
       </div>
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1569,13 +1569,15 @@ export default function HRPage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <TabsList className="flex-wrap" data-testid="tabs-hr">
+        <div className="overflow-x-auto -mx-1 px-1">
+        <TabsList className="inline-flex w-max" data-testid="tabs-hr">
           <TabsTrigger value="reviews" data-testid="tab-reviews">Reviews</TabsTrigger>
           <TabsTrigger value="kpi-groups" data-testid="tab-kpi-groups">KPI Groups</TabsTrigger>
           <TabsTrigger value="skills-qualifications" data-testid="tab-skills-qualifications">Skills & Qualifications</TabsTrigger>
           <TabsTrigger value="education" data-testid="tab-education">Education</TabsTrigger>
           <TabsTrigger value="licenses" data-testid="tab-licenses">Licenses</TabsTrigger>
         </TabsList>
+        </div>
 
         <TabsContent value="reviews">
           <ReviewsTab />
