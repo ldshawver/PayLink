@@ -298,7 +298,7 @@ export async function registerRoutes(
   });
 
   app.use("/api", (req, res, next) => {
-    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches"
+    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
       || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
@@ -771,6 +771,123 @@ export async function registerRoutes(
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Punch failed" });
+    }
+  });
+
+  // Sign in without punch — auth + session only
+  app.post("/api/time-clock/sign-in", async (req, res) => {
+    try {
+      const { employeeNumber, pin } = req.body;
+      if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
+      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
+      if (!worker || worker.pin !== pin) return res.status(401).json({ message: "Invalid employee number or PIN" });
+      if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
+      const allUsers = await storage.getUsers();
+      let user = allUsers.find(u => u.workerId === worker.id);
+      if (!user) {
+        const hashedPassword = await bcrypt.hash(pin, 10);
+        user = await storage.createUser({ username: employeeNumber, password: hashedPassword, role: "employee", companyId: worker.companyId, workerId: worker.id, isActive: true });
+      }
+      if (user.isActive === false) return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
+      req.session.userId = user.id;
+      req.session.username = user.username;
+      req.session.save((err) => {
+        if (err) return res.status(500).json({ message: "Authentication failed" });
+        res.json({ id: user!.id, username: user!.username, role: user!.role, workerId: user!.workerId, companyId: user!.companyId });
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Sign in failed" });
+    }
+  });
+
+  // Clock in + session — auth + clock_in punch + session creation
+  app.post("/api/time-clock/clock-in-session", async (req, res) => {
+    try {
+      const { employeeNumber, pin, wageGroupId } = req.body;
+      if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
+      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
+      if (!worker || worker.pin !== pin) return res.status(401).json({ message: "Invalid employee number or PIN" });
+      if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
+      if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
+        return res.status(400).json({ message: "Invoice-based contractors cannot clock in." });
+      }
+      // Duplicate clock-in prevention
+      const allPunches = await storage.getTimePunches(worker.companyId);
+      const workerPunches = allPunches.filter(p => p.workerId === worker.id).sort((a, b) => new Date(b.punchTime).getTime() - new Date(a.punchTime).getTime());
+      const lastPunch = workerPunches[0];
+      if (lastPunch && (lastPunch.punchType === "clock_in" || lastPunch.punchType === "break_end")) {
+        return res.status(409).json({ message: "You are already clocked in. Please clock out first." });
+      }
+      // Create punch
+      const punch = await storage.createTimePunch({ workerId: worker.id, companyId: worker.companyId, punchType: "clock_in", punchTime: new Date(), approvalStatus: "approved", stationId: null });
+      // Close any stale open entries from previous days
+      const today = new Date().toISOString().split("T")[0];
+      const allEntries = await storage.getTimeEntries();
+      const staleOpenEntries = allEntries.filter(e => e.workerId === worker.id && e.clockIn && !e.clockOut && e.date !== today);
+      for (const stale of staleOpenEntries) {
+        const staleClockIn = new Date(stale.clockIn!);
+        const elapsed = (Date.now() - staleClockIn.getTime()) / (1000 * 60 * 60);
+        const cappedHours = Math.min(elapsed, 8).toFixed(2);
+        const staleClockOut = new Date(staleClockIn.getTime() + parseFloat(cappedHours) * 60 * 60 * 1000);
+        await storage.updateTimeEntry(stale.id, { clockOut: staleClockOut, totalHours: cappedHours, overtimeHours: "0.00", doubleTimeHours: "0.00" });
+      }
+      // Create time entry
+      const now = new Date();
+      await storage.createTimeEntry({ workerId: worker.id, companyId: worker.companyId, date: today, clockIn: now, status: "pending", source: "punches" });
+      // Auth + session
+      const allUsers = await storage.getUsers();
+      let user = allUsers.find(u => u.workerId === worker.id);
+      if (!user) {
+        const hashedPassword = await bcrypt.hash(pin, 10);
+        user = await storage.createUser({ username: employeeNumber, password: hashedPassword, role: "employee", companyId: worker.companyId, workerId: worker.id, isActive: true });
+      }
+      req.session.userId = user.id;
+      req.session.username = user.username;
+      req.session.save((err) => {
+        if (err) return res.status(500).json({ message: "Authentication failed" });
+        res.status(201).json({ punch, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName } });
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Clock in failed" });
+    }
+  });
+
+  // Clock out — auth + clock_out punch (no session needed after clock out)
+  app.post("/api/time-clock/clock-out-session", async (req, res) => {
+    try {
+      const { employeeNumber, pin } = req.body;
+      if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
+      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
+      if (!worker || worker.pin !== pin) return res.status(401).json({ message: "Invalid employee number or PIN" });
+      if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
+      // Must have an open shift
+      const allPunches = await storage.getTimePunches(worker.companyId);
+      const workerPunches = allPunches.filter(p => p.workerId === worker.id).sort((a, b) => new Date(b.punchTime).getTime() - new Date(a.punchTime).getTime());
+      const lastPunch = workerPunches[0];
+      if (!lastPunch || lastPunch.punchType === "clock_out") {
+        return res.status(409).json({ message: "You are not currently clocked in." });
+      }
+      // Create punch
+      const punch = await storage.createTimePunch({ workerId: worker.id, companyId: worker.companyId, punchType: "clock_out", punchTime: new Date(), approvalStatus: "approved", stationId: null });
+      // Close open time entry
+      const allEntries = await storage.getTimeEntries();
+      const openEntry = allEntries.find(e => e.workerId === worker.id && e.clockIn && !e.clockOut);
+      if (openEntry) {
+        const clockIn = new Date(openEntry.clockIn!);
+        const clockOut = new Date();
+        const totalMs = clockOut.getTime() - clockIn.getTime();
+        const breakMs = (openEntry.breakMinutes || 0) * 60 * 1000;
+        const workedHours = Math.max(0, (totalMs - breakMs) / (1000 * 60 * 60));
+        const otHours = Math.max(0, workedHours - 8);
+        const dtHours = Math.max(0, workedHours - 12);
+        await storage.updateTimeEntry(openEntry.id, { clockOut, totalHours: workedHours.toFixed(2), overtimeHours: otHours.toFixed(2), doubleTimeHours: dtHours.toFixed(2) });
+      }
+      res.status(201).json({ punch, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName } });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Clock out failed" });
     }
   });
 

@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
 
@@ -21,6 +21,8 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+const EMPLOYEE_INACTIVITY_MS = 5 * 60 * 1000;
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { data: user, isLoading } = useQuery<AuthUser | null>({
     queryKey: ["/api/auth/me"],
@@ -28,6 +30,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     retry: false,
     staleTime: Infinity,
   });
+
+  const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!user || user.role !== "employee") return;
+
+    function resetTimer() {
+      if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+      inactivityTimer.current = setTimeout(async () => {
+        try {
+          await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+        } catch (_) {}
+        queryClient.clear();
+        window.location.href = "/clock-in";
+      }, EMPLOYEE_INACTIVITY_MS);
+    }
+
+    const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll", "click"];
+    events.forEach((e) => window.addEventListener(e, resetTimer, { passive: true }));
+    resetTimer();
+
+    return () => {
+      events.forEach((e) => window.removeEventListener(e, resetTimer));
+      if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+    };
+  }, [user?.id, user?.role]);
 
   const loginMutation = useMutation({
     mutationFn: async ({ username, password }: { username: string; password: string }) => {
@@ -54,10 +82,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await apiRequest("POST", "/api/auth/logout");
       return res.json();
     },
-    onSuccess: (data: { redirectUrl?: string }) => {
+    onSuccess: (_data: { redirectUrl?: string }) => {
       queryClient.setQueryData(["/api/auth/me"], null);
       queryClient.clear();
-      window.location.href = data?.redirectUrl ?? "https://mypaylink.app";
+      if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+      if (user?.role === "employee") {
+        window.location.href = "/clock-in";
+      } else {
+        window.location.href = _data?.redirectUrl ?? "https://mypaylink.app";
+      }
     },
   });
 
