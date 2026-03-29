@@ -28,6 +28,27 @@ if (isProduction) {
   app.set("trust proxy", 1);
 }
 
+const CAPACITOR_ORIGINS = [
+  'capacitor://localhost',
+  'http://localhost',
+  'https://app.mypaylink.paylink',
+];
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && CAPACITOR_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
+  }
+  next();
+});
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
@@ -152,23 +173,33 @@ app.use(express.urlencoded({ extended: false }));
 app.use("/uploads", express.static(uploadsDir));
 
 const PgStore = connectPgSimple(session);
-app.use(
-  session({
-    store: new PgStore({
-      conString: process.env.DATABASE_URL,
-      createTableIfMissing: true,
-    }),
-    secret: process.env.SESSION_SECRET || "paylink-dev-secret",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      maxAge: 24 * 60 * 60 * 1000,
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: "lax",
-    },
+const sessionMiddleware = session({
+  store: new PgStore({
+    conString: process.env.DATABASE_URL,
+    createTableIfMissing: true,
   }),
-);
+  secret: process.env.SESSION_SECRET || "paylink-dev-secret",
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    maxAge: 24 * 60 * 60 * 1000,
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: "lax",
+  },
+});
+
+app.use((req, res, next) => {
+  sessionMiddleware(req, res, () => {
+    const origin = req.headers.origin;
+    const isCapacitor = origin !== undefined && CAPACITOR_ORIGINS.includes(origin);
+    if (isCapacitor && isProduction && req.session?.cookie) {
+      req.session.cookie.sameSite = "none";
+      req.session.cookie.secure = true;
+    }
+    next();
+  });
+});
 
 if (isProduction) {
   app.use((_req, res, next) => {

@@ -82,6 +82,17 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 -   **Security:** Enforces secure cookie settings, hides sensitive error details, and uses security headers.
 -   **Public Marketing Website:** A separate static site (`mypaylink.app`) is hosted for marketing.
 
+## Mobile App (Capacitor)
+PayLink includes Capacitor configuration for building native Android and iOS apps from the web codebase.
+
+-   **Config:** `capacitor.config.ts` — app ID `app.mypaylink.paylink`, web assets from `dist/public/`
+-   **Plugins installed:** push-notifications, camera, filesystem, haptics, keyboard, status-bar, app, share, browser, capacitor-native-biometric
+-   **CORS:** Express middleware in `server/index.ts` accepts Capacitor WebView origins (`capacitor://localhost` for iOS, `http://localhost` for Android) with credentials
+-   **Session cookies:** `sameSite: "none"` in production so cross-origin cookies work in the WebView
+-   **API base URL:** `client/src/lib/queryClient.ts` detects native platform via `Capacitor.isNativePlatform()` and prepends the production API URL to all fetch calls
+-   **Asset directories:** `resources/android/` and `resources/ios/` with icon and splash subdirectories; see `resources/ASSET_GENERATION.md`
+-   **Build guide:** `MOBILE_BUILD_GUIDE.md` — complete step-by-step instructions for local Android/iOS builds
+
 ## External Dependencies
 -   **PostgreSQL:** Primary application database.
 -   **NGINX:** Reverse proxy for production deployments.
@@ -89,3 +100,4 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 -   **Nodemailer:** For email notifications.
 -   **Twilio:** For SMS notifications.
 -   **OpenAI:** Utilized for AI-powered receipt scanning via GPT-4o vision.
+-   **Capacitor:** Cross-platform native runtime for wrapping the web app as Android/iOS apps.
