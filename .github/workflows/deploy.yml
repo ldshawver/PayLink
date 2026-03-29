@@ -125,16 +125,35 @@ jobs:
             # Cleanup old backups (keep last 10)
             ls -t "$BACKUP_DIR"/paylink_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
 
-            # Step 9: Also sync marketing website files
-            echo "9. Syncing marketing website..."
-            WEBSITE_DIR="/home/mypaylink/htdocs/mypaylink.appsite"
-            if [ -d "$APP_DIR/public-site/public" ] && [ -d "$WEBSITE_DIR" ]; then
-              rsync -av --delete \
-                --exclude='.git' \
-                --exclude='node_modules' \
-                "$APP_DIR/public-site/public/" "$WEBSITE_DIR/" 2>/dev/null || echo "   Website sync skipped (permission issue)"
-            fi
-
             echo "=========================================="
             echo "App Deploy Complete - Health: $HEALTH | Ready: $READY"
             echo "=========================================="
+
+  deploy-website:
+    runs-on: ubuntu-latest
+    name: Deploy Marketing Site (mypaylink.app public)
+    needs: deploy-app
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install rsync
+        run: sudo apt-get install -y rsync
+
+      - name: Setup SSH key for website user
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.WEBSITE_SSH_KEY }}" > ~/.ssh/website_key
+          chmod 600 ~/.ssh/website_key
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy marketing site files
+        run: |
+          rsync -avz --delete \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            -e "ssh -i ~/.ssh/website_key -o StrictHostKeyChecking=no" \
+            public-site/public/ \
+            ${{ secrets.WEBSITE_SSH_USER }}@${{ secrets.VPS_HOST }}:/home/mypaylink/htdocs/mypaylink.appsite/
+          echo "Marketing site deployed successfully"
