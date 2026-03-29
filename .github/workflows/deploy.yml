@@ -173,8 +173,21 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "${{ secrets.WEBSITE_SSH_KEY }}" | tr -d '\r' > ~/.ssh/website_key
           chmod 600 ~/.ssh/website_key
+
+          # Diagnostics: confirm the key file looks correct
+          echo "Key file size: $(wc -c < ~/.ssh/website_key) bytes"
+          echo "First line: $(head -1 ~/.ssh/website_key)"
+          echo "Last line:  $(tail -1 ~/.ssh/website_key)"
+
+          # Validate the key — fail immediately with a clear message if invalid
+          if ! ssh-keygen -y -f ~/.ssh/website_key > /dev/null; then
+            echo "ERROR: WEBSITE_SSH_KEY failed validation. The secret may be empty, corrupted, or contain Windows line endings."
+            echo "Key byte count: $(wc -c < ~/.ssh/website_key)"
+            exit 1
+          fi
+          echo "SSH key validated successfully."
+
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
-          ssh-keygen -y -f ~/.ssh/website_key >/dev/null
 
       - name: Deploy marketing site (local rsync on VPS)
         uses: appleboy/ssh-action@v1.0.0
