@@ -181,7 +181,7 @@ function ProjectDetailView({ projectId, onBack }: { projectId: number; onBack: (
 
   if (!project) {
     return (
-      <div className="p-6">
+      <div className="p-4 sm:p-6">
         <Button variant="ghost" onClick={onBack} data-testid="button-back-projects">
           <ArrowLeft className="h-4 w-4 mr-2" /> Back to Projects
         </Button>
@@ -206,7 +206,7 @@ function ProjectDetailView({ projectId, onBack }: { projectId: number; onBack: (
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center gap-4">
         <Button variant="ghost" onClick={onBack} data-testid="button-back-projects">
           <ArrowLeft className="h-4 w-4 mr-2" /> Back
@@ -492,7 +492,7 @@ export default function OnboardingProjectsPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Onboarding Projects</h1>

@@ -2549,8 +2549,7 @@ function JobCostReportSection() {
           <p className="text-sm text-muted-foreground mt-1">Assign jobs to shifts in the Schedule page to track job costs.</p>
         </CardContent></Card>
       ) : (
-        <Card><CardContent className="p-0">
-          <div className="overflow-x-auto">
+        <Card><CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>

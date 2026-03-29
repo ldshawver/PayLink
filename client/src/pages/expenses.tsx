@@ -494,7 +494,7 @@ export default function ExpensesPage() {
   if (loadingExpenses) return <div className="p-8"><Skeleton className="h-[500px] w-full" /></div>;
 
   return (
-    <div className="p-6 max-w-[1400px] mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-[1400px] mx-auto space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-page-title">
@@ -503,16 +503,16 @@ export default function ExpensesPage() {
           <p className="text-sm text-muted-foreground mt-1">Manage expenses, reimbursements, and contractor invoices</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button onClick={() => setExpenseDialogOpen(true)} data-testid="button-new-expense">
+          <Button className="w-full sm:w-auto" onClick={() => setExpenseDialogOpen(true)} data-testid="button-new-expense">
             <Plus className="h-4 w-4 mr-1" /> New Expense
           </Button>
           {isContractor && (
-            <Button variant="outline" onClick={() => setInvoiceDialogOpen(true)} data-testid="button-new-invoice">
+            <Button variant="outline" className="w-full sm:w-auto" onClick={() => setInvoiceDialogOpen(true)} data-testid="button-new-invoice">
               <FileText className="h-4 w-4 mr-1" /> New Invoice
             </Button>
           )}
           {isAdmin && (
-            <Button variant="outline" onClick={() => setInvoiceDialogOpen(true)} data-testid="button-new-invoice-admin">
+            <Button variant="outline" className="w-full sm:w-auto" onClick={() => setInvoiceDialogOpen(true)} data-testid="button-new-invoice-admin">
               <FileText className="h-4 w-4 mr-1" /> New Invoice
             </Button>
           )}

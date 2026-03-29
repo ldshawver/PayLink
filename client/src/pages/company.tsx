@@ -879,7 +879,7 @@ function LegalEntityTab() {
       </Dialog>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1137,7 +1137,7 @@ function BranchesTab() {
       </Dialog>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1394,7 +1394,7 @@ function DepartmentsTab() {
       </Dialog>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1584,7 +1584,7 @@ function EnterprisesTab() {
       </Dialog>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1781,7 +1781,7 @@ function DivisionsTab() {
       </Dialog>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -2012,7 +2012,7 @@ function PositionsTab() {
       </Dialog>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -2204,7 +2204,7 @@ function CostCentersTab() {
       </Dialog>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -2481,7 +2481,7 @@ function JobsTab() {
       </Dialog>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -4163,7 +4163,7 @@ export default function CompanyPage() {
   const [activeTab, setActiveTab] = useTabParam("info");
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <div className="flex items-center gap-3">
         <Building2 className="h-6 w-6 text-blue-accent" />
         <h1 className="text-2xl font-bold" data-testid="text-page-title">Company</h1>

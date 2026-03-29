@@ -789,7 +789,7 @@ export default function MyProfilePage() {
 
   if (workerLoading) {
     return (
-      <div className="p-6 space-y-4">
+      <div className="p-4 sm:p-6 space-y-4">
         <Skeleton className="h-8 w-48" />
         <LoadingSkeleton />
       </div>
@@ -799,7 +799,7 @@ export default function MyProfilePage() {
   const workerName = worker ? `${worker.firstName} ${worker.lastName}` : user?.username || "My Profile";
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight" data-testid="heading-my-profile">My Profile</h1>
         <p className="text-muted-foreground">{workerName}</p>

@@ -83,7 +83,7 @@ export default function EngagementFeedPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold" data-testid="text-page-title">Engagement Feed</h1>
         <p className="text-muted-foreground">Chronological stream of customer engagement events</p>

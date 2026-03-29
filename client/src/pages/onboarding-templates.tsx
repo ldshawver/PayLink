@@ -294,13 +294,13 @@ export default function OnboardingTemplatesPage() {
   });
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Onboarding Templates</h1>
           <p className="text-muted-foreground">Create reusable onboarding templates for products</p>
         </div>
-        <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-add-template">
+        <Button className="w-full sm:w-auto" onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-add-template">
           <Plus className="h-4 w-4 mr-2" /> New Template
         </Button>
       </div>

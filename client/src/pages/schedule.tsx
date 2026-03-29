@@ -364,8 +364,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
           {myListings.length === 0 ? (
             <Card><CardContent className="text-center py-8 text-muted-foreground">No posted shifts.</CardContent></Card>
           ) : (
-            <div className="overflow-x-auto">
-            <Table data-testid="table-my-listings">
+            <div className="overflow-x-auto"><Table data-testid="table-my-listings">
               <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Time</TableHead><TableHead>Status</TableHead><TableHead>Urgency</TableHead><TableHead>Requests</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>
               <TableBody>
                 {myListings.map((listing: any) => {
@@ -389,8 +388,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                   );
                 })}
               </TableBody>
-            </Table>
-            </div>
+            </Table></div>
           )}
         </TabsContent>
 
@@ -399,8 +397,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
           {myRequests.length === 0 ? (
             <Card><CardContent className="text-center py-8 text-muted-foreground">No shift requests.</CardContent></Card>
           ) : (
-            <div className="overflow-x-auto">
-            <Table data-testid="table-my-requests">
+            <div className="overflow-x-auto"><Table data-testid="table-my-requests">
               <TableHeader><TableRow><TableHead>Listing</TableHead><TableHead>Status</TableHead><TableHead>Note</TableHead><TableHead>Reviewed By</TableHead></TableRow></TableHeader>
               <TableBody>
                 {myRequests.map((req: any) => {
@@ -416,8 +413,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                   );
                 })}
               </TableBody>
-            </Table>
-            </div>
+            </Table></div>
           )}
         </TabsContent>
 
@@ -483,8 +479,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                 {shiftOffers.length === 0 ? (
                   <p className="text-center text-muted-foreground py-4">No legacy offers.</p>
                 ) : (
-                  <div className="overflow-x-auto">
-                  <Table data-testid="table-legacy-offers">
+                  <div className="overflow-x-auto"><Table data-testid="table-legacy-offers">
                     <TableHeader><TableRow><TableHead>Offered By</TableHead><TableHead>Date</TableHead><TableHead>Time</TableHead><TableHead>Status</TableHead><TableHead>Claimed By</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>
                     <TableBody>
                       {shiftOffers.map((offer: any) => {
@@ -516,8 +511,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                         );
                       })}
                     </TableBody>
-                  </Table>
-                  </div>
+                  </Table></div>
                 )}
               </CardContent>
             </Card>
@@ -530,8 +524,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
             {auditLogs.length === 0 ? (
               <Card><CardContent className="text-center py-8 text-muted-foreground">No audit entries yet.</CardContent></Card>
             ) : (
-              <div className="overflow-x-auto">
-              <Table data-testid="table-audit-log">
+              <div className="overflow-x-auto"><Table data-testid="table-audit-log">
                 <TableHeader><TableRow><TableHead>Time</TableHead><TableHead>Action</TableHead><TableHead>Object</TableHead><TableHead>Actor</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {auditLogs.map((log: any) => (
@@ -543,8 +536,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
-              </div>
+              </Table></div>
             )}
           </TabsContent>
         )}
@@ -2128,7 +2120,7 @@ export default function SchedulePage() {
                   ))}
                 </div>
               ) : (
-                <Table data-testid="table-recurring">
+                <div className="overflow-x-auto"><Table data-testid="table-recurring">
                   <TableHeader>
                     <TableRow>
                       <TableHead>Employee</TableHead>
@@ -2193,7 +2185,7 @@ export default function SchedulePage() {
                       ))
                     )}
                   </TableBody>
-                </Table>
+                </Table></div>
               )}
             </CardContent>
           </Card>

@@ -49,15 +49,15 @@ export default function PayrollAuditPage() {
   };
 
   return (
-    <div className="p-6 space-y-6" data-testid="payroll-audit-page">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 space-y-6" data-testid="payroll-audit-page">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Payroll Audit</h1>
           <p className="text-muted-foreground">Check payroll configuration for errors, missing data, and compliance issues.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Select value={companyId} onValueChange={setCompanyId}>
-            <SelectTrigger className="w-[200px]" data-testid="select-company-filter">
+            <SelectTrigger className="w-full sm:w-[200px]" data-testid="select-company-filter">
               <SelectValue placeholder="All Companies" />
             </SelectTrigger>
             <SelectContent>
@@ -67,7 +67,7 @@ export default function PayrollAuditPage() {
               ))}
             </SelectContent>
           </Select>
-          <Button variant="outline" onClick={() => refetch()} disabled={isFetching} data-testid="button-refresh-audit">
+          <Button variant="outline" className="w-full sm:w-auto" onClick={() => refetch()} disabled={isFetching} data-testid="button-refresh-audit">
             <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? "animate-spin" : ""}`} />
             Re-run Audit
           </Button>

@@ -1562,7 +1562,7 @@ export default function HRPage() {
   const [activeTab, handleTabChange] = useTabParam("reviews");
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <div className="flex items-center gap-2 flex-wrap">
         <ClipboardList className="h-6 w-6 text-blue-accent" />
         <h1 className="text-2xl font-bold" data-testid="text-hr-title">HR</h1>
@@ -1602,7 +1602,7 @@ export default function HRPage() {
                     Qualifications & Certifications
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="p-0">
+                <CardContent className="p-0 overflow-x-auto">
                   <QualificationsTab />
                 </CardContent>
               </Card>
@@ -1614,7 +1614,7 @@ export default function HRPage() {
                     Languages
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="p-0">
+                <CardContent className="p-0 overflow-x-auto">
                   <LanguagesTab />
                 </CardContent>
               </Card>
@@ -1628,7 +1628,7 @@ export default function HRPage() {
                     Professional Memberships
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="p-0">
+                <CardContent className="p-0 overflow-x-auto">
                   <MembershipsTab />
                 </CardContent>
               </Card>
@@ -1640,7 +1640,7 @@ export default function HRPage() {
                     Qualification Groups & Skills
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="p-0">
+                <CardContent className="p-0 overflow-x-auto">
                   <QualificationGroupsTab />
                   <div className="border-t">
                     <SkillsTab />

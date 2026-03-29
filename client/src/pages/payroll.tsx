@@ -4451,7 +4451,7 @@ export default function PayrollPage() {
   ];
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <div className="flex items-center gap-3 flex-wrap">
         <DollarSign className="h-6 w-6 text-blue-accent" />
         <h1 className="text-2xl font-bold" data-testid="text-payroll-title">Payroll</h1>

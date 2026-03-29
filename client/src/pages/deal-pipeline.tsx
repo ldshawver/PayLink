@@ -179,7 +179,7 @@ function StageColumn({ stage, deals, onEdit, onDrop, onDragStart, onDragOver, is
   const stageValue = deals.reduce((sum, d) => sum + d.value, 0);
 
   return (
-    <div className="min-w-[200px]" data-testid={`column-${stage.value}`}>
+    <div className="min-w-[200px] flex-shrink-0" data-testid={`column-${stage.value}`}>
       <div className="mb-3">
         <div className="flex items-center justify-between">
           <Badge className={stage.color} data-testid={`badge-stage-${stage.value}`}>
@@ -308,18 +308,18 @@ export default function DealPipelinePage() {
   const wonValue = deals.filter(d => d.stage === "closed_won").reduce((sum, d) => sum + d.value, 0);
 
   return (
-    <div className="p-6 space-y-6" onDragEnd={handleDragEnd}>
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 space-y-6" onDragEnd={handleDragEnd}>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Deal Pipeline</h1>
           <p className="text-muted-foreground">Track and manage deals through your sales pipeline</p>
         </div>
-        <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-add-deal">
+        <Button className="w-full sm:w-auto" onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-add-deal">
           <Plus className="h-4 w-4 mr-2" /> New Deal
         </Button>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card>
           <CardContent className="p-4 flex items-center gap-3">
             <div className="h-10 w-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
@@ -360,7 +360,7 @@ export default function DealPipelinePage() {
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : (
-        <div className="grid grid-cols-6 gap-3 overflow-x-auto" data-testid="kanban-board">
+        <div className="flex gap-3 overflow-x-auto pb-4" data-testid="kanban-board">
           {DEAL_STAGES.map(stage => (
             <StageColumn
               key={stage.value}

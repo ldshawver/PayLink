@@ -1947,7 +1947,7 @@ export default function AttendancePage() {
   const currentTab = useTabParam("timesheet");
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto">
       <div>
         <h1 className="text-2xl font-bold tracking-tight" data-testid="text-attendance-title">
           Attendance

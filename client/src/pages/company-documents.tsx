@@ -83,8 +83,8 @@ export default function CompanyDocumentsPage() {
   const companyId = user?.companyId;
 
   return (
-    <div className="p-6 max-w-[1400px] mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 max-w-[1400px] mx-auto space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Company Document Center</h1>
           <p className="text-sm text-muted-foreground mt-1">Manage company documents, policies, and compliance records</p>
