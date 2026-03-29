@@ -785,6 +785,9 @@ function OnboardingTab({ companyId }: { companyId?: string }) {
 
 function OnboardingPacketDetail({ packetId, onClose }: { packetId: string; onClose: () => void }) {
   const { toast } = useToast();
+  const [stepNotes, setStepNotes] = useState<Record<string, string>>({});
+  const [portalLink, setPortalLink] = useState<string | null>(null);
+
   const { data: packet } = useQuery<OnboardingPacket & { steps: OnboardingPacketStep[] }>({
     queryKey: ["/api/onboarding-packets", packetId],
     queryFn: async () => {
@@ -795,26 +798,85 @@ function OnboardingPacketDetail({ packetId, onClose }: { packetId: string; onClo
   });
 
   const updateStepMutation = useMutation({
-    mutationFn: async ({ stepId, status }: { stepId: string; status: string }) => {
-      await apiRequest("PATCH", `/api/onboarding-packet-steps/${stepId}`, {
-        status, completedAt: status === "completed" ? new Date().toISOString() : null,
-      });
+    mutationFn: async ({ stepId, updates }: { stepId: string; updates: any }) => {
+      await apiRequest("PATCH", `/api/onboarding-packet-steps/${stepId}`, updates);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding-packets", packetId] });
       toast({ title: "Step updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const sendLinkMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/onboarding-packets/${packetId}/send-link`);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setPortalLink(data.portalUrl);
+      queryClient.invalidateQueries({ queryKey: ["/api/onboarding-packets", packetId] });
+      toast({ title: "Portal link sent", description: "The worker will receive a notification with their portal access link." });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const revokeLinkMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", `/api/onboarding-packets/${packetId}/revoke-link`);
+    },
+    onSuccess: () => {
+      setPortalLink(null);
+      toast({ title: "Portal links revoked" });
     },
   });
 
   if (!packet) return null;
 
   const steps = packet.steps || [];
-  const completedCount = steps.filter(s => s.status === "completed").length;
+  const completedCount = steps.filter(s => s.status === "completed" || s.status === "approved").length;
   const progress = steps.length > 0 ? Math.round((completedCount / steps.length) * 100) : 0;
+
+  const isStepBlocked = (step: OnboardingPacketStep) => {
+    if (!step.dependenciesJson) return false;
+    try {
+      const depIds: string[] = JSON.parse(step.dependenciesJson);
+      return depIds.some(depId => {
+        const dep = steps.find(s => s.id === depId);
+        return !dep || (dep.status !== "completed" && dep.status !== "approved");
+      });
+    } catch { return false; }
+  };
+
+  const getStepStatusColor = (step: OnboardingPacketStep) => {
+    if (step.status === "completed" || step.status === "approved") return "bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-900";
+    if (step.status === "submitted") return "bg-blue-50 dark:bg-blue-950 border-blue-200 dark:border-blue-900";
+    if (step.status === "rejected") return "bg-red-50 dark:bg-red-950 border-red-200 dark:border-red-900";
+    if (isStepBlocked(step)) return "bg-muted/50 border-muted";
+    return "bg-card";
+  };
+
+  const getStepIcon = (step: OnboardingPacketStep) => {
+    if (step.status === "completed" || step.status === "approved") return <CheckCircle className="h-5 w-5 text-green-600" />;
+    if (step.status === "rejected") return <XCircle className="h-5 w-5 text-red-600" />;
+    if (step.status === "submitted") return <Clock className="h-5 w-5 text-blue-600" />;
+    if (isStepBlocked(step)) return <Lock className="h-5 w-5 text-muted-foreground/50" />;
+    return <div className="h-5 w-5 rounded-full border-2 border-muted-foreground/30" />;
+  };
+
+  const taskTypeBadge = (tt: string | null) => {
+    const map: Record<string, string> = {
+      document_upload: "Upload",
+      signature: "Sign",
+      acknowledgement: "Acknowledge",
+      manual: "Manual",
+    };
+    return map[tt || "manual"] || tt || "manual";
+  };
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Onboarding: {packet.templateName}</DialogTitle></DialogHeader>
         <div className="space-y-4">
           <div className="flex items-center gap-4">
@@ -824,31 +886,99 @@ function OnboardingPacketDetail({ packetId, onClose }: { packetId: string; onClo
                 <span className="font-medium">{progress}%</span>
               </div>
               <div className="h-2 bg-muted rounded-full overflow-hidden">
-                <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${progress}%` }} />
+                <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${progress}%` }} data-testid="progress-bar" />
               </div>
             </div>
           </div>
 
-          <div className="space-y-2">
-            {steps.map((step, i) => (
-              <div key={step.id} className={`flex items-center gap-3 p-3 rounded-lg border ${step.status === "completed" ? "bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-900" : "bg-card"}`} data-testid={`row-step-${step.id}`}>
-                <button
-                  onClick={() => updateStepMutation.mutate({ stepId: step.id, status: step.status === "completed" ? "pending" : "completed" })}
-                  className="shrink-0"
-                  data-testid={`button-toggle-step-${step.id}`}
-                >
-                  {step.status === "completed" ?
-                    <CheckCircle className="h-5 w-5 text-green-600" /> :
-                    <div className="h-5 w-5 rounded-full border-2 border-muted-foreground/30" />
-                  }
-                </button>
-                <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium ${step.status === "completed" ? "line-through text-muted-foreground" : ""}`}>{step.stepName}</p>
-                  {step.description && <p className="text-xs text-muted-foreground">{step.description}</p>}
-                </div>
-                <Badge variant="outline" className="text-xs shrink-0">{step.stepType.replace("_", " ")}</Badge>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button size="sm" variant="outline" onClick={() => sendLinkMutation.mutate()} disabled={sendLinkMutation.isPending} data-testid="button-send-portal-link">
+              <FileUp className="h-4 w-4 mr-2" />
+              {sendLinkMutation.isPending ? "Sending..." : "Send Portal Link"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => revokeLinkMutation.mutate()} disabled={revokeLinkMutation.isPending} data-testid="button-revoke-link">
+              <Lock className="h-4 w-4 mr-2" />
+              Revoke Links
+            </Button>
+            {portalLink && (
+              <div className="flex items-center gap-2 text-xs bg-muted px-3 py-1.5 rounded-md">
+                <span className="text-muted-foreground">Portal URL:</span>
+                <code className="font-mono" data-testid="text-portal-url">{portalLink}</code>
               </div>
-            ))}
+            )}
+          </div>
+
+          <div className="space-y-2">
+            {steps.map((step) => {
+              const blocked = isStepBlocked(step);
+              return (
+                <div key={step.id} className={`p-3 rounded-lg border ${getStepStatusColor(step)}`} data-testid={`row-step-${step.id}`}>
+                  <div className="flex items-center gap-3">
+                    <div className="shrink-0">{getStepIcon(step)}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className={`text-sm font-medium ${step.status === "completed" || step.status === "approved" ? "line-through text-muted-foreground" : ""}`}>{step.stepName}</p>
+                        {step.required && <span className="text-red-500 text-xs">*</span>}
+                      </div>
+                      {step.description && <p className="text-xs text-muted-foreground">{step.description}</p>}
+                      {step.docType && <p className="text-xs text-muted-foreground mt-0.5">Doc: {step.docType}</p>}
+                      {step.notes && <p className="text-xs mt-1 italic text-muted-foreground">Note: {step.notes}</p>}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Badge variant="outline" className="text-xs">{taskTypeBadge(step.taskType)}</Badge>
+                      {step.docStatus && step.docStatus !== "pending" && (
+                        <Badge variant={step.docStatus === "approved" ? "default" : step.docStatus === "rejected" ? "destructive" : "secondary"} className="text-xs" data-testid={`badge-docstatus-${step.id}`}>
+                          {step.docStatus}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  {!blocked && step.status !== "completed" && step.status !== "approved" && (
+                    <div className="flex items-center gap-2 mt-2 ml-8">
+                      {step.status === "submitted" ? (
+                        <>
+                          <Button size="sm" variant="default" className="h-7 text-xs" data-testid={`button-approve-step-${step.id}`}
+                            onClick={() => updateStepMutation.mutate({ stepId: step.id, updates: { status: "approved", docStatus: "approved", completedAt: new Date().toISOString() } })}>
+                            <CheckCircle className="h-3 w-3 mr-1" />Approve
+                          </Button>
+                          <Button size="sm" variant="destructive" className="h-7 text-xs" data-testid={`button-reject-step-${step.id}`}
+                            onClick={() => updateStepMutation.mutate({ stepId: step.id, updates: { status: "rejected", docStatus: "rejected" } })}>
+                            <XCircle className="h-3 w-3 mr-1" />Reject
+                          </Button>
+                        </>
+                      ) : (
+                        <Button size="sm" variant="outline" className="h-7 text-xs" data-testid={`button-complete-step-${step.id}`}
+                          onClick={() => updateStepMutation.mutate({ stepId: step.id, updates: { status: "completed", completedAt: new Date().toISOString() } })}>
+                          <CheckCircle className="h-3 w-3 mr-1" />Mark Complete
+                        </Button>
+                      )}
+                      <div className="flex-1" />
+                      <Input
+                        placeholder="Add note..."
+                        className="h-7 text-xs max-w-[200px]"
+                        value={stepNotes[step.id] || ""}
+                        onChange={e => setStepNotes(prev => ({ ...prev, [step.id]: e.target.value }))}
+                        data-testid={`input-note-${step.id}`}
+                      />
+                      {stepNotes[step.id] && (
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" data-testid={`button-save-note-${step.id}`}
+                          onClick={() => {
+                            updateStepMutation.mutate({ stepId: step.id, updates: { notes: stepNotes[step.id] } });
+                            setStepNotes(prev => ({ ...prev, [step.id]: "" }));
+                          }}>
+                          Save
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                  {blocked && (
+                    <p className="text-xs text-muted-foreground mt-1 ml-8 flex items-center gap-1">
+                      <Lock className="h-3 w-3" /> Blocked: prerequisite steps must be completed first
+                    </p>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </DialogContent>

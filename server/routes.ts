@@ -180,7 +180,7 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/"];
+  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/portal/"];
   app.use("/api", (req, res, next) => {
     if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
     blockDemoWrites(req, res, next);
@@ -292,7 +292,8 @@ export async function registerRoutes(
     if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
       || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")
-      || req.path === "/demo/provision") {
+      || req.path === "/demo/provision"
+      || req.path.startsWith("/portal/")) {
       return next();
     }
     requireAuth(req, res, next);
@@ -9285,24 +9286,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const packet = await storage.createOnboardingPacket(req.body);
       emitIntegrationEvent(packet.companyId, "onboarding_packet.created", { packetId: packet.id, workerId: packet.workerId, templateName: packet.templateName }).catch(() => {});
-      const templateSteps: Record<string, Array<{name: string; type: string; desc: string}>> = {
+      const templateSteps: Record<string, Array<{name: string; type: string; taskType: string; desc: string; docType?: string; deps?: number[]; required?: boolean}>> = {
         "Standard Onboarding": [
-          { name: "Offer Letter", type: "document_sign", desc: "Sign the employment offer letter" },
-          { name: "W-4 Tax Withholding", type: "document_upload", desc: "Complete W-4 federal tax withholding form" },
-          { name: "W-9 / I-9 Verification", type: "document_upload", desc: "Complete employment eligibility verification" },
-          { name: "Direct Deposit Setup", type: "document_upload", desc: "Provide banking information for direct deposit" },
-          { name: "Employee Handbook Acknowledgement", type: "document_sign", desc: "Read and sign the employee handbook" },
-          { name: "Benefits Enrollment", type: "task_complete", desc: "Review and select benefit options" },
+          { name: "Offer Letter", type: "document_sign", taskType: "signature", desc: "Sign the employment offer letter", docType: "Offer Letter", deps: [], required: true },
+          { name: "W-4 Tax Withholding", type: "document_upload", taskType: "document_upload", desc: "Complete W-4 federal tax withholding form", docType: "W-4", deps: [0], required: true },
+          { name: "I-9 Employment Verification", type: "document_upload", taskType: "document_upload", desc: "Complete employment eligibility verification", docType: "I-9", deps: [0], required: true },
+          { name: "Direct Deposit Setup", type: "document_upload", taskType: "document_upload", desc: "Provide banking information for direct deposit", docType: "Direct Deposit Form", deps: [0], required: true },
+          { name: "Employee Handbook Acknowledgement", type: "document_sign", taskType: "acknowledgement", desc: "Read and acknowledge the employee handbook", docType: "Employee Handbook", deps: [0], required: true },
+          { name: "NDA / Confidentiality Agreement", type: "document_sign", taskType: "signature", desc: "Sign the non-disclosure agreement", docType: "NDA", deps: [0], required: true },
         ],
         "Contractor Onboarding": [
-          { name: "Independent Contractor Agreement", type: "document_sign", desc: "Sign the contractor agreement" },
-          { name: "W-9 Form", type: "document_upload", desc: "Complete W-9 tax form" },
-          { name: "NDA / Confidentiality Agreement", type: "document_sign", desc: "Sign non-disclosure agreement" },
+          { name: "W-9 Form", type: "document_upload", taskType: "document_upload", desc: "Complete W-9 tax form", docType: "W-9", deps: [], required: true },
+          { name: "Contractor Agreement", type: "document_sign", taskType: "signature", desc: "Sign the contractor agreement", docType: "Contractor Agreement", deps: [0], required: true },
+          { name: "NDA / Confidentiality Agreement", type: "document_sign", taskType: "signature", desc: "Sign non-disclosure agreement", docType: "NDA", deps: [0], required: true },
         ],
       };
       const steps = templateSteps[req.body.templateName] || templateSteps["Standard Onboarding"];
+      const createdSteps = [];
       for (let i = 0; i < steps.length; i++) {
-        await storage.createOnboardingPacketStep({
+        const step = await storage.createOnboardingPacketStep({
           packetId: packet.id,
           stepName: steps[i].name,
           stepType: steps[i].type,
@@ -9310,7 +9312,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           sortOrder: i,
           status: "pending",
           assignedTo: req.body.workerId,
+          taskType: steps[i].taskType,
+          docType: steps[i].docType || null,
+          required: steps[i].required !== false,
+          dependenciesJson: JSON.stringify(steps[i].deps || []),
         });
+        createdSteps.push(step);
+      }
+      for (let i = 0; i < createdSteps.length; i++) {
+        const deps = steps[i].deps || [];
+        if (deps.length > 0) {
+          const depIds = deps.map((idx: number) => createdSteps[idx]?.id).filter(Boolean);
+          await storage.updateOnboardingPacketStep(createdSteps[i].id, {
+            dependenciesJson: JSON.stringify(depIds),
+          });
+        }
       }
       res.status(201).json(packet);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to create onboarding packet") }); }
@@ -9345,10 +9361,102 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/onboarding-packet-steps/:id", requireAuth, blockDemoWrites, async (req, res) => {
     try {
-      const r = await storage.updateOnboardingPacketStep(req.params.id, req.body);
+      const existing = await storage.getOnboardingPacketStepById(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Step not found" });
+      const packet = await storage.getOnboardingPacket(existing.packetId);
+      if (!packet) return res.status(404).json({ message: "Packet not found" });
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (packet.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
+      if (req.body.status === "completed" || req.body.status === "submitted") {
+        if (existing.dependenciesJson) {
+          const depIds: string[] = JSON.parse(existing.dependenciesJson);
+          if (depIds.length > 0) {
+            const allSteps = await storage.getOnboardingPacketSteps(existing.packetId);
+            const unmetDeps = depIds.filter(depId => {
+              const dep = allSteps.find(s => s.id === depId);
+              return !dep || (dep.status !== "completed" && dep.status !== "approved");
+            });
+            if (unmetDeps.length > 0) {
+              return res.status(400).json({ message: "Cannot complete this step: prerequisite steps are not yet done" });
+            }
+          }
+        }
+      }
+      const allowedFields: Record<string, any> = {};
+      if (req.body.status) allowedFields.status = req.body.status;
+      if (req.body.docStatus) allowedFields.docStatus = req.body.docStatus;
+      if (req.body.notes !== undefined) allowedFields.notes = req.body.notes;
+      if (req.body.completedAt) allowedFields.completedAt = new Date(req.body.completedAt);
+      if (req.body.completedBy) allowedFields.completedBy = req.body.completedBy;
+      if (req.body.documentId) allowedFields.documentId = req.body.documentId;
+      const r = await storage.updateOnboardingPacketStep(req.params.id, allowedFields);
       if (!r) return res.status(404).json({ message: "Step not found" });
+      const allSteps = await storage.getOnboardingPacketSteps(existing.packetId);
+      const completedCount = allSteps.filter(s => s.status === "completed" || s.status === "approved").length;
+      if (completedCount === allSteps.length && allSteps.length > 0) {
+        await storage.updateOnboardingPacket(existing.packetId, { status: "completed", completedAt: new Date() });
+      } else if (completedCount > 0) {
+        await storage.updateOnboardingPacket(existing.packetId, { status: "in_progress" });
+      }
       res.json(r);
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update step") }); }
+  });
+
+  app.post("/api/onboarding-packets/:id/send-link", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const packet = await storage.getOnboardingPacket(req.params.id);
+      if (!packet) return res.status(404).json({ message: "Packet not found" });
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (packet.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
+      const worker = await storage.getWorker(packet.workerId);
+      if (!worker) return res.status(404).json({ message: "Worker not found" });
+      const crypto = await import("crypto");
+      const token = crypto.randomBytes(32).toString("hex");
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      const portalToken = await storage.createPortalAccessToken({
+        companyId: packet.companyId,
+        packetId: packet.id,
+        workerId: packet.workerId,
+        token,
+        tokenType: "onboarding_packet",
+        expiresAt,
+      });
+      const company = await storage.getCompany(packet.companyId);
+      await storage.createNotification({
+        companyId: packet.companyId,
+        workerId: packet.workerId,
+        type: "onboarding_portal_link",
+        title: "Onboarding Portal Access",
+        message: `Your onboarding portal is ready. Access your onboarding packet to complete required documents.`,
+        actionUrl: `/portal/onboarding/${token}`,
+      });
+      await storage.createDocumentAuditLog({
+        companyId: packet.companyId,
+        action: "onboarding_portal_token_generated",
+        actorName: (req as any).user?.username || "System",
+        actorId: (req as any).user?.id,
+        details: JSON.stringify({ packetId: packet.id, workerId: packet.workerId, workerName: worker ? `${worker.firstName} ${worker.lastName}` : "Unknown" }),
+      });
+      res.status(201).json({ token: portalToken.token, expiresAt, portalUrl: `/portal/onboarding/${token}` });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to send portal link") }); }
+  });
+
+  app.post("/api/onboarding-packets/:id/revoke-link", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const packet = await storage.getOnboardingPacket(req.params.id);
+      if (!packet) return res.status(404).json({ message: "Packet not found" });
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (packet.companyId !== sessionCompanyId) return res.status(403).json({ message: "Access denied" });
+      await storage.revokePortalTokensForPacket(req.params.id);
+      await storage.createDocumentAuditLog({
+        companyId: packet.companyId,
+        action: "onboarding_portal_token_revoked",
+        actorName: (req as any).user?.username || "System",
+        actorId: (req as any).user?.id,
+        details: JSON.stringify({ packetId: packet.id }),
+      });
+      res.json({ message: "Portal links revoked" });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to revoke link") }); }
   });
 
   app.get("/api/invoice-approval-workflows", requireAuth, enforceCompanyScope("query"), async (req, res) => {
@@ -9533,6 +9641,143 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       res.status(201).json({ message: "Invoice submitted successfully", invoiceId: invoice.id });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to submit invoice") }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ONBOARDING PORTAL (PUBLIC - no auth required, token-based)
+  // ══════════════════════════════════════════════════════════════════════
+  app.get("/api/portal/onboarding/validate", async (req, res) => {
+    try {
+      const token = req.query.token as string;
+      if (!token) return res.status(400).json({ message: "Token required" });
+      const r = await storage.getPortalAccessTokenByToken(token);
+      if (!r) return res.status(404).json({ message: "Invalid or expired token" });
+      if (r.isRevoked) return res.status(403).json({ message: "Token has been revoked" });
+      if (r.tokenType !== "onboarding_packet") return res.status(400).json({ message: "Invalid token type" });
+      if (r.expiresAt && new Date(r.expiresAt) < new Date()) {
+        return res.status(410).json({ message: "Token has expired" });
+      }
+      const packet = r.packetId ? await storage.getOnboardingPacket(r.packetId) : null;
+      if (!packet) return res.status(404).json({ message: "Packet not found" });
+      const steps = await storage.getOnboardingPacketSteps(packet.id);
+      const worker = r.workerId ? await storage.getWorker(r.workerId) : null;
+      const company = await storage.getCompany(r.companyId);
+      await storage.createDocumentAuditLog({
+        companyId: r.companyId,
+        action: "onboarding_portal_accessed",
+        actorName: worker ? `${worker.firstName} ${worker.lastName}` : "Portal User",
+        ipAddress: req.ip || req.headers["x-forwarded-for"]?.toString() || "",
+        details: JSON.stringify({ packetId: packet.id, workerId: r.workerId }),
+      });
+      res.json({
+        valid: true,
+        companyName: company?.name || "Unknown",
+        workerName: worker ? `${worker.firstName} ${worker.lastName}` : "Unknown",
+        packet: { ...packet, steps },
+        companyId: r.companyId,
+        tokenType: r.tokenType,
+      });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to validate onboarding token") }); }
+  });
+
+  app.patch("/api/portal/onboarding/steps/:stepId", async (req, res) => {
+    try {
+      const token = req.body.token || req.query.token;
+      if (!token) return res.status(400).json({ message: "Token required" });
+      const portalToken = await storage.getPortalAccessTokenByToken(token as string);
+      if (!portalToken) return res.status(404).json({ message: "Invalid token" });
+      if (portalToken.isRevoked) return res.status(403).json({ message: "Token has been revoked" });
+      if (portalToken.tokenType !== "onboarding_packet") return res.status(400).json({ message: "Invalid token type" });
+      if (portalToken.expiresAt && new Date(portalToken.expiresAt) < new Date()) {
+        return res.status(410).json({ message: "Token has expired" });
+      }
+      const step = await storage.getOnboardingPacketStepById(req.params.stepId);
+      if (!step) return res.status(404).json({ message: "Step not found" });
+      if (step.packetId !== portalToken.packetId) return res.status(403).json({ message: "Access denied" });
+      const allowedUpdates: any = {};
+      if (req.body.status === "submitted" || req.body.status === "completed") {
+        if (step.dependenciesJson) {
+          const depIds: string[] = JSON.parse(step.dependenciesJson);
+          if (depIds.length > 0) {
+            const allSteps = await storage.getOnboardingPacketSteps(step.packetId);
+            const unmetDeps = depIds.filter(depId => {
+              const dep = allSteps.find(s => s.id === depId);
+              return !dep || (dep.status !== "completed" && dep.status !== "approved");
+            });
+            if (unmetDeps.length > 0) {
+              return res.status(400).json({ message: "Cannot complete this step: prerequisite steps are not yet done" });
+            }
+          }
+        }
+        allowedUpdates.status = req.body.status;
+        if (req.body.status === "completed") allowedUpdates.completedAt = new Date();
+        allowedUpdates.docStatus = req.body.status === "submitted" ? "submitted" : "completed";
+      }
+      if (req.body.notes) allowedUpdates.notes = req.body.notes;
+      const r = await storage.updateOnboardingPacketStep(req.params.stepId, allowedUpdates);
+      const worker = portalToken.workerId ? await storage.getWorker(portalToken.workerId) : null;
+      await storage.createDocumentAuditLog({
+        companyId: portalToken.companyId,
+        action: `onboarding_step_${req.body.status || "updated"}`,
+        actorName: worker ? `${worker.firstName} ${worker.lastName}` : "Portal User",
+        ipAddress: req.ip || req.headers["x-forwarded-for"]?.toString() || "",
+        details: JSON.stringify({ stepId: step.id, stepName: step.stepName, packetId: step.packetId }),
+      });
+      const allSteps = await storage.getOnboardingPacketSteps(step.packetId);
+      const completedCount = allSteps.filter(s => s.status === "completed" || s.status === "approved").length;
+      if (completedCount === allSteps.length && allSteps.length > 0) {
+        await storage.updateOnboardingPacket(step.packetId, { status: "completed", completedAt: new Date() });
+      } else if (completedCount > 0) {
+        await storage.updateOnboardingPacket(step.packetId, { status: "in_progress" });
+      }
+      res.json(r);
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to update onboarding step") }); }
+  });
+
+  app.post("/api/portal/onboarding/upload", documentUpload.single("file"), async (req: any, res) => {
+    try {
+      const token = req.body.token;
+      if (!token) return res.status(400).json({ message: "Token required" });
+      const portalToken = await storage.getPortalAccessTokenByToken(token);
+      if (!portalToken) return res.status(404).json({ message: "Invalid token" });
+      if (portalToken.isRevoked) return res.status(403).json({ message: "Token has been revoked" });
+      if (portalToken.tokenType !== "onboarding_packet") return res.status(400).json({ message: "Invalid token type" });
+      if (portalToken.expiresAt && new Date(portalToken.expiresAt) < new Date()) {
+        return res.status(410).json({ message: "Token has expired" });
+      }
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const stepId = req.body.stepId;
+      if (!stepId) return res.status(400).json({ message: "stepId required" });
+      const step = await storage.getOnboardingPacketStepById(stepId);
+      if (!step) return res.status(404).json({ message: "Step not found" });
+      if (step.packetId !== portalToken.packetId) return res.status(403).json({ message: "Access denied" });
+      const fileUrl = `/uploads/${req.file.filename}`;
+      const doc = await storage.createDocument({
+        companyId: portalToken.companyId,
+        title: step.stepName || req.file.originalname,
+        documentType: step.docType || "Other",
+        fileUrl,
+        fileName: req.file.originalname,
+        fileSize: req.file.size.toString(),
+        mimeType: req.file.mimetype,
+        status: "active",
+        classification: "internal",
+      });
+      await storage.updateOnboardingPacketStep(stepId, {
+        documentId: doc.id,
+        status: "submitted",
+        docStatus: "submitted",
+      });
+      const worker = portalToken.workerId ? await storage.getWorker(portalToken.workerId) : null;
+      await storage.createDocumentAuditLog({
+        companyId: portalToken.companyId,
+        action: "onboarding_document_uploaded",
+        actorName: worker ? `${worker.firstName} ${worker.lastName}` : "Portal User",
+        ipAddress: req.ip || req.headers["x-forwarded-for"]?.toString() || "",
+        details: JSON.stringify({ stepId, stepName: step.stepName, documentId: doc.id, fileName: req.file.originalname }),
+      });
+      res.status(201).json({ documentId: doc.id, fileUrl });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to upload document") }); }
   });
 
   // ── Deals (Pipeline) ──────────────────────────────────────────

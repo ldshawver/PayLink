@@ -36,6 +36,7 @@ import DealPipelinePage from "@/pages/deal-pipeline";
 import OnboardingProjectsPage from "@/pages/onboarding-projects";
 import OnboardingTemplatesPage from "@/pages/onboarding-templates";
 import EngagementFeedPage from "@/pages/engagement-feed";
+import PortalOnboardingPage from "@/pages/portal-onboarding";
 import LoginPage from "@/pages/login";
 import { Loader2, Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -170,6 +171,10 @@ function OnboardingRedirect({ children }: { children: React.ReactNode }) {
 function AppContent() {
   const { user, isLoading } = useAuth();
   const [location] = useLocation();
+
+  if (location.startsWith("/portal/onboarding/")) {
+    return <PortalOnboardingPage />;
+  }
 
   if (location.startsWith("/pay/")) {
     return <PayInvoicePage />;

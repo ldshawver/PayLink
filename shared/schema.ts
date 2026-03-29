@@ -2311,10 +2311,13 @@ export const portalAccessTokens = pgTable("portal_access_tokens", {
   invoiceId: varchar("invoice_id").references(() => invoices.id),
   documentId: varchar("document_id").references(() => documents.id),
   signatureRequestId: varchar("signature_request_id"),
+  packetId: varchar("packet_id"),
+  workerId: varchar("worker_id"),
   token: text("token").notNull(),
   tokenType: text("token_type").notNull(),
   expiresAt: timestamp("expires_at"),
   usedAt: timestamp("used_at"),
+  isRevoked: boolean("is_revoked").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -2390,6 +2393,12 @@ export const onboardingPacketSteps = pgTable("onboarding_packet_steps", {
   completedAt: timestamp("completed_at"),
   completedBy: varchar("completed_by"),
   notes: text("notes"),
+  taskType: text("task_type").default("manual"),
+  dependenciesJson: text("dependencies_json"),
+  docType: text("doc_type"),
+  docStatus: text("doc_status").default("pending"),
+  required: boolean("required").default(true),
+  signaturePackageId: varchar("signature_package_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

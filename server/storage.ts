@@ -647,6 +647,7 @@ export interface IStorage {
   updateOnboardingPacket(id: string, data: Partial<OnboardingPacket>): Promise<OnboardingPacket | undefined>;
 
   getOnboardingPacketSteps(packetId: string): Promise<OnboardingPacketStep[]>;
+  getOnboardingPacketStepById(id: string): Promise<OnboardingPacketStep | undefined>;
   createOnboardingPacketStep(data: InsertOnboardingPacketStep): Promise<OnboardingPacketStep>;
   updateOnboardingPacketStep(id: string, data: Partial<OnboardingPacketStep>): Promise<OnboardingPacketStep | undefined>;
 
@@ -670,6 +671,7 @@ export interface IStorage {
 
   createPortalAccessToken(data: any): Promise<any>;
   getPortalAccessTokenByToken(token: string): Promise<any>;
+  revokePortalTokensForPacket(packetId: string): Promise<void>;
 
   getDeals(companyId: string): Promise<Deal[]>;
   getDeal(id: string): Promise<Deal | undefined>;
@@ -2897,6 +2899,9 @@ export class DatabaseStorage implements IStorage {
     const [r] = await db.select().from(portalAccessTokens).where(eq(portalAccessTokens.token, token));
     return r;
   }
+  async revokePortalTokensForPacket(packetId: string): Promise<void> {
+    await db.update(portalAccessTokens).set({ isRevoked: true }).where(eq(portalAccessTokens.packetId, packetId));
+  }
 
   async getDocumentAuditLogsByCompany(companyId: string): Promise<DocumentAuditLog[]> {
     return db.select().from(documentAuditLogs).where(eq(documentAuditLogs.companyId, companyId)).orderBy(desc(documentAuditLogs.createdAt));
@@ -2950,6 +2955,10 @@ export class DatabaseStorage implements IStorage {
 
   async getOnboardingPacketSteps(packetId: string): Promise<OnboardingPacketStep[]> {
     return db.select().from(onboardingPacketSteps).where(eq(onboardingPacketSteps.packetId, packetId)).orderBy(onboardingPacketSteps.sortOrder);
+  }
+  async getOnboardingPacketStepById(id: string): Promise<OnboardingPacketStep | undefined> {
+    const [r] = await db.select().from(onboardingPacketSteps).where(eq(onboardingPacketSteps.id, id));
+    return r;
   }
   async createOnboardingPacketStep(data: InsertOnboardingPacketStep): Promise<OnboardingPacketStep> {
     const [r] = await db.insert(onboardingPacketSteps).values(data).returning();
