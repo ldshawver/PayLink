@@ -107,6 +107,14 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 -   **Security:** Enforces secure cookie settings, hides sensitive error details, and utilizes security headers.
 -   **Public Marketing Website:** A separate static HTML/CSS/JS site (`mypaylink.app`) is hosted at `/public-site/` for marketing purposes, running on PM2.
 
+## PWA Configuration
+-   **vite-plugin-pwa:** Configured in `vite.config.ts` to auto-generate service worker (Workbox) and web app manifest.
+-   **Manifest:** App name "PayLink", standalone display mode, theme color #1a5276, icons at 192x192, 512x512, and maskable 512x512.
+-   **Service Worker:** Precaches app shell and static assets. Runtime caching: CacheFirst for Google Fonts, NetworkFirst for API requests (10s timeout, 5min cache expiry).
+-   **Icons:** `client/public/pwa-192x192.png`, `client/public/pwa-512x512.png`, `client/public/pwa-maskable-512x512.png`.
+-   **Offline Fallback:** `client/public/offline.html` displays when offline and page not cached.
+-   **iOS Support:** Apple-specific meta tags in `client/index.html` (apple-mobile-web-app-capable, apple-touch-icon, status-bar-style).
+
 ## External Dependencies
 -   **PostgreSQL:** Primary database for all application data.
 -   **NGINX:** Used as a reverse proxy for production deployments.
