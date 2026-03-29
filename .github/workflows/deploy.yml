@@ -128,6 +128,25 @@ jobs:
             # Cleanup old backups (keep last 10)
             ls -t "$BACKUP_DIR"/paylink_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
 
+            # Step 8: Install/reload Nginx config
+            echo "8. Applying Nginx config..."
+            NGINX_CONF="$APP_DIR/scripts/nginx-mypaylink.conf"
+            NGINX_AVAIL="/etc/nginx/sites-available/mypaylink.app"
+            NGINX_ENABLED="/etc/nginx/sites-enabled/mypaylink.app"
+
+            if [ -f "$NGINX_CONF" ]; then
+              sudo cp "$NGINX_CONF" "$NGINX_AVAIL"
+              sudo ln -sf "$NGINX_AVAIL" "$NGINX_ENABLED" 2>/dev/null || true
+              if sudo nginx -t 2>&1; then
+                sudo systemctl reload nginx
+                echo "   Nginx reloaded successfully"
+              else
+                echo "   WARNING: nginx -t failed — config not applied. Review $NGINX_CONF"
+              fi
+            else
+              echo "   WARNING: Nginx config file not found at $NGINX_CONF"
+            fi
+
             # Stage public-site files in /tmp for website deploy job
             echo "Staging public-site files for website deploy..."
             rm -rf /tmp/paylink-public-staging

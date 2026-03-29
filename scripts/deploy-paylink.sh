@@ -66,7 +66,25 @@ pm2 start dist/index.cjs \
   -- dotenv_config_path="$ENV_FILE"
 pm2 save --force
 
-echo "7. Waiting for startup..."
+echo "7. Applying Nginx config..."
+NGINX_CONF="$APP_DIR/scripts/nginx-mypaylink.conf"
+NGINX_AVAIL="/etc/nginx/sites-available/mypaylink.app"
+NGINX_ENABLED="/etc/nginx/sites-enabled/mypaylink.app"
+
+if [ -f "$NGINX_CONF" ]; then
+  sudo cp "$NGINX_CONF" "$NGINX_AVAIL"
+  sudo ln -sf "$NGINX_AVAIL" "$NGINX_ENABLED" 2>/dev/null || true
+  if sudo nginx -t 2>&1; then
+    sudo systemctl reload nginx
+    echo "   Nginx reloaded successfully"
+  else
+    echo "   WARNING: nginx -t failed — config not applied. Review $NGINX_CONF"
+  fi
+else
+  echo "   WARNING: Nginx config not found at $NGINX_CONF"
+fi
+
+echo "8. Waiting for startup..."
 sleep 12
 
 HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health 2>/dev/null || echo "000")
