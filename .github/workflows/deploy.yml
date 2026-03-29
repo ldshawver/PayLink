@@ -168,12 +168,13 @@ jobs:
     needs: deploy-app
 
     steps:
-      - name: Setup SSH key for website user
+      - name: Setup website SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.WEBSITE_SSH_KEY }}" > ~/.ssh/website_key
+          printf '%s\n' "${{ secrets.WEBSITE_SSH_KEY }}" | tr -d '\r' > ~/.ssh/website_key
           chmod 600 ~/.ssh/website_key
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keygen -y -f ~/.ssh/website_key >/dev/null
 
       - name: Deploy marketing site (local rsync on VPS)
         uses: appleboy/ssh-action@v1.0.0
