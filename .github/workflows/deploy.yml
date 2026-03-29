@@ -68,34 +68,27 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            # Step 3: Normalize ownership and permissions before build
-            echo "3. Normalizing ownership and permissions..."
-            chown -R paylinkssh:mypaylink-app "$APP_DIR" 2>/dev/null || true
-            chmod -R u+rwX "$APP_DIR" 2>/dev/null || true
-
-            # Step 4: Install dependencies and fix all binary permissions
-            echo "4. Installing dependencies..."
+            # Step 3: Install dependencies
+            echo "3. Installing dependencies..."
             npm install --production=false
             chmod +x "$APP_DIR/node_modules/.bin/"* 2>/dev/null || true
             find "$APP_DIR/node_modules" -path "*/bin/*" -type f -exec chmod +x {} + 2>/dev/null || true
 
-            # Step 5: Build (remove stale/root-owned dist artifacts first)
-            echo "5. Building..."
-            rm -f "$APP_DIR/dist/index.cjs" 2>/dev/null || true
-            chown -R paylinkssh:mypaylink-app "$APP_DIR/dist" 2>/dev/null || true
-            chmod -R u+rwX "$APP_DIR/dist" 2>/dev/null || true
-            rm -rf "$APP_DIR/dist" 2>/dev/null || true
+            # Step 4: Normalize ownership and permissions, then build
+            echo "4. Normalizing ownership and building..."
+            cd "$APP_DIR"
+            chown -R paylinkssh:mypaylink-app "$APP_DIR"
+            chmod -R u+rwX "$APP_DIR"
+            rm -rf "$APP_DIR/dist"
             mkdir -p "$APP_DIR/dist"
             npm run build
-            chown -R paylinkssh:mypaylink-app "$APP_DIR/dist"
-            chmod -R u+rwX "$APP_DIR/dist"
 
-            # Step 6: Copy session table SQL
-            echo "6. Copying session table SQL..."
+            # Step 5: Copy session table SQL
+            echo "5. Copying session table SQL..."
             cp node_modules/connect-pg-simple/table.sql dist/
 
-            # Step 7: Restart app (restart if running, fresh start if not)
-            echo "7. Restarting app..."
+            # Step 6: Restart app (restart if running, fresh start if not)
+            echo "6. Restarting app..."
             cd "$APP_DIR"
             if pm2 describe paylink > /dev/null 2>&1; then
               pm2 restart paylink --update-env
@@ -112,8 +105,8 @@ jobs:
             fi
             pm2 save --force
 
-            # Step 8: Health check
-            echo "8. Waiting for app to start..."
+            # Step 7: Health check
+            echo "7. Waiting for app to start..."
             sleep 10
 
             HEALTH=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health)
