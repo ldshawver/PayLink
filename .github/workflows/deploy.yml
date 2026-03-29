@@ -151,9 +151,17 @@ jobs:
           chmod 600 ~/.ssh/website_key
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
+      - name: Repair destination permissions before rsync
+        run: |
+          ssh -i ~/.ssh/website_key \
+            -o StrictHostKeyChecking=no \
+            ${{ secrets.WEBSITE_SSH_USER }}@${{ secrets.VPS_HOST }} \
+            "chown -R mypaylink:mypaylink /home/mypaylink/htdocs/mypaylink.appsite && chmod -R u+rwX /home/mypaylink/htdocs/mypaylink.appsite && echo 'Permissions repaired'"
+
       - name: Deploy marketing site files
         run: |
-          rsync -avz --delete \
+          rsync -rlvz --delete \
+            --no-times \
             --exclude='.git' \
             --exclude='node_modules' \
             -e "ssh -i ~/.ssh/website_key -o StrictHostKeyChecking=no" \
