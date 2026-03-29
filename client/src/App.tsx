@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
@@ -187,7 +187,7 @@ function OnboardingRedirect({ children }: { children: React.ReactNode }) {
 function NativeFeatureInit() {
   const { user } = useAuth();
   const { setupPushListeners, requestPermission, registerToken, permissionState } = usePushNotifications();
-  const { isEnabled, restoreSession, enableBiometric, isAvailable } = useBiometricAuth();
+  const [pushRequested, setPushRequested] = useState(false);
 
   useEffect(() => {
     const cleanup = setupPushListeners();
@@ -200,13 +200,48 @@ function NativeFeatureInit() {
     }
   }, [user, permissionState, registerToken]);
 
-  useAppLifecycle(() => {
-    if (!user && isEnabled) {
-      restoreSession();
+  useEffect(() => {
+    if (user && !pushRequested && permissionState === "prompt") {
+      setPushRequested(true);
+      requestPermission().then((granted) => {
+        if (granted) registerToken();
+      });
     }
-  });
+  }, [user, pushRequested, permissionState, requestPermission, registerToken]);
 
   return null;
+}
+
+function BiometricGate({ children }: { children: React.ReactNode }) {
+  const { user, isLoading } = useAuth();
+  const { isEnabled, isAvailable, restoreSession } = useBiometricAuth();
+  const [biometricAttempted, setBiometricAttempted] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+
+  useAppLifecycle(useCallback(() => {
+    if (!user && isEnabled && isAvailable) {
+      setRestoring(true);
+      restoreSession().finally(() => setRestoring(false));
+    }
+  }, [user, isEnabled, isAvailable, restoreSession]));
+
+  useEffect(() => {
+    if (!isLoading && !user && isEnabled && isAvailable && !biometricAttempted) {
+      setBiometricAttempted(true);
+      setRestoring(true);
+      restoreSession().finally(() => setRestoring(false));
+    }
+  }, [isLoading, user, isEnabled, isAvailable, biometricAttempted, restoreSession]);
+
+  if (restoring) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return <>{children}</>;
 }
 
 function AppContent() {
@@ -229,7 +264,11 @@ function AppContent() {
     if (!isLoading && user) {
       return <RedirectToApp />;
     }
-    return <LoginPage />;
+    return (
+      <BiometricGate>
+        <LoginPage />
+      </BiometricGate>
+    );
   }
 
   if (location.startsWith("/app/print-check/")) {
