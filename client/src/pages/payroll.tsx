@@ -45,6 +45,7 @@ function ProcessPayrollTab() {
   const [showAll, setShowAll] = useState(false);
   const [dateSearch, setDateSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState("all");
+  const [workerFilter, setWorkerFilter] = useState("all");
 
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
@@ -85,6 +86,10 @@ function ProcessPayrollTab() {
       latestByCompany[run.companyId] = run;
     }
   }
+
+  const filterableWorkers = companyFilter === "all"
+    ? workers
+    : workers.filter(w => w.companyId === companyFilter);
 
   let displayRuns: PayrollRun[];
   if (showAll || dateSearch || companyFilter !== "all") {
@@ -177,13 +182,22 @@ function ProcessPayrollTab() {
 
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3 flex-wrap">
-          <Select value={companyFilter} onValueChange={v => { setCompanyFilter(v); if (v !== "all") setShowAll(true); }}>
+          <Select value={companyFilter} onValueChange={v => { setCompanyFilter(v); setWorkerFilter("all"); if (v !== "all") setShowAll(true); }}>
             <SelectTrigger className="w-[200px]" data-testid="select-payroll-company-filter">
               <SelectValue placeholder="All Companies" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Companies</SelectItem>
               {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={workerFilter} onValueChange={setWorkerFilter}>
+            <SelectTrigger className="w-[180px]" data-testid="select-payroll-worker-filter">
+              <SelectValue placeholder="All Employees" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Employees</SelectItem>
+              {filterableWorkers.map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}
             </SelectContent>
           </Select>
           <Input
@@ -261,6 +275,7 @@ function ProcessPayrollTab() {
             onToggle={() => setExpandedRun(expandedRun === run.id ? null : run.id)}
             getWorkerName={getWorkerName}
             onExportCSV={exportCSV}
+            filterWorkerId={workerFilter}
           />
         ))}
         {displayRuns.length === 0 && (
@@ -278,7 +293,7 @@ function ProcessPayrollTab() {
 }
 
 function PayrollRunCard({
-  run, companyName, expanded, onToggle, getWorkerName, onExportCSV,
+  run, companyName, expanded, onToggle, getWorkerName, onExportCSV, filterWorkerId = "all",
 }: {
   run: PayrollRun;
   companyName: string;
@@ -286,6 +301,7 @@ function PayrollRunCard({
   onToggle: () => void;
   getWorkerName: (id: string) => string;
   onExportCSV: (run: PayrollRun, items: PayrollItem[]) => void;
+  filterWorkerId?: string;
 }) {
   const { toast } = useToast();
   const { data: items = [], isLoading } = useQuery<PayrollItem[]>({
@@ -310,6 +326,8 @@ function PayrollRunCard({
       amendmentsByWorker[a.workerId].push(a);
     }
   }
+
+  const displayItems = filterWorkerId === "all" ? items : items.filter(i => i.workerId === filterWorkerId);
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editItem, setEditItem] = useState<PayrollItem | null>(null);
@@ -678,7 +696,7 @@ function PayrollRunCard({
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {items.map(item => {
+                    {displayItems.map(item => {
                       const workerAmends = amendmentsByWorker[item.workerId] || [];
                       const amendTotal = workerAmends.reduce((s, a) => s + Number(a.amount || 0), 0);
                       const storedDeductions = Number(item.deductions || 0);

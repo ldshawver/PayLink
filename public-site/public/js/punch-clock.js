@@ -99,15 +99,15 @@ document.addEventListener('DOMContentLoaded', function() {
           var rect = punchHero.getBoundingClientRect();
           var heroH = punchHero.offsetHeight;
           var scrolled = -rect.top;
-          var progress = Math.max(0, Math.min(1, scrolled / (heroH * 0.5)));
+          var progress = Math.max(0, Math.min(1, scrolled / (heroH * 0.3)));
 
-          var scale = 1 - progress * 0.55;
-          var yMove = progress * -200;
+          var scale = 1 - progress * 0.93;
+          var yMove = progress * -420;
 
           punchWrap.style.transform = 'scale(' + scale + ') translateY(' + yMove + 'px)';
 
           if (scrollHint) {
-            scrollHint.style.opacity = Math.max(0, 1 - progress * 3);
+            scrollHint.style.opacity = Math.max(0, 1 - progress * 5);
           }
 
           ticking = false;

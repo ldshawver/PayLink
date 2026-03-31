@@ -1364,6 +1364,15 @@ app.use((req, res, next) => {
     } catch (e: any) {
       console.log("Auto-migration skipped (company check numbers):", e.message);
     }
+
+    // Add company_id to payroll_items and enforce unique check numbers per company
+    await run("payroll_items.company_id", sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS company_id VARCHAR`);
+    try {
+      await db.execute(sql`UPDATE payroll_items pi SET company_id = pr.company_id FROM payroll_runs pr WHERE pi.payroll_run_id = pr.id AND pi.company_id IS NULL`);
+    } catch (e: any) {
+      console.log("Auto-migration skipped (payroll_items company_id populate):", e.message);
+    }
+    await run("payroll_items.company_check_unique", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_payroll_items_company_check ON payroll_items(company_id, check_number) WHERE check_number IS NOT NULL AND company_id IS NOT NULL`);
   }
 
   const { seedDatabase } = await import("./seed");

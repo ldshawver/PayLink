@@ -1,5 +1,5 @@
 .punch-hero {
-  height: 140vh;
+  height: 110vh;
   position: relative;
   background: #050810;
   color: #fff;
@@ -44,7 +44,7 @@
   max-width: 480px;
   width: 100%;
   padding: 0 24px;
-  margin-bottom: 4px;
+  margin-bottom: 0;
 }
 
 .hero-logo-img {
@@ -94,7 +94,7 @@
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  gap: 20px;
+  gap: 10px;
   transition: none;
 }
 
@@ -125,7 +125,7 @@
 
 .clock-header {
   text-align: center;
-  padding: 20px 24px 12px;
+  padding: 12px 24px 8px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
 }
 
@@ -149,10 +149,10 @@
 }
 
 .clock-screen {
-  margin: 20px 24px;
+  margin: 12px 24px;
   background: #060e0c;
   border-radius: 16px;
-  padding: 28px 20px;
+  padding: 16px 20px;
   position: relative;
   border: 1px solid rgba(13, 148, 136, 0.15);
   box-shadow:
@@ -232,7 +232,7 @@
 .clock-actions {
   display: flex;
   gap: 12px;
-  padding: 0 24px 20px;
+  padding: 0 24px 12px;
 }
 
 .clock-btn {
@@ -329,7 +329,7 @@
 }
 
 .clock-card-slot {
-  margin: 0 24px 20px;
+  margin: 0 24px 12px;
   height: 8px;
   background: #0a0a0a;
   border-radius: 4px;
@@ -366,7 +366,7 @@
 
 .clock-footer {
   text-align: center;
-  padding: 0 24px 16px;
+  padding: 0 24px 10px;
 }
 
 .clock-footer-text {
@@ -377,7 +377,7 @@
 }
 
 .scroll-hint {
-  margin-top: 40px;
+  margin-top: 14px;
   text-align: center;
   color: rgba(255,255,255,0.92);
   font-size: 1rem;
@@ -500,8 +500,8 @@
 
 @media (max-width: 480px) {
   .clock-machine { border-radius: 24px; }
-  .clock-screen { margin: 16px 16px; padding: 20px 16px; }
-  .clock-actions { padding: 0 16px 16px; }
-  .clock-card-slot { margin: 0 16px 16px; }
-  .clock-header { padding: 16px 16px 10px; }
+  .clock-screen { margin: 10px 16px; padding: 12px 16px; }
+  .clock-actions { padding: 0 16px 10px; }
+  .clock-card-slot { margin: 0 16px 10px; }
+  .clock-header { padding: 10px 16px 8px; }
 }

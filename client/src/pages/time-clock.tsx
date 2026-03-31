@@ -90,7 +90,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
   }, [mode]);
 
   useEffect(() => {
-    if (successState === "clock-in") {
+    if (successState === "clock-in" || successState === "clock-out" || successState === "sign-in") {
       setCountdown(10);
       const interval = setInterval(() => {
         setCountdown((c) => {
@@ -103,12 +103,6 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
         });
       }, 1000);
       return () => clearInterval(interval);
-    }
-    if (successState === "clock-out") {
-      const timer = setTimeout(() => {
-        window.location.href = "https://mypaylink.app";
-      }, 3000);
-      return () => clearTimeout(timer);
     }
   }, [successState, onClose]);
 
@@ -161,8 +155,11 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
     setLoading(true);
     setError("");
     try {
-      await callApi("sign-in", { employeeNumber, pin });
-      window.location.href = "/app/dashboard";
+      const data = await callApi("sign-in", { employeeNumber, pin });
+      const name = data.worker ? `${data.worker.firstName} ${data.worker.lastName}` : "";
+      setSuccessName(name);
+      setSuccessState("sign-in");
+      setLoading(false);
     } catch (err: any) {
       setError(err.message || "Sign in failed");
       setLoading(false);
