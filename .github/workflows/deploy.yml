@@ -41,7 +41,7 @@ jobs:
 
             cd "$APP_DIR"
 
-            echo "==> Sync latest code"
+            echo "==> Sync latest code from GitHub"
             git fetch origin main
             git reset --hard origin/main
 
