@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Play, Square, LogIn, X, Hash, Lock, CheckCircle, Fingerprint, ChevronDown } from "lucide-react";
+import { Play, Square, LogIn, X, Hash, Lock, CheckCircle, Fingerprint } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -374,13 +374,6 @@ export default function TimeClock() {
             Clock Out
           </Button>
         </div>
-      </div>
-
-      <div className="absolute bottom-6 left-0 right-0 flex flex-col items-center gap-1.5 z-10" data-testid="div-scroll-hint">
-        <p className="text-white text-sm font-bold tracking-widest uppercase drop-shadow-lg">
-          Scroll down to see more
-        </p>
-        <ChevronDown className="h-5 w-5 text-white animate-bounce" />
       </div>
 
       <ClockModal mode={modalMode} onClose={() => setModalMode(null)} />

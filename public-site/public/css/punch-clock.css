@@ -14,7 +14,7 @@
   height: 100%;
   object-fit: cover;
   z-index: 0;
-  opacity: 0.3;
+  opacity: 0.65;
 }
 
 .hero-video-overlay {
@@ -23,7 +23,7 @@
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.78);
+  background: rgba(0, 0, 0, 0.50);
   z-index: 1;
   pointer-events: none;
 }
@@ -43,10 +43,12 @@
 .punch-sticky > .scroll-hint {
   position: absolute;
   bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  white-space: nowrap;
+  left: 0;
+  right: 0;
+  text-align: center;
+  white-space: normal;
   margin-top: 0;
+  transform: none;
 }
 
 .hero-headline {
@@ -515,3 +517,118 @@
   .clock-card-slot { margin: 0 16px 10px; }
   .clock-header { padding: 10px 16px 8px; }
 }
+
+/* ── Clock punch modal ──────────────────────────────────────────────────── */
+.punch-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  backdrop-filter: blur(6px);
+}
+.punch-modal-card {
+  background: #0f1928;
+  border: 1px solid rgba(13, 148, 136, 0.35);
+  border-radius: 20px;
+  width: 100%;
+  max-width: 380px;
+  padding: 32px 28px 28px;
+  position: relative;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+}
+.punch-modal-close {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.4);
+  font-size: 1.6rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+  transition: color 0.15s;
+}
+.punch-modal-close:hover { color: #fff; }
+.punch-modal-header { text-align: center; margin-bottom: 20px; }
+.punch-modal-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgba(13, 148, 136, 0.18);
+  border: 1px solid rgba(13, 148, 136, 0.4);
+  color: #0d9488;
+  font-size: 1.3rem;
+  margin-bottom: 12px;
+}
+.punch-modal-icon.out { background: rgba(220, 38, 38, 0.15); border-color: rgba(220,38,38,0.4); color: #ef4444; }
+.punch-modal-title { font-size: 1.35rem; font-weight: 700; color: #fff; margin: 0 0 4px; }
+.punch-modal-sub { font-size: 0.82rem; color: rgba(255,255,255,0.5); margin: 0; }
+.punch-modal-field { margin-bottom: 14px; }
+.punch-modal-field label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: rgba(255,255,255,0.55);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-bottom: 6px;
+}
+.punch-modal-field input {
+  width: 100%;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 10px;
+  color: #fff;
+  font-size: 1rem;
+  padding: 10px 14px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.punch-modal-field input:focus { border-color: rgba(13,148,136,0.7); }
+.punch-modal-error {
+  color: #f87171;
+  font-size: 0.8rem;
+  margin: 0 0 10px;
+  min-height: 18px;
+}
+.punch-modal-submit {
+  width: 100%;
+  padding: 13px;
+  border-radius: 10px;
+  border: none;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  background: linear-gradient(135deg, #0d9488, #0891b2);
+  color: #fff;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.punch-modal-submit:hover { opacity: 0.88; transform: translateY(-1px); }
+.punch-modal-submit.out { background: linear-gradient(135deg, #dc2626, #b91c1c); }
+.punch-modal-submit:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.punch-modal-success-wrap { text-align: center; padding: 12px 0 4px; }
+.punch-modal-success-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.18);
+  border: 1px solid rgba(16,185,129,0.5);
+  color: #10b981;
+  font-size: 2rem;
+  margin-bottom: 16px;
+}
+.punch-modal-success-name { font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0 0 6px; }
+.punch-modal-success-msg { font-size: 0.9rem; color: rgba(255,255,255,0.55); margin: 0 0 14px; }
+.punch-modal-countdown { font-size: 0.78rem; color: rgba(255,255,255,0.35); margin: 0; }

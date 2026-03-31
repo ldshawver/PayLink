@@ -511,6 +511,42 @@
     </div>
   </footer>
 
+  <!-- Clock-in / Clock-out modal -->
+  <div id="punchModal" class="punch-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="punchModalTitle" style="display:none;">
+    <div class="punch-modal-card">
+      <button class="punch-modal-close" id="punchModalClose" aria-label="Close">&times;</button>
+
+      <div id="punchModalForm">
+        <div class="punch-modal-header">
+          <div class="punch-modal-icon" id="punchModalIcon">&#9654;</div>
+          <h2 class="punch-modal-title" id="punchModalTitle">Clock In</h2>
+          <p class="punch-modal-sub">Enter your employee number and PIN</p>
+        </div>
+        <div class="punch-modal-body">
+          <div class="punch-modal-field">
+            <label for="punchEmpNum">Employee Number</label>
+            <input type="text" id="punchEmpNum" inputmode="numeric" autocomplete="off" placeholder="e.g. 1001" />
+          </div>
+          <div class="punch-modal-field">
+            <label for="punchPin">PIN</label>
+            <input type="password" id="punchPin" inputmode="numeric" autocomplete="off" placeholder="&bull;&bull;&bull;&bull;" maxlength="8" />
+          </div>
+          <p class="punch-modal-error" id="punchModalError"></p>
+          <button class="punch-modal-submit" id="punchModalSubmit" type="button">
+            <span id="punchModalSubmitText">Clock In</span>
+          </button>
+        </div>
+      </div>
+
+      <div id="punchModalSuccess" style="display:none;" class="punch-modal-success-wrap">
+        <div class="punch-modal-success-icon">&#10003;</div>
+        <p class="punch-modal-success-name" id="punchModalSuccessName">Clocked In!</p>
+        <p class="punch-modal-success-msg" id="punchModalSuccessMsg">Have a great shift.</p>
+        <p class="punch-modal-countdown">Closing in <span id="punchModalCountdown">10</span>s</p>
+      </div>
+    </div>
+  </div>
+
   <script src="/js/main.js"></script>
   <script src="/js/punch-clock.js"></script>
   <script src="/js/dashboard-cycle.js"></script>
