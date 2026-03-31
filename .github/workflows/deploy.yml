@@ -1,207 +1,117 @@
-name: Deploy to VPS
+name: Deploy PayLink to VPS
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      reason:
-        description: "Reason for manual deploy (optional)"
-        required: false
-        default: "Manual trigger"
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    name: Deploy App + Marketing Site
 
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.0
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy to VPS over SSH
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
-          port: 2222
-          username: root
+          username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
           script_stop: true
-          command_timeout: 15m
+          command_timeout: 30m
           script: |
-            set -e
+            set -Eeuo pipefail
 
+            APP_USER="paylinkssh"
+            APP_GROUP="mypaylink-app"
+            APP_NAME="paylink"
             APP_DIR="/home/paylinkssh/paylink-app/PayLink"
-            ENV_FILE="/etc/paylink/.env"
-            BACKUP_DIR="/home/paylinkssh/backups"
-            WEB_SOURCE="$APP_DIR/public-site/public"
+            APP_ENTRY="$APP_DIR/dist/index.cjs"
+            APP_PORT="8000"
+            ENV_FILE="$APP_DIR/.env"
             WEB_ROOT="/home/mypaylink/htdocs/mypaylink.app"
 
-            echo "=========================================="
-            echo "PayLink Deploy - $(date)"
-            echo "=========================================="
+            echo "========== DEPLOY START =========="
+            echo "User: $(whoami)"
+            echo "App dir: $APP_DIR"
 
-            # Step 0: Validate env file
-            echo "0. Validating environment..."
-            if [ ! -f "$ENV_FILE" ]; then
-              echo "ERROR: $ENV_FILE does not exist. Cannot deploy."
-              exit 1
-            fi
-            for VAR in DATABASE_URL SESSION_SECRET APP_BASE_URL PORT NODE_ENV; do
-              if ! grep -q "^${VAR}=" "$ENV_FILE"; then
-                echo "ERROR: Required variable $VAR missing from $ENV_FILE"
-                exit 1
-              fi
-            done
-            echo "   Environment validated"
-
-            # Step 1: Backup PostgreSQL database
-            mkdir -p "$BACKUP_DIR"
-            BACKUP_FILE="$BACKUP_DIR/paylink_backup_$(date +%Y%m%d_%H%M%S).sql"
-            echo "1. Backing up PostgreSQL database..."
-            DB_PW=$(grep '^DATABASE_URL=' "$ENV_FILE" | sed 's|.*://[^:]*:\([^@]*\)@.*|\1|')
-            DB_USER=$(grep '^DATABASE_URL=' "$ENV_FILE" | sed 's|.*://\([^:]*\):.*|\1|')
-            DB_NAME=$(grep '^DATABASE_URL=' "$ENV_FILE" | sed 's|.*/\([^?]*\).*|\1|')
-            DB_HOST=$(grep '^DATABASE_URL=' "$ENV_FILE" | sed 's|.*@\([^:]*\):.*|\1|')
-            PGPASSWORD="$DB_PW" pg_dump -U "$DB_USER" -h "$DB_HOST" "$DB_NAME" > "$BACKUP_FILE"
-            echo "   Saved: $BACKUP_FILE"
-
-            # Step 2: Sync latest code
             cd "$APP_DIR"
-            echo "2. Syncing latest code..."
-            git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
+
+            echo "==> Sync latest code"
             git fetch origin main
             git reset --hard origin/main
 
-            # Step 3: Install dependencies
-            echo "3. Installing dependencies..."
-            npm install --production=false
-            chmod +x "$APP_DIR/node_modules/.bin/"* 2>/dev/null || true
-            find "$APP_DIR/node_modules" -path "*/bin/*" -type f -exec chmod +x {} + 2>/dev/null || true
+            echo "==> Fix ownership before build"
+            sudo chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
 
-            # Step 4: Build
-            echo "4. Building..."
-            cd "$APP_DIR"
-            chmod -R u+rwX "$APP_DIR"
-            rm -rf "$APP_DIR/dist"
-            mkdir -p "$APP_DIR/dist"
+            echo "==> Versions"
+            node -v
+            npm -v
+            pm2 -v
+
+            echo "==> Install dependencies"
+            npm install
+
+            echo "==> Build app"
             npm run build
 
-            # Step 5: Copy session table SQL
-            echo "5. Copying session table SQL..."
-            cp node_modules/connect-pg-simple/table.sql dist/
+            echo "==> Fix ownership after build"
+            sudo chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
 
-            # Step 6: Restart app
-            echo "6. Restarting app..."
-            cd "$APP_DIR"
+            echo "==> Verify required files"
+            test -f "$APP_ENTRY" || { echo "ERROR: Missing build artifact: $APP_ENTRY"; exit 1; }
+            test -f "$ENV_FILE" || { echo "ERROR: Missing env file: $ENV_FILE"; exit 1; }
 
-            APP_PORT=$(grep '^PORT=' "$ENV_FILE" | cut -d= -f2 | tr -d '[:space:]')
-            APP_PORT="${APP_PORT:-8000}"
-            echo "   Using port: $APP_PORT"
+            echo "==> Stop old PM2 app if present"
+            pm2 delete "$APP_NAME" 2>/dev/null || true
 
-            if node -e "require('dotenv')" 2>/dev/null; then
-              DOTENV_ARG="--node-args=-r dotenv/config"
-            else
-              DOTENV_ARG=""
-            fi
-
-            if sudo pm2 describe paylink >/dev/null 2>&1; then
-              sudo pm2 delete paylink
-            fi
-
-            sudo env PATH="$PATH" pm2 start dist/index.cjs \
-              --name paylink \
+            echo "==> Start app with PM2"
+            pm2 start "$APP_ENTRY" \
+              --name "$APP_NAME" \
               --cwd "$APP_DIR" \
               --interpreter node \
-              $DOTENV_ARG \
+              --node-args="-r dotenv/config" \
               --update-env \
               -- dotenv_config_path="$ENV_FILE"
 
-            sudo pm2 save --force
+            echo "==> Save PM2 process list"
+            pm2 save --force
 
-            sleep 10
+            echo "==> Wait for app startup"
+            sleep 15
 
-            sudo pm2 list
-            sudo pm2 logs paylink --lines 50 --nostream
+            echo "==> PM2 status"
+            pm2 list
+            pm2 describe "$APP_NAME" || true
+            pm2 logs "$APP_NAME" --lines 50 --nostream || true
 
-            # Step 7: Health check
-            echo "7. Health check..."
-            sleep 10
-            HEALTH=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${APP_PORT}/health")
-            READY=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${APP_PORT}/ready")
-            echo "   Health: $HEALTH | Ready: $READY"
-            if [ "$HEALTH" != "200" ] || [ "$READY" != "200" ]; then
-              echo "ERROR: Health checks failed!"
-              pm2 logs paylink --lines 50 --nostream
+            echo "==> Port check"
+            ss -tlnp | grep ":$APP_PORT" || true
+
+            echo "==> Health checks"
+            HEALTH_CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$APP_PORT/health" || true)"
+            READY_CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$APP_PORT/ready" || true)"
+            echo "Health: $HEALTH_CODE | Ready: $READY_CODE"
+
+            if [ "$HEALTH_CODE" != "200" ] && [ "$READY_CODE" != "200" ]; then
+              echo "ERROR: App failed health checks"
+              pm2 logs "$APP_NAME" --lines 100 --nostream || true
               exit 1
             fi
 
-            # Cleanup old backups (keep last 10)
-            ls -t "$BACKUP_DIR"/paylink_backup_*.sql 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
+            echo "==> Validate nginx"
+            sudo nginx -t
 
-            # Step 8: Apply Nginx config
-            echo "8. Applying Nginx config..."
-            NGINX_CONF="$APP_DIR/scripts/nginx-mypaylink.conf"
-            NGINX_AVAIL="/etc/nginx/sites-available/mypaylink.app"
-            NGINX_ENABLED="/etc/nginx/sites-enabled/mypaylink.app"
-            if [ ! -f "$NGINX_CONF" ]; then
-              echo "   ERROR: Nginx config not found at $NGINX_CONF"
-              exit 1
-            fi
-            sudo cp "$NGINX_CONF" "$NGINX_AVAIL"
-            echo "   Copied config to $NGINX_AVAIL"
-            sudo ln -sf "$NGINX_AVAIL" "$NGINX_ENABLED"
-            echo "   Symlinked into sites-enabled"
-            if ! sudo nginx -t 2>&1; then
-              echo "   ERROR: nginx -t failed. Rolling back config."
-              exit 1
-            fi
+            echo "==> Reload nginx"
             sudo systemctl reload nginx
-            echo "   Nginx reloaded successfully"
-            # Verify /api/ proxy rule is present in the live config
-            if grep -q 'location.*api' "$NGINX_AVAIL"; then
-              echo "   OK: /api/ proxy rule confirmed in active config"
-            else
-              echo "   WARNING: /api/ proxy rule not found in $NGINX_AVAIL"
+
+            echo "==> Sync static files if present"
+            if [ -d "$APP_DIR/dist/public" ] && [ -d "$WEB_ROOT" ]; then
+              sudo rsync -av --delete "$APP_DIR/dist/public/" "$WEB_ROOT/"
             fi
 
-            # Step 9: Deploy marketing site
-            # Source lives in the repo already cloned on this VPS — no cross-job state needed.
-            echo "9. Deploying marketing site..."
-            echo "   Source : $WEB_SOURCE"
-            echo "   Dest   : $WEB_ROOT"
-
-            if [ ! -d "$WEB_SOURCE" ]; then
-              echo "ERROR: $WEB_SOURCE does not exist after git reset."
-              exit 1
-            fi
-
-            echo "   Source file count: $(find $WEB_SOURCE -type f | wc -l)"
-
-            # Run rsync as mypaylink so it has native write access to its own web root.
-            # --no-perms/--no-owner/--no-group: do not attempt to set metadata (avoids
-            # mkstemp Permission denied and failed-to-set-times errors).
-            sudo -u mypaylink /usr/bin/rsync -rv --delete \
-              --omit-dir-times \
-              --no-perms \
-              --no-owner \
-              --no-group \
-              --exclude='.git' \
-              --exclude='node_modules' \
-              "$WEB_SOURCE/" "$WEB_ROOT/"
-
-            echo "   Deployed $(ls $WEB_ROOT | wc -l) items to web root"
-
-            # Spot-checks on live index.html
-            if grep -q 'app\.mypaylink\.app' "$WEB_ROOT/index.html" 2>/dev/null; then
-              echo "   WARNING: legacy app.mypaylink.app link still in index.html"
-            else
-              echo "   OK: no legacy subdomain links in index.html"
-            fi
-            if grep -q 'href="/clock"' "$WEB_ROOT/index.html" 2>/dev/null; then
-              echo "   WARNING: legacy /clock link still in index.html"
-            else
-              echo "   OK: no legacy /clock links in index.html"
-            fi
-
-            echo "=========================================="
-            echo "Deploy Complete - App: $HEALTH/$READY | Site: deployed"
-            echo "=========================================="
+            echo "========== DEPLOY SUCCESS =========="
