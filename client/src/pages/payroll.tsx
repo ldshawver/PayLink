@@ -744,6 +744,9 @@ function PayrollRunCard({
 function PayStubsTab() {
   const { toast } = useToast();
   const [ytdCompanyId, setYtdCompanyId] = useState("");
+  const [filterCompanyId, setFilterCompanyId] = useState("all");
+  const [filterWorkerId, setFilterWorkerId] = useState("all");
+  const [filterPeriod, setFilterPeriod] = useState("");
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: payrollRuns = [], isLoading: runsLoading } = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"] });
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
@@ -782,6 +785,21 @@ function PayStubsTab() {
     const w = workers.find(w => w.id === id);
     return w ? `${w.firstName} ${w.lastName}` : id;
   };
+
+  const filterableWorkers = filterCompanyId === "all"
+    ? workers
+    : workers.filter(w => w.companyId === filterCompanyId);
+
+  const filteredItems = items.filter(item => {
+    if (filterCompanyId !== "all" && item._run.companyId !== filterCompanyId) return false;
+    if (filterWorkerId !== "all" && item.workerId !== filterWorkerId) return false;
+    if (filterPeriod) {
+      const ps = item._run.periodStart ? String(item._run.periodStart) : "";
+      const pe = item._run.periodEnd ? String(item._run.periodEnd) : "";
+      return ps.includes(filterPeriod) || pe.includes(filterPeriod);
+    }
+    return true;
+  });
 
   if (runsLoading) {
     return <div data-testid="loading-pay-stubs"><Skeleton className="h-64 w-full" /></div>;
@@ -826,28 +844,64 @@ function PayStubsTab() {
       <CardHeader>
         <CardTitle>Pay Stubs</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap gap-3 items-center">
+          <Select value={filterCompanyId} onValueChange={v => { setFilterCompanyId(v); setFilterWorkerId("all"); }} data-testid="select-stubs-company">
+            <SelectTrigger className="w-[180px]"><SelectValue placeholder="All Companies" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={filterWorkerId} onValueChange={setFilterWorkerId} data-testid="select-stubs-employee">
+            <SelectTrigger className="w-[180px]"><SelectValue placeholder="All Employees" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Employees</SelectItem>
+              {filterableWorkers.map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Input
+            type="date"
+            className="w-[160px]"
+            value={filterPeriod}
+            onChange={e => setFilterPeriod(e.target.value)}
+            placeholder="Filter by period"
+            data-testid="input-stubs-period"
+          />
+          {(filterCompanyId !== "all" || filterWorkerId !== "all" || filterPeriod) && (
+            <Button variant="ghost" size="sm" onClick={() => { setFilterCompanyId("all"); setFilterWorkerId("all"); setFilterPeriod(""); }} data-testid="button-stubs-clear">
+              Clear Filters
+            </Button>
+          )}
+          <span className="text-xs text-muted-foreground ml-auto">{filteredItems.length} of {items.length} stubs</span>
+        </div>
         <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Employee</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Period</TableHead>
                 <TableHead>Gross Pay</TableHead>
+                <TableHead>Net Pay</TableHead>
                 <TableHead>Status</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {items.map(item => (
+              {filteredItems.map(item => (
                 <TableRow key={item.id} data-testid={`row-pay-stub-${item.id}`}>
                   <TableCell>{getWorkerName(item.workerId)}</TableCell>
+                  <TableCell className="text-muted-foreground text-sm">{companies.find(c => c.id === item._run.companyId)?.name || "—"}</TableCell>
                   <TableCell>{item._run.periodStart} — {item._run.periodEnd}</TableCell>
                   <TableCell>${Number(item.grossPay || 0).toFixed(2)}</TableCell>
+                  <TableCell>${Number(item.netPay || 0).toFixed(2)}</TableCell>
                   <TableCell><Badge variant="outline">{item._run.status || "draft"}</Badge></TableCell>
                 </TableRow>
               ))}
-              {items.length === 0 && (
-                <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground">No pay stubs available</TableCell></TableRow>
+              {filteredItems.length === 0 && (
+                <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                  {items.length === 0 ? "No pay stubs available" : "No stubs match the selected filters"}
+                </TableCell></TableRow>
               )}
             </TableBody>
           </Table>

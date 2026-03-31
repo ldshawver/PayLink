@@ -87,17 +87,20 @@ function CheckPortion({
 
       {/* Pay-to / amount */}
       <div style={{ marginBottom: "0.1in" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-          <div style={{ fontSize: "13px" }}>
-            <span style={{ fontWeight: "bold" }}>PAY TO THE ORDER OF: </span>
-            <span style={{ fontSize: "15px" }}>{worker.firstName} {worker.lastName}</span>
-          </div>
-          <div style={{ border: "2px solid #000", padding: "6px 16px", fontSize: "18px", fontWeight: "bold", minWidth: "1.5in", textAlign: "right" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+          <div style={{ fontSize: "11px", fontWeight: "bold", letterSpacing: "0.5px" }}>PAY TO THE ORDER OF</div>
+          <div style={{ border: "2px solid #000", padding: "5px 14px", fontSize: "17px", fontWeight: "bold", minWidth: "1.5in", textAlign: "right", letterSpacing: "0.5px" }}>
             ${fmt(netPay)}
           </div>
         </div>
-        <div style={{ borderBottom: "1px solid #000", paddingBottom: "6px", fontSize: "12px" }}>
-          {numberToWords(netPay)} Dollars
+        <div style={{ borderBottom: "2px solid #000", paddingBottom: "4px", marginBottom: "6px", display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+          <span style={{ fontSize: "15px", fontWeight: "600" }}>{worker.firstName} {worker.lastName}</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: "4px" }}>
+          <span style={{ fontSize: "12px", whiteSpace: "nowrap" }}>{numberToWords(netPay)} Dollars</span>
+          <span style={{ flex: 1, borderBottom: "1px solid #000", marginBottom: "2px", display: "inline-block", overflow: "hidden", letterSpacing: "4px", color: "#666", fontSize: "10px" }}>
+            {"\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022"}
+          </span>
         </div>
       </div>
 

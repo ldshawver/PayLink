@@ -96,7 +96,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
         setCountdown((c) => {
           if (c <= 1) {
             clearInterval(interval);
-            window.location.href = "/app/dashboard";
+            onClose();
             return 0;
           }
           return c - 1;
@@ -110,7 +110,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
       }, 3000);
       return () => clearTimeout(timer);
     }
-  }, [successState]);
+  }, [successState, onClose]);
 
   async function callApi(endpoint: string, body: object) {
     const res = await fetch(`/api/time-clock/${endpoint}`, {
@@ -204,16 +204,16 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
                 {successName ? `${successName} — Clocked In!` : "Clocked In!"}
               </p>
               <p className="text-sm text-white/60 mt-1">
-                Redirecting to your dashboard in{" "}
+                Returning to time clock in{" "}
                 <span className="font-bold text-teal-300">{countdown}</span>s...
               </p>
             </div>
             <Button
-              onClick={() => { window.location.href = "/app/dashboard"; }}
-              className="bg-teal-600 hover:bg-teal-700 text-white border-0"
-              data-testid="button-go-to-dashboard"
+              onClick={onClose}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+              data-testid="button-close-clock-in"
             >
-              Go to Dashboard Now
+              Done
             </Button>
           </div>
         ) : successState === "clock-out" ? (

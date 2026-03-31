@@ -1353,6 +1353,17 @@ app.use((req, res, next) => {
     await run("document_signature_requests.provider", sql`ALTER TABLE document_signature_requests ADD COLUMN IF NOT EXISTS provider TEXT`);
     await run("document_signature_requests.provider_object_id", sql`ALTER TABLE document_signature_requests ADD COLUMN IF NOT EXISTS provider_object_id TEXT`);
     await run("document_signers.routing_order", sql`ALTER TABLE document_signers ADD COLUMN IF NOT EXISTS routing_order INTEGER DEFAULT 1`);
+
+    // Set starting check number sequences for known companies (only if still at default 1 or null)
+    try {
+      await db.execute(sql`UPDATE companies SET next_check_number = 100  WHERE LOWER(TRIM(name)) = 'adiken'            AND (next_check_number IS NULL OR next_check_number <= 1)`);
+      await db.execute(sql`UPDATE companies SET next_check_number = 300  WHERE LOWER(TRIM(name)) = 'adiken properties' AND (next_check_number IS NULL OR next_check_number <= 1)`);
+      await db.execute(sql`UPDATE companies SET next_check_number = 700  WHERE LOWER(TRIM(name)) = 'lucifer cruz'      AND (next_check_number IS NULL OR next_check_number <= 1)`);
+      await db.execute(sql`UPDATE companies SET next_check_number = 1000 WHERE LOWER(TRIM(name)) = 'refined mind'      AND (next_check_number IS NULL OR next_check_number <= 1)`);
+      console.log("Auto-migration OK: company check number starting sequences");
+    } catch (e: any) {
+      console.log("Auto-migration skipped (company check numbers):", e.message);
+    }
   }
 
   const { seedDatabase } = await import("./seed");
