@@ -632,3 +632,18 @@
 .punch-modal-success-name { font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0 0 6px; }
 .punch-modal-success-msg { font-size: 0.9rem; color: rgba(255,255,255,0.55); margin: 0 0 14px; }
 .punch-modal-countdown { font-size: 0.78rem; color: rgba(255,255,255,0.35); margin: 0; }
+.punch-modal-toggle {
+  text-align: center;
+  margin: 12px 0 0;
+}
+.punch-modal-toggle button {
+  background: none;
+  border: none;
+  color: rgba(13,148,136,0.85);
+  font-size: 0.82rem;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+  transition: color 0.15s;
+}
+.punch-modal-toggle button:hover { color: #0d9488; }
