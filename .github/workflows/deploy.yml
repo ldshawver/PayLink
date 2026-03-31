@@ -93,21 +93,18 @@ jobs:
             echo "6. Restarting app..."
             cd "$APP_DIR"
 
-            # Read PORT from env file; default to 8000
             APP_PORT=$(grep '^PORT=' "$ENV_FILE" | cut -d= -f2 | tr -d '[:space:]')
             APP_PORT="${APP_PORT:-8000}"
             echo "   Using port: $APP_PORT"
 
-            pm2 delete paylink 2>/dev/null || true
-            fuser -k "${APP_PORT}/tcp" 2>/dev/null || true
-            pkill -f "dist/index.cjs" 2>/dev/null || true
-            sleep 3
-
-            # Use -r dotenv/config only if the dotenv package is present
             if node -e "require('dotenv')" 2>/dev/null; then
               DOTENV_ARG="--node-args=-r dotenv/config"
             else
               DOTENV_ARG=""
+            fi
+
+            if pm2 describe paylink >/dev/null 2>&1; then
+              pm2 delete paylink
             fi
 
             pm2 start dist/index.cjs \
@@ -117,7 +114,13 @@ jobs:
               $DOTENV_ARG \
               --update-env \
               -- dotenv_config_path="$ENV_FILE"
+
             pm2 save --force
+
+            sleep 10
+
+            pm2 list
+            pm2 logs paylink --lines 50 --nostream
 
             # Step 7: Health check
             echo "7. Health check..."
