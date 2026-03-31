@@ -135,24 +135,27 @@ document.addEventListener('DOMContentLoaded', function() {
   function showSuccess(name, type) {
     var isOut   = type === 'out';
     var isStaff = type === 'staff';
+    var isIn    = type === 'in';
     if (successName) {
-      successName.textContent = isStaff  ? ('Welcome, ' + (name || 'User') + '!')
+      successName.textContent = isStaff ? ('Welcome, ' + (name || 'User') + '!')
                               : (name   ? name + (isOut ? ' — Clocked Out!' : ' — Clocked In!')
                                         : (isOut ? 'Clocked Out!' : 'Clocked In!'));
     }
     if (successMsg) {
-      successMsg.textContent = isStaff ? 'Redirecting to your dashboard…'
-                             : (isOut  ? 'See you next time!' : 'Have a great shift.');
+      successMsg.textContent = (isStaff || isIn) ? 'Redirecting to your dashboard…'
+                                                 : 'See you next time!';
     }
     if (modalForm)    modalForm.style.display    = 'none';
     if (modalSuccess) modalSuccess.style.display = '';
     if (statusLine) {
-      statusLine.textContent = isStaff ? 'Signing in…' : (isOut ? 'Clocked out successfully' : 'Clocked in successfully');
+      statusLine.textContent = (isStaff || isIn) ? 'Redirecting…' : 'Clocked out successfully';
       statusLine.className = 'clock-status-line success';
     }
-    if (isStaff) {
+    if (isStaff || isIn) {
+      // Session is now active — send to dashboard
       setTimeout(function() { window.location.href = 'https://mypaylink.app/app/dashboard'; }, 1200);
     } else {
+      // Clock-out: just close the modal after countdown
       startCountdown();
     }
   }
