@@ -22,7 +22,7 @@ jobs:
         with:
           host: ${{ secrets.VPS_HOST }}
           port: 2222
-          username: ${{ secrets.VPS_USER }}
+          username: paylinkssh
           key: ${{ secrets.VPS_SSH_KEY }}
           script_stop: true
           command_timeout: 15m
@@ -33,7 +33,7 @@ jobs:
             ENV_FILE="/etc/paylink/.env"
             BACKUP_DIR="/home/paylinkssh/backups"
             WEB_SOURCE="$APP_DIR/public-site/public"
-            WEB_ROOT="/home/mypaylink/htdocs/mypaylink.appsite"
+            WEB_ROOT="/home/mypaylink/htdocs/mypaylink.app"
 
             echo "=========================================="
             echo "PayLink Deploy - $(date)"
@@ -92,16 +92,29 @@ jobs:
             # Step 6: Restart app
             echo "6. Restarting app..."
             cd "$APP_DIR"
+
+            # Read PORT from env file; default to 8000
+            APP_PORT=$(grep '^PORT=' "$ENV_FILE" | cut -d= -f2 | tr -d '[:space:]')
+            APP_PORT="${APP_PORT:-8000}"
+            echo "   Using port: $APP_PORT"
+
             pm2 delete paylink 2>/dev/null || true
-            fuser -k 8000/tcp 2>/dev/null || true
+            fuser -k "${APP_PORT}/tcp" 2>/dev/null || true
             pkill -f "dist/index.cjs" 2>/dev/null || true
             sleep 3
+
+            # Use -r dotenv/config only if the dotenv package is present
+            if node -e "require('dotenv')" 2>/dev/null; then
+              DOTENV_ARG="--node-args=-r dotenv/config"
+            else
+              DOTENV_ARG=""
+            fi
 
             pm2 start dist/index.cjs \
               --name paylink \
               --cwd "$APP_DIR" \
               --interpreter node \
-              --node-args="-r dotenv/config" \
+              $DOTENV_ARG \
               --update-env \
               -- dotenv_config_path="$ENV_FILE"
             pm2 save --force
@@ -109,8 +122,8 @@ jobs:
             # Step 7: Health check
             echo "7. Health check..."
             sleep 10
-            HEALTH=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health)
-            READY=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/ready)
+            HEALTH=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${APP_PORT}/health")
+            READY=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${APP_PORT}/ready")
             echo "   Health: $HEALTH | Ready: $READY"
             if [ "$HEALTH" != "200" ] || [ "$READY" != "200" ]; then
               echo "ERROR: Health checks failed!"
