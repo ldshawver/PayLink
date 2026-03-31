@@ -37,6 +37,16 @@
   justify-content: center;
   flex-direction: column;
   z-index: 2;
+  padding-bottom: 48px;
+}
+
+.punch-sticky > .scroll-hint {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  margin-top: 0;
 }
 
 .hero-headline {
