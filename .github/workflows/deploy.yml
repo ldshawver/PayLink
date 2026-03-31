@@ -14,13 +14,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Deploy to VPS over SSH
+      - name: Deploy to VPS
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
+          port: 22
           script_stop: true
           command_timeout: 30m
           script: |
@@ -46,7 +46,7 @@ jobs:
             git reset --hard origin/main
 
             echo "==> Fix ownership before build"
-            sudo chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
+            sudo /usr/bin/chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
 
             echo "==> Versions"
             node -v
@@ -60,7 +60,7 @@ jobs:
             npm run build
 
             echo "==> Fix ownership after build"
-            sudo chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
+            sudo /usr/bin/chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
 
             echo "==> Verify required files"
             test -f "$APP_ENTRY" || { echo "ERROR: Missing build artifact: $APP_ENTRY"; exit 1; }
@@ -81,7 +81,7 @@ jobs:
             echo "==> Save PM2 process list"
             pm2 save --force
 
-            echo "==> Wait for app startup"
+            echo "==> Wait for startup"
             sleep 15
 
             echo "==> PM2 status"
@@ -104,14 +104,14 @@ jobs:
             fi
 
             echo "==> Validate nginx"
-            sudo nginx -t
+            sudo /usr/sbin/nginx -t
 
             echo "==> Reload nginx"
-            sudo systemctl reload nginx
+            sudo /usr/bin/systemctl reload nginx
 
             echo "==> Sync static files if present"
             if [ -d "$APP_DIR/dist/public" ] && [ -d "$WEB_ROOT" ]; then
-              sudo rsync -av --delete "$APP_DIR/dist/public/" "$WEB_ROOT/"
+              sudo /usr/bin/rsync -av --delete "$APP_DIR/dist/public/" "$WEB_ROOT/"
             fi
 
             echo "========== DEPLOY SUCCESS =========="
