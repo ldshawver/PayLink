@@ -103,11 +103,11 @@ jobs:
               DOTENV_ARG=""
             fi
 
-            if pm2 describe paylink >/dev/null 2>&1; then
-              pm2 delete paylink
+            if sudo pm2 describe paylink >/dev/null 2>&1; then
+              sudo pm2 delete paylink
             fi
 
-            pm2 start dist/index.cjs \
+            sudo env PATH="$PATH" pm2 start dist/index.cjs \
               --name paylink \
               --cwd "$APP_DIR" \
               --interpreter node \
@@ -115,12 +115,12 @@ jobs:
               --update-env \
               -- dotenv_config_path="$ENV_FILE"
 
-            pm2 save --force
+            sudo pm2 save --force
 
             sleep 10
 
-            pm2 list
-            pm2 logs paylink --lines 50 --nostream
+            sudo pm2 list
+            sudo pm2 logs paylink --lines 50 --nostream
 
             # Step 7: Health check
             echo "7. Health check..."
