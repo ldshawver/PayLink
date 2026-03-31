@@ -22,7 +22,7 @@ jobs:
         with:
           host: ${{ secrets.VPS_HOST }}
           port: 2222
-          username: paylinkssh
+          username: root
           key: ${{ secrets.VPS_SSH_KEY }}
           script_stop: true
           command_timeout: 15m
