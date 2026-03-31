@@ -3,6 +3,7 @@
   position: relative;
   background: #050810;
   color: #fff;
+  overflow: hidden;
 }
 
 .hero-video-bg {
@@ -10,10 +11,10 @@
   top: 0;
   left: 0;
   width: 100%;
-  height: 100vh;
+  height: 100%;
   object-fit: cover;
   z-index: 0;
-  opacity: 0.45;
+  opacity: 0.55;
 }
 
 .hero-video-overlay {
@@ -21,8 +22,8 @@
   top: 0;
   left: 0;
   width: 100%;
-  height: 100vh;
-  background: linear-gradient(180deg, rgba(5,8,16,0.5) 0%, rgba(5,8,16,0.3) 40%, rgba(5,8,16,0.7) 100%);
+  height: 100%;
+  background: rgba(0, 0, 0, 0.62);
   z-index: 1;
   pointer-events: none;
 }
@@ -35,8 +36,44 @@
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  overflow: hidden;
   z-index: 2;
+}
+
+.hero-headline {
+  text-align: center;
+  max-width: 480px;
+  width: 100%;
+  padding: 0 24px;
+  margin-bottom: 4px;
+}
+
+.hero-logo-img {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 24px rgba(13,148,136,0.6));
+  margin-bottom: 14px;
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.hero-h1 {
+  font-size: clamp(1.75rem, 5vw, 2.4rem);
+  font-weight: 800;
+  color: #fff;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  text-shadow: 0 2px 24px rgba(0,0,0,0.6);
+  margin: 0 0 10px 0;
+}
+
+.hero-h2 {
+  font-size: 0.92rem;
+  font-weight: 400;
+  color: rgba(255,255,255,0.68);
+  line-height: 1.65;
+  margin: 0;
 }
 
 .punch-sticky::before {
@@ -56,6 +93,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-direction: column;
+  gap: 20px;
   transition: none;
 }
 

@@ -25,8 +25,9 @@ Production VPS Safety Rules (CRITICAL - NEVER VIOLATE):
 6. Do not add destructive startup resets, schema drops, or automatic database recreation.
 7. Before restarting production, validate: .env file exists, DATABASE_URL exists, SESSION_SECRET exists, APP_BASE_URL exists.
 8. Keep deploy backup logic aligned to PostgreSQL. Use pg_dump, not mysqldump.
-9. Marketing site is static and does not need its own database connection variable. It talks to the app API.
+9. Marketing site static files are served by nginx from /home/mypaylink/htdocs/mypaylink.appsite/ (NOT mypaylink.app). Marketing site Node.js server runs on port 3000 as PM2 process "paylink-site" and also serves as a fallback.
 10. Do not change production ports unless explicitly instructed. PayLink app runs behind reverse proxy on 127.0.0.1:8000.
+11. deploy.yml MUST use APP_PORT="8000", ENV_FILE="/etc/paylink/.env", and WEB_ROOT="/home/mypaylink/htdocs/mypaylink.appsite". The rsync step copies public-site/public/ to WEB_ROOT (NOT dist/public/ which would overwrite marketing files).
 
 Schema Change Rules (CRITICAL - NEVER VIOLATE):
 1. NEVER drop existing tables - only add new tables.

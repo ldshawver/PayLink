@@ -31,9 +31,9 @@ jobs:
             APP_NAME="paylink"
             APP_DIR="/home/paylinkssh/paylink-app/PayLink"
             APP_ENTRY="$APP_DIR/dist/index.cjs"
-            APP_PORT="8080"
-            ENV_FILE="$APP_DIR/.env"
-            WEB_ROOT="/home/mypaylink/htdocs/mypaylink.app"
+            APP_PORT="8000"
+            ENV_FILE="/etc/paylink/.env"
+            WEB_ROOT="/home/mypaylink/htdocs/mypaylink.appsite"
 
             echo "========== DEPLOY START =========="
             echo "User: $(whoami)"
@@ -109,9 +109,20 @@ jobs:
             echo "==> Reload nginx"
             sudo /usr/bin/systemctl reload nginx
 
-            echo "==> Sync static files if present"
-            if [ -d "$APP_DIR/dist/public" ] && [ -d "$WEB_ROOT" ]; then
-              sudo /usr/bin/rsync -av --delete "$APP_DIR/dist/public/" "$WEB_ROOT/"
+            echo "==> Sync marketing site static files to web root"
+            if [ -d "$APP_DIR/public-site/public" ] && [ -d "$WEB_ROOT" ]; then
+              sudo /usr/bin/rsync -av --delete "$APP_DIR/public-site/public/" "$WEB_ROOT/"
+              echo "Marketing files synced to $WEB_ROOT"
+            else
+              echo "WARN: Marketing public dir or WEB_ROOT not found - skipping rsync"
             fi
+
+            echo "==> Start/restart marketing site server (port 3000)"
+            pm2 describe paylink-site &>/dev/null \
+              && pm2 restart paylink-site \
+              || pm2 start "$APP_DIR/public-site/server.js" \
+                   --name paylink-site \
+                   --cwd "$APP_DIR/public-site"
+            pm2 save --force
 
             echo "========== DEPLOY SUCCESS =========="
