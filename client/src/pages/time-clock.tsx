@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Play, Square, LogIn, X, Hash, Lock, CheckCircle, Fingerprint } from "lucide-react";
+import { Play, Square, LogIn, X, Hash, Lock, CheckCircle, Fingerprint, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,8 +21,8 @@ function VideoBackground() {
       >
         <source src={bgVideo} type="video/mp4" />
       </video>
-      <div className="absolute inset-0 bg-gradient-to-br from-slate-900/85 via-teal-900/70 to-blue-900/80" />
-      <div className="absolute inset-0 bg-black/30" />
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-900/95 via-teal-950/90 to-blue-950/95" />
+      <div className="absolute inset-0 bg-black/60" />
     </div>
   );
 }
@@ -59,7 +59,7 @@ function LiveClock() {
   );
 }
 
-type ModalMode = "clock-in" | "clock-out" | "sign-in" | null;
+type ModalMode = "clock-in" | "clock-out" | null;
 
 interface ClockModalProps {
   mode: ModalMode;
@@ -71,8 +71,9 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
+  const [successState, setSuccessState] = useState<"clock-in" | "clock-out" | "sign-in" | null>(null);
   const [successName, setSuccessName] = useState("");
+  const [countdown, setCountdown] = useState(10);
   const { toast } = useToast();
   const empRef = useRef<HTMLInputElement>(null);
 
@@ -82,10 +83,34 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
       setPin("");
       setError("");
       setLoading(false);
-      setSuccess(false);
+      setSuccessState(null);
+      setCountdown(10);
       setTimeout(() => empRef.current?.focus(), 100);
     }
   }, [mode]);
+
+  useEffect(() => {
+    if (successState === "clock-in") {
+      setCountdown(10);
+      const interval = setInterval(() => {
+        setCountdown((c) => {
+          if (c <= 1) {
+            clearInterval(interval);
+            window.location.href = "/app/dashboard";
+            return 0;
+          }
+          return c - 1;
+        });
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+    if (successState === "clock-out") {
+      const timer = setTimeout(() => {
+        window.location.href = "https://mypaylink.app";
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [successState]);
 
   async function callApi(endpoint: string, body: object) {
     const res = await fetch(`/api/time-clock/${endpoint}`, {
@@ -106,8 +131,9 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
     try {
       const data = await callApi("clock-in-session", { employeeNumber, pin });
       const name = data.worker ? `${data.worker.firstName} ${data.worker.lastName}` : "";
-      toast({ title: `Clocked in${name ? ` — ${name}` : ""}`, description: "Redirecting to your dashboard..." });
-      setTimeout(() => { window.location.href = "/app/dashboard"; }, 1200);
+      setSuccessName(name);
+      setSuccessState("clock-in");
+      setLoading(false);
     } catch (err: any) {
       setError(err.message || "Clock in failed");
       setLoading(false);
@@ -122,9 +148,8 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
       const data = await callApi("clock-out-session", { employeeNumber, pin });
       const name = data.worker ? `${data.worker.firstName} ${data.worker.lastName}` : "";
       setSuccessName(name);
-      setSuccess(true);
+      setSuccessState("clock-out");
       setLoading(false);
-      setTimeout(() => { window.location.href = "/clock-in"; }, 3000);
     } catch (err: any) {
       setError(err.message || "Clock out failed");
       setLoading(false);
@@ -137,8 +162,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
     setError("");
     try {
       await callApi("sign-in", { employeeNumber, pin });
-      toast({ title: "Signed in", description: "Redirecting to your dashboard..." });
-      setTimeout(() => { window.location.href = "/app/dashboard"; }, 1200);
+      window.location.href = "/app/dashboard";
     } catch (err: any) {
       setError(err.message || "Sign in failed");
       setLoading(false);
@@ -149,15 +173,11 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
     if (e.key === "Enter") {
       if (mode === "clock-in") handleClockIn();
       else if (mode === "clock-out") handleClockOut();
-      else if (mode === "sign-in") handleSignIn();
     }
   }
 
-  const titles: Record<NonNullable<ModalMode>, string> = {
-    "clock-in": "Clock In",
-    "clock-out": "Clock Out",
-    "sign-in": "Sign In",
-  };
+  const isClockIn = mode === "clock-in";
+  const isClockOut = mode === "clock-out";
 
   return (
     <Dialog open={!!mode} onOpenChange={(open) => { if (!open && !loading) onClose(); }}>
@@ -167,24 +187,43 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
       >
         <DialogHeader>
           <DialogTitle className="text-xl font-semibold text-white flex items-center gap-2">
-            {mode === "clock-in" && <Play className="h-5 w-5 text-emerald-400" />}
-            {mode === "clock-out" && <Square className="h-5 w-5 text-red-400" />}
-            {mode === "sign-in" && <LogIn className="h-5 w-5 text-teal-400" />}
-            {mode && titles[mode]}
+            {isClockIn && <Play className="h-5 w-5 text-emerald-400" />}
+            {isClockOut && <Square className="h-5 w-5 text-red-400" />}
+            {isClockIn ? "Clock In / Sign In" : "Clock Out"}
           </DialogTitle>
           <DialogDescription className="text-white/50 text-sm">
             Enter your employee number and PIN to continue.
           </DialogDescription>
         </DialogHeader>
 
-        {success ? (
+        {successState === "clock-in" ? (
+          <div className="flex flex-col items-center gap-4 py-6" data-testid="div-clock-in-success">
+            <CheckCircle className="h-14 w-14 text-emerald-400" />
+            <div className="text-center">
+              <p className="text-lg font-semibold text-white">
+                {successName ? `${successName} — Clocked In!` : "Clocked In!"}
+              </p>
+              <p className="text-sm text-white/60 mt-1">
+                Redirecting to your dashboard in{" "}
+                <span className="font-bold text-teal-300">{countdown}</span>s...
+              </p>
+            </div>
+            <Button
+              onClick={() => { window.location.href = "/app/dashboard"; }}
+              className="bg-teal-600 hover:bg-teal-700 text-white border-0"
+              data-testid="button-go-to-dashboard"
+            >
+              Go to Dashboard Now
+            </Button>
+          </div>
+        ) : successState === "clock-out" ? (
           <div className="flex flex-col items-center gap-4 py-6" data-testid="div-clock-out-success">
             <CheckCircle className="h-14 w-14 text-emerald-400" />
             <div className="text-center">
               <p className="text-lg font-semibold text-white">
                 {successName ? `${successName} — Clocked Out` : "Clocked Out"}
               </p>
-              <p className="text-sm text-white/60 mt-1">Returning to clock page...</p>
+              <p className="text-sm text-white/60 mt-1">See you next time!</p>
             </div>
           </div>
         ) : (
@@ -232,19 +271,31 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
             )}
 
             <div className="flex flex-col gap-2 pt-2">
-              {mode === "clock-in" && (
-                <Button
-                  onClick={handleClockIn}
-                  disabled={loading}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white border-0 shadow-lg shadow-emerald-900/30 py-5"
-                  data-testid="button-modal-clock-in"
-                >
-                  <Play className="h-4 w-4 mr-2" />
-                  {loading ? "Clocking In..." : "Clock In"}
-                </Button>
+              {isClockIn && (
+                <>
+                  <Button
+                    onClick={handleClockIn}
+                    disabled={loading}
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white border-0 shadow-lg shadow-emerald-900/30 py-5"
+                    data-testid="button-modal-clock-in"
+                  >
+                    <Play className="h-4 w-4 mr-2" />
+                    {loading ? "Clocking In..." : "Clock In"}
+                  </Button>
+
+                  <Button
+                    onClick={handleSignIn}
+                    disabled={loading}
+                    className="w-full bg-teal-600 hover:bg-teal-700 text-white border-0 shadow-lg shadow-teal-900/30 py-5"
+                    data-testid="button-modal-sign-in"
+                  >
+                    <Fingerprint className="h-4 w-4 mr-2" />
+                    {loading ? "Signing In..." : "Sign In"}
+                  </Button>
+                </>
               )}
 
-              {mode === "clock-out" && (
+              {isClockOut && (
                 <Button
                   onClick={handleClockOut}
                   disabled={loading}
@@ -253,31 +304,6 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
                 >
                   <Square className="h-4 w-4 mr-2" />
                   {loading ? "Clocking Out..." : "Clock Out"}
-                </Button>
-              )}
-
-              {mode === "sign-in" && (
-                <Button
-                  onClick={handleSignIn}
-                  disabled={loading}
-                  className="w-full bg-teal-600 hover:bg-teal-700 text-white border-0 shadow-lg shadow-teal-900/30 py-5"
-                  data-testid="button-modal-sign-in"
-                >
-                  <Fingerprint className="h-4 w-4 mr-2" />
-                  {loading ? "Signing In..." : "Sign In"}
-                </Button>
-              )}
-
-              {(mode === "clock-in" || mode === "clock-out") && (
-                <Button
-                  variant="outline"
-                  onClick={handleSignIn}
-                  disabled={loading}
-                  className="w-full border-white/25 text-white/80 hover:bg-white/10 hover:text-white bg-transparent py-4"
-                  data-testid="button-modal-sign-in-instead"
-                >
-                  <LogIn className="h-4 w-4 mr-2" />
-                  Sign In Instead
                 </Button>
               )}
 
@@ -306,17 +332,26 @@ export default function TimeClock() {
     <div className="relative flex flex-col items-center justify-center min-h-screen p-4 select-none">
       <VideoBackground />
 
-      <div className="relative z-10 w-full max-w-sm space-y-8">
-        <div className="flex flex-col items-center gap-4">
+      <div className="relative z-10 w-full max-w-sm space-y-6">
+        <div className="flex flex-col items-center gap-3 text-center">
           <img
             src={paylinkLogo}
             alt="PayLink"
             className="h-20 w-20 object-contain drop-shadow-2xl"
             data-testid="img-paylink-logo"
           />
-          <h1 className="text-2xl font-bold tracking-tight text-white/90 drop-shadow-lg" data-testid="text-timeclock-title">
-            Employee Time Clock
+          <h1
+            className="text-3xl font-extrabold tracking-tight text-white drop-shadow-lg leading-tight"
+            data-testid="text-timeclock-h1"
+          >
+            One Platform.<br />Total Business Control.
           </h1>
+          <h2
+            className="text-sm font-medium text-white/75 leading-relaxed max-w-xs drop-shadow"
+            data-testid="text-timeclock-h2"
+          >
+            Manage your team, finances, and operations with powerful, integrated tools built to scale.
+          </h2>
         </div>
 
         <LiveClock />
@@ -329,7 +364,7 @@ export default function TimeClock() {
             data-testid="button-open-clock-in"
           >
             <Play className="h-6 w-6 mr-3" />
-            Clock In
+            Clock In / Sign In
           </Button>
 
           <Button
@@ -341,16 +376,14 @@ export default function TimeClock() {
             <Square className="h-6 w-6 mr-3" />
             Clock Out
           </Button>
-
-          <button
-            onClick={() => setModalMode("sign-in")}
-            className="w-full text-center text-sm text-white/50 hover:text-white/80 underline underline-offset-4 transition-colors pt-1"
-            data-testid="button-open-sign-in"
-          >
-            <LogIn className="h-3.5 w-3.5 inline mr-1 mb-0.5" />
-            Employee Sign In
-          </button>
         </div>
+      </div>
+
+      <div className="absolute bottom-6 left-0 right-0 flex flex-col items-center gap-1.5 z-10" data-testid="div-scroll-hint">
+        <p className="text-white text-sm font-bold tracking-widest uppercase drop-shadow-lg">
+          Scroll down to see more
+        </p>
+        <ChevronDown className="h-5 w-5 text-white animate-bounce" />
       </div>
 
       <ClockModal mode={modalMode} onClose={() => setModalMode(null)} />
