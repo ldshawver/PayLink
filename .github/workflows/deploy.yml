@@ -6,34 +6,43 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: deploy-paylink-production
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy to VPS
+      - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
+          port: ${{ secrets.VPS_PORT || 22 }}
           script_stop: true
           command_timeout: 30m
           script: |
             set -Eeuo pipefail
 
-            APP_USER="paylinkssh"
+            APP_USER="${{ secrets.VPS_USER }}"
             APP_GROUP="mypaylink-app"
             APP_NAME="paylink"
-            APP_DIR="/home/paylinkssh/paylink-app/PayLink"
+            SITE_NAME="paylink-site"
+            APP_DIR="/home/${{ secrets.VPS_USER }}/paylink-app/PayLink"
             APP_ENTRY="$APP_DIR/dist/index.cjs"
             APP_PORT="8000"
             ENV_FILE="/etc/paylink/.env"
             WEB_ROOT="/home/mypaylink/htdocs/mypaylink.appsite"
+            MARKETING_DIR="$APP_DIR/public-site"
+            MARKETING_PUBLIC="$MARKETING_DIR/public"
+            MARKETING_SERVER="$MARKETING_DIR/server.js"
 
             echo "========== DEPLOY START =========="
             echo "User: $(whoami)"
@@ -100,7 +109,7 @@ jobs:
 
             echo "==> Health checks (primary success condition)"
             HEALTH_CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$APP_PORT/health" || true)"
-            READY_CODE="$(curl -s -o /dev/null -w '%{http_code}'  "http://127.0.0.1:$APP_PORT/ready"  || true)"
+            READY_CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$APP_PORT/ready" || true)"
             echo "Health: $HEALTH_CODE | Ready: $READY_CODE"
 
             if [ "$HEALTH_CODE" != "200" ] && [ "$READY_CODE" != "200" ]; then
@@ -117,30 +126,34 @@ jobs:
             echo "==> Reload nginx"
             sudo /usr/bin/systemctl reload nginx
 
-            echo "==> Sync marketing site static files to web root"
-            echo "Diagnostics:"
-            ls -lah "$APP_DIR/public-site"        || true
-            ls -lah "$APP_DIR/public-site/public"  || true
-            ls -lah "$WEB_ROOT"                    || true
+            echo "==> Marketing site diagnostics"
+            sudo ls -lah "$MARKETING_DIR" || true
+            sudo ls -lah "$MARKETING_PUBLIC" || true
+            sudo ls -lah "$WEB_ROOT" || true
             id
 
-            if [ -d "$APP_DIR/public-site/public" ] && [ -d "$WEB_ROOT" ]; then
+            echo "==> Sync marketing site static files to web root"
+            if sudo test -d "$MARKETING_PUBLIC" && sudo test -d "$WEB_ROOT"; then
               echo "Syncing marketing files..."
-              if sudo /usr/bin/rsync -av --delete "$APP_DIR/public-site/public/" "$WEB_ROOT/"; then
+              if sudo /usr/bin/rsync -av --delete "$MARKETING_PUBLIC/" "$WEB_ROOT/"; then
                 echo "Marketing files synced to $WEB_ROOT"
               else
-                echo "WARN: rsync to $WEB_ROOT failed; continuing because app is healthy"
+                echo "WARN: rsync failed; continuing because core app is healthy"
               fi
             else
-              echo "WARN: Marketing public dir or WEB_ROOT not found - skipping rsync"
+              echo "WARN: Marketing public dir or WEB_ROOT not accessible - skipping rsync"
             fi
 
             echo "==> Start/restart marketing site server (port 3000)"
-            pm2 describe paylink-site &>/dev/null \
-              && pm2 restart paylink-site \
-              || pm2 start "$APP_DIR/public-site/server.js" \
-                   --name paylink-site \
-                   --cwd "$APP_DIR/public-site"
-            pm2 save --force
+            if [ -f "$MARKETING_SERVER" ]; then
+              pm2 describe "$SITE_NAME" >/dev/null 2>&1 \
+                && pm2 restart "$SITE_NAME" \
+                || pm2 start "$MARKETING_SERVER" \
+                    --name "$SITE_NAME" \
+                    --cwd "$MARKETING_DIR"
+              pm2 save --force
+            else
+              echo "WARN: Marketing server file missing - skipping paylink-site restart"
+            fi
 
             echo "========== DEPLOY SUCCESS =========="
