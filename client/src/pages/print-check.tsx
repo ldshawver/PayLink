@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
 import { useParams } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Printer, ArrowLeft } from "lucide-react";
@@ -152,77 +153,177 @@ function CheckPortion({
 }) {
   const remittanceSource = remittanceSources.find(s => s.companyId === company.id && s.status === "enabled") || remittanceSources.find(s => s.companyId === company.id);
   const netPay = overrideNetPay !== undefined ? overrideNetPay : Number(item.netPay || 0);
-  const checkDate = run.processedAt ? new Date(run.processedAt).toLocaleDateString() : new Date().toLocaleDateString();
-  const memoText = (run.periodStart && run.periodEnd)
-    ? `Payroll ${new Date(run.periodStart + "T00:00:00").toLocaleDateString()} to ${new Date(run.periodEnd + "T00:00:00").toLocaleDateString()}`
-    : "";
+  const checkDate = run.processedAt
+    ? new Date(run.processedAt).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+    : new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
+  const periodStart = run.periodStart ? new Date(run.periodStart + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "";
+  const periodEnd = run.periodEnd ? new Date(run.periodEnd + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "";
+  const memoText = periodStart && periodEnd ? `Pay period ${periodStart} – ${periodEnd}` : "";
+
+  // Routing / account from remittance source
+  const routing = (remittanceSource?.routingNumber || "000000000").replace(/\D/g, "").padEnd(9, "0").slice(0, 9);
+  const account = (remittanceSource?.accountNumber || "0000000000").replace(/\D/g, "");
+  const checkNum = String(item.checkNumber || "0001").padStart(4, "0");
 
   return (
-    <div style={{ height: "3.667in", boxSizing: "border-box", padding: "0.3in 0.6in 0.25in", display: "flex", flexDirection: "column" }}>
-      {/* Company header + check number / date / void notice */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.15in" }}>
-        <CompanyHeader company={company} config={config} />
-        <div style={{ textAlign: "right" }}>
-          {config.showCheckNumber && <div style={{ fontSize: "14px", fontWeight: "bold" }}>CHECK #{item.checkNumber || "—"}</div>}
-          <div style={{ fontSize: "12px", marginTop: "4px" }}>Date: {checkDate}</div>
-          <div style={{ fontSize: "9px", color: "#666", marginTop: "2px", fontStyle: "italic" }}>Void after 90 days</div>
-        </div>
-      </div>
+    // Total height: 3.667in.  Bottom 0.625in reserved for MICR band (ANSI X9.27).
+    // Content area: top 3.042in with standard check-stock layout.
+    <div style={{ height: "3.667in", boxSizing: "border-box", display: "flex", flexDirection: "column", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
 
-      {/* Pay-to / amount */}
-      <div style={{ marginBottom: "0.12in" }}>
-        {/* Row: PAY TO THE ORDER OF [Name underline_____] $[BOX] */}
-        <div style={{ display: "flex", alignItems: "flex-end", gap: "8px", marginBottom: "4px" }}>
-          <div style={{ fontSize: "10px", fontWeight: "bold", letterSpacing: "0.4px", whiteSpace: "nowrap", paddingBottom: "3px" }}>PAY TO THE ORDER OF</div>
-          <div style={{ flex: 1, borderBottom: "2px solid #000", paddingBottom: "3px", fontSize: "15px", fontWeight: "600" }}>
+      {/* ── CONTENT AREA (top 3.042in) ── */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "0.22in 0.55in 0.18in" }}>
+
+        {/* ROW 1: Company issuer block (left) + Check number box + Date (right) */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.18in" }}>
+
+          {/* Left: issuer block */}
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
+            {config.showCompanyLogo && company.logoUrl && (
+              <img src={company.logoUrl} alt="" style={{ height: "38px", width: "38px", objectFit: "contain", marginTop: "2px" }} />
+            )}
+            <div>
+              {config.showCompanyName && (
+                <div style={{ fontSize: "14px", fontWeight: "700", letterSpacing: "0.2px", lineHeight: 1.2 }}>{company.name}</div>
+              )}
+              {company.dba && config.showCompanyName && (
+                <div style={{ fontSize: "10px", color: "#444" }}>DBA: {company.dba}</div>
+              )}
+              {config.showCompanyAddress && company.address && (
+                <div style={{ fontSize: "10px", color: "#333", marginTop: "2px" }}>{company.address}</div>
+              )}
+              {config.showCompanyAddress && (company.city || company.state || company.zip) && (
+                <div style={{ fontSize: "10px", color: "#333" }}>
+                  {[company.city, company.state].filter(Boolean).join(", ")}{company.zip ? " " + company.zip : ""}
+                </div>
+              )}
+              {config.showCompanyAddress && company.phone && (
+                <div style={{ fontSize: "10px", color: "#333" }}>{company.phone}</div>
+              )}
+            </div>
+          </div>
+
+          {/* Right: check number in bordered box + date + void notice */}
+          <div style={{ textAlign: "right" }}>
+            {config.showCheckNumber && (
+              <div style={{
+                border: "1.5px solid #000",
+                padding: "3px 10px",
+                textAlign: "center",
+                fontSize: "13px",
+                fontWeight: "700",
+                letterSpacing: "0.5px",
+                marginBottom: "5px",
+                minWidth: "1.1in",
+                display: "inline-block",
+              }}>
+                No. {item.checkNumber || "—"}
+              </div>
+            )}
+            <div style={{ fontSize: "11px", fontWeight: "600" }}>DATE: {checkDate}</div>
+            <div style={{ fontSize: "8px", color: "#777", fontStyle: "italic", marginTop: "2px" }}>VOID AFTER 90 DAYS</div>
+          </div>
+        </div>
+
+        {/* ROW 2: "PAY TO THE ORDER OF" + payee underline spanning full width + dollar-amount box */}
+        <div style={{ display: "flex", alignItems: "flex-end", gap: "8px", marginBottom: "6px" }}>
+          <span style={{ fontSize: "9px", fontWeight: "700", whiteSpace: "nowrap", letterSpacing: "0.6px", paddingBottom: "4px", flexShrink: 0 }}>
+            PAY TO THE ORDER OF
+          </span>
+          {/* Payee name on underline — stretches to fill space before amount box */}
+          <div style={{
+            flex: 1,
+            borderBottom: "1.5px solid #000",
+            paddingBottom: "4px",
+            fontSize: "15px",
+            fontWeight: "600",
+            letterSpacing: "0.3px",
+            minWidth: 0,
+          }}>
             {worker.firstName} {worker.lastName}
           </div>
-          <div style={{ border: "2px solid #000", padding: "3px 12px", fontSize: "17px", fontWeight: "bold", minWidth: "1.4in", textAlign: "right", letterSpacing: "0.5px", whiteSpace: "nowrap" }}>
+          {/* Dollar-amount box — double left border for security */}
+          <div style={{
+            border: "1.5px solid #000",
+            borderLeft: "5px solid #000",
+            padding: "4px 10px 4px 8px",
+            fontSize: "16px",
+            fontWeight: "700",
+            minWidth: "1.25in",
+            textAlign: "right",
+            letterSpacing: "0.5px",
+            whiteSpace: "nowrap",
+            fontFamily: "'Courier New', Courier, monospace",
+            flexShrink: 0,
+          }}>
             ${fmt(netPay)}
           </div>
         </div>
-        {/* Row: Written amount */}
-        <div style={{ display: "flex", alignItems: "baseline", gap: "4px" }}>
-          <span style={{ fontSize: "11px", whiteSpace: "nowrap" }}>{numberToWords(netPay)} Dollars</span>
-          <span style={{ flex: 1, borderBottom: "1px solid #000", marginBottom: "2px", display: "inline-block", overflow: "hidden", letterSpacing: "4px", color: "#666", fontSize: "10px" }}>
-            {"\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022"}
+
+        {/* ROW 3: Written-out dollar amount + protective fill to right edge */}
+        <div style={{ display: "flex", alignItems: "baseline", borderBottom: "1px solid #000", paddingBottom: "4px", marginBottom: "0.17in" }}>
+          <span style={{ fontSize: "11px", fontWeight: "600", flexShrink: 0, whiteSpace: "nowrap" }}>
+            {numberToWords(netPay)} Dollars
+          </span>
+          {/* Protective underline fill — dots prevent alteration */}
+          <span style={{
+            flex: 1,
+            display: "inline-block",
+            marginLeft: "6px",
+            overflow: "hidden",
+            letterSpacing: "3px",
+            color: "#aaa",
+            fontSize: "10px",
+            userSelect: "none",
+            whiteSpace: "nowrap",
+          }}>
+            {"  \u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022\u00A0\u2022"}
           </span>
         </div>
-      </div>
 
-      {/* Spacer */}
-      <div style={{ flex: 1 }} />
+        {/* ROW 4: spacer — keeps memo/sig pinned to bottom of content area */}
+        <div style={{ flex: 1 }} />
 
-      {/* Memo (bottom-left) + signature line (bottom-right) */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "0.15in" }}>
-        {/* Left: memo line */}
-        <div>
-          <div style={{ fontSize: "9px", color: "#666", marginBottom: "1px" }}>MEMO</div>
-          <div style={{ borderBottom: "1px solid #000", minWidth: "2.5in", paddingBottom: "2px", fontSize: "11px" }}>
-            {memoText}
+        {/* ROW 5: MEMO (left) + Authorized Signature line (right) */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+
+          {/* Memo */}
+          <div>
+            <div style={{ fontSize: "8px", color: "#666", letterSpacing: "0.5px", marginBottom: "2px" }}>MEMO</div>
+            <div style={{
+              borderBottom: "1px solid #000",
+              minWidth: "2.2in",
+              paddingBottom: "2px",
+              fontSize: "10px",
+              color: "#333",
+            }}>
+              {memoText}
+            </div>
+          </div>
+
+          {/* Signature */}
+          <div style={{ textAlign: "center" }}>
+            {/* Blank signing space above the label */}
+            <div style={{ borderBottom: "1.5px solid #000", width: "2.6in", height: "0.38in" }} />
+            <div style={{ fontSize: "8px", color: "#666", marginTop: "2px", letterSpacing: "0.4px" }}>AUTHORIZED SIGNATURE</div>
           </div>
         </div>
-        {/* Right: signature line */}
-        <div style={{ textAlign: "right" }}>
-          <div style={{ borderBottom: "1px solid #000", width: "3.5in", height: "0.45in", display: "flex", alignItems: "flex-end", justifyContent: "flex-end" }}>
-            <div style={{ fontSize: "9px", color: "#999", paddingBottom: "2px" }}>Authorized Signature</div>
-          </div>
-        </div>
       </div>
 
-      {/* MICR clear band — ANSI X9.27: 0.625in from bottom edge, left-aligned */}
-      {config.showMicrLine && (
+      {/* ── MICR CLEAR BAND (bottom 0.625in, ANSI X9.27) ── */}
+      {config.showMicrLine ? (
         <div style={{
+          height: "0.625in",
           borderTop: "0.5px solid #ccc",
-          paddingTop: "6px",
-          marginTop: "auto",
+          display: "flex",
+          alignItems: "center",
+          paddingLeft: "0.55in",
+          flexShrink: 0,
         }}>
-          <MicrLine
-            routing={(remittanceSource?.routingNumber || "000000000").replace(/\D/g, "").padEnd(9, "0")}
-            account={(remittanceSource?.accountNumber || "0000000000").replace(/\D/g, "")}
-            checkNum={String(item.checkNumber || "0001").padStart(4, "0")}
-          />
+          <MicrLine routing={routing} account={account} checkNum={checkNum} />
         </div>
+      ) : (
+        /* Reserve the same space even if MICR is hidden so check height stays constant */
+        <div style={{ height: "0.625in", flexShrink: 0 }} />
       )}
     </div>
   );
@@ -1062,6 +1163,21 @@ function ThreePartCheck({ item, worker, company, run, deductions, config, payStu
 
 export default function PrintCheckPage() {
   const { runId } = useParams<{ runId: string }>();
+  const [fontReady, setFontReady] = useState(false);
+
+  useEffect(() => {
+    // Wait for all web fonts (including MICRNumeric) to finish loading before
+    // enabling the Print button. This guarantees the font is embedded when the
+    // browser's PDF renderer walks the document.
+    document.fonts.ready.then(() => setFontReady(true));
+  }, []);
+
+  async function handlePrint() {
+    // Re-check fonts in case the ready promise resolved before the font file
+    // arrived (e.g. cache miss on first load).
+    await document.fonts.ready;
+    window.print();
+  }
 
   const { data: run } = useQuery<PayrollRun>({
     queryKey: ["/api/payroll-runs", runId],
@@ -1155,11 +1271,12 @@ export default function PrintCheckPage() {
             <ArrowLeft className="mr-2 h-4 w-4" />Back to Payroll
           </Button>
         </Link>
-        <Button onClick={() => window.print()} data-testid="button-print-checks">
-          <Printer className="mr-2 h-4 w-4" />Print Checks
+        <Button onClick={handlePrint} disabled={!fontReady} data-testid="button-print-checks">
+          <Printer className="mr-2 h-4 w-4" />{fontReady ? "Print Checks" : "Loading fonts…"}
         </Button>
         <span className="text-sm text-muted-foreground" data-testid="text-check-info">
           {items.length} check(s) for {company?.name || ""} — Template: {activeTemplate?.name || "Default"}
+          {fontReady && <span className="ml-2 text-green-600 font-medium text-xs">● MICR font ready</span>}
         </span>
       </div>
 
