@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useRoute } from "wouter";
+import { useParams } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Printer, ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
@@ -980,8 +980,7 @@ function ThreePartCheck({ item, worker, company, run, deductions, config, payStu
 }
 
 export default function PrintCheckPage() {
-  const [, params] = useRoute("/app/print-check/:runId");
-  const runId = params?.runId ?? window.location.pathname.split("/").pop();
+  const { runId } = useParams<{ runId: string }>();
 
   const { data: run } = useQuery<PayrollRun>({
     queryKey: ["/api/payroll-runs", runId],
@@ -1110,8 +1109,12 @@ export default function PrintCheckPage() {
         @media print {
           @page { size: 8.5in 11in; margin: 0; }
           .print-hide { display: none !important; }
+          [data-sidebar], [data-sidebar="sidebar"], aside, nav,
+          .trial-banner, [role="banner"], header { display: none !important; }
           .check-page { page-break-after: always; }
           .print-content { display: block; }
+          .flex.h-screen { display: block !important; }
+          main { overflow: visible !important; }
         }
         @media screen {
           body { background: #e5e7eb; margin: 0; }

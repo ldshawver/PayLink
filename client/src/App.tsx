@@ -88,6 +88,7 @@ function AuthenticatedRouter() {
       <Route path="/app/onboarding-templates">{() => <RoleGuard roles={["admin", "manager"]}><OnboardingTemplatesPage /></RoleGuard>}</Route>
       <Route path="/app/engagement-feed">{() => <RoleGuard roles={["admin", "manager"]}><EngagementFeedPage /></RoleGuard>}</Route>
       <Route path="/app/license-requests">{() => <RoleGuard roles={["admin"]}><LicenseRequestsPage /></RoleGuard>}</Route>
+      <Route path="/app/print-check/:runId">{() => <RoleGuard roles={["admin", "manager"]}><PrintCheckPage /></RoleGuard>}</Route>
       <Route path="/app/print-expense-check" component={PrintExpenseCheckPage} />
       <Route path="/app/my-profile" component={MyProfilePage} />
       <Route path="/app/notification-settings" component={NotificationSettingsPage} />
@@ -277,14 +278,6 @@ function AppContent() {
         <LoginPage />
       </BiometricGate>
     );
-  }
-
-  if (location.startsWith("/app/print-check/")) {
-    if (isLoading) return null;
-    if (!user) {
-      return <RedirectToLogin />;
-    }
-    return <RoleGuard roles={["admin", "manager"]}><PrintCheckPage /></RoleGuard>;
   }
 
   if (isLoading) {
