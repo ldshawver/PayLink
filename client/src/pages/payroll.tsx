@@ -667,7 +667,7 @@ function PayrollRunCard({
                   </Button>
                 )}
                 {run.status === "processed" && (
-                  <Link href={`/print-check/${run.id}`}>
+                  <Link href={`/app/print-check/${run.id}`}>
                     <Button variant="outline" size="sm" data-testid={`button-print-checks-${run.id}`}>
                       <Printer className="mr-2 h-4 w-4" />Print Checks
                     </Button>
