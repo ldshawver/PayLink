@@ -122,17 +122,25 @@ jobs:
 
             echo "========== CORE APP DEPLOY SUCCESS =========="
 
+name: Deploy Marketing Site
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
   deploy_marketing:
     name: Deploy Marketing Site
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: deploy_app
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy marketing site over SSH
+      - name: Deploy marketing over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -162,19 +170,18 @@ jobs:
             git reset --hard origin/main
 
             echo "==> Diagnostics"
-            sudo ls -lah "$MARKETING_DIR" || true
-            sudo ls -lah "$MARKETING_PUBLIC" || true
-            sudo ls -lah "$WEB_ROOT" || true
+            ls -lah "$MARKETING_DIR" || true
+            ls -lah "$MARKETING_PUBLIC" || true
+            ls -lah "$WEB_ROOT" || true
             id
 
+            echo "==> Verify paths"
+            test -d "$MARKETING_PUBLIC" || { echo "ERROR: Missing marketing public dir: $MARKETING_PUBLIC"; exit 1; }
+            test -d "$WEB_ROOT" || { echo "ERROR: Missing or inaccessible web root: $WEB_ROOT"; exit 1; }
+
             echo "==> Sync static marketing files"
-            if sudo test -d "$MARKETING_PUBLIC" && sudo test -d "$WEB_ROOT"; then
-              sudo /usr/bin/rsync -av --delete "$MARKETING_PUBLIC/" "$WEB_ROOT/"
-              echo "Marketing files synced to $WEB_ROOT"
-            else
-              echo "ERROR: Marketing public dir or WEB_ROOT is missing or inaccessible"
-              exit 1
-            fi
+            rsync -av --delete "$MARKETING_PUBLIC/" "$WEB_ROOT/"
+            echo "Marketing files synced to $WEB_ROOT"
 
             echo "==> Start/restart marketing site PM2 process"
             if [ -f "$MARKETING_SERVER" ]; then
