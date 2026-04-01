@@ -64,10 +64,14 @@ jobs:
 
             echo "==> Verify required files"
             test -f "$APP_ENTRY" || { echo "ERROR: Missing build artifact: $APP_ENTRY"; exit 1; }
-            test -f "$ENV_FILE" || { echo "ERROR: Missing env file: $ENV_FILE"; exit 1; }
+            test -f "$ENV_FILE"  || { echo "ERROR: Missing env file: $ENV_FILE"; exit 1; }
 
             echo "==> Stop old PM2 app if present"
             pm2 delete "$APP_NAME" 2>/dev/null || true
+
+            echo "==> Kill anything lingering on port $APP_PORT"
+            sudo fuser -k "${APP_PORT}/tcp" 2>/dev/null || true
+            sleep 2
 
             echo "==> Start app with PM2"
             pm2 start "$APP_ENTRY" \
@@ -76,6 +80,8 @@ jobs:
               --interpreter node \
               --node-args="-r dotenv/config" \
               --update-env \
+              --restart-delay 5000 \
+              --max-restarts 5 \
               -- dotenv_config_path="$ENV_FILE"
 
             echo "==> Save PM2 process list"
@@ -92,16 +98,18 @@ jobs:
             echo "==> Port check"
             ss -tlnp | grep ":$APP_PORT" || true
 
-            echo "==> Health checks"
+            echo "==> Health checks (primary success condition)"
             HEALTH_CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$APP_PORT/health" || true)"
-            READY_CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$APP_PORT/ready" || true)"
+            READY_CODE="$(curl -s -o /dev/null -w '%{http_code}'  "http://127.0.0.1:$APP_PORT/ready"  || true)"
             echo "Health: $HEALTH_CODE | Ready: $READY_CODE"
 
             if [ "$HEALTH_CODE" != "200" ] && [ "$READY_CODE" != "200" ]; then
-              echo "ERROR: App failed health checks"
+              echo "ERROR: App failed health checks — aborting"
               pm2 logs "$APP_NAME" --lines 100 --nostream || true
               exit 1
             fi
+
+            echo "==> App is healthy — continuing with optional steps"
 
             echo "==> Validate nginx"
             sudo /usr/sbin/nginx -t
@@ -110,9 +118,19 @@ jobs:
             sudo /usr/bin/systemctl reload nginx
 
             echo "==> Sync marketing site static files to web root"
+            echo "Diagnostics:"
+            ls -lah "$APP_DIR/public-site"        || true
+            ls -lah "$APP_DIR/public-site/public"  || true
+            ls -lah "$WEB_ROOT"                    || true
+            id
+
             if [ -d "$APP_DIR/public-site/public" ] && [ -d "$WEB_ROOT" ]; then
-              sudo /usr/bin/rsync -av --delete "$APP_DIR/public-site/public/" "$WEB_ROOT/"
-              echo "Marketing files synced to $WEB_ROOT"
+              echo "Syncing marketing files..."
+              if sudo /usr/bin/rsync -av --delete "$APP_DIR/public-site/public/" "$WEB_ROOT/"; then
+                echo "Marketing files synced to $WEB_ROOT"
+              else
+                echo "WARN: rsync to $WEB_ROOT failed; continuing because app is healthy"
+              fi
             else
               echo "WARN: Marketing public dir or WEB_ROOT not found - skipping rsync"
             fi
