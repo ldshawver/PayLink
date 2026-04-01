@@ -153,6 +153,10 @@ jobs:
             echo "==> Verify source paths"
             test -d "$MARKETING_PUBLIC" || { echo "ERROR: Missing marketing public dir: $MARKETING_PUBLIC"; exit 1; }
 
+            echo "==> Fix file permissions (umask may leave assets at 600)"
+            find "$MARKETING_PUBLIC" -type f -exec chmod 644 {} \;
+            find "$MARKETING_PUBLIC" -type d -exec chmod 755 {} \;
+
             echo "==> Sync static marketing files (no sudo)"
             if [ -d "$WEB_ROOT" ]; then
               if rsync -av --delete "$MARKETING_PUBLIC/" "$WEB_ROOT/"; then
