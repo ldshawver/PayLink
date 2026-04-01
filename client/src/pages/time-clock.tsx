@@ -201,7 +201,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
                 {successName ? `${successName} — Clocked In!` : "Clocked In!"}
               </p>
               <p className="text-sm text-white/60 mt-1">
-                Returning to time clock in{" "}
+                Closing in{" "}
                 <span className="font-bold text-teal-300">{countdown}</span>s...
               </p>
             </div>
@@ -220,8 +220,38 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
               <p className="text-lg font-semibold text-white">
                 {successName ? `${successName} — Clocked Out` : "Clocked Out"}
               </p>
-              <p className="text-sm text-white/60 mt-1">See you next time!</p>
+              <p className="text-sm text-white/60 mt-1">
+                Closing in{" "}
+                <span className="font-bold text-teal-300">{countdown}</span>s...
+              </p>
             </div>
+            <Button
+              onClick={onClose}
+              className="bg-slate-600 hover:bg-slate-700 text-white border-0"
+              data-testid="button-close-clock-out"
+            >
+              Done
+            </Button>
+          </div>
+        ) : successState === "sign-in" ? (
+          <div className="flex flex-col items-center gap-4 py-6" data-testid="div-sign-in-success">
+            <CheckCircle className="h-14 w-14 text-teal-400" />
+            <div className="text-center">
+              <p className="text-lg font-semibold text-white">
+                {successName ? `Welcome, ${successName}!` : "Signed In!"}
+              </p>
+              <p className="text-sm text-white/60 mt-1">
+                Closing in{" "}
+                <span className="font-bold text-teal-300">{countdown}</span>s...
+              </p>
+            </div>
+            <Button
+              onClick={onClose}
+              className="bg-teal-600 hover:bg-teal-700 text-white border-0"
+              data-testid="button-close-sign-in"
+            >
+              Done
+            </Button>
           </div>
         ) : (
           <div className="space-y-4 py-2">

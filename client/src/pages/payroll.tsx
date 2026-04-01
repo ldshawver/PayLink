@@ -191,7 +191,7 @@ function ProcessPayrollTab() {
               {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Select value={workerFilter} onValueChange={setWorkerFilter}>
+          <Select value={workerFilter} onValueChange={v => { setWorkerFilter(v); if (v !== "all") setShowAll(true); }}>
             <SelectTrigger className="w-[180px]" data-testid="select-payroll-worker-filter">
               <SelectValue placeholder="All Employees" />
             </SelectTrigger>

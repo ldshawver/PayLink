@@ -126,11 +126,20 @@ function CheckPortion({
         </div>
       </div>
 
-      {/* MICR band — last flex item, sits at the bottom */}
+      {/* MICR band — pinned to bottom of check, left-aligned per ANSI X9.27 */}
       {config.showMicrLine && (
-        <div style={{ textAlign: "center" }}>
-          <span style={{ fontSize: "12pt", fontWeight: "bold", fontFamily: "'MICR', 'Courier New', monospace", letterSpacing: "1px", color: "#000" }}>
-            ⑈{remittanceSource?.routingNumber || "000000000"}⑈ ⑆{remittanceSource?.accountNumber || company.ein || "000000000"}⑆ {String(item.checkNumber || "0000").padStart(4, "0")}
+        <div style={{ paddingTop: "0.06in" }}>
+          <span style={{
+            fontSize: "12pt",
+            fontFamily: "'MICR', monospace",
+            letterSpacing: "2px",
+            color: "#000",
+            display: "block",
+            textAlign: "left",
+            lineHeight: 1,
+          }}>
+            {/* ⑆ = Transit/Routing symbol  |  ⑈ = On-Us symbol */}
+            ⑆{(remittanceSource?.routingNumber || "000000000").replace(/\D/g, "").padEnd(9, "0")}⑆{"  "}{(remittanceSource?.accountNumber || "000000000").replace(/\D/g, "")}{"  "}⑈{String(item.checkNumber || "0001").padStart(4, "0")}⑈
           </span>
         </div>
       )}
