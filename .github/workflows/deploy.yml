@@ -26,8 +26,6 @@ jobs:
           script: |
             set -Eeuo pipefail
 
-            APP_USER="paylinkssh"
-            APP_GROUP="mypaylink-app"
             APP_NAME="paylink"
             APP_DIR="/home/paylinkssh/paylink-app/PayLink"
             APP_ENTRY="$APP_DIR/dist/index.cjs"
@@ -45,9 +43,6 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            echo "==> Fix ownership before build"
-            sudo /usr/bin/chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
-
             echo "==> Versions"
             node -v
             npm -v
@@ -59,18 +54,12 @@ jobs:
             echo "==> Build app"
             npm run build
 
-            echo "==> Fix ownership after build"
-            sudo /usr/bin/chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
-
             echo "==> Verify required files"
             test -f "$APP_ENTRY" || { echo "ERROR: Missing build artifact: $APP_ENTRY"; exit 1; }
             test -f "$ENV_FILE"  || { echo "ERROR: Missing env file: $ENV_FILE"; exit 1; }
 
-            echo "==> Stop old PM2 app if present"
+            echo "==> Stop old PM2 app if present (this also frees the port)"
             pm2 delete "$APP_NAME" 2>/dev/null || true
-
-            echo "==> Kill anything lingering on port $APP_PORT"
-            sudo fuser -k "${APP_PORT}/tcp" 2>/dev/null || true
             sleep 2
 
             echo "==> Start app with PM2"
@@ -111,13 +100,7 @@ jobs:
 
             echo "==> App is healthy — continuing with optional steps"
 
-            echo "==> Validate nginx"
-            sudo /usr/sbin/nginx -t
-
-            echo "==> Reload nginx"
-            sudo /usr/bin/systemctl reload nginx
-
-            echo "==> Sync marketing site static files to web root"
+            echo "==> Sync marketing site static files to web root (no sudo)"
             echo "Diagnostics:"
             ls -lah "$APP_DIR/public-site"        || true
             ls -lah "$APP_DIR/public-site/public"  || true
@@ -126,10 +109,10 @@ jobs:
 
             if [ -d "$APP_DIR/public-site/public" ] && [ -d "$WEB_ROOT" ]; then
               echo "Syncing marketing files..."
-              if sudo /usr/bin/rsync -av --delete "$APP_DIR/public-site/public/" "$WEB_ROOT/"; then
+              if rsync -av --delete "$APP_DIR/public-site/public/" "$WEB_ROOT/"; then
                 echo "Marketing files synced to $WEB_ROOT"
               else
-                echo "WARN: rsync to $WEB_ROOT failed; continuing because app is healthy"
+                echo "WARN: rsync to $WEB_ROOT failed (permission issue?). Fix: add paylinkssh to the mypaylink group and make WEB_ROOT group-writable. Continuing because app is healthy."
               fi
             else
               echo "WARN: Marketing public dir or WEB_ROOT not found - skipping rsync"
