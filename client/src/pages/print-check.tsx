@@ -980,8 +980,8 @@ function ThreePartCheck({ item, worker, company, run, deductions, config, payStu
 }
 
 export default function PrintCheckPage() {
-  const [, params] = useRoute("/print-check/:runId");
-  const runId = params?.runId;
+  const [, params] = useRoute("/app/print-check/:runId");
+  const runId = params?.runId ?? window.location.pathname.split("/").pop();
 
   const { data: run } = useQuery<PayrollRun>({
     queryKey: ["/api/payroll-runs", runId],
