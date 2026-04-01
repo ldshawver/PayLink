@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Play, Square, LogIn, X, Hash, Lock, CheckCircle, Fingerprint } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -354,6 +354,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
 
 export default function TimeClock() {
   const [modalMode, setModalMode] = useState<ModalMode>(null);
+  const handleClose = useCallback(() => setModalMode(null), []);
 
   return (
     <div className="relative flex flex-col items-center justify-center min-h-screen p-4 select-none">
@@ -406,7 +407,7 @@ export default function TimeClock() {
         </div>
       </div>
 
-      <ClockModal mode={modalMode} onClose={() => setModalMode(null)} />
+      <ClockModal mode={modalMode} onClose={handleClose} />
     </div>
   );
 }

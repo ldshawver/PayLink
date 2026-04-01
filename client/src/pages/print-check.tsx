@@ -61,6 +61,90 @@ function CompanyHeader({ company, config }: { company: Company; config: Record<s
   );
 }
 
+// ── MICR E-13B Line Component ──
+// Renders the magnetic ink line at the bottom of a check.
+// Digits use the locally-hosted MICRNumeric font (DejaVu Mono served from /fonts/).
+// Transit ⑆ and On-Us ⑈ symbols are inline SVG so they render correctly in
+// browsers that lack an E-13B glyph, and embed faithfully in print-to-PDF.
+
+function MicrTransit({ h = 16 }: { h?: number }) {
+  const w = Math.round(h * 0.72);
+  const bar = Math.round(w * 0.22);
+  return (
+    <svg
+      width={w} height={h}
+      style={{ display: "inline-block", verticalAlign: "middle", marginBottom: 2 }}
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      {/* Left full-height bar */}
+      <rect x={0} y={0} width={bar} height={h} fill="#000" />
+      {/* Right full-height bar */}
+      <rect x={w - bar} y={0} width={bar} height={h} fill="#000" />
+      {/* Top horizontal bridge */}
+      <rect x={0} y={0} width={w} height={bar} fill="#000" />
+      {/* Bottom horizontal bridge */}
+      <rect x={0} y={h - bar} width={w} height={bar} fill="#000" />
+      {/* Inner step — top-right notch (makes it distinctly transit) */}
+      <rect x={bar} y={bar} width={w - bar * 2} height={Math.round(h * 0.28)} fill="#000" />
+    </svg>
+  );
+}
+
+function MicrOnUs({ h = 16 }: { h?: number }) {
+  const w = Math.round(h * 0.58);
+  const bar = Math.round(w * 0.25);
+  return (
+    <svg
+      width={w} height={h}
+      style={{ display: "inline-block", verticalAlign: "middle", marginBottom: 2 }}
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      {/* Left bar: full height */}
+      <rect x={0} y={0} width={bar} height={h} fill="#000" />
+      {/* Right bar: full height */}
+      <rect x={w - bar} y={0} width={bar} height={h} fill="#000" />
+      {/* Top cap */}
+      <rect x={0} y={0} width={w} height={bar} fill="#000" />
+      {/* Bottom cap */}
+      <rect x={0} y={h - bar} width={w} height={bar} fill="#000" />
+    </svg>
+  );
+}
+
+function MicrLine({ routing, account, checkNum }: { routing: string; account: string; checkNum: string }) {
+  const SYM_H = 18;
+  const numSpan = (text: string, mx = 0) => (
+    <span style={{
+      fontFamily: "'MICRNumeric', 'Courier New', monospace",
+      fontSize: "12.5pt",
+      letterSpacing: "3px",
+      lineHeight: 1,
+      verticalAlign: "middle",
+      marginLeft: mx,
+      marginRight: mx,
+    }}>
+      {text}
+    </span>
+  );
+  const gap = <span style={{ display: "inline-block", width: "12px" }} />;
+
+  return (
+    <div style={{ lineHeight: 1, display: "flex", alignItems: "center", gap: 0 }}>
+      <MicrTransit h={SYM_H} />
+      {numSpan(routing, 2)}
+      <MicrTransit h={SYM_H} />
+      {gap}
+      {numSpan(account)}
+      {gap}
+      <MicrOnUs h={SYM_H} />
+      {numSpan(checkNum, 2)}
+      <MicrOnUs h={SYM_H} />
+    </div>
+  );
+}
+
 function CheckPortion({
   item, worker, company, run, config, overrideNetPay, remittanceSources = [],
 }: {
@@ -126,21 +210,18 @@ function CheckPortion({
         </div>
       </div>
 
-      {/* MICR band — pinned to bottom of check, left-aligned per ANSI X9.27 */}
+      {/* MICR clear band — ANSI X9.27: 0.625in from bottom edge, left-aligned */}
       {config.showMicrLine && (
-        <div style={{ paddingTop: "0.06in" }}>
-          <span style={{
-            fontSize: "12pt",
-            fontFamily: "'MICR', monospace",
-            letterSpacing: "2px",
-            color: "#000",
-            display: "block",
-            textAlign: "left",
-            lineHeight: 1,
-          }}>
-            {/* ⑆ = Transit/Routing symbol  |  ⑈ = On-Us symbol */}
-            ⑆{(remittanceSource?.routingNumber || "000000000").replace(/\D/g, "").padEnd(9, "0")}⑆{"  "}{(remittanceSource?.accountNumber || "000000000").replace(/\D/g, "")}{"  "}⑈{String(item.checkNumber || "0001").padStart(4, "0")}⑈
-          </span>
+        <div style={{
+          borderTop: "0.5px solid #ccc",
+          paddingTop: "6px",
+          marginTop: "auto",
+        }}>
+          <MicrLine
+            routing={(remittanceSource?.routingNumber || "000000000").replace(/\D/g, "").padEnd(9, "0")}
+            account={(remittanceSource?.accountNumber || "0000000000").replace(/\D/g, "")}
+            checkNum={String(item.checkNumber || "0001").padStart(4, "0")}
+          />
         </div>
       )}
     </div>

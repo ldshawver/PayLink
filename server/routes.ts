@@ -794,7 +794,7 @@ export async function registerRoutes(
       req.session.username = user.username;
       req.session.save((err) => {
         if (err) return res.status(500).json({ message: "Authentication failed" });
-        res.json({ id: user!.id, username: user!.username, role: user!.role, workerId: user!.workerId, companyId: user!.companyId });
+        res.json({ id: user!.id, username: user!.username, role: user!.role, workerId: user!.workerId, companyId: user!.companyId, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName } });
       });
     } catch (error) {
       console.error(error);

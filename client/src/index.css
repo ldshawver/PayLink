@@ -3,16 +3,15 @@
 @tailwind utilities;
 
 @font-face {
-  font-family: 'MICR';
-  src: url('https://cdn.jsdelivr.net/gh/AlfredoRamos/micr-e13b-font@master/MICR_E13B.woff2') format('woff2'),
-       url('https://cdn.jsdelivr.net/gh/AlfredoRamos/micr-e13b-font@master/MICR_E13B.woff') format('woff');
+  font-family: 'MICRNumeric';
+  src: url('/fonts/micr-numeric.ttf') format('truetype');
   font-weight: normal;
   font-style: normal;
-  font-display: swap;
+  font-display: block;
 }
 
 .font-micr {
-  font-family: 'MICR', 'Courier New', monospace;
+  font-family: 'MICRNumeric', 'Courier New', monospace;
   letter-spacing: 0.05em;
 }
 
