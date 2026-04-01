@@ -11,7 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  deploy_app:
+    name: Deploy Core App
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -19,7 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy over SSH
+      - name: Deploy core app over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -34,17 +35,12 @@ jobs:
             APP_USER="${{ secrets.VPS_USER }}"
             APP_GROUP="mypaylink-app"
             APP_NAME="paylink"
-            SITE_NAME="paylink-site"
             APP_DIR="/home/${{ secrets.VPS_USER }}/paylink-app/PayLink"
             APP_ENTRY="$APP_DIR/dist/index.cjs"
             APP_PORT="8000"
             ENV_FILE="/etc/paylink/.env"
-            WEB_ROOT="/home/mypaylink/htdocs/mypaylink.appsite"
-            MARKETING_DIR="$APP_DIR/public-site"
-            MARKETING_PUBLIC="$MARKETING_DIR/public"
-            MARKETING_SERVER="$MARKETING_DIR/server.js"
 
-            echo "========== DEPLOY START =========="
+            echo "========== CORE APP DEPLOY START =========="
             echo "User: $(whoami)"
             echo "App dir: $APP_DIR"
 
@@ -102,23 +98,21 @@ jobs:
             echo "==> PM2 status"
             pm2 list
             pm2 describe "$APP_NAME" || true
-            pm2 logs "$APP_NAME" --lines 50 --nostream || true
+            pm2 logs "$APP_NAME" --lines 75 --nostream || true
 
             echo "==> Port check"
             ss -tlnp | grep ":$APP_PORT" || true
 
-            echo "==> Health checks (primary success condition)"
+            echo "==> Health checks"
             HEALTH_CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$APP_PORT/health" || true)"
             READY_CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$APP_PORT/ready" || true)"
             echo "Health: $HEALTH_CODE | Ready: $READY_CODE"
 
             if [ "$HEALTH_CODE" != "200" ] && [ "$READY_CODE" != "200" ]; then
-              echo "ERROR: App failed health checks — aborting"
-              pm2 logs "$APP_NAME" --lines 100 --nostream || true
+              echo "ERROR: Core app failed health checks"
+              pm2 logs "$APP_NAME" --lines 150 --nostream || true
               exit 1
             fi
-
-            echo "==> App is healthy — continuing with optional steps"
 
             echo "==> Validate nginx"
             sudo /usr/sbin/nginx -t
@@ -126,25 +120,63 @@ jobs:
             echo "==> Reload nginx"
             sudo /usr/bin/systemctl reload nginx
 
-            echo "==> Marketing site diagnostics"
+            echo "========== CORE APP DEPLOY SUCCESS =========="
+
+  deploy_marketing:
+    name: Deploy Marketing Site
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: deploy_app
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy marketing site over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            set -Eeuo pipefail
+
+            SITE_NAME="paylink-site"
+            APP_DIR="/home/${{ secrets.VPS_USER }}/paylink-app/PayLink"
+            MARKETING_DIR="$APP_DIR/public-site"
+            MARKETING_PUBLIC="$MARKETING_DIR/public"
+            MARKETING_SERVER="$MARKETING_DIR/server.js"
+            WEB_ROOT="/home/mypaylink/htdocs/mypaylink.appsite"
+
+            echo "========== MARKETING DEPLOY START =========="
+            echo "User: $(whoami)"
+            echo "App dir: $APP_DIR"
+
+            cd "$APP_DIR"
+
+            echo "==> Sync latest code from GitHub"
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "==> Diagnostics"
             sudo ls -lah "$MARKETING_DIR" || true
             sudo ls -lah "$MARKETING_PUBLIC" || true
             sudo ls -lah "$WEB_ROOT" || true
             id
 
-            echo "==> Sync marketing site static files to web root"
+            echo "==> Sync static marketing files"
             if sudo test -d "$MARKETING_PUBLIC" && sudo test -d "$WEB_ROOT"; then
-              echo "Syncing marketing files..."
-              if sudo /usr/bin/rsync -av --delete "$MARKETING_PUBLIC/" "$WEB_ROOT/"; then
-                echo "Marketing files synced to $WEB_ROOT"
-              else
-                echo "WARN: rsync failed; continuing because core app is healthy"
-              fi
+              sudo /usr/bin/rsync -av --delete "$MARKETING_PUBLIC/" "$WEB_ROOT/"
+              echo "Marketing files synced to $WEB_ROOT"
             else
-              echo "WARN: Marketing public dir or WEB_ROOT not accessible - skipping rsync"
+              echo "ERROR: Marketing public dir or WEB_ROOT is missing or inaccessible"
+              exit 1
             fi
 
-            echo "==> Start/restart marketing site server (port 3000)"
+            echo "==> Start/restart marketing site PM2 process"
             if [ -f "$MARKETING_SERVER" ]; then
               pm2 describe "$SITE_NAME" >/dev/null 2>&1 \
                 && pm2 restart "$SITE_NAME" \
@@ -153,7 +185,13 @@ jobs:
                     --cwd "$MARKETING_DIR"
               pm2 save --force
             else
-              echo "WARN: Marketing server file missing - skipping paylink-site restart"
+              echo "ERROR: Missing marketing server file: $MARKETING_SERVER"
+              exit 1
             fi
 
-            echo "========== DEPLOY SUCCESS =========="
+            echo "==> PM2 status"
+            pm2 list
+            pm2 describe "$SITE_NAME" || true
+            pm2 logs "$SITE_NAME" --lines 75 --nostream || true
+
+            echo "========== MARKETING DEPLOY SUCCESS =========="
