@@ -11780,5 +11780,43 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  // ── System Documents ──────────────────────────────────────────────────────
+  app.get("/api/system-documents", requireAuth, async (req, res) => {
+    try {
+      const { category } = req.query as Record<string, string>;
+      res.json(await storage.getSystemDocuments(category));
+    } catch (e) { res.status(500).json({ message: "Failed to fetch system documents" }); }
+  });
+
+  app.get("/api/system-documents/:id", requireAuth, async (req, res) => {
+    try {
+      const doc = await storage.getSystemDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      res.json(doc);
+    } catch (e) { res.status(500).json({ message: "Failed" }); }
+  });
+
+  app.post("/api/system-documents", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const doc = await storage.createSystemDocument(req.body);
+      res.status(201).json(doc);
+    } catch (e) { res.status(500).json({ message: "Failed to create system document" }); }
+  });
+
+  app.patch("/api/system-documents/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const doc = await storage.updateSystemDocument(req.params.id, req.body);
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      res.json(doc);
+    } catch (e) { res.status(500).json({ message: "Failed to update system document" }); }
+  });
+
+  app.delete("/api/system-documents/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      await storage.deleteSystemDocument(req.params.id);
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ message: "Failed to delete system document" }); }
+  });
+
   return httpServer;
 }

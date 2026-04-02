@@ -73,6 +73,7 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
     -   **Integration Event Bus:** Outbound webhook system for events like document creation/updates and signature requests, with HMAC-signed events and audit logging.
     -   **Automation Engine:** Rules-based automation with event logging.
     -   **Notifications System:** Company/user-scoped notification tracking.
+    -   **System Documents:** Source-of-truth policy documents stored in DB (`system_documents` table) and version-controlled in `/docs/`. Served statically at `/docs/*`. Seeded with Payroll Processing Rules v1.0. Surfaced in Settings > System Documents (with download links) and linked in the Run Payroll dialog header. API: `GET/POST/PATCH/DELETE /api/system-documents`.
 
 **Database:**
 -   **Type:** PostgreSQL, managed with Drizzle ORM.

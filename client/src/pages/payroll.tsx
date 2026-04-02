@@ -276,7 +276,19 @@ function ProcessPayrollTab() {
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Run Payroll</DialogTitle>
+              <DialogTitle className="flex items-center justify-between gap-2">
+                Run Payroll
+                <a
+                  href="/docs/payroll/MyPayLink_Payroll_Processing_Rules_v1.0.docx"
+                  download
+                  className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 font-normal"
+                  data-testid="link-payroll-rules"
+                  onClick={e => e.stopPropagation()}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+                  Payroll Rules v1.0
+                </a>
+              </DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-1">
               <div className="space-y-2">

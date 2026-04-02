@@ -171,6 +171,7 @@ app.use(
 app.use(express.urlencoded({ extended: false }));
 
 app.use("/uploads", express.static(uploadsDir));
+app.use("/docs", express.static(path.join(process.cwd(), "docs")));
 
 const PgStore = connectPgSimple(session);
 const sessionMiddleware = session({
@@ -1403,6 +1404,35 @@ app.use((req, res, next) => {
       read_at TIMESTAMP,
       delivered_at TIMESTAMP DEFAULT NOW()
     )`);
+    await run("system_documents table", sql`CREATE TABLE IF NOT EXISTS system_documents (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      title TEXT NOT NULL,
+      version TEXT NOT NULL DEFAULT '1.0',
+      category TEXT NOT NULL DEFAULT 'General',
+      file_url TEXT,
+      description TEXT,
+      effective_date DATE,
+      change_log TEXT,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    // Seed the canonical Payroll Processing Rules document if not already present
+    await run("system_documents seed payroll rules", sql`
+      INSERT INTO system_documents (title, version, category, file_url, description, effective_date, change_log, is_active)
+      SELECT
+        'MyPayLink Payroll Processing Rules',
+        'v1.0',
+        'Payroll',
+        '/docs/payroll/MyPayLink_Payroll_Processing_Rules_v1.0.docx',
+        'Official payroll processing rules, data integrity requirements, and system behaviors. Covers pay period calculation, YTD logic, duplicate prevention, reimbursement handling, and check/stub requirements.',
+        '2026-04-02',
+        'v1.0 (2026-04-02): Initial release. Covers payroll period schedule, run workflow, amendment rules, expense/reimbursement deduplication, duplicate-run prevention, YTD snapshot rules, and check/stub display requirements.',
+        TRUE
+      WHERE NOT EXISTS (
+        SELECT 1 FROM system_documents WHERE title = 'MyPayLink Payroll Processing Rules' AND version = 'v1.0'
+      )
+    `);
   }
 
   const { seedDatabase } = await import("./seed");

@@ -156,6 +156,8 @@ import {
   type CompanyWebhookConfig, type InsertCompanyWebhookConfig,
   type IntegrationEvent, type InsertIntegrationEvent,
   type DeviceToken, type InsertDeviceToken,
+  systemDocuments,
+  type SystemDocument, type InsertSystemDocument,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -2570,6 +2572,29 @@ export class DatabaseStorage implements IStorage {
   async updatePayrollReimbursementItem(id: string, data: Partial<PayrollReimbursementItem>): Promise<PayrollReimbursementItem | undefined> {
     const [r] = await db.update(payrollReimbursementItems).set(data).where(eq(payrollReimbursementItems.id, id)).returning();
     return r;
+  }
+
+  // ── System Documents ──────────────────────────────────────────────────────
+  async getSystemDocuments(category?: string): Promise<SystemDocument[]> {
+    const q = category
+      ? db.select().from(systemDocuments).where(eq(systemDocuments.category, category))
+      : db.select().from(systemDocuments);
+    return q.orderBy(desc(systemDocuments.updatedAt));
+  }
+  async getSystemDocument(id: string): Promise<SystemDocument | undefined> {
+    const [r] = await db.select().from(systemDocuments).where(eq(systemDocuments.id, id));
+    return r;
+  }
+  async createSystemDocument(data: InsertSystemDocument): Promise<SystemDocument> {
+    const [r] = await db.insert(systemDocuments).values(data).returning();
+    return r;
+  }
+  async updateSystemDocument(id: string, data: Partial<SystemDocument>): Promise<SystemDocument | undefined> {
+    const [r] = await db.update(systemDocuments).set({ ...data, updatedAt: new Date() }).where(eq(systemDocuments.id, id)).returning();
+    return r;
+  }
+  async deleteSystemDocument(id: string): Promise<void> {
+    await db.delete(systemDocuments).where(eq(systemDocuments.id, id));
   }
 
   // ── Customers ──────────────────────────────────────────

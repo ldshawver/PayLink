@@ -14,11 +14,15 @@ import {
   Globe,
   Bell,
   ChevronRight,
+  FileText,
+  Download,
+  BookOpen,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import type { SystemDocument } from "@shared/schema";
 import {
   Select,
   SelectContent,
@@ -255,6 +259,79 @@ const complianceInfo = [
   },
 ];
 
+function SystemDocumentsSection() {
+  const { data: docs = [], isLoading } = useQuery<SystemDocument[]>({
+    queryKey: ["/api/system-documents"],
+  });
+
+  if (isLoading) return null;
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-4">
+        <BookOpen className="h-4 w-4 text-primary" />
+        <h2 className="text-sm font-semibold">System Documents</h2>
+        <p className="text-xs text-muted-foreground ml-2">Canonical source-of-truth policies and rules</p>
+      </div>
+      {docs.length === 0 ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-8">
+            <FileText className="h-8 w-8 text-muted-foreground/30 mb-2" />
+            <p className="text-sm text-muted-foreground">No system documents found.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {docs.map(doc => (
+            <Card key={doc.id} data-testid={`card-system-doc-${doc.id}`}>
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3 min-w-0">
+                    <div className="rounded-md bg-primary/10 p-2 shrink-0 mt-0.5">
+                      <FileText className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-sm font-semibold">{doc.title}</h3>
+                        <Badge variant="outline" className="text-xs">{doc.version}</Badge>
+                        <Badge variant="secondary" className="text-xs">{doc.category}</Badge>
+                        {doc.isActive && <Badge className="text-xs">Active</Badge>}
+                      </div>
+                      {doc.description && (
+                        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{doc.description}</p>
+                      )}
+                      <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                        {doc.effectiveDate && <span>Effective: {doc.effectiveDate}</span>}
+                        {doc.updatedAt && <span>Updated: {new Date(doc.updatedAt).toLocaleDateString()}</span>}
+                      </div>
+                      {doc.changeLog && (
+                        <p className="text-xs text-muted-foreground/70 mt-1 italic">{doc.changeLog}</p>
+                      )}
+                    </div>
+                  </div>
+                  {doc.fileUrl && (
+                    <a
+                      href={doc.fileUrl}
+                      download
+                      data-testid={`link-download-doc-${doc.id}`}
+                      className="shrink-0"
+                    >
+                      <Button variant="outline" size="sm" className="gap-1.5">
+                        <Download className="h-3.5 w-3.5" />
+                        Download
+                      </Button>
+                    </a>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { data: companies, isLoading } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -334,6 +411,8 @@ export default function SettingsPage() {
           ))}
         </div>
       </div>
+
+      <SystemDocumentsSection />
 
       <Card>
         <CardHeader className="pb-3">

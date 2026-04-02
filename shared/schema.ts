@@ -2710,3 +2710,22 @@ export const staffMessageRecipients = pgTable("staff_message_recipients", {
 export const insertStaffMessageRecipientSchema = createInsertSchema(staffMessageRecipients).omit({ id: true });
 export type StaffMessageRecipient = typeof staffMessageRecipients.$inferSelect;
 export type InsertStaffMessageRecipient = z.infer<typeof insertStaffMessageRecipientSchema>;
+
+// ── System Documents ─────────────────────────────────────────────────────────
+export const systemDocuments = pgTable("system_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  title: text("title").notNull(),
+  version: text("version").notNull().default("1.0"),
+  category: text("category").notNull().default("General"),
+  fileUrl: text("file_url"),
+  description: text("description"),
+  effectiveDate: date("effective_date"),
+  changeLog: text("change_log"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertSystemDocumentSchema = createInsertSchema(systemDocuments).omit({ id: true, createdAt: true, updatedAt: true });
+export type SystemDocument = typeof systemDocuments.$inferSelect;
+export type InsertSystemDocument = z.infer<typeof insertSystemDocumentSchema>;
