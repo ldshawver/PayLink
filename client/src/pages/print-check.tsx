@@ -216,7 +216,7 @@ function CheckPortion({
                 minWidth: "1.1in",
                 display: "inline-block",
               }}>
-                No. {item.checkNumber || "—"}
+                No. {checkNum}
               </div>
             )}
             <div style={{ fontSize: "11px", fontWeight: "600" }}>DATE: {checkDate}</div>
@@ -301,10 +301,10 @@ function CheckPortion({
           </div>
 
           {/* Signature */}
-          <div style={{ textAlign: "center" }}>
+          <div>
             {/* Blank signing space above the label */}
-            <div style={{ borderBottom: "1.5px solid #000", width: "2.6in", height: "0.38in" }} />
-            <div style={{ fontSize: "8px", color: "#666", marginTop: "2px", letterSpacing: "0.4px" }}>AUTHORIZED SIGNATURE</div>
+            <div style={{ borderBottom: "1.5px solid #000", width: "2.6in", height: "0.38in", margin: "0 auto" }} />
+            <div style={{ fontSize: "8px", color: "#666", marginTop: "2px", letterSpacing: "0.4px", textAlign: "center", width: "2.6in", margin: "2px auto 0" }}>AUTHORIZED SIGNATURE</div>
           </div>
         </div>
       </div>

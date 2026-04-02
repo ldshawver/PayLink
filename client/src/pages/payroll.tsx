@@ -91,10 +91,13 @@ function ProcessPayrollTab() {
     ? workers
     : workers.filter(w => w.companyId === companyFilter);
 
+  const selectedWorker = workerFilter !== "all" ? workers.find(w => w.id === workerFilter) : null;
+
   let displayRuns: PayrollRun[];
-  if (showAll || dateSearch || companyFilter !== "all") {
+  if (showAll || dateSearch || companyFilter !== "all" || workerFilter !== "all") {
     displayRuns = sortedRuns.filter(run => {
       if (companyFilter !== "all" && run.companyId !== companyFilter) return false;
+      if (selectedWorker && run.companyId !== selectedWorker.companyId) return false;
       if (dateSearch) {
         const periodStart = run.periodStart ? String(run.periodStart) : "";
         const periodEnd = run.periodEnd ? String(run.periodEnd) : "";
@@ -191,7 +194,7 @@ function ProcessPayrollTab() {
               {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Select value={workerFilter} onValueChange={v => { setWorkerFilter(v); if (v !== "all") setShowAll(true); }}>
+          <Select value={workerFilter} onValueChange={v => setWorkerFilter(v)}>
             <SelectTrigger className="w-[180px]" data-testid="select-payroll-worker-filter">
               <SelectValue placeholder="All Employees" />
             </SelectTrigger>
@@ -259,7 +262,7 @@ function ProcessPayrollTab() {
         </Dialog>
       </div>
 
-      {!showAll && !dateSearch && companyFilter === "all" && payrollRuns.length > Object.keys(latestByCompany).length && (
+      {!showAll && !dateSearch && companyFilter === "all" && workerFilter === "all" && payrollRuns.length > Object.keys(latestByCompany).length && (
         <p className="text-sm text-muted-foreground">
           Showing latest payroll per company. {payrollRuns.length - Object.keys(latestByCompany).length} older run(s) hidden.
         </p>
