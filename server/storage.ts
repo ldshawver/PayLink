@@ -1485,6 +1485,10 @@ export class DatabaseStorage implements IStorage {
     if (companyId) return db.select().from(payPeriodSchedules).where(eq(payPeriodSchedules.companyId, companyId)).orderBy(desc(payPeriodSchedules.createdAt));
     return db.select().from(payPeriodSchedules).orderBy(desc(payPeriodSchedules.createdAt));
   }
+  async getPayPeriodSchedule(id: string): Promise<PayPeriodSchedule | undefined> {
+    const [r] = await db.select().from(payPeriodSchedules).where(eq(payPeriodSchedules.id, id));
+    return r;
+  }
   async createPayPeriodSchedule(data: InsertPayPeriodSchedule): Promise<PayPeriodSchedule> {
     const [r] = await db.insert(payPeriodSchedules).values(data).returning();
     return r;
