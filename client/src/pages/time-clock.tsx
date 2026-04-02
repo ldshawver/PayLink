@@ -16,13 +16,14 @@ function VideoBackground() {
         loop
         muted
         playsInline
-        className="absolute w-full h-full object-cover"
+        style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "cover" }}
         data-testid="video-background"
       >
         <source src={bgVideo} type="video/mp4" />
       </video>
-      <div className="absolute inset-0 bg-gradient-to-br from-slate-900/95 via-teal-950/90 to-blue-950/95" />
-      <div className="absolute inset-0 bg-black/60" />
+      {/* Lighter overlays so the video motion is visible behind the UI */}
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-900/55 via-teal-950/45 to-blue-950/55" />
+      <div className="absolute inset-0 bg-black/25" />
     </div>
   );
 }
@@ -96,7 +97,11 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
         setCountdown((c) => {
           if (c <= 1) {
             clearInterval(interval);
-            onClose();
+            if (successState === "clock-out") {
+              window.location.href = "https://mypaylink.app/";
+            } else {
+              onClose();
+            }
             return 0;
           }
           return c - 1;
@@ -221,16 +226,16 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
                 {successName ? `${successName} — Clocked Out` : "Clocked Out"}
               </p>
               <p className="text-sm text-white/60 mt-1">
-                Closing in{" "}
+                Redirecting in{" "}
                 <span className="font-bold text-teal-300">{countdown}</span>s...
               </p>
             </div>
             <Button
-              onClick={onClose}
+              onClick={() => { window.location.href = "https://mypaylink.app/"; }}
               className="bg-slate-600 hover:bg-slate-700 text-white border-0"
               data-testid="button-close-clock-out"
             >
-              Done
+              Go to mypaylink.app
             </Button>
           </div>
         ) : successState === "sign-in" ? (
@@ -357,10 +362,11 @@ export default function TimeClock() {
   const handleClose = useCallback(() => setModalMode(null), []);
 
   return (
-    <div className="relative flex flex-col items-center justify-center min-h-screen p-4 select-none">
+    <div className="relative flex flex-col items-center justify-start min-h-screen p-6 pt-10 select-none">
       <VideoBackground />
 
       <div className="relative z-10 w-full max-w-sm space-y-6">
+        {/* Logo + tagline */}
         <div className="flex flex-col items-center gap-3 text-center">
           <img
             src={paylinkLogo}
@@ -382,8 +388,10 @@ export default function TimeClock() {
           </h2>
         </div>
 
+        {/* Live clock */}
         <LiveClock />
 
+        {/* Action buttons */}
         <div className="space-y-3">
           <Button
             size="lg"
@@ -402,7 +410,7 @@ export default function TimeClock() {
             data-testid="button-open-clock-out"
           >
             <Square className="h-6 w-6 mr-3" />
-            Clock Out
+            Clock Out / Sign Out
           </Button>
         </div>
       </div>
