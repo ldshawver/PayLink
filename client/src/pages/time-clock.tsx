@@ -99,6 +99,8 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
             clearInterval(interval);
             if (successState === "clock-out") {
               window.location.href = "https://mypaylink.app/";
+            } else if (successState === "sign-in") {
+              window.location.href = "/app/dashboard";
             } else {
               onClose();
             }
@@ -246,16 +248,16 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
                 {successName ? `Welcome, ${successName}!` : "Signed In!"}
               </p>
               <p className="text-sm text-white/60 mt-1">
-                Closing in{" "}
+                Redirecting to dashboard in{" "}
                 <span className="font-bold text-teal-300">{countdown}</span>s...
               </p>
             </div>
             <Button
-              onClick={onClose}
+              onClick={() => { window.location.href = "/app/dashboard"; }}
               className="bg-teal-600 hover:bg-teal-700 text-white border-0"
               data-testid="button-close-sign-in"
             >
-              Done
+              Go to Dashboard
             </Button>
           </div>
         ) : (
