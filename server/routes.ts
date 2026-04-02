@@ -1406,8 +1406,14 @@ export async function registerRoutes(
     try {
       const { companyId } = req.body;
       if (!companyId) return res.status(400).json({ message: "companyId required" });
-      const allRuns = (await storage.getPayrollRuns(companyId))
+      const allRunsRaw = (await storage.getPayrollRuns(companyId))
         .filter(r => r.status === "processed" || r.status === "paid")
+        .sort((a, b) => a.periodStart.localeCompare(b.periodStart));
+
+      // Deduplicate by period: if two finalized runs cover the same period, only the
+      // canonical one (paid > processed, then latest processedAt) counts toward YTD.
+      // Re-sort after dedup so chronological order is preserved.
+      const allRuns = deduplicateByPeriod(allRunsRaw)
         .sort((a, b) => a.periodStart.localeCompare(b.periodStart));
 
       // Build year-scoped cumulative ytd per worker.
