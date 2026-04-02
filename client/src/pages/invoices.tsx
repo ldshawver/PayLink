@@ -771,6 +771,353 @@ function InvoiceForm({ invoice, customers, companyId, companies = [], onSave, on
   );
 }
 
+// ── Recurring Billing Tab ──────────────────────────────────────────────────
+
+const FREQ_OPTIONS = [
+  { value: "weekly", label: "Weekly" },
+  { value: "biweekly", label: "Bi-Weekly (every 2 weeks)" },
+  { value: "monthly", label: "Monthly" },
+  { value: "quarterly", label: "Quarterly" },
+  { value: "semiannual", label: "Semi-Annual" },
+  { value: "annual", label: "Annual" },
+  { value: "custom", label: "Custom interval" },
+];
+
+const REMINDER_OPTIONS = [
+  { value: "0", label: "No reminders" },
+  { value: "1", label: "Every day" },
+  { value: "3", label: "Every 3 days" },
+  { value: "7", label: "Weekly" },
+  { value: "14", label: "Every 2 weeks" },
+];
+
+type RecurProfile = {
+  id: string; name: string; customerId: string; frequency: string;
+  customIntervalDays: number | null; amount: string; taxRate: string;
+  startDate: string; endDate: string | null; nextInvoiceDate: string | null;
+  dueDays: number; notifyEmail: boolean; notifySms: boolean;
+  notifyDaysBefore: number; reminderFrequencyDays: number;
+  status: string; notes: string | null; companyId: string;
+};
+
+const emptyProfile = (): Partial<RecurProfile> => ({
+  name: "", customerId: "", frequency: "monthly", customIntervalDays: null,
+  amount: "", taxRate: "0", startDate: new Date().toISOString().split("T")[0],
+  endDate: null, dueDays: 30, notifyEmail: true, notifySms: false,
+  notifyDaysBefore: 7, reminderFrequencyDays: 0, status: "active", notes: "",
+});
+
+function RecurringBillingTab({ companyId, customers }: { companyId: string; customers: Customer[] }) {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<RecurProfile | null>(null);
+  const [form, setForm] = useState<Partial<RecurProfile>>(emptyProfile());
+
+  const { data: profiles = [], isLoading } = useQuery<RecurProfile[]>({
+    queryKey: [`/api/recurring-billing?companyId=${companyId}`],
+    enabled: !!companyId,
+  });
+
+  const openCreate = () => { setEditing(null); setForm(emptyProfile()); setOpen(true); };
+  const openEdit = (p: RecurProfile) => { setEditing(p); setForm({ ...p }); setOpen(true); };
+
+  const saveMutation = useMutation({
+    mutationFn: async (data: Partial<RecurProfile>) => {
+      if (editing) {
+        await apiRequest("PATCH", `/api/recurring-billing/${editing.id}`, data);
+      } else {
+        await apiRequest("POST", "/api/recurring-billing", { ...data, companyId });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/recurring-billing?companyId=${companyId}`] });
+      setOpen(false);
+      toast({ title: editing ? "Profile updated" : "Recurring profile created" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("DELETE", `/api/recurring-billing/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/recurring-billing?companyId=${companyId}`] });
+      toast({ title: "Profile deleted" });
+    },
+  });
+
+  const toggleStatus = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) =>
+      apiRequest("PATCH", `/api/recurring-billing/${id}`, { status }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/recurring-billing?companyId=${companyId}`] }),
+  });
+
+  const handleSave = () => {
+    if (!form.name) return toast({ title: "Profile name is required", variant: "destructive" });
+    if (!form.customerId) return toast({ title: "Customer is required", variant: "destructive" });
+    if (!form.startDate) return toast({ title: "Start date is required", variant: "destructive" });
+    if (!form.amount || isNaN(parseFloat(form.amount as string))) return toast({ title: "Amount is required", variant: "destructive" });
+    saveMutation.mutate(form);
+  };
+
+  const getCustomerName = (id: string) => customers.find(c => c.id === id)?.name || id;
+
+  const freqLabel = (p: RecurProfile) => {
+    const opt = FREQ_OPTIONS.find(o => o.value === p.frequency);
+    if (p.frequency === "custom" && p.customIntervalDays) return `Every ${p.customIntervalDays} days`;
+    return opt?.label || p.frequency;
+  };
+
+  if (isLoading) return <div className="flex justify-center py-16"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="font-semibold text-lg">Recurring Billing</h3>
+          <p className="text-sm text-muted-foreground">Automatically generate invoices on a schedule</p>
+        </div>
+        <Button onClick={openCreate} data-testid="button-create-recurring">
+          <Plus className="h-4 w-4 mr-2" /> New Profile
+        </Button>
+      </div>
+
+      {profiles.length === 0 ? (
+        <Card>
+          <CardContent className="py-16 text-center">
+            <RefreshCw className="h-12 w-12 mx-auto text-muted-foreground/30 mb-3" />
+            <p className="text-lg font-medium">No recurring profiles yet</p>
+            <p className="text-muted-foreground mt-1 text-sm">Set up automatic recurring invoices for your customers</p>
+            <Button className="mt-4" onClick={openCreate} data-testid="button-setup-recurring">
+              <Plus className="h-4 w-4 mr-2" /> Create Recurring Profile
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {profiles.map(p => (
+            <Card key={p.id} data-testid={`card-recurring-${p.id}`} className={p.status === "paused" ? "opacity-60" : ""}>
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3 min-w-0">
+                    <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-teal-500 to-blue-500 flex items-center justify-center text-white shrink-0">
+                      <RefreshCw className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-semibold truncate">{p.name}</div>
+                      <div className="text-sm text-muted-foreground">{getCustomerName(p.customerId)}</div>
+                      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1"><RefreshCw className="h-3 w-3" />{freqLabel(p)}</span>
+                        <span className="flex items-center gap-1"><CalendarDays className="h-3 w-3" />Starts {p.startDate}</span>
+                        <span className="flex items-center gap-1"><Clock className="h-3 w-3" />Net {p.dueDays} days</span>
+                        {p.notifyEmail && <span className="flex items-center gap-1 text-teal-600"><Mail className="h-3 w-3" />Email</span>}
+                        {p.notifySms && <span className="flex items-center gap-1 text-blue-600"><MessageSquare className="h-3 w-3" />SMS</span>}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <div className="text-right">
+                      <div className="font-bold text-lg">${parseFloat(p.amount).toFixed(2)}</div>
+                      <Badge variant={p.status === "active" ? "default" : "secondary"} className="text-xs">
+                        {p.status === "active" ? "Active" : "Paused"}
+                      </Badge>
+                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`button-recurring-menu-${p.id}`}>
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => openEdit(p)}><Edit className="h-4 w-4 mr-2" />Edit</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => toggleStatus.mutate({ id: p.id, status: p.status === "active" ? "paused" : "active" })}>
+                          {p.status === "active" ? <><Pause className="h-4 w-4 mr-2" />Pause</> : <><Play className="h-4 w-4 mr-2" />Resume</>}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem className="text-red-600" onClick={() => { if (confirm("Delete this recurring profile?")) deleteMutation.mutate(p.id); }}>
+                          <Trash2 className="h-4 w-4 mr-2" />Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editing ? "Edit Recurring Profile" : "New Recurring Profile"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-5 py-1">
+
+            {/* Basic info */}
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <FileText className="h-3.5 w-3.5" />Profile Details
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="sm:col-span-2 space-y-1">
+                  <Label>Profile Name</Label>
+                  <Input value={form.name || ""} onChange={e => setForm({ ...form, name: e.target.value })}
+                    placeholder="e.g. Monthly Retainer — Acme Corp" data-testid="input-recurring-name" />
+                </div>
+                <div className="space-y-1">
+                  <Label>Customer</Label>
+                  <Select value={form.customerId || ""} onValueChange={v => setForm({ ...form, customerId: v })}>
+                    <SelectTrigger data-testid="select-recurring-customer"><SelectValue placeholder="Select customer" /></SelectTrigger>
+                    <SelectContent>
+                      {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label>Amount ($)</Label>
+                  <Input type="number" step="0.01" min="0" value={form.amount || ""}
+                    onChange={e => setForm({ ...form, amount: e.target.value })}
+                    placeholder="0.00" data-testid="input-recurring-amount" />
+                </div>
+                <div className="space-y-1">
+                  <Label>Tax Rate (%)</Label>
+                  <Input type="number" step="0.01" min="0" max="100" value={form.taxRate || "0"}
+                    onChange={e => setForm({ ...form, taxRate: e.target.value })} data-testid="input-recurring-tax" />
+                </div>
+              </div>
+            </div>
+
+            {/* Schedule */}
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <CalendarDays className="h-3.5 w-3.5" />Schedule
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label>Frequency</Label>
+                  <Select value={form.frequency || "monthly"} onValueChange={v => setForm({ ...form, frequency: v })}>
+                    <SelectTrigger data-testid="select-recurring-frequency"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {FREQ_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {form.frequency === "custom" && (
+                  <div className="space-y-1">
+                    <Label>Every X Days</Label>
+                    <Input type="number" min="1" value={form.customIntervalDays || ""}
+                      onChange={e => setForm({ ...form, customIntervalDays: parseInt(e.target.value) || null })}
+                      placeholder="e.g. 45" data-testid="input-recurring-custom-days" />
+                  </div>
+                )}
+                <div className="space-y-1">
+                  <Label>First Invoice Date</Label>
+                  <Input type="date" value={form.startDate || ""}
+                    onChange={e => setForm({ ...form, startDate: e.target.value })} data-testid="input-recurring-start" />
+                </div>
+                <div className="space-y-1">
+                  <Label>End Date <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                  <Input type="date" value={form.endDate || ""}
+                    onChange={e => setForm({ ...form, endDate: e.target.value || null })} data-testid="input-recurring-end" />
+                </div>
+                <div className="space-y-1">
+                  <Label>Due Days <span className="text-muted-foreground text-xs">(net terms)</span></Label>
+                  <Select value={String(form.dueDays ?? 30)} onValueChange={v => setForm({ ...form, dueDays: parseInt(v) })}>
+                    <SelectTrigger data-testid="select-recurring-due-days"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">Due on Receipt</SelectItem>
+                      <SelectItem value="7">Net 7</SelectItem>
+                      <SelectItem value="15">Net 15</SelectItem>
+                      <SelectItem value="30">Net 30</SelectItem>
+                      <SelectItem value="45">Net 45</SelectItem>
+                      <SelectItem value="60">Net 60</SelectItem>
+                      <SelectItem value="90">Net 90</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+
+            {/* Notifications */}
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <Bell className="h-3.5 w-3.5" />Notifications
+              </h4>
+              <div className="rounded-md border p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Mail className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <p className="text-sm font-medium">Email notifications</p>
+                      <p className="text-xs text-muted-foreground">Send invoice to customer by email</p>
+                    </div>
+                  </div>
+                  <Switch checked={!!form.notifyEmail} onCheckedChange={v => setForm({ ...form, notifyEmail: v })} data-testid="switch-notify-email" />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <p className="text-sm font-medium">SMS notifications</p>
+                      <p className="text-xs text-muted-foreground">Text message alert when invoice is issued</p>
+                    </div>
+                  </div>
+                  <Switch checked={!!form.notifySms} onCheckedChange={v => setForm({ ...form, notifySms: v })} data-testid="switch-notify-sms" />
+                </div>
+                {(form.notifyEmail || form.notifySms) && (
+                  <div className="pt-2 border-t space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label>Notify how many days before due?</Label>
+                        <Select value={String(form.notifyDaysBefore ?? 7)} onValueChange={v => setForm({ ...form, notifyDaysBefore: parseInt(v) })}>
+                          <SelectTrigger data-testid="select-notify-days"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="0">On due date</SelectItem>
+                            <SelectItem value="1">1 day before</SelectItem>
+                            <SelectItem value="3">3 days before</SelectItem>
+                            <SelectItem value="7">7 days before</SelectItem>
+                            <SelectItem value="14">14 days before</SelectItem>
+                            <SelectItem value="30">30 days before</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Reminder frequency</Label>
+                        <Select value={String(form.reminderFrequencyDays ?? 0)} onValueChange={v => setForm({ ...form, reminderFrequencyDays: parseInt(v) })}>
+                          <SelectTrigger data-testid="select-reminder-freq"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {REMINDER_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div className="space-y-1">
+              <Label>Notes <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Textarea value={form.notes || ""} onChange={e => setForm({ ...form, notes: e.target.value })}
+                rows={2} placeholder="Internal notes about this recurring billing..." data-testid="input-recurring-notes" />
+            </div>
+          </div>
+
+          <DialogFooter className="mt-2">
+            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button onClick={handleSave} disabled={saveMutation.isPending} data-testid="button-save-recurring">
+              {saveMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+              {editing ? "Save Changes" : "Create Profile"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ── Status config ──────────────────────────────────────────────────────────
 const statusConfig: Record<string, { icon: any; color: string }> = {
   draft: { icon: FileText, color: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300" },
   sent: { icon: Send, color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
@@ -1075,16 +1422,7 @@ export default function InvoicesPage() {
         </TabsContent>
 
         <TabsContent value="recurring">
-          <Card>
-            <CardContent className="py-12 text-center">
-              <Clock className="h-12 w-12 mx-auto text-muted-foreground/30 mb-3" />
-              <p className="text-lg font-medium">Recurring Billing</p>
-              <p className="text-muted-foreground mt-1">Set up automatic recurring invoices for your customers</p>
-              <Button variant="outline" className="mt-4" data-testid="button-setup-recurring">
-                <Plus className="h-4 w-4 mr-2" /> Create Recurring Profile
-              </Button>
-            </CardContent>
-          </Card>
+          <RecurringBillingTab companyId={companyId} customers={customers || []} />
         </TabsContent>
 
         <TabsContent value="payments">
