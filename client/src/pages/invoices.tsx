@@ -14,12 +14,21 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Plus, Search, Edit, Trash2, FileText, DollarSign, Send, Eye, Loader2,
   CalendarDays, Clock, CheckCircle, AlertCircle, XCircle, Copy, Link2,
   CreditCard, Building2, Zap, ArrowRight, Settings, Info, Sparkles,
-  TrendingDown, Shield, Palette,
+  TrendingDown, Shield, Palette, RefreshCw, Bell, Mail, MessageSquare,
+  Pause, Play, MoreHorizontal,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { Invoice, Customer, Company } from "@shared/schema";
 
 // ── Invoice Template Styles ─────────────────────────────────────────────────

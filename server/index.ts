@@ -889,6 +889,12 @@ app.use((req, res, next) => {
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    await run("recurring_billing_profiles.due_days", sql`ALTER TABLE recurring_billing_profiles ADD COLUMN IF NOT EXISTS due_days INTEGER DEFAULT 30`);
+    await run("recurring_billing_profiles.notify_email", sql`ALTER TABLE recurring_billing_profiles ADD COLUMN IF NOT EXISTS notify_email BOOLEAN DEFAULT TRUE`);
+    await run("recurring_billing_profiles.notify_sms", sql`ALTER TABLE recurring_billing_profiles ADD COLUMN IF NOT EXISTS notify_sms BOOLEAN DEFAULT FALSE`);
+    await run("recurring_billing_profiles.notify_days_before", sql`ALTER TABLE recurring_billing_profiles ADD COLUMN IF NOT EXISTS notify_days_before INTEGER DEFAULT 7`);
+    await run("recurring_billing_profiles.reminder_frequency_days", sql`ALTER TABLE recurring_billing_profiles ADD COLUMN IF NOT EXISTS reminder_frequency_days INTEGER DEFAULT 0`);
+
     // Document folders table
     await run("document_folders table", sql`CREATE TABLE IF NOT EXISTS document_folders (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

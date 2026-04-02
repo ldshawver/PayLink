@@ -2057,6 +2057,13 @@ export const recurringBillingProfiles = pgTable("recurring_billing_profiles", {
   status: text("status").notNull().default("active"),
   canceledAt: timestamp("canceled_at"),
   notes: text("notes"),
+  // Invoice date & due date settings
+  dueDays: integer("due_days").default(30),
+  // Notification settings
+  notifyEmail: boolean("notify_email").default(true),
+  notifySms: boolean("notify_sms").default(false),
+  notifyDaysBefore: integer("notify_days_before").default(7),
+  reminderFrequencyDays: integer("reminder_frequency_days").default(0),
   createdBy: varchar("created_by"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
