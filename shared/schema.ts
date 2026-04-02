@@ -2670,3 +2670,35 @@ export const licenseRequests = pgTable("license_requests", {
 export const insertLicenseRequestSchema = createInsertSchema(licenseRequests).omit({ id: true, createdAt: true });
 export type LicenseRequest = typeof licenseRequests.$inferSelect;
 export type InsertLicenseRequest = z.infer<typeof insertLicenseRequestSchema>;
+
+// ── Staff Messages ──────────────────────────────────────────────────────────
+export const staffMessages = pgTable("staff_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  senderId: varchar("sender_id").notNull().references(() => workers.id),
+  subject: text("subject").notNull(),
+  body: text("body").notNull(),
+  scope: text("scope").notNull().default("one"),        // 'one' | 'company' | 'sitewide'
+  recipientWorkerId: varchar("recipient_worker_id").references(() => workers.id),
+  deliveryChannel: text("delivery_channel").notNull().default("app"),  // 'app' | 'email' | 'sms' | 'both'
+  parentMessageId: varchar("parent_message_id"),        // set on replies
+  isReply: boolean("is_reply").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertStaffMessageSchema = createInsertSchema(staffMessages).omit({ id: true, createdAt: true });
+export type StaffMessage = typeof staffMessages.$inferSelect;
+export type InsertStaffMessage = z.infer<typeof insertStaffMessageSchema>;
+
+// ── Staff Message Recipients ────────────────────────────────────────────────
+export const staffMessageRecipients = pgTable("staff_message_recipients", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  messageId: varchar("message_id").notNull().references(() => staffMessages.id),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  readAt: timestamp("read_at"),
+  deliveredAt: timestamp("delivered_at").defaultNow(),
+});
+
+export const insertStaffMessageRecipientSchema = createInsertSchema(staffMessageRecipients).omit({ id: true });
+export type StaffMessageRecipient = typeof staffMessageRecipients.$inferSelect;
+export type InsertStaffMessageRecipient = z.infer<typeof insertStaffMessageRecipientSchema>;

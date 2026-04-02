@@ -1373,6 +1373,28 @@ app.use((req, res, next) => {
       console.log("Auto-migration skipped (payroll_items company_id populate):", e.message);
     }
     await run("payroll_items.company_check_unique", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_payroll_items_company_check ON payroll_items(company_id, check_number) WHERE check_number IS NOT NULL AND company_id IS NOT NULL`);
+
+    // Staff Messaging tables
+    await run("staff_messages table", sql`CREATE TABLE IF NOT EXISTS staff_messages (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id),
+      sender_id VARCHAR NOT NULL REFERENCES workers(id),
+      subject TEXT NOT NULL,
+      body TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'one',
+      recipient_worker_id VARCHAR REFERENCES workers(id),
+      delivery_channel TEXT NOT NULL DEFAULT 'app',
+      parent_message_id VARCHAR,
+      is_reply BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("staff_message_recipients table", sql`CREATE TABLE IF NOT EXISTS staff_message_recipients (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      message_id VARCHAR NOT NULL REFERENCES staff_messages(id) ON DELETE CASCADE,
+      worker_id VARCHAR NOT NULL REFERENCES workers(id),
+      read_at TIMESTAMP,
+      delivered_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");

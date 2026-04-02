@@ -11283,5 +11283,352 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  // ── Staff Messaging ──────────────────────────────────────────────────────
+
+  // GET /api/messages — inbox: received + sent
+  app.get("/api/messages", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const workerRow = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${userId} LIMIT 1`);
+      const myWorkerId = (workerRow.rows ?? workerRow)[0]?.id ?? null;
+      if (!myWorkerId) return res.json([]);
+
+      const folder = req.query.folder as string || "inbox";
+
+      let rows: any[];
+      if (folder === "sent") {
+        const result = await db.execute(sql`
+          SELECT
+            sm.id, sm.company_id, sm.sender_id, sm.subject, sm.body, sm.scope,
+            sm.recipient_worker_id, sm.delivery_channel, sm.parent_message_id, sm.is_reply, sm.created_at,
+            w.first_name || ' ' || w.last_name AS sender_name,
+            rw.first_name || ' ' || rw.last_name AS recipient_name,
+            NULL::timestamp AS read_at,
+            (SELECT COUNT(*) FROM staff_messages r WHERE r.parent_message_id = sm.id) AS reply_count
+          FROM staff_messages sm
+          JOIN workers w ON w.id = sm.sender_id
+          LEFT JOIN workers rw ON rw.id = sm.recipient_worker_id
+          WHERE sm.sender_id = ${myWorkerId} AND sm.is_reply = FALSE
+          ORDER BY sm.created_at DESC
+        `);
+        rows = result.rows ?? (result as any);
+      } else {
+        const result = await db.execute(sql`
+          SELECT
+            sm.id, sm.company_id, sm.sender_id, sm.subject, sm.body, sm.scope,
+            sm.recipient_worker_id, sm.delivery_channel, sm.parent_message_id, sm.is_reply, sm.created_at,
+            w.first_name || ' ' || w.last_name AS sender_name,
+            rw.first_name || ' ' || rw.last_name AS recipient_name,
+            smr.read_at,
+            (SELECT COUNT(*) FROM staff_messages r WHERE r.parent_message_id = sm.id) AS reply_count
+          FROM staff_message_recipients smr
+          JOIN staff_messages sm ON sm.id = smr.message_id
+          JOIN workers w ON w.id = sm.sender_id
+          LEFT JOIN workers rw ON rw.id = sm.recipient_worker_id
+          WHERE smr.worker_id = ${myWorkerId} AND sm.is_reply = FALSE
+          ORDER BY sm.created_at DESC
+        `);
+        rows = result.rows ?? (result as any);
+      }
+      res.json(rows);
+    } catch (err) {
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to fetch messages") });
+    }
+  });
+
+  // GET /api/messages/unread-count
+  app.get("/api/messages/unread-count", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const workerRow = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${userId} LIMIT 1`);
+      const myWorkerId = (workerRow.rows ?? workerRow)[0]?.id ?? null;
+      if (!myWorkerId) return res.json({ count: 0 });
+      const result = await db.execute(sql`
+        SELECT COUNT(*) AS count FROM staff_message_recipients smr
+        JOIN staff_messages sm ON sm.id = smr.message_id
+        WHERE smr.worker_id = ${myWorkerId} AND smr.read_at IS NULL
+      `);
+      const count = parseInt((result.rows ?? result as any)[0]?.count ?? "0", 10);
+      res.json({ count });
+    } catch (err) {
+      res.json({ count: 0 });
+    }
+  });
+
+  // GET /api/messages/:id — message + its replies
+  app.get("/api/messages/:id", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const workerRow = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${userId} LIMIT 1`);
+      const myWorkerId = (workerRow.rows ?? workerRow)[0]?.id ?? null;
+      const msgId = req.params.id;
+
+      const msgResult = await db.execute(sql`
+        SELECT sm.*, w.first_name || ' ' || w.last_name AS sender_name,
+          rw.first_name || ' ' || rw.last_name AS recipient_name,
+          smr.read_at
+        FROM staff_messages sm
+        JOIN workers w ON w.id = sm.sender_id
+        LEFT JOIN workers rw ON rw.id = sm.recipient_worker_id
+        LEFT JOIN staff_message_recipients smr ON smr.message_id = sm.id AND smr.worker_id = ${myWorkerId}
+        WHERE sm.id = ${msgId}
+        LIMIT 1
+      `);
+      const msg = (msgResult.rows ?? msgResult as any)[0];
+      if (!msg) return res.status(404).json({ message: "Message not found" });
+
+      // Check access: must be sender or recipient
+      const accessCheck = await db.execute(sql`
+        SELECT 1 FROM staff_message_recipients WHERE message_id = ${msgId} AND worker_id = ${myWorkerId}
+        UNION SELECT 1 FROM staff_messages WHERE id = ${msgId} AND sender_id = ${myWorkerId}
+      `);
+      if ((accessCheck.rows ?? accessCheck as any).length === 0) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const repliesResult = await db.execute(sql`
+        SELECT sm.*, w.first_name || ' ' || w.last_name AS sender_name
+        FROM staff_messages sm
+        JOIN workers w ON w.id = sm.sender_id
+        WHERE sm.parent_message_id = ${msgId}
+        ORDER BY sm.created_at ASC
+      `);
+      const replies = repliesResult.rows ?? (repliesResult as any);
+
+      res.json({ ...msg, replies });
+    } catch (err) {
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to fetch message") });
+    }
+  });
+
+  // POST /api/messages — create new message (admin/manager any channel; employee app-only)
+  app.post("/api/messages", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const userRole = (req.session as any).role || "employee";
+      const workerRow = await db.execute(sql`SELECT id, company_id FROM workers WHERE user_id = ${userId} LIMIT 1`);
+      const sender = (workerRow.rows ?? workerRow)[0];
+      if (!sender) return res.status(400).json({ message: "No worker record linked to your account" });
+
+      const { subject, body, scope, recipientWorkerId, deliveryChannel, companyId } = req.body;
+
+      if (!subject?.trim() || !body?.trim()) {
+        return res.status(400).json({ message: "Subject and body are required" });
+      }
+
+      const validScopes = ["one", "company", "sitewide"];
+      if (!validScopes.includes(scope)) {
+        return res.status(400).json({ message: "Invalid scope" });
+      }
+
+      const canBroadcast = ["admin", "manager", "supervisor"].includes(userRole);
+      if (!canBroadcast && scope !== "one") {
+        return res.status(403).json({ message: "Only admins and managers can send broadcast messages" });
+      }
+
+      const channel = canBroadcast ? (deliveryChannel || "app") : "app";
+
+      // Create message record
+      const msgResult = await db.execute(sql`
+        INSERT INTO staff_messages (company_id, sender_id, subject, body, scope, recipient_worker_id, delivery_channel, is_reply)
+        VALUES (${companyId || sender.company_id}, ${sender.id}, ${subject.trim()}, ${body.trim()}, ${scope}, ${recipientWorkerId || null}, ${channel}, FALSE)
+        RETURNING *
+      `);
+      const newMsg = (msgResult.rows ?? msgResult as any)[0];
+
+      // Determine recipients
+      let recipientWorkers: any[] = [];
+      if (scope === "one") {
+        if (!recipientWorkerId) return res.status(400).json({ message: "Recipient required for individual messages" });
+        const rw = await db.execute(sql`
+          SELECT w.id, w.first_name, w.last_name, u.email, w.phone, w.preferences
+          FROM workers w LEFT JOIN users u ON u.id = w.user_id
+          WHERE w.id = ${recipientWorkerId}
+        `);
+        recipientWorkers = rw.rows ?? (rw as any);
+      } else if (scope === "company") {
+        const targetCompanyId = companyId || sender.company_id;
+        const rw = await db.execute(sql`
+          SELECT w.id, w.first_name, w.last_name, u.email, w.phone, w.preferences
+          FROM workers w LEFT JOIN users u ON u.id = w.user_id
+          WHERE w.company_id = ${targetCompanyId} AND w.id != ${sender.id}
+        `);
+        recipientWorkers = rw.rows ?? (rw as any);
+      } else if (scope === "sitewide") {
+        const rw = await db.execute(sql`
+          SELECT w.id, w.first_name, w.last_name, u.email, w.phone, w.preferences
+          FROM workers w LEFT JOIN users u ON u.id = w.user_id
+          WHERE w.id != ${sender.id}
+        `);
+        recipientWorkers = rw.rows ?? (rw as any);
+      }
+
+      // Insert recipient records and send notifications
+      const senderNameResult = await db.execute(sql`SELECT first_name || ' ' || last_name AS name FROM workers WHERE id = ${sender.id}`);
+      const senderName = (senderNameResult.rows ?? senderNameResult as any)[0]?.name || "Staff";
+
+      for (const rw of recipientWorkers) {
+        await db.execute(sql`
+          INSERT INTO staff_message_recipients (message_id, worker_id) VALUES (${newMsg.id}, ${rw.id})
+        `);
+
+        // Check worker's messaging preference
+        let prefs: any = {};
+        try { prefs = JSON.parse(rw.preferences || "{}"); } catch {}
+        const workerChannel = prefs.messagingChannel || "app";
+
+        const shouldEmail = (channel === "email" || channel === "both") && (workerChannel === "email" || workerChannel === "both");
+        const shouldSms = (channel === "sms" || channel === "both") && (workerChannel === "sms" || workerChannel === "both");
+
+        if (shouldEmail && rw.email) {
+          const { getTransporter } = await import("./notifications");
+          const smtp = getTransporter();
+          if (smtp) {
+            const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+              <div style="background:linear-gradient(135deg,#0d9488,#2563eb);padding:20px;border-radius:8px 8px 0 0;">
+                <h1 style="color:white;margin:0;font-size:20px;">New Message from ${senderName}</h1>
+              </div>
+              <div style="background:#f9fafb;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;">
+                <p style="font-size:15px;color:#111827;">Hi <strong>${rw.first_name}</strong>,</p>
+                <h3 style="color:#0d9488;">${subject.trim()}</h3>
+                <p style="color:#374151;white-space:pre-line;">${body.trim()}</p>
+                <p style="color:#9ca3af;font-size:13px;margin-top:24px;">Log in to PayLink to reply.</p>
+              </div>
+            </div>`;
+            try {
+              await smtp.transporter.sendMail({
+                from: smtp.fromAddress,
+                to: rw.email,
+                subject: `[PayLink Message] ${subject.trim()}`,
+                text: `${senderName}: ${body.trim()}`,
+                html,
+              });
+            } catch (emailErr: any) {
+              console.error("[Messaging] Email delivery failed:", emailErr.message);
+            }
+          }
+        }
+
+        if (shouldSms && rw.phone) {
+          try {
+            const accountSid = process.env.TWILIO_ACCOUNT_SID;
+            const authToken = process.env.TWILIO_AUTH_TOKEN;
+            const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+            if (accountSid && authToken && fromNumber) {
+              const twilio = (await import("twilio")).default;
+              const client = twilio(accountSid, authToken);
+              await client.messages.create({
+                body: `PayLink message from ${senderName}: ${subject.trim()}\n\n${body.trim().substring(0, 200)}`,
+                from: fromNumber,
+                to: rw.phone,
+              });
+            }
+          } catch (smsErr: any) {
+            console.error("[Messaging] SMS delivery failed:", smsErr.message);
+          }
+        }
+      }
+
+      res.json(newMsg);
+    } catch (err) {
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to send message") });
+    }
+  });
+
+  // POST /api/messages/:id/reply
+  app.post("/api/messages/:id/reply", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const workerRow = await db.execute(sql`SELECT id, company_id FROM workers WHERE user_id = ${userId} LIMIT 1`);
+      const sender = (workerRow.rows ?? workerRow)[0];
+      if (!sender) return res.status(400).json({ message: "No worker linked to account" });
+
+      const parentId = req.params.id;
+      const { body } = req.body;
+      if (!body?.trim()) return res.status(400).json({ message: "Reply body is required" });
+
+      // Verify access to parent message
+      const accessCheck = await db.execute(sql`
+        SELECT sm.* FROM staff_messages sm
+        LEFT JOIN staff_message_recipients smr ON smr.message_id = sm.id AND smr.worker_id = ${sender.id}
+        WHERE sm.id = ${parentId} AND (sm.sender_id = ${sender.id} OR smr.worker_id = ${sender.id})
+        LIMIT 1
+      `);
+      const parent = (accessCheck.rows ?? accessCheck as any)[0];
+      if (!parent) return res.status(403).json({ message: "Access denied" });
+
+      const replyResult = await db.execute(sql`
+        INSERT INTO staff_messages (company_id, sender_id, subject, body, scope, delivery_channel, parent_message_id, is_reply)
+        VALUES (${parent.company_id}, ${sender.id}, ${'Re: ' + parent.subject}, ${body.trim()}, 'one', 'app', ${parentId}, TRUE)
+        RETURNING *
+      `);
+      const reply = (replyResult.rows ?? replyResult as any)[0];
+
+      // Notify the original sender (if not replying to yourself)
+      const notifyWorkerId = parent.sender_id === sender.id ? parent.recipient_worker_id : parent.sender_id;
+      if (notifyWorkerId && notifyWorkerId !== sender.id) {
+        await db.execute(sql`
+          INSERT INTO staff_message_recipients (message_id, worker_id) VALUES (${reply.id}, ${notifyWorkerId})
+        `);
+      }
+
+      const senderName = await db.execute(sql`SELECT first_name || ' ' || last_name AS name FROM workers WHERE id = ${sender.id}`);
+      const name = (senderName.rows ?? senderName as any)[0]?.name || "Staff";
+
+      res.json({ ...reply, sender_name: name });
+    } catch (err) {
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to send reply") });
+    }
+  });
+
+  // PATCH /api/messages/:id/read
+  app.patch("/api/messages/:id/read", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const workerRow = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${userId} LIMIT 1`);
+      const myWorkerId = (workerRow.rows ?? workerRow)[0]?.id ?? null;
+      if (!myWorkerId) return res.status(400).json({ message: "No worker record" });
+
+      await db.execute(sql`
+        UPDATE staff_message_recipients
+        SET read_at = NOW()
+        WHERE message_id = ${req.params.id} AND worker_id = ${myWorkerId} AND read_at IS NULL
+      `);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to mark read") });
+    }
+  });
+
+  // GET /api/messages/workers — list workers available to message
+  app.get("/api/messages/workers", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const userRole = (req.session as any).role || "employee";
+      const workerRow = await db.execute(sql`SELECT id, company_id FROM workers WHERE user_id = ${userId} LIMIT 1`);
+      const me = (workerRow.rows ?? workerRow)[0];
+      if (!me) return res.json([]);
+
+      let result: any;
+      if (userRole === "admin") {
+        result = await db.execute(sql`
+          SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name
+          FROM workers w LEFT JOIN companies c ON c.id = w.company_id
+          WHERE w.id != ${me.id} ORDER BY w.first_name, w.last_name
+        `);
+      } else {
+        result = await db.execute(sql`
+          SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name
+          FROM workers w LEFT JOIN companies c ON c.id = w.company_id
+          WHERE w.company_id = ${me.company_id} AND w.id != ${me.id}
+          ORDER BY w.first_name, w.last_name
+        `);
+      }
+      res.json(result.rows ?? (result as any));
+    } catch (err) {
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to fetch workers") });
+    }
+  });
+
   return httpServer;
 }

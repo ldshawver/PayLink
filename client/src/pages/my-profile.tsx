@@ -92,6 +92,7 @@ function PreferencesTab({ worker }: { worker: Worker | null }) {
   const [notifyScheduleSms, setNotifyScheduleSms] = useState<boolean>(!!prefs.notifyScheduleSms);
   const [notifyPaydayEmail, setNotifyPaydayEmail] = useState<boolean>(prefs.notifyPaydayEmail !== false);
   const [notifyPaydaySms, setNotifyPaydaySms] = useState<boolean>(!!prefs.notifyPaydaySms);
+  const [messagingChannel, setMessagingChannel] = useState<string>(prefs.messagingChannel || "app");
   const [language, setLanguage] = useState<string>(prefs.language || "en");
   const [timezone, setTimezone] = useState<string>(prefs.timezone || "America/Los_Angeles");
   const [dateFormat, setDateFormat] = useState<string>(prefs.dateFormat || "MM/DD/YYYY");
@@ -113,7 +114,7 @@ function PreferencesTab({ worker }: { worker: Worker | null }) {
   });
 
   const save = () => {
-    mutation.mutate({ notifyScheduleEmail, notifyScheduleSms, notifyPaydayEmail, notifyPaydaySms, language, timezone, dateFormat });
+    mutation.mutate({ notifyScheduleEmail, notifyScheduleSms, notifyPaydayEmail, notifyPaydaySms, messagingChannel, language, timezone, dateFormat });
   };
 
   return (
