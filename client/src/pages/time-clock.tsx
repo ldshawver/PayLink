@@ -365,7 +365,7 @@ export default function TimeClock() {
     <div className="relative flex flex-col items-center justify-start min-h-screen p-6 pt-10 select-none">
       <VideoBackground />
 
-      <div className="relative z-10 w-full max-w-sm space-y-6">
+      <div className="relative z-10 w-full max-w-sm space-y-6 bg-black/50 backdrop-blur-sm rounded-2xl px-6 py-8 shadow-2xl ring-1 ring-white/10">
         {/* Logo + tagline */}
         <div className="flex flex-col items-center gap-3 text-center">
           <img
@@ -375,13 +375,15 @@ export default function TimeClock() {
             data-testid="img-paylink-logo"
           />
           <h1
-            className="text-3xl font-extrabold tracking-tight text-white drop-shadow-lg leading-tight"
+            className="text-3xl font-extrabold tracking-tight text-white leading-tight"
+            style={{ textShadow: "0 2px 12px rgba(0,0,0,0.9)" }}
             data-testid="text-timeclock-h1"
           >
             One Platform.<br />Total Business Control.
           </h1>
           <h2
-            className="text-sm font-medium text-white/75 leading-relaxed max-w-xs drop-shadow"
+            className="text-sm font-medium text-white/90 leading-relaxed max-w-xs"
+            style={{ textShadow: "0 1px 6px rgba(0,0,0,0.8)" }}
             data-testid="text-timeclock-h2"
           >
             Manage your team, finances, and operations with powerful, integrated tools built to scale.
