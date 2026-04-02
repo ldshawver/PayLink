@@ -413,18 +413,8 @@ function EditWorkerDialog({ worker, onClose }: { worker: Worker; onClose: () => 
 
   const linkedAccount = allUsers?.find(u => u.workerId === worker.id) ?? null;
 
-  // Auto-generate username: YY (2-digit hire year) + NN (2-digit sequence)
-  const suggestedUsername = (() => {
-    const hireDate = worker.hireDate || new Date().toISOString().split("T")[0];
-    const yy = String(new Date(hireDate + "T12:00:00").getFullYear()).slice(-2);
-    const prefix = yy;
-    const existing = (allUsers || [])
-      .filter(u => u.companyId === worker.companyId && u.username.startsWith(prefix))
-      .map(u => parseInt(u.username.slice(2), 10))
-      .filter(n => !isNaN(n));
-    const next = existing.length > 0 ? Math.max(...existing) + 1 : 1;
-    return `${prefix}${String(next).padStart(2, "0")}`;
-  })();
+  // Login identifier = worker's employee number (set in Employee Info tab)
+  const loginEmployeeNumber = worker.employeeNumber || "";
 
   const form = useForm<WorkerFormValues>({
     resolver: zodResolver(workerFormSchema),
@@ -468,8 +458,9 @@ function EditWorkerDialog({ worker, onClose }: { worker: Worker; onClose: () => 
   const createAccount = useMutation({
     mutationFn: async () => {
       if (!newPassword) throw new Error("Password is required");
+      if (!loginEmployeeNumber) throw new Error("Employee number must be set before creating a login account");
       await apiRequest("POST", "/api/users", {
-        username: suggestedUsername,
+        username: loginEmployeeNumber,
         password: newPassword,
         role: newRole,
         companyId: worker.companyId,
@@ -480,7 +471,7 @@ function EditWorkerDialog({ worker, onClose }: { worker: Worker; onClose: () => 
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
       setNewPassword("");
-      toast({ title: "Account created", description: `Username: ${suggestedUsername}` });
+      toast({ title: "Account created", description: `Employee #${loginEmployeeNumber} can now log in` });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -557,7 +548,7 @@ function EditWorkerDialog({ worker, onClose }: { worker: Worker; onClose: () => 
               <div className="rounded-md border bg-muted/30 p-4 space-y-2">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Username</p>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Employee Number</p>
                     <p className="text-lg font-mono font-semibold">{linkedAccount.username}</p>
                   </div>
                   <Badge variant={linkedAccount.isActive ? "default" : "secondary"}>
@@ -607,14 +598,15 @@ function EditWorkerDialog({ worker, onClose }: { worker: Worker; onClose: () => 
 
               <div className="space-y-3">
                 <div className="space-y-1">
-                  <Label>Username <span className="text-muted-foreground text-xs">(auto-generated)</span></Label>
-                  <div className="flex items-center gap-2">
-                    <Input value={suggestedUsername} readOnly className="font-mono bg-muted/50" data-testid="input-suggested-username" />
-                    <Badge variant="outline" className="shrink-0 text-xs">
-                      {worker.hireDate ? new Date(worker.hireDate + "T12:00:00").getFullYear() : "Year"} hire
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground">Format: 2-digit year + 2-digit sequence (e.g. 2501 = 1st hire of 2025)</p>
+                  <Label>Employee Number <span className="text-muted-foreground text-xs">(login identifier)</span></Label>
+                  {loginEmployeeNumber ? (
+                    <Input value={loginEmployeeNumber} readOnly className="font-mono bg-muted/50" data-testid="input-suggested-username" />
+                  ) : (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+                      No employee number assigned yet. Set one in the Employee Info tab first.
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground">Employee number is used as the login ID</p>
                 </div>
 
                 <div className="space-y-1">
@@ -649,7 +641,7 @@ function EditWorkerDialog({ worker, onClose }: { worker: Worker; onClose: () => 
                 <Button
                   className="w-full"
                   onClick={() => createAccount.mutate()}
-                  disabled={createAccount.isPending || !newPassword}
+                  disabled={createAccount.isPending || !newPassword || !loginEmployeeNumber}
                   data-testid="button-create-account"
                 >
                   {createAccount.isPending ? "Creating..." : "Create Login Account"}
