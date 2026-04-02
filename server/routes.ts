@@ -936,6 +936,22 @@ export async function registerRoutes(
       const company = await storage.getCompany(run.companyId);
       if (!company) return res.status(404).json({ message: "Company not found" });
 
+      // ── Duplicate-period guard ──────────────────────────────────────────────
+      // Block processing if another finalized run already covers this exact period.
+      const conflictRun = (await storage.getPayrollRuns(run.companyId)).find(r =>
+        r.id !== run.id &&
+        (r.status === "processed" || r.status === "paid") &&
+        r.periodStart === run.periodStart &&
+        r.periodEnd === run.periodEnd
+      );
+      if (conflictRun) {
+        return res.status(409).json({
+          message: `Cannot process: a finalized payroll run already exists for this period ` +
+            `(${run.periodStart} – ${run.periodEnd}). Delete or void run #${conflictRun.id.slice(0, 8)} first.`,
+          conflictRunId: conflictRun.id,
+        });
+      }
+
       const entries = await storage.getTimeEntriesByDateRange(
         run.companyId, run.periodStart, run.periodEnd
       );
@@ -2057,6 +2073,22 @@ export async function registerRoutes(
       const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ message: "Company not found" });
 
+      // ── Duplicate-period guard ──────────────────────────────────────────────
+      // Reject if a finalized (processed/paid) run already exists for this
+      // company + period.  The caller must void/delete the existing run first.
+      const existingRunsForPeriod = (await storage.getPayrollRuns(companyId)).filter(r =>
+        (r.status === "processed" || r.status === "paid") &&
+        r.periodStart === periodStart &&
+        r.periodEnd === periodEnd
+      );
+      if (existingRunsForPeriod.length > 0) {
+        return res.status(409).json({
+          message: `A finalized payroll run already exists for this company and pay period (${periodStart} – ${periodEnd}). ` +
+            `Delete or void run #${existingRunsForPeriod[0].id.slice(0, 8)} before running payroll again for this period.`,
+          conflictRunId: existingRunsForPeriod[0].id,
+        });
+      }
+
       const entries = await storage.getTimeEntriesByDateRange(companyId, periodStart, periodEnd);
       const allWorkers = await storage.getWorkers(companyId);
       const activeWorkers = allWorkers.filter(w => w.isActive);
@@ -2208,6 +2240,7 @@ export async function registerRoutes(
         companyId,
         periodStart,
         periodEnd,
+        payDate: previewPayDate || null,
         status: "processed",
         totalGross: totalGross.toFixed(2),
         totalNet: totalNet.toFixed(2),

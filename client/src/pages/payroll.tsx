@@ -102,7 +102,13 @@ function ProcessPayrollTab() {
       setFormData({ companyId: "", payDate: nextWednesday() });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      // Try to extract the JSON body message from throwIfResNotOk format "STATUS: {json}"
+      let description = err.message;
+      const jsonStart = description.indexOf("{");
+      if (jsonStart !== -1) {
+        try { description = JSON.parse(description.slice(jsonStart)).message || description; } catch { /* keep raw */ }
+      }
+      toast({ title: "Payroll Error", description, variant: "destructive" });
     },
   });
 
