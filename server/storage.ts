@@ -2550,11 +2550,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ── Payroll Reimbursement Items ───────────────────────────────────────
-  async getPayrollReimbursementItems(workerId?: string, payrollRunId?: string, status?: string): Promise<PayrollReimbursementItem[]> {
+  async getPayrollReimbursementItems(workerId?: string, payrollRunId?: string, status?: string, expenseId?: string): Promise<PayrollReimbursementItem[]> {
     const conds: any[] = [];
     if (workerId) conds.push(eq(payrollReimbursementItems.workerId, workerId));
     if (payrollRunId) conds.push(eq(payrollReimbursementItems.payrollRunId, payrollRunId));
     if (status) conds.push(eq(payrollReimbursementItems.status, status));
+    if (expenseId) conds.push(eq(payrollReimbursementItems.expenseId, expenseId));
     const q = conds.length > 0 ? db.select().from(payrollReimbursementItems).where(and(...conds)) : db.select().from(payrollReimbursementItems);
     return q.orderBy(desc(payrollReimbursementItems.createdAt));
   }

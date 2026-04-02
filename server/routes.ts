@@ -3938,16 +3938,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       });
 
       if (expense.reimbursementRequested) {
-        await storage.createPayrollReimbursementItem({
-          expenseId: expense.id,
-          workerId: expense.submitterId,
-          companyId: expense.companyId,
-          amount: expense.amount,
-          isTaxable: false,
-          description: `Reimbursement: ${expense.vendor || expense.categoryName || "Expense"} - ${expense.expenseDate}`,
-          status: "pending",
-        });
-        await storage.updateExpense(req.params.id, { reimbursementStatus: "queued" });
+        // Idempotency guard: never create a second reimbursement item for the same expense
+        const existing = await storage.getPayrollReimbursementItems(undefined, undefined, undefined, expense.id);
+        if (existing.length === 0) {
+          await storage.createPayrollReimbursementItem({
+            expenseId: expense.id,
+            workerId: expense.submitterId,
+            companyId: expense.companyId,
+            amount: expense.amount,
+            isTaxable: false,
+            description: `Reimbursement: ${expense.vendor || expense.categoryName || "Expense"} - ${expense.expenseDate}`,
+            status: "pending",
+          });
+          await storage.updateExpense(req.params.id, { reimbursementStatus: "queued" });
+        }
       }
 
       res.json(updated);
