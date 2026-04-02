@@ -4311,8 +4311,32 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/payroll-reimbursements/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const r = await storage.updatePayrollReimbursementItem(req.params.id, req.body);
-      if (!r) return res.status(404).json({ message: "Not found" });
+      const existing = await storage.getPayrollReimbursementItem(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+
+      // Prevent re-linking an already-included item to a different run
+      if (
+        existing.status === "included" &&
+        req.body.payrollRunId !== undefined &&
+        req.body.payrollRunId !== existing.payrollRunId
+      ) {
+        return res.status(409).json({
+          message: `This reimbursement is already included in payroll run ${existing.payrollRunId}. ` +
+            `Void or remove it from that run before re-assigning.`,
+        });
+      }
+
+      // Auto-stamp includedInPayrollAt when status transitions to "included"
+      const updates: Record<string, unknown> = { ...req.body };
+      if (req.body.status === "included" && existing.status !== "included") {
+        updates.includedInPayrollAt = new Date();
+      }
+      // Clear the timestamp if status moves back to pending
+      if (req.body.status === "pending" && existing.status === "included") {
+        updates.includedInPayrollAt = null;
+      }
+
+      const r = await storage.updatePayrollReimbursementItem(req.params.id, updates);
       res.json(r);
     } catch (e) { res.status(500).json({ message: "Failed" }); }
   });

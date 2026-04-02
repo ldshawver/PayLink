@@ -2558,6 +2558,10 @@ export class DatabaseStorage implements IStorage {
     const q = conds.length > 0 ? db.select().from(payrollReimbursementItems).where(and(...conds)) : db.select().from(payrollReimbursementItems);
     return q.orderBy(desc(payrollReimbursementItems.createdAt));
   }
+  async getPayrollReimbursementItem(id: string): Promise<PayrollReimbursementItem | undefined> {
+    const [r] = await db.select().from(payrollReimbursementItems).where(eq(payrollReimbursementItems.id, id));
+    return r;
+  }
   async createPayrollReimbursementItem(data: InsertPayrollReimbursementItem): Promise<PayrollReimbursementItem> {
     const [r] = await db.insert(payrollReimbursementItems).values(data).returning();
     return r;
