@@ -175,6 +175,30 @@ async function requireActiveSubscription(req: Request, res: Response, next: Next
   }
 }
 
+// ── YTD deduplication helper ──────────────────────────────────────────────────
+// If multiple finalized runs exist for the same company + pay period, only one
+// should count toward YTD.  Preference order: "paid" > "processed"; within
+// the same status the most recently processed run (latest processedAt) wins.
+type RunLike = { id: string; periodStart: string; periodEnd: string; status: string; processedAt?: Date | string | null; payDate?: string | null };
+function deduplicateByPeriod<T extends RunLike>(runs: T[]): T[] {
+  const best = new Map<string, T>();
+  for (const r of runs) {
+    const key = `${r.periodStart}::${r.periodEnd}`;
+    const prev = best.get(key);
+    if (!prev) { best.set(key, r); continue; }
+    const rankStatus = (s: string) => s === "paid" ? 2 : s === "processed" ? 1 : 0;
+    const rRank = rankStatus(r.status);
+    const pRank = rankStatus(prev.status);
+    if (rRank > pRank) { best.set(key, r); continue; }
+    if (rRank === pRank) {
+      const rAt = r.processedAt ? new Date(r.processedAt).getTime() : 0;
+      const pAt = prev.processedAt ? new Date(prev.processedAt).getTime() : 0;
+      if (rAt > pAt) best.set(key, r);
+    }
+  }
+  return [...best.values()];
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -934,12 +958,15 @@ export async function registerRoutes(
         ? new Date(run.payDate + "T00:00:00").getFullYear()
         : new Date(run.periodStart).getFullYear();
       const ytdFloor = `${ytdYear}-01-01`;
-      const priorRuns = allRuns.filter(r =>
+      const priorRunsRaw = allRuns.filter(r =>
         (r.status === "processed" || r.status === "paid") &&
         r.id !== run.id &&
         r.periodEnd < run.periodStart &&
         r.periodEnd >= ytdFloor
       );
+      // Deduplicate: if multiple processed/paid runs cover the same period, count only one.
+      // Keeps "paid" over "processed"; within same status keeps the latest processedAt.
+      const priorRuns = deduplicateByPeriod(priorRunsRaw);
 
       for (const worker of activeWorkers) {
         let ytdGross = 0, ytdDeductions = 0, ytdNet = 0;
@@ -2045,11 +2072,12 @@ export async function registerRoutes(
         ? new Date(previewPayDate + "T00:00:00").getFullYear()
         : new Date(periodStart).getFullYear();
       const previewYtdFloor = `${previewYtdYear}-01-01`;
-      const priorRuns = allRuns.filter(r =>
+      const priorRunsRaw = allRuns.filter(r =>
         (r.status === "processed" || r.status === "paid") &&
         r.periodEnd < periodStart &&
         r.periodEnd >= previewYtdFloor
       );
+      const priorRuns = deduplicateByPeriod(priorRunsRaw);
       const existingYtdByWorker: Record<string, { gross: number; deductions: number; net: number }> = {};
       for (const worker of activeWorkers) {
         let ytdGross = 0, ytdDeductions = 0, ytdNet = 0;
