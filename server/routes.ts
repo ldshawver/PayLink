@@ -928,10 +928,17 @@ export async function registerRoutes(
       const existingYtdByWorker: Record<string, { gross: number; deductions: number; net: number }> = {};
 
       const allRuns = await storage.getPayrollRuns(run.companyId);
-      const currentYear = new Date(run.periodStart).getFullYear();
+      // YTD year is anchored to the payDate (check date) — falls back to periodStart year.
+      // YTD floor is Jan 1 of that year so cross-year periods (e.g. Dec 29 – Jan 4) are handled correctly.
+      const ytdYear = run.payDate
+        ? new Date(run.payDate + "T00:00:00").getFullYear()
+        : new Date(run.periodStart).getFullYear();
+      const ytdFloor = `${ytdYear}-01-01`;
       const priorRuns = allRuns.filter(r =>
-        r.status !== "draft" && r.id !== run.id && r.periodEnd < run.periodStart &&
-        new Date(r.periodEnd).getFullYear() === currentYear
+        (r.status === "processed" || r.status === "paid") &&
+        r.id !== run.id &&
+        r.periodEnd < run.periodStart &&
+        r.periodEnd >= ytdFloor
       );
 
       for (const worker of activeWorkers) {
@@ -1373,16 +1380,19 @@ export async function registerRoutes(
       const { companyId } = req.body;
       if (!companyId) return res.status(400).json({ message: "companyId required" });
       const allRuns = (await storage.getPayrollRuns(companyId))
-        .filter(r => r.status === "processed")
+        .filter(r => r.status === "processed" || r.status === "paid")
         .sort((a, b) => a.periodStart.localeCompare(b.periodStart));
 
-      // Build year-scoped cumulative ytd per worker
+      // Build year-scoped cumulative ytd per worker.
+      // Anchor YTD year to payDate (check date) when available; fall back to periodStart year.
       const ytdByWorkerYear: Record<string, number> = {};
       const ytdNetByWorkerYear: Record<string, number> = {};
       let updatedCount = 0;
 
       for (const run of allRuns) {
-        const year = new Date(run.periodStart).getFullYear();
+        const year = run.payDate
+          ? new Date(run.payDate + "T00:00:00").getFullYear()
+          : new Date(run.periodStart).getFullYear();
         const items = await storage.getPayrollItems(run.id);
         for (const item of items) {
           const key = `${item.workerId}:${year}`;
@@ -2029,10 +2039,16 @@ export async function registerRoutes(
       }
 
       const allRuns = await storage.getPayrollRuns(companyId);
-      const runYear = new Date(periodStart).getFullYear();
+      // YTD year anchored to payDate if provided, otherwise periodStart year.
+      const previewPayDate = req.body?.payDate as string | undefined;
+      const previewYtdYear = previewPayDate
+        ? new Date(previewPayDate + "T00:00:00").getFullYear()
+        : new Date(periodStart).getFullYear();
+      const previewYtdFloor = `${previewYtdYear}-01-01`;
       const priorRuns = allRuns.filter(r =>
-        r.status !== "draft" && r.periodEnd < periodStart &&
-        new Date(r.periodEnd).getFullYear() === runYear
+        (r.status === "processed" || r.status === "paid") &&
+        r.periodEnd < periodStart &&
+        r.periodEnd >= previewYtdFloor
       );
       const existingYtdByWorker: Record<string, { gross: number; deductions: number; net: number }> = {};
       for (const worker of activeWorkers) {

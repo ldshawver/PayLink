@@ -453,8 +453,15 @@ function StubSummarySection({
               <div style={{ fontSize: "7px", color: "#333" }}>{company.name}{company.ein ? ` — EIN: ${company.ein}` : ""}</div>
             </div>
             <div style={{ textAlign: "right", fontSize: "6px" }}>
-              {config.showPayPeriod && <div>Pay Period: {run.periodStart.slice(0, 10)} – {run.periodEnd.slice(0, 10)}</div>}
-              {run.processedAt && <div>Pay Date: {new Date(run.processedAt).toLocaleDateString()}</div>}
+              {config.showPayPeriod && (
+                <>
+                  <div>Pay Period Start: {run.periodStart.slice(0, 10)}</div>
+                  <div>Pay Period End: {run.periodEnd.slice(0, 10)}</div>
+                </>
+              )}
+              <div style={{ fontWeight: "bold" }}>Pay Date: {run.payDate
+                ? new Date(run.payDate + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+                : run.processedAt ? new Date(run.processedAt).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "—"}</div>
             </div>
           </div>
           {isContractor && (
@@ -658,8 +665,9 @@ function StubDetailSection({
           <div style={{ marginTop: "2px" }}>SSN: {ssnDisplay}</div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div><span style={{ fontWeight: "bold" }}>Pay Period:</span> {fmtDate(run.periodStart)} — {fmtDate(run.periodEnd)}</div>
-          {run.processedAt && <div><span style={{ fontWeight: "bold" }}>Pay Date:</span> {fmtDate(new Date(run.processedAt).toISOString().split('T')[0])}</div>}
+          <div><span style={{ fontWeight: "bold" }}>Pay Period Start:</span> {fmtDate(run.periodStart)}</div>
+          <div><span style={{ fontWeight: "bold" }}>Pay Period End:</span> {fmtDate(run.periodEnd)}</div>
+          <div><span style={{ fontWeight: "bold" }}>Pay Date:</span> {run.payDate ? fmtDate(run.payDate) : run.processedAt ? fmtDate(new Date(run.processedAt).toISOString().split('T')[0]) : '—'}</div>
           <div style={{ marginTop: "2px" }}>
             <span style={{ fontWeight: "bold" }}>Payment:</span>{' '}
             {paymentMethodLabel}{paymentPlatformLabel ? ` — ${paymentPlatformLabel}` : ''}
@@ -906,9 +914,14 @@ function StubPortion({
 
       {config.showPayPeriod && (
         <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "2px solid #000", paddingBottom: "4px", marginBottom: "8px" }}>
-          <div><strong>Pay Period:</strong> {run.periodStart} to {run.periodEnd}</div>
-          {config.showCheckNumber && <div><strong>Check #:</strong> {item.checkNumber || "—"}</div>}
-          <div><strong>Pay Date:</strong> {run.processedAt ? new Date(run.processedAt).toLocaleDateString() : "—"}</div>
+          <div>
+            <div><strong>Pay Period Start:</strong> {run.periodStart ? new Date(run.periodStart + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "—"}</div>
+            <div><strong>Pay Period End:</strong> {run.periodEnd ? new Date(run.periodEnd + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "—"}</div>
+          </div>
+          {config.showCheckNumber && <div style={{ alignSelf: "center" }}><strong>Check #:</strong> {item.checkNumber || "—"}</div>}
+          <div style={{ alignSelf: "center" }}><strong>Pay Date:</strong> {run.payDate
+            ? new Date(run.payDate + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+            : run.processedAt ? new Date(run.processedAt).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "—"}</div>
         </div>
       )}
 
