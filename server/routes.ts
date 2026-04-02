@@ -539,6 +539,18 @@ export async function registerRoutes(
       if (req.body.workerType === "employee") {
         req.body.contractorType = null;
       }
+      // Auto-generate employee number if not provided
+      if (!req.body.employeeNumber) {
+        const allWorkers = await storage.getWorkers();
+        const companyWorkers = req.body.companyId
+          ? allWorkers.filter((w: any) => w.companyId === req.body.companyId)
+          : allWorkers;
+        const existing = companyWorkers
+          .map((w: any) => parseInt(w.employeeNumber || "0", 10))
+          .filter((n: number) => !isNaN(n) && n > 0);
+        const next = existing.length > 0 ? Math.max(...existing) + 1 : 1001;
+        req.body.employeeNumber = String(next);
+      }
       const worker = await storage.createWorker(req.body);
       res.status(201).json(worker);
     } catch (error) {

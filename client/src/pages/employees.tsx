@@ -16,6 +16,7 @@ import {
   Pencil,
   Trash2,
   Building2,
+  AlertTriangle,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -83,6 +84,8 @@ const workerFormSchema = z.object({
   state: z.string().optional(),
   zip: z.string().optional(),
   ssn: z.string().optional(),
+  employeeNumber: z.string().optional(),
+  pin: z.string().optional(),
 });
 
 type WorkerFormValues = z.infer<typeof workerFormSchema>;
@@ -294,6 +297,34 @@ function WorkerFormFields({ form, companies }: { form: any; companies: Company[]
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <FormField
           control={form.control}
+          name="employeeNumber"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Employee Number <span className="text-muted-foreground text-xs">(auto-assigned if blank)</span></FormLabel>
+              <FormControl>
+                <Input {...field} placeholder="e.g. 1003" data-testid="input-employee-number" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="pin"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Time Clock PIN <span className="text-muted-foreground text-xs">(for clock-in)</span></FormLabel>
+              <FormControl>
+                <Input type="password" {...field} placeholder="4-digit PIN" maxLength={8} data-testid="input-pin-create" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <FormField
+          control={form.control}
           name="address"
           render={({ field }) => (
             <FormItem>
@@ -391,6 +422,8 @@ function EditWorkerDialog({ worker, onClose }: { worker: Worker; onClose: () => 
       state: worker.state || "",
       zip: worker.zip || "",
       ssn: worker.ssn || "",
+      employeeNumber: worker.employeeNumber || "",
+      pin: worker.pin || "",
     },
   });
 
@@ -408,11 +441,26 @@ function EditWorkerDialog({ worker, onClose }: { worker: Worker; onClose: () => 
     },
   });
 
+  const missingPin = !worker.pin;
+  const missingEmpNum = !worker.employeeNumber;
+
   return (
     <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
       <DialogHeader>
         <DialogTitle>Edit Worker</DialogTitle>
       </DialogHeader>
+      {(missingPin || missingEmpNum) && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 p-3 flex gap-2 text-sm text-amber-800 dark:text-amber-300">
+          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium">This employee can't clock in yet</p>
+            <ul className="mt-1 list-disc list-inside space-y-0.5 text-amber-700 dark:text-amber-400">
+              {missingEmpNum && <li>No employee number — will be auto-assigned on next save</li>}
+              {missingPin && <li>No PIN set — required for time clock access</li>}
+            </ul>
+          </div>
+        </div>
+      )}
       <Form {...form}>
         <form onSubmit={form.handleSubmit((data) => updateWorker.mutate(data))} className="space-y-4">
           <WorkerFormFields form={form} companies={companies} />
@@ -618,6 +666,8 @@ function AddWorkerDialog() {
       state: "",
       zip: "",
       ssn: "",
+      employeeNumber: "",
+      pin: "",
     },
   });
 
