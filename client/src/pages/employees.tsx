@@ -17,12 +17,18 @@ import {
   Trash2,
   Building2,
   AlertTriangle,
+  Shield,
+  Eye,
+  EyeOff,
+  CheckCircle2,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -397,10 +403,28 @@ function WorkerFormFields({ form, companies }: { form: any; companies: Company[]
 
 function EditWorkerDialog({ worker, onClose }: { worker: Worker; onClose: () => void }) {
   const { toast } = useToast();
+  const [tab, setTab] = useState("info");
+  const [showPassword, setShowPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [newRole, setNewRole] = useState("employee");
 
-  const { data: companies } = useQuery<Company[]>({
-    queryKey: ["/api/companies"],
-  });
+  const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: allUsers } = useQuery<any[]>({ queryKey: ["/api/users"] });
+
+  const linkedAccount = allUsers?.find(u => u.workerId === worker.id) ?? null;
+
+  // Auto-generate username: YY (2-digit hire year) + NN (2-digit sequence)
+  const suggestedUsername = (() => {
+    const hireDate = worker.hireDate || new Date().toISOString().split("T")[0];
+    const yy = String(new Date(hireDate + "T12:00:00").getFullYear()).slice(-2);
+    const prefix = yy;
+    const existing = (allUsers || [])
+      .filter(u => u.companyId === worker.companyId && u.username.startsWith(prefix))
+      .map(u => parseInt(u.username.slice(2), 10))
+      .filter(n => !isNaN(n));
+    const next = existing.length > 0 ? Math.max(...existing) + 1 : 1;
+    return `${prefix}${String(next).padStart(2, "0")}`;
+  })();
 
   const form = useForm<WorkerFormValues>({
     resolver: zodResolver(workerFormSchema),
@@ -441,39 +465,200 @@ function EditWorkerDialog({ worker, onClose }: { worker: Worker; onClose: () => 
     },
   });
 
+  const createAccount = useMutation({
+    mutationFn: async () => {
+      if (!newPassword) throw new Error("Password is required");
+      await apiRequest("POST", "/api/users", {
+        username: suggestedUsername,
+        password: newPassword,
+        role: newRole,
+        companyId: worker.companyId,
+        workerId: worker.id,
+        isActive: true,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      setNewPassword("");
+      toast({ title: "Account created", description: `Username: ${suggestedUsername}` });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const resetPassword = useMutation({
+    mutationFn: async () => {
+      if (!linkedAccount) return;
+      if (!newPassword) throw new Error("New password is required");
+      await apiRequest("PATCH", `/api/users/${linkedAccount.id}`, { password: newPassword });
+    },
+    onSuccess: () => {
+      setNewPassword("");
+      toast({ title: "Password updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deactivateAccount = useMutation({
+    mutationFn: async () => {
+      if (!linkedAccount) return;
+      await apiRequest("PATCH", `/api/users/${linkedAccount.id}`, { isActive: !linkedAccount.isActive });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      toast({ title: linkedAccount?.isActive ? "Account deactivated" : "Account activated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const missingPin = !worker.pin;
   const missingEmpNum = !worker.employeeNumber;
 
   return (
-    <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+    <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
       <DialogHeader>
-        <DialogTitle>Edit Worker</DialogTitle>
+        <DialogTitle>{worker.firstName} {worker.lastName}</DialogTitle>
       </DialogHeader>
-      {(missingPin || missingEmpNum) && (
-        <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 p-3 flex gap-2 text-sm text-amber-800 dark:text-amber-300">
-          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-          <div>
-            <p className="font-medium">This employee can't clock in yet</p>
-            <ul className="mt-1 list-disc list-inside space-y-0.5 text-amber-700 dark:text-amber-400">
-              {missingEmpNum && <li>No employee number — will be auto-assigned on next save</li>}
-              {missingPin && <li>No PIN set — required for time clock access</li>}
-            </ul>
-          </div>
-        </div>
-      )}
-      <Form {...form}>
-        <form onSubmit={form.handleSubmit((data) => updateWorker.mutate(data))} className="space-y-4">
-          <WorkerFormFields form={form} companies={companies} />
-          <Button
-            type="submit"
-            className="w-full"
-            disabled={updateWorker.isPending}
-            data-testid="button-submit-edit-worker"
-          >
-            {updateWorker.isPending ? "Saving..." : "Save Changes"}
-          </Button>
-        </form>
-      </Form>
+
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList className="w-full">
+          <TabsTrigger value="info" className="flex-1" data-testid="tab-edit-info">Employee Info</TabsTrigger>
+          <TabsTrigger value="account" className="flex-1" data-testid="tab-edit-account">
+            <Shield className="h-3.5 w-3.5 mr-1" />User Account
+            {linkedAccount && <CheckCircle2 className="h-3 w-3 ml-1 text-green-500" />}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="info" className="mt-4 space-y-4">
+          {(missingPin || missingEmpNum) && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 p-3 flex gap-2 text-sm text-amber-800 dark:text-amber-300">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium">This employee can't clock in yet</p>
+                <ul className="mt-1 list-disc list-inside space-y-0.5 text-amber-700 dark:text-amber-400">
+                  {missingEmpNum && <li>No employee number — will be auto-assigned on save</li>}
+                  {missingPin && <li>No PIN set — required for time clock access</li>}
+                </ul>
+              </div>
+            </div>
+          )}
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit((data) => updateWorker.mutate(data))} className="space-y-4">
+              <WorkerFormFields form={form} companies={companies} />
+              <Button type="submit" className="w-full" disabled={updateWorker.isPending} data-testid="button-submit-edit-worker">
+                {updateWorker.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </form>
+          </Form>
+        </TabsContent>
+
+        <TabsContent value="account" className="mt-4 space-y-4">
+          {linkedAccount ? (
+            <div className="space-y-4">
+              <div className="rounded-md border bg-muted/30 p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Username</p>
+                    <p className="text-lg font-mono font-semibold">{linkedAccount.username}</p>
+                  </div>
+                  <Badge variant={linkedAccount.isActive ? "default" : "secondary"}>
+                    {linkedAccount.isActive ? "Active" : "Inactive"}
+                  </Badge>
+                </div>
+                <div className="text-sm text-muted-foreground">Role: <span className="capitalize font-medium text-foreground">{linkedAccount.role}</span></div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Reset Password</Label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Input
+                      type={showPassword ? "text" : "password"}
+                      placeholder="New password"
+                      value={newPassword}
+                      onChange={e => setNewPassword(e.target.value)}
+                      data-testid="input-reset-password"
+                    />
+                    <Button type="button" variant="ghost" size="icon" className="absolute right-0 top-0 h-full px-2"
+                      onClick={() => setShowPassword(p => !p)}>
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                  <Button onClick={() => resetPassword.mutate()} disabled={resetPassword.isPending || !newPassword} data-testid="button-reset-password">
+                    Update
+                  </Button>
+                </div>
+              </div>
+
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => deactivateAccount.mutate()}
+                disabled={deactivateAccount.isPending}
+                data-testid="button-toggle-account-active"
+              >
+                {linkedAccount.isActive ? "Deactivate Account" : "Reactivate Account"}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">
+                No login account exists for this employee yet.
+              </div>
+
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <Label>Username <span className="text-muted-foreground text-xs">(auto-generated)</span></Label>
+                  <div className="flex items-center gap-2">
+                    <Input value={suggestedUsername} readOnly className="font-mono bg-muted/50" data-testid="input-suggested-username" />
+                    <Badge variant="outline" className="shrink-0 text-xs">
+                      {worker.hireDate ? new Date(worker.hireDate + "T12:00:00").getFullYear() : "Year"} hire
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Format: 2-digit year + 2-digit sequence (e.g. 2501 = 1st hire of 2025)</p>
+                </div>
+
+                <div className="space-y-1">
+                  <Label>Password</Label>
+                  <div className="relative">
+                    <Input
+                      type={showPassword ? "text" : "password"}
+                      placeholder="Set initial password"
+                      value={newPassword}
+                      onChange={e => setNewPassword(e.target.value)}
+                      data-testid="input-account-password"
+                    />
+                    <Button type="button" variant="ghost" size="icon" className="absolute right-0 top-0 h-full px-2"
+                      onClick={() => setShowPassword(p => !p)}>
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <Label>Role</Label>
+                  <Select value={newRole} onValueChange={setNewRole}>
+                    <SelectTrigger data-testid="select-account-role"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="employee">Employee</SelectItem>
+                      <SelectItem value="manager">Manager</SelectItem>
+                      <SelectItem value="admin">Admin</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <Button
+                  className="w-full"
+                  onClick={() => createAccount.mutate()}
+                  disabled={createAccount.isPending || !newPassword}
+                  data-testid="button-create-account"
+                >
+                  {createAccount.isPending ? "Creating..." : "Create Login Account"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </DialogContent>
   );
 }
