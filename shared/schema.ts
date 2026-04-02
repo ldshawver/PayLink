@@ -1928,6 +1928,7 @@ export const invoices = pgTable("invoices", {
   viewedAt: timestamp("viewed_at"),
   paidAt: timestamp("paid_at"),
   voidedAt: timestamp("voided_at"),
+  templateStyle: text("template_style").default("modern_clean"),
   createdBy: varchar("created_by"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

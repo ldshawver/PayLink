@@ -1374,6 +1374,8 @@ app.use((req, res, next) => {
     }
     await run("payroll_items.company_check_unique", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_payroll_items_company_check ON payroll_items(company_id, check_number) WHERE check_number IS NOT NULL AND company_id IS NOT NULL`);
 
+    await run("invoices.template_style", sql`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS template_style TEXT DEFAULT 'modern_clean'`);
+
     // Staff Messaging tables
     await run("staff_messages table", sql`CREATE TABLE IF NOT EXISTS staff_messages (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

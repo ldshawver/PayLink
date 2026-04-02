@@ -18,9 +18,113 @@ import {
   Plus, Search, Edit, Trash2, FileText, DollarSign, Send, Eye, Loader2,
   CalendarDays, Clock, CheckCircle, AlertCircle, XCircle, Copy, Link2,
   CreditCard, Building2, Zap, ArrowRight, Settings, Info, Sparkles,
-  TrendingDown, Shield,
+  TrendingDown, Shield, Palette,
 } from "lucide-react";
-import type { Invoice, Customer } from "@shared/schema";
+import type { Invoice, Customer, Company } from "@shared/schema";
+
+// ── Invoice Template Styles ─────────────────────────────────────────────────
+const TEMPLATE_STYLES = [
+  {
+    key: "modern_clean",
+    name: "Modern Clean",
+    description: "Teal gradient header, crisp layout",
+    preview: (
+      <div className="w-full h-full flex flex-col text-[6px] leading-tight overflow-hidden">
+        <div className="bg-gradient-to-r from-teal-500 to-blue-500 p-1.5 text-white font-bold">INVOICE</div>
+        <div className="flex-1 p-1 space-y-0.5">
+          <div className="bg-teal-100 h-1 w-3/4 rounded" />
+          <div className="bg-gray-200 h-1 w-1/2 rounded" />
+          <div className="mt-1 border-t border-teal-200 pt-0.5">
+            <div className="bg-gray-100 h-1 w-full rounded" />
+            <div className="bg-gray-100 h-1 w-full rounded mt-0.5" />
+          </div>
+          <div className="flex justify-end mt-1">
+            <div className="bg-teal-500 text-white px-1 py-0.5 rounded text-[5px] font-bold">$0.00</div>
+          </div>
+        </div>
+      </div>
+    ),
+  },
+  {
+    key: "classic",
+    name: "Classic",
+    description: "Navy border, professional look",
+    preview: (
+      <div className="w-full h-full flex flex-col text-[6px] leading-tight overflow-hidden border-l-2 border-blue-900">
+        <div className="p-1.5 border-b-2 border-blue-900">
+          <div className="font-bold text-blue-900">INVOICE</div>
+          <div className="text-gray-500 text-[5px]">Company Name</div>
+        </div>
+        <div className="flex-1 p-1 space-y-0.5">
+          <div className="bg-blue-900 h-1 w-3/4 rounded opacity-30" />
+          <div className="bg-gray-200 h-1 w-1/2 rounded" />
+          <div className="mt-1 space-y-0.5">
+            <div className="bg-gray-100 h-1 w-full rounded" />
+            <div className="bg-gray-100 h-1 w-full rounded" />
+          </div>
+          <div className="flex justify-end mt-1">
+            <div className="border border-blue-900 text-blue-900 px-1 py-0.5 rounded text-[5px] font-bold">$0.00</div>
+          </div>
+        </div>
+      </div>
+    ),
+  },
+  {
+    key: "minimal",
+    name: "Minimal",
+    description: "Clean white, subtle gray lines",
+    preview: (
+      <div className="w-full h-full flex flex-col text-[6px] leading-tight overflow-hidden">
+        <div className="p-1.5">
+          <div className="font-bold text-gray-800 text-[7px]">INVOICE</div>
+        </div>
+        <div className="h-px bg-gray-300 mx-1" />
+        <div className="flex-1 p-1 space-y-0.5">
+          <div className="bg-gray-200 h-1 w-2/3 rounded" />
+          <div className="bg-gray-100 h-1 w-1/2 rounded" />
+          <div className="mt-1 space-y-0.5">
+            <div className="bg-gray-100 h-1 w-full rounded" />
+            <div className="bg-gray-100 h-1 w-full rounded" />
+          </div>
+          <div className="h-px bg-gray-300 mt-1" />
+          <div className="flex justify-end">
+            <div className="text-[5px] font-bold text-gray-800">TOTAL $0.00</div>
+          </div>
+        </div>
+      </div>
+    ),
+  },
+  {
+    key: "bold_accent",
+    name: "Bold Accent",
+    description: "Dark header, high contrast",
+    preview: (
+      <div className="w-full h-full flex flex-col text-[6px] leading-tight overflow-hidden">
+        <div className="bg-gray-900 p-1.5 text-white">
+          <div className="font-bold text-[7px]">INVOICE</div>
+          <div className="text-gray-400 text-[5px]">Company</div>
+        </div>
+        <div className="flex-1 p-1 space-y-0.5">
+          <div className="bg-yellow-400 h-1 w-1/3 rounded" />
+          <div className="bg-gray-200 h-1 w-1/2 rounded mt-0.5" />
+          <div className="mt-1 space-y-0.5">
+            <div className="flex justify-between">
+              <div className="bg-gray-100 h-1 w-3/5 rounded" />
+              <div className="bg-gray-200 h-1 w-1/4 rounded" />
+            </div>
+            <div className="flex justify-between">
+              <div className="bg-gray-100 h-1 w-3/5 rounded" />
+              <div className="bg-gray-200 h-1 w-1/4 rounded" />
+            </div>
+          </div>
+          <div className="flex justify-end mt-1">
+            <div className="bg-gray-900 text-white px-1 py-0.5 rounded text-[5px] font-bold">$0.00</div>
+          </div>
+        </div>
+      </div>
+    ),
+  },
+];
 
 type InvoiceWithItems = Invoice & { lineItems?: any[] };
 
@@ -416,10 +520,11 @@ function PaymentMethodSettings({ companyId }: { companyId: string }) {
   );
 }
 
-function InvoiceForm({ invoice, customers, companyId, onSave, onCancel }: {
+function InvoiceForm({ invoice, customers, companyId, companies = [], onSave, onCancel }: {
   invoice?: InvoiceWithItems;
   customers: Customer[];
   companyId: string;
+  companies?: Company[];
   onSave: (data: any) => void;
   onCancel: () => void;
 }) {
@@ -431,6 +536,8 @@ function InvoiceForm({ invoice, customers, companyId, onSave, onCancel }: {
     dueDate: invoice?.dueDate || "",
     notes: invoice?.notes || "",
     paymentTerms: invoice?.paymentTerms || "net_30",
+    templateStyle: (invoice as any)?.templateStyle || "modern_clean",
+    selectedCompanyId: invoice?.companyId || companyId || "",
   });
 
   const [lineItems, setLineItems] = useState<Array<{ description: string; quantity: string; unitPrice: string; taxable: boolean }>>(
@@ -454,9 +561,17 @@ function InvoiceForm({ invoice, customers, companyId, onSave, onCancel }: {
   const total = subtotal;
 
   const handleSave = () => {
+    const effectiveCompanyId = form.selectedCompanyId || companyId;
     onSave({
-      ...form,
-      companyId,
+      customerId: form.customerId,
+      invoiceNumber: form.invoiceNumber,
+      status: form.status,
+      issueDate: form.issueDate,
+      dueDate: form.dueDate,
+      notes: form.notes,
+      paymentTerms: form.paymentTerms,
+      templateStyle: form.templateStyle,
+      companyId: effectiveCompanyId,
       subtotal: subtotal.toFixed(2),
       taxAmount: "0",
       totalAmount: total.toFixed(2),
@@ -473,7 +588,51 @@ function InvoiceForm({ invoice, customers, companyId, onSave, onCancel }: {
   };
 
   return (
-    <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
+    <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-2">
+
+      {/* Template Style Picker */}
+      <div>
+        <Label className="flex items-center gap-1.5 mb-2"><Palette className="h-4 w-4" /> Template Style</Label>
+        <div className="grid grid-cols-4 gap-2">
+          {TEMPLATE_STYLES.map(tpl => (
+            <button
+              key={tpl.key}
+              type="button"
+              onClick={() => setForm({ ...form, templateStyle: tpl.key })}
+              data-testid={`button-template-${tpl.key}`}
+              className={`rounded-lg border-2 p-0 overflow-hidden transition-all cursor-pointer text-left ${
+                form.templateStyle === tpl.key
+                  ? "border-teal-500 shadow-md shadow-teal-200 dark:shadow-teal-900/30"
+                  : "border-muted hover:border-muted-foreground/40"
+              }`}
+            >
+              <div className="h-20 w-full bg-white dark:bg-gray-50">{tpl.preview}</div>
+              <div className="px-1.5 py-1 bg-background border-t">
+                <div className="text-xs font-semibold truncate">{tpl.name}</div>
+                <div className="text-[10px] text-muted-foreground truncate leading-tight">{tpl.description}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Company selector — shown when admin has no assigned company */}
+      {companies.length > 0 && (
+        <div>
+          <Label>Company *</Label>
+          <Select value={form.selectedCompanyId} onValueChange={v => setForm({ ...form, selectedCompanyId: v })}>
+            <SelectTrigger data-testid="select-invoice-company">
+              <SelectValue placeholder="Select company" />
+            </SelectTrigger>
+            <SelectContent>
+              {companies.map(c => (
+                <SelectItem key={c.id} value={c.id} data-testid={`option-company-${c.id}`}>{c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label>Customer *</Label>
@@ -591,7 +750,11 @@ function InvoiceForm({ invoice, customers, companyId, onSave, onCancel }: {
 
       <DialogFooter>
         <Button variant="outline" onClick={onCancel} data-testid="button-cancel-invoice">Cancel</Button>
-        <Button onClick={handleSave} disabled={!form.customerId || !form.invoiceNumber || !form.dueDate} data-testid="button-save-invoice">
+        <Button
+          onClick={handleSave}
+          disabled={!form.invoiceNumber || !form.dueDate || !(form.selectedCompanyId || companyId)}
+          data-testid="button-save-invoice"
+        >
           {invoice?.id ? "Update" : "Create"} Invoice
         </Button>
       </DialogFooter>
@@ -618,8 +781,26 @@ export default function InvoicesPage() {
   const [editing, setEditing] = useState<InvoiceWithItems | undefined>();
   const [activeTab, setActiveTab] = useState("invoices");
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
+  const [adminCompanyId, setAdminCompanyId] = useState<string>("");
 
-  const companyId = user?.companyId;
+  const userCompanyId = user?.companyId;
+  const isAdminWithoutCompany = user?.role === "admin" && !userCompanyId;
+
+  // For admins without an assigned company, fetch all companies and let them pick
+  const { data: allCompanies = [] } = useQuery<Company[]>({
+    queryKey: ["/api/companies"],
+    enabled: isAdminWithoutCompany,
+  });
+
+  // Effective company ID for queries — user's own, or admin's selected company
+  const companyId = userCompanyId || adminCompanyId || allCompanies[0]?.id || "";
+
+  // Auto-select first company for admin
+  useEffect(() => {
+    if (isAdminWithoutCompany && allCompanies.length > 0 && !adminCompanyId) {
+      setAdminCompanyId(allCompanies[0].id);
+    }
+  }, [isAdminWithoutCompany, allCompanies, adminCompanyId]);
 
   const { data: invoices = [], isLoading } = useQuery<Invoice[]>({
     queryKey: [`/api/invoices?companyId=${companyId}`],
@@ -631,10 +812,14 @@ export default function InvoicesPage() {
     enabled: !!companyId,
   });
 
+  const invalidateInvoices = () => {
+    queryClient.invalidateQueries({ queryKey: [`/api/invoices?companyId=${companyId}`] });
+  };
+
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/invoices", data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [`/api/invoices?companyId=${companyId}`] });
+      invalidateInvoices();
       toast({ title: "Invoice created" });
       setDialogOpen(false);
     },
@@ -644,7 +829,7 @@ export default function InvoicesPage() {
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => apiRequest("PATCH", `/api/invoices/${id}`, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [`/api/invoices?companyId=${companyId}`] });
+      invalidateInvoices();
       toast({ title: "Invoice updated" });
       setDialogOpen(false);
       setEditing(undefined);
@@ -655,7 +840,7 @@ export default function InvoicesPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/invoices/${id}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [`/api/invoices?companyId=${companyId}`] });
+      invalidateInvoices();
       toast({ title: "Invoice deleted" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -714,9 +899,23 @@ export default function InvoicesPage() {
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Invoicing</h1>
           <p className="text-muted-foreground">Create and manage invoices with multiple payment methods</p>
         </div>
-        <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-create-invoice" className="w-full sm:w-auto">
-          <Plus className="h-4 w-4 mr-2" /> New Invoice
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {isAdminWithoutCompany && allCompanies.length > 0 && (
+            <Select value={adminCompanyId} onValueChange={setAdminCompanyId}>
+              <SelectTrigger className="w-[200px]" data-testid="select-admin-company">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {allCompanies.map(c => (
+                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-create-invoice" className="w-full sm:w-auto">
+            <Plus className="h-4 w-4 mr-2" /> New Invoice
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -897,6 +1096,7 @@ export default function InvoicesPage() {
             invoice={editing}
             customers={customers}
             companyId={companyId || ""}
+            companies={isAdminWithoutCompany ? allCompanies : []}
             onSave={data => {
               if (editing?.id) {
                 updateMutation.mutate({ id: editing.id, data });
