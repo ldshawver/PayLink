@@ -211,7 +211,7 @@ function CheckPortion({
           </div>
 
           {/* Right: check number in bordered box + date + void notice + institution */}
-          <div style={{ textAlign: "right" }}>
+          <div style={{ textAlign: "right", minWidth: "1.4in" }}>
             {config.showCheckNumber && (
               <div style={{
                 border: "1.5px solid #000",
@@ -220,15 +220,37 @@ function CheckPortion({
                 fontSize: "13px",
                 fontWeight: "700",
                 letterSpacing: "0.5px",
-                marginBottom: "5px",
-                minWidth: "1.1in",
+                marginBottom: "6px",
+                minWidth: "1.4in",
                 display: "inline-block",
+                boxSizing: "border-box",
               }}>
                 No. {checkNum}
               </div>
             )}
-            <div style={{ fontSize: "11px", fontWeight: "600" }}>DATE: {checkDate}</div>
-            <div style={{ fontSize: "8px", color: "#777", fontStyle: "italic", marginTop: "2px" }}>VOID AFTER 90 DAYS</div>
+            <div style={{
+              fontSize: "9px",
+              fontWeight: "700",
+              letterSpacing: "0.4px",
+              color: "#333",
+              marginBottom: "1px",
+              textAlign: "right",
+            }}>
+              DATE
+            </div>
+            <div style={{
+              fontSize: "11px",
+              fontWeight: "600",
+              borderBottom: "1.5px solid #000",
+              paddingBottom: "2px",
+              minWidth: "1.4in",
+              display: "inline-block",
+              textAlign: "center",
+              boxSizing: "border-box",
+            }}>
+              {checkDate}
+            </div>
+            <div style={{ fontSize: "8px", color: "#777", fontStyle: "italic", marginTop: "3px" }}>VOID AFTER 90 DAYS</div>
             {institutionName && (
               <div style={{ fontSize: "8px", color: "#555", marginTop: "3px", fontWeight: "600", letterSpacing: "0.3px" }}>{institutionName}</div>
             )}
@@ -259,12 +281,13 @@ function CheckPortion({
             padding: "4px 10px 4px 8px",
             fontSize: "16px",
             fontWeight: "700",
-            minWidth: "1.25in",
+            minWidth: "1.4in",
             textAlign: "right",
             letterSpacing: "0.5px",
             whiteSpace: "nowrap",
             fontFamily: "'Courier New', Courier, monospace",
             flexShrink: 0,
+            boxSizing: "border-box",
           }}>
             ${fmt(netPay)}
           </div>

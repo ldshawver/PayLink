@@ -230,7 +230,12 @@ function ProcessPayrollTab() {
 
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3 flex-wrap">
-          <Select value={companyFilter} onValueChange={v => { setCompanyFilter(v); setWorkerFilter("all"); if (v !== "all") setShowAll(true); }}>
+          <Select value={companyFilter} onValueChange={v => {
+            setCompanyFilter(v);
+            setWorkerFilter("all");
+            if (v !== "all") setShowAll(true);
+            else setShowAll(false);
+          }}>
             <SelectTrigger className="w-[200px]" data-testid="select-payroll-company-filter">
               <SelectValue placeholder="All Companies" />
             </SelectTrigger>
@@ -239,7 +244,15 @@ function ProcessPayrollTab() {
               {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Select value={workerFilter} onValueChange={v => setWorkerFilter(v)}>
+          <Select value={workerFilter} onValueChange={v => {
+            setWorkerFilter(v);
+            if (v !== "all") {
+              const w = workers.find(wk => wk.id === v);
+              if (w) { setCompanyFilter(w.companyId || "all"); setShowAll(true); }
+            } else {
+              if (companyFilter === "all") setShowAll(false);
+            }
+          }}>
             <SelectTrigger className="w-[180px]" data-testid="select-payroll-worker-filter">
               <SelectValue placeholder="All Employees" />
             </SelectTrigger>

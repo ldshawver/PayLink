@@ -872,19 +872,9 @@ export async function registerRoutes(
       // Create time entry
       const now = new Date();
       await storage.createTimeEntry({ workerId: worker.id, companyId: worker.companyId, date: today, clockIn: now, status: "pending", source: "punches" });
-      // Auth + session
-      const allUsers = await storage.getUsers();
-      let user = allUsers.find(u => u.workerId === worker.id);
-      if (!user) {
-        const hashedPassword = await bcrypt.hash(pin, 10);
-        user = await storage.createUser({ username: employeeNumber, password: hashedPassword, role: "employee", companyId: worker.companyId, workerId: worker.id, isActive: true });
-      }
-      req.session.userId = user.id;
-      req.session.username = user.username;
-      req.session.save((err) => {
-        if (err) return res.status(500).json({ message: "Authentication failed" });
-        res.status(201).json({ punch, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName } });
-      });
+      // Return result without creating a session — this is a shared kiosk endpoint.
+      // Sessions are only created via /api/auth/login or /api/time-clock/sign-in.
+      res.status(201).json({ punch, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName } });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Clock in failed" });
