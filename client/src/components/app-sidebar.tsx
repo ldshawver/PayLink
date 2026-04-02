@@ -64,6 +64,7 @@ import {
   LayoutTemplate,
   Rss,
   Bell,
+  MessageSquare,
 } from "lucide-react";
 import {
   Sidebar,
@@ -109,6 +110,12 @@ const navSections: NavSection[] = [
     label: "Dashboard",
     icon: LayoutDashboard,
     url: "/app",
+    items: [],
+  },
+  {
+    label: "Messages",
+    icon: MessageSquare,
+    url: "/app/messages",
     items: [],
   },
   {

@@ -97,11 +97,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
         setCountdown((c) => {
           if (c <= 1) {
             clearInterval(interval);
-            if (successState === "clock-out") {
-              window.location.href = "https://mypaylink.app/";
-            } else {
-              onClose();
-            }
+            onClose();
             return 0;
           }
           return c - 1;

@@ -11289,8 +11289,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/messages", requireAuth, async (req, res) => {
     try {
       const userId = (req.session as any).userId;
-      const workerRow = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${userId} LIMIT 1`);
-      const myWorkerId = (workerRow.rows ?? workerRow)[0]?.id ?? null;
+      const user = await storage.getUser(userId);
+      const myWorkerId = user?.workerId ?? null;
       if (!myWorkerId) return res.json([]);
 
       const folder = req.query.folder as string || "inbox";
@@ -11340,8 +11340,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/messages/unread-count", requireAuth, async (req, res) => {
     try {
       const userId = (req.session as any).userId;
-      const workerRow = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${userId} LIMIT 1`);
-      const myWorkerId = (workerRow.rows ?? workerRow)[0]?.id ?? null;
+      const user = await storage.getUser(userId);
+      const myWorkerId = user?.workerId ?? null;
       if (!myWorkerId) return res.json({ count: 0 });
       const result = await db.execute(sql`
         SELECT COUNT(*) AS count FROM staff_message_recipients smr
@@ -11355,12 +11355,64 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  // GET /api/messages/workers — list workers available to message (must be before /:id)
+  app.get("/api/messages/workers", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const userRole = user?.role || "employee";
+      const myWorkerId = user?.workerId ?? null;
+      let myCompanyId: string | null = null;
+      if (myWorkerId) {
+        const workerData = await storage.getWorker(myWorkerId);
+        myCompanyId = workerData?.companyId ?? null;
+      }
+
+      let result: any;
+      if (userRole === "admin") {
+        // Admin: return all workers (exclude self if we have a worker record)
+        result = myWorkerId
+          ? await db.execute(sql`
+              SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name
+              FROM workers w LEFT JOIN companies c ON c.id = w.company_id
+              WHERE w.id != ${myWorkerId} ORDER BY w.first_name, w.last_name
+            `)
+          : await db.execute(sql`
+              SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name
+              FROM workers w LEFT JOIN companies c ON c.id = w.company_id
+              ORDER BY w.first_name, w.last_name
+            `);
+      } else if (myCompanyId) {
+        if (myWorkerId) {
+          result = await db.execute(sql`
+            SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name
+            FROM workers w LEFT JOIN companies c ON c.id = w.company_id
+            WHERE w.company_id = ${myCompanyId} AND w.id != ${myWorkerId}
+            ORDER BY w.first_name, w.last_name
+          `);
+        } else {
+          result = await db.execute(sql`
+            SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name
+            FROM workers w LEFT JOIN companies c ON c.id = w.company_id
+            WHERE w.company_id = ${myCompanyId}
+            ORDER BY w.first_name, w.last_name
+          `);
+        }
+      } else {
+        return res.json([]);
+      }
+      res.json(result.rows ?? (result as any));
+    } catch (err) {
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to fetch workers") });
+    }
+  });
+
   // GET /api/messages/:id — message + its replies
   app.get("/api/messages/:id", requireAuth, async (req, res) => {
     try {
       const userId = (req.session as any).userId;
-      const workerRow = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${userId} LIMIT 1`);
-      const myWorkerId = (workerRow.rows ?? workerRow)[0]?.id ?? null;
+      const user = await storage.getUser(userId);
+      const myWorkerId = user?.workerId ?? null;
       const msgId = req.params.id;
 
       const msgResult = await db.execute(sql`
@@ -11405,10 +11457,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/messages", requireAuth, async (req, res) => {
     try {
       const userId = (req.session as any).userId;
-      const userRole = (req.session as any).role || "employee";
-      const workerRow = await db.execute(sql`SELECT id, company_id FROM workers WHERE user_id = ${userId} LIMIT 1`);
-      const sender = (workerRow.rows ?? workerRow)[0];
-      if (!sender) return res.status(400).json({ message: "No worker record linked to your account" });
+      const user = await storage.getUser(userId);
+      const userRole = user?.role || "employee";
+      if (!user?.workerId) return res.status(400).json({ message: "No worker record linked to your account" });
+      const senderWorker = await storage.getWorker(user.workerId);
+      if (!senderWorker) return res.status(400).json({ message: "Worker record not found" });
+      const sender = { id: senderWorker.id, company_id: senderWorker.companyId };
 
       const { subject, body, scope, recipientWorkerId, deliveryChannel, companyId } = req.body;
 
@@ -11442,7 +11496,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!recipientWorkerId) return res.status(400).json({ message: "Recipient required for individual messages" });
         const rw = await db.execute(sql`
           SELECT w.id, w.first_name, w.last_name, u.email, w.phone, w.preferences
-          FROM workers w LEFT JOIN users u ON u.id = w.user_id
+          FROM workers w LEFT JOIN users u ON u.worker_id = w.id
           WHERE w.id = ${recipientWorkerId}
         `);
         recipientWorkers = rw.rows ?? (rw as any);
@@ -11450,14 +11504,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const targetCompanyId = companyId || sender.company_id;
         const rw = await db.execute(sql`
           SELECT w.id, w.first_name, w.last_name, u.email, w.phone, w.preferences
-          FROM workers w LEFT JOIN users u ON u.id = w.user_id
+          FROM workers w LEFT JOIN users u ON u.worker_id = w.id
           WHERE w.company_id = ${targetCompanyId} AND w.id != ${sender.id}
         `);
         recipientWorkers = rw.rows ?? (rw as any);
       } else if (scope === "sitewide") {
         const rw = await db.execute(sql`
           SELECT w.id, w.first_name, w.last_name, u.email, w.phone, w.preferences
-          FROM workers w LEFT JOIN users u ON u.id = w.user_id
+          FROM workers w LEFT JOIN users u ON u.worker_id = w.id
           WHERE w.id != ${sender.id}
         `);
         recipientWorkers = rw.rows ?? (rw as any);
@@ -11539,9 +11593,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/messages/:id/reply", requireAuth, async (req, res) => {
     try {
       const userId = (req.session as any).userId;
-      const workerRow = await db.execute(sql`SELECT id, company_id FROM workers WHERE user_id = ${userId} LIMIT 1`);
-      const sender = (workerRow.rows ?? workerRow)[0];
-      if (!sender) return res.status(400).json({ message: "No worker linked to account" });
+      const user = await storage.getUser(userId);
+      if (!user?.workerId) return res.status(400).json({ message: "No worker linked to account" });
+      const senderWorker = await storage.getWorker(user.workerId);
+      if (!senderWorker) return res.status(400).json({ message: "Worker record not found" });
+      const sender = { id: senderWorker.id, company_id: senderWorker.companyId };
 
       const parentId = req.params.id;
       const { body } = req.body;
@@ -11585,8 +11641,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.patch("/api/messages/:id/read", requireAuth, async (req, res) => {
     try {
       const userId = (req.session as any).userId;
-      const workerRow = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${userId} LIMIT 1`);
-      const myWorkerId = (workerRow.rows ?? workerRow)[0]?.id ?? null;
+      const user = await storage.getUser(userId);
+      const myWorkerId = user?.workerId ?? null;
       if (!myWorkerId) return res.status(400).json({ message: "No worker record" });
 
       await db.execute(sql`
@@ -11597,36 +11653,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ message: safeErrorMessage(err, "Failed to mark read") });
-    }
-  });
-
-  // GET /api/messages/workers — list workers available to message
-  app.get("/api/messages/workers", requireAuth, async (req, res) => {
-    try {
-      const userId = (req.session as any).userId;
-      const userRole = (req.session as any).role || "employee";
-      const workerRow = await db.execute(sql`SELECT id, company_id FROM workers WHERE user_id = ${userId} LIMIT 1`);
-      const me = (workerRow.rows ?? workerRow)[0];
-      if (!me) return res.json([]);
-
-      let result: any;
-      if (userRole === "admin") {
-        result = await db.execute(sql`
-          SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name
-          FROM workers w LEFT JOIN companies c ON c.id = w.company_id
-          WHERE w.id != ${me.id} ORDER BY w.first_name, w.last_name
-        `);
-      } else {
-        result = await db.execute(sql`
-          SELECT w.id, w.first_name, w.last_name, w.company_id, c.name AS company_name
-          FROM workers w LEFT JOIN companies c ON c.id = w.company_id
-          WHERE w.company_id = ${me.company_id} AND w.id != ${me.id}
-          ORDER BY w.first_name, w.last_name
-        `);
-      }
-      res.json(result.rows ?? (result as any));
-    } catch (err) {
-      res.status(500).json({ message: safeErrorMessage(err, "Failed to fetch workers") });
     }
   });
 

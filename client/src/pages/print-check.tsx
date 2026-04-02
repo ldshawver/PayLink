@@ -164,11 +164,16 @@ function CheckPortion({
   const routing = (remittanceSource?.routingNumber || "000000000").replace(/\D/g, "").padEnd(9, "0").slice(0, 9);
   const account = (remittanceSource?.accountNumber || "0000000000").replace(/\D/g, "");
   const checkNum = String(item.checkNumber || "0001").padStart(4, "0");
+  const institutionName = remittanceSource?.institution || "";
+
+  // Alignment offsets from remittance source (in inches, positive = down/right)
+  const vOffset = Number(remittanceSource?.verticalAlignment || 0);
+  const hOffset = Number(remittanceSource?.horizontalAlignment || 0);
 
   return (
     // Total height: 3.667in.  Bottom 0.625in reserved for MICR band (ANSI X9.27).
     // Content area: top 3.042in with standard check-stock layout.
-    <div style={{ height: "3.667in", boxSizing: "border-box", display: "flex", flexDirection: "column", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
+    <div style={{ height: "3.667in", boxSizing: "border-box", display: "flex", flexDirection: "column", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif", position: "relative", top: vOffset ? `${vOffset}in` : undefined, left: hOffset ? `${hOffset}in` : undefined }}>
 
       {/* ── CONTENT AREA (top 3.042in) ── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "0.22in 0.55in 0.18in" }}>
@@ -202,7 +207,7 @@ function CheckPortion({
             </div>
           </div>
 
-          {/* Right: check number in bordered box + date + void notice */}
+          {/* Right: check number in bordered box + date + void notice + institution */}
           <div style={{ textAlign: "right" }}>
             {config.showCheckNumber && (
               <div style={{
@@ -221,6 +226,9 @@ function CheckPortion({
             )}
             <div style={{ fontSize: "11px", fontWeight: "600" }}>DATE: {checkDate}</div>
             <div style={{ fontSize: "8px", color: "#777", fontStyle: "italic", marginTop: "2px" }}>VOID AFTER 90 DAYS</div>
+            {institutionName && (
+              <div style={{ fontSize: "8px", color: "#555", marginTop: "3px", fontWeight: "600", letterSpacing: "0.3px" }}>{institutionName}</div>
+            )}
           </div>
         </div>
 
