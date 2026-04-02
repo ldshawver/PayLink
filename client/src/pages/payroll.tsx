@@ -37,11 +37,38 @@ function useTabParam(): [string, (tab: string) => void] {
   return [tab, setTab];
 }
 
+// ── Pay-period helpers (weekly Sun–Sat, payday following Wednesday) ──────────
+// Given a Wednesday payday, the pay period is the prior Sun–Sat.
+// payDate(Wed)  → periodEnd = payDate - 4 days (Sat)
+//              → periodStart = payDate - 10 days (Sun)
+function computePeriodFromPayDate(payDate: string): { periodStart: string; periodEnd: string } | null {
+  if (!payDate) return null;
+  const d = new Date(payDate + "T12:00:00");
+  if (isNaN(d.getTime())) return null;
+  const endDate = new Date(d); endDate.setDate(d.getDate() - 4);   // Saturday
+  const startDate = new Date(d); startDate.setDate(d.getDate() - 10); // Sunday
+  const fmt = (dt: Date) => dt.toISOString().split("T")[0];
+  return { periodStart: fmt(startDate), periodEnd: fmt(endDate) };
+}
+
+function isWednesday(dateStr: string): boolean {
+  if (!dateStr) return false;
+  return new Date(dateStr + "T12:00:00").getDay() === 3;
+}
+
+function nextWednesday(): string {
+  const d = new Date();
+  const dayOfWeek = d.getDay(); // 0=Sun,1=Mon,...,3=Wed
+  const daysUntilWed = (3 - dayOfWeek + 7) % 7 || 7;
+  d.setDate(d.getDate() + daysUntilWed);
+  return d.toISOString().split("T")[0];
+}
+
 function ProcessPayrollTab() {
   const { toast } = useToast();
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [formData, setFormData] = useState({ companyId: "", periodStart: "", periodEnd: "" });
+  const [formData, setFormData] = useState({ companyId: "", payDate: nextWednesday() });
   const [showAll, setShowAll] = useState(false);
   const [dateSearch, setDateSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState("all");
@@ -51,16 +78,28 @@ function ProcessPayrollTab() {
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
   const { data: payrollRuns = [], isLoading } = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"] });
 
+  // Auto-compute pay period from the selected pay date
+  const computedPeriod = computePeriodFromPayDate(formData.payDate);
+  const payDateIsWednesday = isWednesday(formData.payDate);
+
   const createMutation = useMutation({
-    mutationFn: async (data: { companyId: string; periodStart: string; periodEnd: string }) => {
-      const res = await apiRequest("POST", "/api/payroll-runs", data);
+    mutationFn: async () => {
+      if (!formData.companyId) throw new Error("Please select a company");
+      if (!formData.payDate) throw new Error("Please select a pay date");
+      if (!computedPeriod) throw new Error("Invalid pay date");
+      const res = await apiRequest("POST", "/api/payroll-runs", {
+        companyId: formData.companyId,
+        periodStart: computedPeriod.periodStart,
+        periodEnd: computedPeriod.periodEnd,
+        payDate: formData.payDate,
+      });
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
       toast({ title: "Payroll run created" });
       setDialogOpen(false);
-      setFormData({ companyId: "", periodStart: "", periodEnd: "" });
+      setFormData({ companyId: "", payDate: nextWednesday() });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -230,8 +269,10 @@ function ProcessPayrollTab() {
             <Button data-testid="button-run-payroll"><Plus className="mr-2 h-4 w-4" />Run Payroll</Button>
           </DialogTrigger>
           <DialogContent>
-            <DialogHeader><DialogTitle>Run Payroll</DialogTitle></DialogHeader>
-            <div className="space-y-4">
+            <DialogHeader>
+              <DialogTitle>Run Payroll</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-1">
               <div className="space-y-2">
                 <Label>Company</Label>
                 <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v }))}>
@@ -241,19 +282,45 @@ function ProcessPayrollTab() {
                   </SelectContent>
                 </Select>
               </div>
+
               <div className="space-y-2">
-                <Label>Period Start</Label>
-                <Input type="date" data-testid="input-period-start" value={formData.periodStart} onChange={e => setFormData(p => ({ ...p, periodStart: e.target.value }))} />
+                <Label>Pay Date <span className="text-muted-foreground text-xs">(must be a Wednesday)</span></Label>
+                <Input
+                  type="date"
+                  data-testid="input-pay-date"
+                  value={formData.payDate}
+                  onChange={e => setFormData(p => ({ ...p, payDate: e.target.value }))}
+                />
+                {formData.payDate && !payDateIsWednesday && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                    <AlertCircle className="h-3.5 w-3.5" /> Pay dates should be Wednesdays — this date falls on a {new Date(formData.payDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "long" })}.
+                  </p>
+                )}
               </div>
-              <div className="space-y-2">
-                <Label>Period End</Label>
-                <Input type="date" data-testid="input-period-end" value={formData.periodEnd} onChange={e => setFormData(p => ({ ...p, periodEnd: e.target.value }))} />
-              </div>
+
+              {computedPeriod && (
+                <div className="rounded-md border bg-muted/40 p-3 space-y-1.5 text-sm">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Pay Period (auto-calculated)</p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Period start</span>
+                    <span className="font-medium">{new Date(computedPeriod.periodStart + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} (Sunday)</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Period end</span>
+                    <span className="font-medium">{new Date(computedPeriod.periodEnd + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} (Saturday)</span>
+                  </div>
+                  <div className="flex items-center justify-between border-t pt-1.5 mt-1">
+                    <span className="text-muted-foreground">Payday</span>
+                    <span className="font-semibold text-emerald-600">{new Date(formData.payDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} (Wednesday)</span>
+                  </div>
+                </div>
+              )}
+
               <Button
                 className="w-full"
                 data-testid="button-submit-payroll"
-                disabled={createMutation.isPending}
-                onClick={() => createMutation.mutate(formData)}
+                disabled={createMutation.isPending || !formData.companyId || !formData.payDate}
+                onClick={() => createMutation.mutate()}
               >
                 {createMutation.isPending ? "Creating..." : "Create Payroll Run"}
               </Button>
@@ -480,6 +547,11 @@ function PayrollRunCard({
           <span className="text-sm text-muted-foreground">
             {run.periodStart} — {run.periodEnd}
           </span>
+          {run.payDate && (
+            <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+              <CalendarDays className="h-3.5 w-3.5" /> Payday: {new Date(run.payDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+            </span>
+          )}
           <Badge variant={statusVariant} data-testid={`badge-status-${run.id}`}>{run.status}</Badge>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
