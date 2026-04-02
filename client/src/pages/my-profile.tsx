@@ -170,6 +170,24 @@ function PreferencesTab({ worker }: { worker: Worker | null }) {
       </Card>
 
       <Card>
+        <CardHeader><CardTitle className="text-base">Messaging Preferences</CardTitle></CardHeader>
+        <CardContent className="space-y-2">
+          <p className="text-sm text-muted-foreground">How would you like to receive staff messages from managers?</p>
+          <Select value={messagingChannel} onValueChange={setMessagingChannel}>
+            <SelectTrigger data-testid="select-messaging-channel">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="app">In-app only</SelectItem>
+              <SelectItem value="email">Email</SelectItem>
+              <SelectItem value="sms">Text (SMS)</SelectItem>
+              <SelectItem value="both">Email &amp; Text (SMS)</SelectItem>
+            </SelectContent>
+          </Select>
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardHeader><CardTitle className="text-base">Notification Preferences</CardTitle></CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
