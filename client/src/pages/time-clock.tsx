@@ -222,16 +222,16 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
                 {successName ? `${successName} — Clocked Out` : "Clocked Out"}
               </p>
               <p className="text-sm text-white/60 mt-1">
-                Redirecting in{" "}
+                Closing in{" "}
                 <span className="font-bold text-teal-300">{countdown}</span>s...
               </p>
             </div>
             <Button
-              onClick={() => { window.location.href = "https://mypaylink.app/"; }}
+              onClick={onClose}
               className="bg-slate-600 hover:bg-slate-700 text-white border-0"
               data-testid="button-close-clock-out"
             >
-              Go to mypaylink.app
+              Done
             </Button>
           </div>
         ) : successState === "sign-in" ? (

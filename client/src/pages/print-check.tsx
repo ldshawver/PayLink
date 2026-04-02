@@ -153,9 +153,12 @@ function CheckPortion({
 }) {
   const remittanceSource = remittanceSources.find(s => s.companyId === company.id && s.status === "enabled") || remittanceSources.find(s => s.companyId === company.id);
   const netPay = overrideNetPay !== undefined ? overrideNetPay : Number(item.netPay || 0);
-  const checkDate = run.processedAt
-    ? new Date(run.processedAt).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
-    : new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
+  // Prefer explicit pay date → processedAt → today
+  const checkDate = run.payDate
+    ? new Date(run.payDate + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+    : run.processedAt
+      ? new Date(run.processedAt).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+      : new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
   const periodStart = run.periodStart ? new Date(run.periodStart + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "";
   const periodEnd = run.periodEnd ? new Date(run.periodEnd + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "";
   const memoText = periodStart && periodEnd ? `Pay period ${periodStart} – ${periodEnd}` : "";
@@ -266,6 +269,20 @@ function CheckPortion({
             ${fmt(netPay)}
           </div>
         </div>
+
+        {/* ROW 2b: Payee address (shown when showEmployeeAddress is on and worker has address) */}
+        {config.showEmployeeAddress && (worker.address || worker.city) && (
+          <div style={{ marginBottom: "6px", paddingLeft: "0.01in" }}>
+            {worker.address && (
+              <div style={{ fontSize: "10px", color: "#333", lineHeight: 1.35 }}>{worker.address}{worker.address2 ? ", " + worker.address2 : ""}</div>
+            )}
+            {(worker.city || worker.state || worker.zip) && (
+              <div style={{ fontSize: "10px", color: "#333", lineHeight: 1.35 }}>
+                {[worker.city, worker.state].filter(Boolean).join(", ")}{worker.zip ? " " + worker.zip : ""}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ROW 3: Written-out dollar amount + protective fill to right edge */}
         <div style={{ display: "flex", alignItems: "baseline", borderBottom: "1px solid #000", paddingBottom: "4px", marginBottom: "0.17in" }}>

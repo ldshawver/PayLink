@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useSearch, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -1131,13 +1132,21 @@ const statusConfig: Record<string, { icon: any; color: string }> = {
 export default function InvoicesPage() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const search_params = useSearch();
+  const [, setLocation] = useLocation();
+  const urlTab = new URLSearchParams(search_params).get("tab") || "invoices";
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<InvoiceWithItems | undefined>();
-  const [activeTab, setActiveTab] = useState("invoices");
+  const [activeTab, setActiveTab] = useState(urlTab);
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
   const [adminCompanyId, setAdminCompanyId] = useState<string>("");
+
+  // Keep tab in sync with URL when the user navigates via the sidebar
+  useEffect(() => {
+    setActiveTab(urlTab);
+  }, [urlTab]);
 
   const userCompanyId = user?.companyId;
   const isAdminWithoutCompany = user?.role === "admin" && !userCompanyId;
@@ -1293,7 +1302,7 @@ export default function InvoicesPage() {
         </CardContent></Card>
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
+      <Tabs value={activeTab} onValueChange={tab => { setActiveTab(tab); setLocation(`/app/invoices?tab=${tab}`); }}>
         <TabsList>
           <TabsTrigger value="invoices" data-testid="tab-invoices">Invoices</TabsTrigger>
           <TabsTrigger value="recurring" data-testid="tab-recurring">Recurring</TabsTrigger>
