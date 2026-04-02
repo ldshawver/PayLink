@@ -3561,7 +3561,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const payload = {
           recipientName: mgrWorker ? `${mgrWorker.firstName} ${mgrWorker.lastName}` : mgr.username,
           email: mgrWorker?.email || null,
-          phone: mgrWorker?.phone || null,
+          phone: mgrWorker?.mobilePhone || mgrWorker?.phone || null,
           companyName: mgrCompany?.name || "Your Company",
           pendingPunches: pendingPunches.length,
           pendingTimecards: 0,
@@ -4312,7 +4312,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           const bodyText = `${offeringName} has posted their shift on ${shiftDate} ${shiftTime} to the Shift Marketplace.\n\nLog in to PayLink and go to Schedule → Shift Marketplace to claim this shift.`;
           for (const w of eligibleWorkers) {
             const wEmail = w.workEmail || w.homeEmail || w.email;
-            const wPhone = w.mobilePhone || w.homePhone;
+            const wPhone = w.mobilePhone || w.phone || w.homePhone;
             const wName = `${w.firstName} ${w.lastName}`;
             await Promise.all([
               sendShiftMarketplaceEmail({ recipientName: wName, email: wEmail, subject, bodyText }),
@@ -11495,7 +11495,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (scope === "one") {
         if (!recipientWorkerId) return res.status(400).json({ message: "Recipient required for individual messages" });
         const rw = await db.execute(sql`
-          SELECT w.id, w.first_name, w.last_name, u.email, w.phone, w.preferences
+          SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
           FROM workers w LEFT JOIN users u ON u.worker_id = w.id
           WHERE w.id = ${recipientWorkerId}
         `);
@@ -11503,14 +11503,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       } else if (scope === "company") {
         const targetCompanyId = companyId || sender.company_id;
         const rw = await db.execute(sql`
-          SELECT w.id, w.first_name, w.last_name, u.email, w.phone, w.preferences
+          SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
           FROM workers w LEFT JOIN users u ON u.worker_id = w.id
           WHERE w.company_id = ${targetCompanyId} AND w.id != ${sender.id}
         `);
         recipientWorkers = rw.rows ?? (rw as any);
       } else if (scope === "sitewide") {
         const rw = await db.execute(sql`
-          SELECT w.id, w.first_name, w.last_name, u.email, w.phone, w.preferences
+          SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
           FROM workers w LEFT JOIN users u ON u.worker_id = w.id
           WHERE w.id != ${sender.id}
         `);
@@ -11563,7 +11563,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           }
         }
 
-        if (shouldSms && rw.phone) {
+        const smsPhone = rw.mobile_phone || rw.phone;
+        if (shouldSms && smsPhone) {
           try {
             const accountSid = process.env.TWILIO_ACCOUNT_SID;
             const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -11574,7 +11575,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               await client.messages.create({
                 body: `PayLink message from ${senderName}: ${subject.trim()}\n\n${body.trim().substring(0, 200)}`,
                 from: fromNumber,
-                to: rw.phone,
+                to: smsPhone,
               });
             }
           } catch (smsErr: any) {
