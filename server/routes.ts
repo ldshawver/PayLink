@@ -395,7 +395,7 @@ export async function registerRoutes(
   });
 
   app.use("/api", (req, res, next) => {
-    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session"
+    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
       || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
@@ -988,6 +988,59 @@ export async function registerRoutes(
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Clock out failed" });
+    }
+  });
+
+  // Break start — auth + break_start punch (starting a break)
+  app.post("/api/time-clock/break-start", async (req, res) => {
+    try {
+      const { employeeNumber, pin } = req.body;
+      if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
+      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
+      if (!worker || worker.pin !== pin) return res.status(401).json({ message: "Invalid employee number or PIN" });
+      if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
+      const allPunches = await storage.getTimePunches(worker.companyId);
+      const workerPunches = allPunches.filter(p => p.workerId === worker.id).sort((a, b) => new Date(b.punchTime).getTime() - new Date(a.punchTime).getTime());
+      const lastPunch = workerPunches[0];
+      if (!lastPunch || lastPunch.punchType === "clock_out" || lastPunch.punchType === "break_start") {
+        return res.status(409).json({ message: lastPunch?.punchType === "break_start" ? "You are already on a break." : "You are not currently clocked in." });
+      }
+      const punch = await storage.createTimePunch({ workerId: worker.id, companyId: worker.companyId, punchType: "break_start", punchTime: new Date(), approvalStatus: "approved", stationId: null });
+      res.status(201).json({ punch, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName } });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Break start failed" });
+    }
+  });
+
+  // Break end — auth + break_end punch (returning from break)
+  app.post("/api/time-clock/break-end", async (req, res) => {
+    try {
+      const { employeeNumber, pin } = req.body;
+      if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
+      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
+      if (!worker || worker.pin !== pin) return res.status(401).json({ message: "Invalid employee number or PIN" });
+      if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
+      const allPunches = await storage.getTimePunches(worker.companyId);
+      const workerPunches = allPunches.filter(p => p.workerId === worker.id).sort((a, b) => new Date(b.punchTime).getTime() - new Date(a.punchTime).getTime());
+      const lastPunch = workerPunches[0];
+      if (!lastPunch || lastPunch.punchType !== "break_start") {
+        return res.status(409).json({ message: "You are not currently on a break." });
+      }
+      const punch = await storage.createTimePunch({ workerId: worker.id, companyId: worker.companyId, punchType: "break_end", punchTime: new Date(), approvalStatus: "approved", stationId: null });
+      // Update open time entry break minutes
+      const allEntries = await storage.getTimeEntries();
+      const openEntry = allEntries.find(e => e.workerId === worker.id && e.clockIn && !e.clockOut);
+      if (openEntry) {
+        const breakStart = new Date(lastPunch.punchTime);
+        const breakMinutesThisBreak = (Date.now() - breakStart.getTime()) / (1000 * 60);
+        const existingBreakMinutes = openEntry.breakMinutes || 0;
+        await storage.updateTimeEntry(openEntry.id, { breakMinutes: (existingBreakMinutes + breakMinutesThisBreak).toFixed(0) as any });
+      }
+      res.status(201).json({ punch, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName } });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Break end failed" });
     }
   });
 
