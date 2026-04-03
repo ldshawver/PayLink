@@ -178,6 +178,8 @@ import {
   type EnterpriseRolePermission, type InsertEnterpriseRolePermission,
   type UserCompanyAccess, type InsertUserCompanyAccess,
   type UserPermissionOverride, type InsertUserPermissionOverride,
+  authorizationAuditLog,
+  type AuthorizationAuditLog, type InsertAuthorizationAuditLog,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -815,11 +817,6 @@ export interface IStorage {
   deleteEmployeeManagerRelation(id: string): Promise<void>;
 
   // Permission System
-  getPlatformModules(): Promise<PlatformModule[]>;
-  getPlatformModule(id: string): Promise<PlatformModule | undefined>;
-  createPlatformModule(data: InsertPlatformModule): Promise<PlatformModule>;
-  updatePlatformModule(id: string, data: Partial<PlatformModule>): Promise<PlatformModule | undefined>;
-
   getPermissionGroups(): Promise<PermissionGroup[]>;
   createPermissionGroup(data: InsertPermissionGroup): Promise<PermissionGroup>;
   updatePermissionGroup(id: string, data: Partial<PermissionGroup>): Promise<PermissionGroup | undefined>;
@@ -842,6 +839,9 @@ export interface IStorage {
   getUserPermissionOverrides(userId: string, companyId?: string): Promise<UserPermissionOverride[]>;
   createUserPermissionOverride(data: InsertUserPermissionOverride): Promise<UserPermissionOverride>;
   deleteUserPermissionOverride(id: string): Promise<void>;
+
+  getAuthorizationAuditLogs(limit?: number): Promise<AuthorizationAuditLog[]>;
+  createAuthorizationAuditLog(data: InsertAuthorizationAuditLog): Promise<AuthorizationAuditLog>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3743,14 +3743,17 @@ export class DatabaseStorage implements IStorage {
     await db.delete(userPermissionOverrides).where(eq(userPermissionOverrides.id, id));
   }
 
-  async getDepartmentMembers(companyId: string, departmentId: string): Promise<Worker[]> {
-    return db.select().from(workers)
-      .where(and(
-        eq(workers.companyId, companyId),
-        eq(workers.departmentId, departmentId),
-        eq(workers.isActive, true)
-      ))
-      .orderBy(workers.lastName, workers.firstName);
+  async getAuthorizationAuditLogs(limit = 100): Promise<AuthorizationAuditLog[]> {
+    return db
+      .select()
+      .from(authorizationAuditLog)
+      .orderBy(desc(authorizationAuditLog.createdAt))
+      .limit(limit);
+  }
+
+  async createAuthorizationAuditLog(data: InsertAuthorizationAuditLog): Promise<AuthorizationAuditLog> {
+    const [row] = await db.insert(authorizationAuditLog).values(data).returning();
+    return row;
   }
 }
 

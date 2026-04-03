@@ -12371,6 +12371,76 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to update 1099 summary" }); }
   });
 
+  // ── Authorization & Permissions Matrix API ──────────────────────────────
+  app.get("/api/permissions/matrix", requireAuth, requireRole("admin"), async (req: any, res) => {
+    try {
+      const allRoles = await storage.getRoles();
+      const allPerms = await storage.getAllRolePermissions();
+      const allUsers = await storage.getUsers();
+      const allUserRoles = await storage.getUserRoles();
+      res.json({ roles: allRoles, permissions: allPerms, users: allUsers, userRoles: allUserRoles });
+    } catch (e) { res.status(500).json({ message: "Failed to fetch permissions matrix" }); }
+  });
+
+  app.get("/api/permissions/effective/:userId", requireAuth, requireRole("admin"), async (req: any, res) => {
+    try {
+      const { checkPermission, getEffectivePermissions } = await import("./auth/authorization.js");
+      const effectivePerms = await getEffectivePermissions(req.params.userId);
+      res.json(effectivePerms);
+    } catch (e) { res.status(500).json({ message: "Failed to compute effective permissions" }); }
+  });
+
+  app.get("/api/permissions/audit-log", requireAuth, requireRole("admin"), async (req: any, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 100;
+      const logs = await storage.getAuthorizationAuditLogs(limit);
+      res.json(logs);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch audit log" }); }
+  });
+
+  app.get("/api/permissions/export-csv", requireAuth, requireRole("admin"), async (req: any, res) => {
+    try {
+      const allRoles = await storage.getRoles();
+      const allPerms = await storage.getAllRolePermissions();
+
+      const resourceSet = new Set(allPerms.map(p => p.resource));
+      const resources = Array.from(resourceSet).sort();
+
+      const headers = ["Resource", ...allRoles.map(r => r.name)];
+      const rows = resources.map(resource => {
+        const cols = allRoles.map(role => {
+          const perm = allPerms.find(p => p.roleId === role.id && p.resource === resource);
+          if (!perm) return "none";
+          const grants: string[] = [];
+          if (perm.canView) grants.push("view");
+          if (perm.canCreate) grants.push("create");
+          if (perm.canEdit) grants.push("edit");
+          if (perm.canDelete) grants.push("delete");
+          if (perm.canExport) grants.push("export");
+          if (perm.canApprove) grants.push("approve");
+          return grants.join("+") || "none";
+        });
+        return [resource, ...cols];
+      });
+
+      const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(",")).join("\n");
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", "attachment; filename=permissions-matrix.csv");
+      res.send(csv);
+    } catch (e) { res.status(500).json({ message: "Failed to export CSV" }); }
+  });
+
+  // Check a specific permission for current user (for frontend guards)
+  app.post("/api/permissions/check", requireAuth, async (req: any, res) => {
+    try {
+      const { resource, permission } = req.body;
+      if (!resource || !permission) return res.status(400).json({ message: "resource and permission required" });
+      const { checkPermission } = await import("./auth/authorization.js");
+      const result = await checkPermission(req.session.userId, resource, permission);
+      res.json(result);
+    } catch (e) { res.status(500).json({ message: "Failed to check permission" }); }
+  });
+
   // ── Phase 2: Contractor Profile endpoint ──────────────────────────────────
   app.get("/api/contractors", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
     try {

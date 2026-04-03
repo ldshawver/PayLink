@@ -66,6 +66,7 @@ import {
   Bell,
   MessageSquare,
   ArrowLeftRight,
+  KeyRound,
 } from "lucide-react";
 import {
   Sidebar,
@@ -322,6 +323,13 @@ const navSections: NavSection[] = [
       { title: "HR Reports", url: "/app/reports?tab=hr", icon: PieChart },
       { title: "Expense Reports", url: "/app/reports?tab=expense", icon: Receipt },
     ],
+  },
+  {
+    label: "Permissions",
+    icon: KeyRound,
+    url: "/app/permissions",
+    roles: ["admin", "platform_super_admin"],
+    items: [],
   },
   {
     label: "Billing",

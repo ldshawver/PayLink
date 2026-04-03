@@ -2823,6 +2823,23 @@ export const insertContractorDocumentSchema = createInsertSchema(contractorDocum
 export type ContractorDocument = typeof contractorDocuments.$inferSelect;
 export type InsertContractorDocument = z.infer<typeof insertContractorDocumentSchema>;
 
+// ── Authorization Audit Log ────────────────────────────────────────────────
+export const authorizationAuditLog = pgTable("authorization_audit_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  actorUserId: varchar("actor_user_id").notNull(),
+  targetUserId: varchar("target_user_id"),
+  targetRoleId: varchar("target_role_id"),
+  targetResource: text("target_resource"),
+  changeType: text("change_type").notNull(), // "role_assigned" | "role_removed" | "permission_changed" | "override_added" | "override_removed"
+  beforeValue: text("before_value"),
+  afterValue: text("after_value"),
+  note: text("note"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertAuthorizationAuditLogSchema = createInsertSchema(authorizationAuditLog).omit({ id: true, createdAt: true });
+export type AuthorizationAuditLog = typeof authorizationAuditLog.$inferSelect;
+export type InsertAuthorizationAuditLog = z.infer<typeof insertAuthorizationAuditLogSchema>;
+
 // ── Contractor 1099 Summaries ─────────────────────────────────────────────
 export const contractor1099Summaries = pgTable("contractor_1099_summaries", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
