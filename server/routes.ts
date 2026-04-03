@@ -11572,39 +11572,59 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
       const myWorkerId = user?.workerId ?? null;
-      if (!myWorkerId) return res.json([]);
+      const userRole = user?.role || "employee";
 
       const folder = req.query.folder as string || "inbox";
 
       let rows: any[];
       if (folder === "sent") {
-        const result = await db.execute(sql`
-          SELECT
-            sm.id, sm.company_id, sm.sender_id, sm.subject, sm.body, sm.scope,
-            sm.recipient_worker_id, sm.delivery_channel, sm.parent_message_id, sm.is_reply, sm.created_at,
-            w.first_name || ' ' || w.last_name AS sender_name,
-            rw.first_name || ' ' || rw.last_name AS recipient_name,
-            NULL::timestamp AS read_at,
-            (SELECT COUNT(*) FROM staff_messages r WHERE r.parent_message_id = sm.id) AS reply_count
-          FROM staff_messages sm
-          JOIN workers w ON w.id = sm.sender_id
-          LEFT JOIN workers rw ON rw.id = sm.recipient_worker_id
-          WHERE sm.sender_id = ${myWorkerId} AND sm.is_reply = FALSE
-          ORDER BY sm.created_at DESC
-        `);
-        rows = result.rows ?? (result as any);
+        // For admins without worker records, show messages they sent (scoped by sender_user_id)
+        const result = myWorkerId
+          ? await db.execute(sql`
+              SELECT
+                sm.id, sm.company_id, sm.sender_id, sm.sender_name, sm.sender_user_id,
+                sm.subject, sm.body, sm.scope,
+                sm.recipient_worker_id, sm.delivery_channel, sm.parent_message_id, sm.is_reply, sm.created_at,
+                COALESCE(sm.sender_name, w.first_name || ' ' || w.last_name, 'Admin') AS sender_name,
+                rw.first_name || ' ' || rw.last_name AS recipient_name,
+                NULL::timestamp AS read_at,
+                (SELECT COUNT(*) FROM staff_messages r WHERE r.parent_message_id = sm.id) AS reply_count
+              FROM staff_messages sm
+              LEFT JOIN workers w ON w.id = sm.sender_id
+              LEFT JOIN workers rw ON rw.id = sm.recipient_worker_id
+              WHERE sm.sender_id = ${myWorkerId} AND sm.is_reply = FALSE
+              ORDER BY sm.created_at DESC
+            `)
+          : await db.execute(sql`
+              SELECT
+                sm.id, sm.company_id, sm.sender_id, sm.sender_name, sm.sender_user_id,
+                sm.subject, sm.body, sm.scope,
+                sm.recipient_worker_id, sm.delivery_channel, sm.parent_message_id, sm.is_reply, sm.created_at,
+                COALESCE(sm.sender_name, 'Staff') AS sender_name,
+                rw.first_name || ' ' || rw.last_name AS recipient_name,
+                NULL::timestamp AS read_at,
+                (SELECT COUNT(*) FROM staff_messages r WHERE r.parent_message_id = sm.id) AS reply_count
+              FROM staff_messages sm
+              LEFT JOIN workers rw ON rw.id = sm.recipient_worker_id
+              WHERE sm.sender_id IS NULL AND sm.sender_user_id = ${String(userId)} AND sm.is_reply = FALSE
+              ORDER BY sm.created_at DESC
+            `);
+        rows = (result as any).rows ?? (result as any);
       } else {
+        // Inbox — only workers can receive messages (recipients must be workers)
+        if (!myWorkerId) return res.json([]);
         const result = await db.execute(sql`
           SELECT
-            sm.id, sm.company_id, sm.sender_id, sm.subject, sm.body, sm.scope,
+            sm.id, sm.company_id, sm.sender_id, sm.sender_name, sm.sender_user_id,
+            sm.subject, sm.body, sm.scope,
             sm.recipient_worker_id, sm.delivery_channel, sm.parent_message_id, sm.is_reply, sm.created_at,
-            w.first_name || ' ' || w.last_name AS sender_name,
+            COALESCE(sm.sender_name, w.first_name || ' ' || w.last_name, 'Admin') AS sender_name,
             rw.first_name || ' ' || rw.last_name AS recipient_name,
             smr.read_at,
             (SELECT COUNT(*) FROM staff_messages r WHERE r.parent_message_id = sm.id) AS reply_count
           FROM staff_message_recipients smr
           JOIN staff_messages sm ON sm.id = smr.message_id
-          JOIN workers w ON w.id = sm.sender_id
+          LEFT JOIN workers w ON w.id = sm.sender_id
           LEFT JOIN workers rw ON rw.id = sm.recipient_worker_id
           WHERE smr.worker_id = ${myWorkerId} AND sm.is_reply = FALSE
           ORDER BY sm.created_at DESC
@@ -11696,12 +11716,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const myWorkerId = user?.workerId ?? null;
       const msgId = req.params.id;
 
+      const userRole = user?.role || "employee";
+
       const msgResult = await db.execute(sql`
-        SELECT sm.*, w.first_name || ' ' || w.last_name AS sender_name,
+        SELECT sm.*,
+          COALESCE(sm.sender_name, w.first_name || ' ' || w.last_name, 'Admin') AS sender_name,
           rw.first_name || ' ' || rw.last_name AS recipient_name,
           smr.read_at
         FROM staff_messages sm
-        JOIN workers w ON w.id = sm.sender_id
+        LEFT JOIN workers w ON w.id = sm.sender_id
         LEFT JOIN workers rw ON rw.id = sm.recipient_worker_id
         LEFT JOIN staff_message_recipients smr ON smr.message_id = sm.id AND smr.worker_id = ${myWorkerId}
         WHERE sm.id = ${msgId}
@@ -11710,19 +11733,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const msg = (msgResult.rows ?? msgResult as any)[0];
       if (!msg) return res.status(404).json({ message: "Message not found" });
 
-      // Check access: must be sender or recipient
-      const accessCheck = await db.execute(sql`
-        SELECT 1 FROM staff_message_recipients WHERE message_id = ${msgId} AND worker_id = ${myWorkerId}
-        UNION SELECT 1 FROM staff_messages WHERE id = ${msgId} AND sender_id = ${myWorkerId}
-      `);
-      if ((accessCheck.rows ?? accessCheck as any).length === 0) {
-        return res.status(403).json({ message: "Access denied" });
+      // Check access: must be sender (worker or senderless user) or a recipient worker
+      const isWorkerSender = myWorkerId && msg.sender_id === myWorkerId;
+      const isSenderlessOwner = !msg.sender_id && msg.sender_user_id && String(msg.sender_user_id) === String(userId);
+      if (!isWorkerSender && !isSenderlessOwner) {
+        if (!myWorkerId) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+        const accessCheck = await db.execute(sql`
+          SELECT 1 FROM staff_message_recipients WHERE message_id = ${msgId} AND worker_id = ${myWorkerId}
+        `);
+        if ((accessCheck.rows ?? accessCheck as any).length === 0) {
+          return res.status(403).json({ message: "Access denied" });
+        }
       }
 
       const repliesResult = await db.execute(sql`
-        SELECT sm.*, w.first_name || ' ' || w.last_name AS sender_name
+        SELECT sm.*,
+          COALESCE(sm.sender_name, w.first_name || ' ' || w.last_name, 'Admin') AS sender_name
         FROM staff_messages sm
-        JOIN workers w ON w.id = sm.sender_id
+        LEFT JOIN workers w ON w.id = sm.sender_id
         WHERE sm.parent_message_id = ${msgId}
         ORDER BY sm.created_at ASC
       `);
@@ -11740,10 +11770,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
       const userRole = user?.role || "employee";
-      if (!user?.workerId) return res.status(400).json({ message: "No worker record linked to your account" });
-      const senderWorker = await storage.getWorker(user.workerId);
-      if (!senderWorker) return res.status(400).json({ message: "Worker record not found" });
-      const sender = { id: senderWorker.id, company_id: senderWorker.companyId };
+
+      // Resolve sender info — worker record is optional for admins
+      let senderId: string | null = null;
+      let senderCompanyId: string | null = null;
+      let senderName = "Admin";
+      if (user?.workerId) {
+        const senderWorker = await storage.getWorker(user.workerId);
+        if (senderWorker) {
+          senderId = senderWorker.id;
+          senderCompanyId = senderWorker.companyId;
+          senderName = `${senderWorker.firstName} ${senderWorker.lastName}`.trim() || "Staff";
+        }
+      }
+      if (!senderId) {
+        // Users without a linked worker record (commonly admin accounts) can still send
+        senderCompanyId = user?.companyId ?? null;
+        senderName = user?.username
+          ? user.username.charAt(0).toUpperCase() + user.username.slice(1)
+          : (userRole === "admin" ? "Admin" : "Staff");
+      }
 
       const { subject, body, scope, recipientWorkerId, deliveryChannel, companyId } = req.body;
 
@@ -11762,11 +11808,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       const channel = canBroadcast ? (deliveryChannel || "app") : "app";
+      const effectiveCompanyId = companyId || senderCompanyId;
 
-      // Create message record
+      // For company-scoped messages, require a resolved company ID
+      if (scope === "company" && !effectiveCompanyId) {
+        return res.status(400).json({ message: "Company ID is required for company-wide messages" });
+      }
+
+      // Create message record — persist sender_name and sender_user_id for stable attribution
+      const senderUserId = senderId ? null : String(userId);
       const msgResult = await db.execute(sql`
-        INSERT INTO staff_messages (company_id, sender_id, subject, body, scope, recipient_worker_id, delivery_channel, is_reply)
-        VALUES (${companyId || sender.company_id}, ${sender.id}, ${subject.trim()}, ${body.trim()}, ${scope}, ${recipientWorkerId || null}, ${channel}, FALSE)
+        INSERT INTO staff_messages (company_id, sender_id, sender_name, sender_user_id, subject, body, scope, recipient_worker_id, delivery_channel, is_reply)
+        VALUES (${effectiveCompanyId}, ${senderId}, ${senderName}, ${senderUserId}, ${subject.trim()}, ${body.trim()}, ${scope}, ${recipientWorkerId || null}, ${channel}, FALSE)
         RETURNING *
       `);
       const newMsg = (msgResult.rows ?? msgResult as any)[0];
@@ -11782,25 +11835,32 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         `);
         recipientWorkers = rw.rows ?? (rw as any);
       } else if (scope === "company") {
-        const targetCompanyId = companyId || sender.company_id;
-        const rw = await db.execute(sql`
-          SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
-          FROM workers w LEFT JOIN users u ON u.worker_id = w.id
-          WHERE w.company_id = ${targetCompanyId} AND w.id != ${sender.id}
-        `);
+        const targetCompanyId = effectiveCompanyId;
+        const rw = senderId
+          ? await db.execute(sql`
+              SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
+              FROM workers w LEFT JOIN users u ON u.worker_id = w.id
+              WHERE w.company_id = ${targetCompanyId} AND w.id != ${senderId}
+            `)
+          : await db.execute(sql`
+              SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
+              FROM workers w LEFT JOIN users u ON u.worker_id = w.id
+              WHERE w.company_id = ${targetCompanyId}
+            `);
         recipientWorkers = rw.rows ?? (rw as any);
       } else if (scope === "sitewide") {
-        const rw = await db.execute(sql`
-          SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
-          FROM workers w LEFT JOIN users u ON u.worker_id = w.id
-          WHERE w.id != ${sender.id}
-        `);
+        const rw = senderId
+          ? await db.execute(sql`
+              SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
+              FROM workers w LEFT JOIN users u ON u.worker_id = w.id
+              WHERE w.id != ${senderId}
+            `)
+          : await db.execute(sql`
+              SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
+              FROM workers w LEFT JOIN users u ON u.worker_id = w.id
+            `);
         recipientWorkers = rw.rows ?? (rw as any);
       }
-
-      // Insert recipient records and send notifications
-      const senderNameResult = await db.execute(sql`SELECT first_name || ' ' || last_name AS name FROM workers WHERE id = ${sender.id}`);
-      const senderName = (senderNameResult.rows ?? senderNameResult as any)[0]?.name || "Staff";
 
       for (const rw of recipientWorkers) {
         await db.execute(sql`
@@ -11876,44 +11936,66 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
-      if (!user?.workerId) return res.status(400).json({ message: "No worker linked to account" });
-      const senderWorker = await storage.getWorker(user.workerId);
-      if (!senderWorker) return res.status(400).json({ message: "Worker record not found" });
-      const sender = { id: senderWorker.id, company_id: senderWorker.companyId };
+      const userRole = user?.role || "employee";
+
+      // Resolve sender info — worker record is optional for admins only
+      let senderId: string | null = null;
+      let replierName = "Admin";
+      if (user?.workerId) {
+        const senderWorker = await storage.getWorker(user.workerId);
+        if (senderWorker) {
+          senderId = senderWorker.id;
+          replierName = `${senderWorker.firstName} ${senderWorker.lastName}`.trim() || "Staff";
+        }
+      }
+      if (!senderId) {
+        // Users without a linked worker record (commonly admin accounts) can still reply
+        replierName = user?.username
+          ? user.username.charAt(0).toUpperCase() + user.username.slice(1)
+          : (userRole === "admin" ? "Admin" : "Staff");
+      }
 
       const parentId = req.params.id;
       const { body } = req.body;
       if (!body?.trim()) return res.status(400).json({ message: "Reply body is required" });
 
-      // Verify access to parent message
-      const accessCheck = await db.execute(sql`
-        SELECT sm.* FROM staff_messages sm
-        LEFT JOIN staff_message_recipients smr ON smr.message_id = sm.id AND smr.worker_id = ${sender.id}
-        WHERE sm.id = ${parentId} AND (sm.sender_id = ${sender.id} OR smr.worker_id = ${sender.id})
-        LIMIT 1
-      `);
+      // Verify access to parent message — must be sender or recipient
+      let accessCheck: any;
+      if (senderId) {
+        accessCheck = await db.execute(sql`
+          SELECT sm.* FROM staff_messages sm
+          LEFT JOIN staff_message_recipients smr ON smr.message_id = sm.id AND smr.worker_id = ${senderId}
+          WHERE sm.id = ${parentId} AND (sm.sender_id = ${senderId} OR smr.worker_id = ${senderId})
+          LIMIT 1
+        `);
+      } else {
+        // Senderless user: access only to messages they originally sent (by sender_user_id)
+        accessCheck = await db.execute(sql`
+          SELECT sm.* FROM staff_messages sm
+          WHERE sm.id = ${parentId} AND sm.sender_user_id = ${String(userId)}
+          LIMIT 1
+        `);
+      }
       const parent = (accessCheck.rows ?? accessCheck as any)[0];
       if (!parent) return res.status(403).json({ message: "Access denied" });
 
+      const replierUserId = senderId ? null : String(userId);
       const replyResult = await db.execute(sql`
-        INSERT INTO staff_messages (company_id, sender_id, subject, body, scope, delivery_channel, parent_message_id, is_reply)
-        VALUES (${parent.company_id}, ${sender.id}, ${'Re: ' + parent.subject}, ${body.trim()}, 'one', 'app', ${parentId}, TRUE)
+        INSERT INTO staff_messages (company_id, sender_id, sender_name, sender_user_id, subject, body, scope, delivery_channel, parent_message_id, is_reply)
+        VALUES (${parent.company_id}, ${senderId}, ${replierName}, ${replierUserId}, ${'Re: ' + parent.subject}, ${body.trim()}, 'one', 'app', ${parentId}, TRUE)
         RETURNING *
       `);
       const reply = (replyResult.rows ?? replyResult as any)[0];
 
       // Notify the original sender (if not replying to yourself)
-      const notifyWorkerId = parent.sender_id === sender.id ? parent.recipient_worker_id : parent.sender_id;
-      if (notifyWorkerId && notifyWorkerId !== sender.id) {
+      const notifyWorkerId = parent.sender_id === senderId ? parent.recipient_worker_id : parent.sender_id;
+      if (notifyWorkerId && notifyWorkerId !== senderId) {
         await db.execute(sql`
           INSERT INTO staff_message_recipients (message_id, worker_id) VALUES (${reply.id}, ${notifyWorkerId})
         `);
       }
 
-      const senderName = await db.execute(sql`SELECT first_name || ' ' || last_name AS name FROM workers WHERE id = ${sender.id}`);
-      const name = (senderName.rows ?? senderName as any)[0]?.name || "Staff";
-
-      res.json({ ...reply, sender_name: name });
+      res.json({ ...reply, sender_name: replierName });
     } catch (err) {
       res.status(500).json({ message: safeErrorMessage(err, "Failed to send reply") });
     }

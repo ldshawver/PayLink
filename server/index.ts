@@ -1397,6 +1397,9 @@ app.use((req, res, next) => {
       is_reply BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+    await run("staff_messages.sender_id nullable", sql`ALTER TABLE staff_messages ALTER COLUMN sender_id DROP NOT NULL`);
+    await run("staff_messages.sender_name", sql`ALTER TABLE staff_messages ADD COLUMN IF NOT EXISTS sender_name TEXT`);
+    await run("staff_messages.sender_user_id", sql`ALTER TABLE staff_messages ADD COLUMN IF NOT EXISTS sender_user_id VARCHAR`);
     await run("staff_message_recipients table", sql`CREATE TABLE IF NOT EXISTS staff_message_recipients (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       message_id VARCHAR NOT NULL REFERENCES staff_messages(id) ON DELETE CASCADE,

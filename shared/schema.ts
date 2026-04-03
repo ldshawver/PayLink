@@ -2683,7 +2683,9 @@ export type InsertLicenseRequest = z.infer<typeof insertLicenseRequestSchema>;
 export const staffMessages = pgTable("staff_messages", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").references(() => companies.id),
-  senderId: varchar("sender_id").notNull().references(() => workers.id),
+  senderId: varchar("sender_id").references(() => workers.id),
+  senderName: text("sender_name"),                      // persisted display name; populated at send time
+  senderUserId: varchar("sender_user_id"),              // user account id for senderless (admin) senders
   subject: text("subject").notNull(),
   body: text("body").notNull(),
   scope: text("scope").notNull().default("one"),        // 'one' | 'company' | 'sitewide'
