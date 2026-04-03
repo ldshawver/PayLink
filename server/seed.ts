@@ -1,6 +1,6 @@
 import { db } from "./db";
 import { eq } from "drizzle-orm";
-import { companies, workers, timeEntries, schedules, taxesDeductions, users, roles, rolePermissions, userRoles, employeeGroupConfigs } from "@shared/schema";
+import { companies, workers, timeEntries, schedules, taxesDeductions, users, roles, rolePermissions, userRoles, employeeGroupConfigs, tradeTransactions } from "@shared/schema";
 import bcrypt from "bcrypt";
 
 const PERMISSION_RESOURCES = [
@@ -561,8 +561,75 @@ export async function seedDatabase() {
   ]);
 
   await seedEmployeeGroupConfigs();
+  await seedTradeCompensationDemo(insertedWorkers, company1.id);
 
   console.log("Database seeded successfully");
+}
+
+async function seedTradeCompensationDemo(insertedWorkers: any[], companyId: string) {
+  try {
+    const existing = await db.select().from(tradeTransactions).where(eq(tradeTransactions.companyId, companyId));
+    if (existing.length > 0) {
+      console.log("Trade transactions already seeded, skipping");
+      return;
+    }
+    const contractor = insertedWorkers.find(w => w.workerType === "contractor");
+    if (!contractor) return;
+
+    const currentYear = new Date().getFullYear();
+    const adminUser = await db.select().from(users).where(eq(users.username, "admin")).then(r => r[0]);
+    const createdBy = adminUser?.id || "admin";
+
+    await db.insert(tradeTransactions).values([
+      {
+        companyId, createdBy,
+        title: "Logo & Brand Identity Design",
+        transactionType: "services",
+        counterpartyType: "contractor",
+        counterpartyId: contractor.id,
+        counterpartyName: `${contractor.firstName} ${contractor.lastName}`,
+        description: "Custom logo, brand guidelines, and identity package in exchange for 3 months free SaaS access ($250/mo value).",
+        fairMarketValue: "750.00",
+        currency: "USD",
+        status: "completed",
+        isReportable: true,
+        taxYear: currentYear,
+        reportingNotes: "Trade value equals retail SaaS subscription value. Must be included in 1099-NEC.",
+      },
+      {
+        companyId, createdBy,
+        title: "UX Audit & Wireframes",
+        transactionType: "services",
+        counterpartyType: "contractor",
+        counterpartyId: contractor.id,
+        counterpartyName: `${contractor.firstName} ${contractor.lastName}`,
+        description: "Full UX audit of the dashboard and new feature wireframes in exchange for equipment (refurbished laptop).",
+        fairMarketValue: "420.00",
+        currency: "USD",
+        status: "approved",
+        isReportable: true,
+        taxYear: currentYear,
+        reportingNotes: "FMV of laptop provided as consideration.",
+      },
+      {
+        companyId, createdBy,
+        title: "Office Space Sub-let",
+        transactionType: "property_rights",
+        counterpartyType: "vendor",
+        counterpartyId: null,
+        counterpartyName: "Eastside Co-work LLC",
+        description: "Provided 2 desks for 6 months in exchange for accounting software licenses.",
+        fairMarketValue: "1200.00",
+        currency: "USD",
+        status: "draft",
+        isReportable: false,
+        taxYear: currentYear,
+      },
+    ]);
+    console.log("Trade compensation demo data seeded");
+  } catch (e) {
+    console.log("Could not seed trade compensation demo:", e);
+  }
 }
 
 async function seedEmployeeGroupConfigs() {

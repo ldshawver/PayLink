@@ -163,6 +163,9 @@ import {
   type TradeTransactionItem, type InsertTradeTransactionItem,
   type TradeAttachment, type InsertTradeAttachment,
   type TradeAuditLog, type InsertTradeAuditLog,
+  contractorDocuments, contractor1099Summaries,
+  type ContractorDocument, type InsertContractorDocument,
+  type Contractor1099Summary, type InsertContractor1099Summary,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -757,6 +760,20 @@ export interface IStorage {
   getTradeAuditLogs(tradeTransactionId: string): Promise<TradeAuditLog[]>;
   createTradeAuditLog(data: InsertTradeAuditLog): Promise<TradeAuditLog>;
   getTradeReportingSummary(companyId: string, year: number): Promise<{ counterpartyId: string | null; counterpartyName: string; totalFairMarketValue: string; transactionCount: number }[]>;
+
+  // Contractor documents (W-9, W-8BEN)
+  getContractorDocuments(companyId: string, workerId?: string): Promise<ContractorDocument[]>;
+  createContractorDocument(data: InsertContractorDocument): Promise<ContractorDocument>;
+  deleteContractorDocument(id: string): Promise<void>;
+
+  // 1099 summaries
+  get1099Summaries(companyId: string, year: number): Promise<Contractor1099Summary[]>;
+  get1099Summary(id: string): Promise<Contractor1099Summary | undefined>;
+  get1099SummaryByWorker(companyId: string, workerId: string, year: number): Promise<Contractor1099Summary | undefined>;
+  upsert1099Summary(data: InsertContractor1099Summary): Promise<Contractor1099Summary>;
+  update1099Summary(id: string, data: Partial<Contractor1099Summary>): Promise<Contractor1099Summary | undefined>;
+  calculate1099Summary(companyId: string, workerId: string, year: number): Promise<{ cashTotal: number; tradeTotal: number; total: number; missingW9: boolean }>;
+  generateAll1099Summaries(companyId: string, year: number): Promise<Contractor1099Summary[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3339,6 +3356,108 @@ export class DatabaseStorage implements IStorage {
       }
     }
     return Array.from(map.values()).map(v => ({ counterpartyId: v.counterpartyId, counterpartyName: v.counterpartyName, totalFairMarketValue: v.total.toFixed(2), transactionCount: v.count })).sort((a, b) => parseFloat(b.totalFairMarketValue) - parseFloat(a.totalFairMarketValue));
+  }
+
+  // ── Contractor Documents ───────────────────────────────────────────────────
+  async getContractorDocuments(companyId: string, workerId?: string): Promise<ContractorDocument[]> {
+    const conds = [eq(contractorDocuments.companyId, companyId)];
+    if (workerId) conds.push(eq(contractorDocuments.workerId, workerId));
+    return db.select().from(contractorDocuments).where(and(...conds)).orderBy(desc(contractorDocuments.createdAt));
+  }
+  async createContractorDocument(data: InsertContractorDocument): Promise<ContractorDocument> {
+    const [r] = await db.insert(contractorDocuments).values(data).returning();
+    return r;
+  }
+  async deleteContractorDocument(id: string): Promise<void> {
+    await db.delete(contractorDocuments).where(eq(contractorDocuments.id, id));
+  }
+
+  // ── 1099 Summaries ─────────────────────────────────────────────────────────
+  async get1099Summaries(companyId: string, year: number): Promise<Contractor1099Summary[]> {
+    return db.select().from(contractor1099Summaries).where(and(eq(contractor1099Summaries.companyId, companyId), eq(contractor1099Summaries.taxYear, year))).orderBy(desc(contractor1099Summaries.totalCompensation));
+  }
+  async get1099Summary(id: string): Promise<Contractor1099Summary | undefined> {
+    const [r] = await db.select().from(contractor1099Summaries).where(eq(contractor1099Summaries.id, id));
+    return r;
+  }
+  async get1099SummaryByWorker(companyId: string, workerId: string, year: number): Promise<Contractor1099Summary | undefined> {
+    const [r] = await db.select().from(contractor1099Summaries).where(and(eq(contractor1099Summaries.companyId, companyId), eq(contractor1099Summaries.workerId, workerId), eq(contractor1099Summaries.taxYear, year)));
+    return r;
+  }
+  async upsert1099Summary(data: InsertContractor1099Summary): Promise<Contractor1099Summary> {
+    const existing = await this.get1099SummaryByWorker(data.companyId, data.workerId, data.taxYear as number);
+    if (existing) {
+      const [r] = await db.update(contractor1099Summaries).set({ ...data, updatedAt: new Date() }).where(eq(contractor1099Summaries.id, existing.id)).returning();
+      return r;
+    }
+    const [r] = await db.insert(contractor1099Summaries).values(data).returning();
+    return r;
+  }
+  async update1099Summary(id: string, data: Partial<Contractor1099Summary>): Promise<Contractor1099Summary | undefined> {
+    const [r] = await db.update(contractor1099Summaries).set({ ...data, updatedAt: new Date() }).where(eq(contractor1099Summaries.id, id)).returning();
+    return r;
+  }
+
+  async calculate1099Summary(companyId: string, workerId: string, year: number): Promise<{ cashTotal: number; tradeTotal: number; total: number; missingW9: boolean }> {
+    // Cash from contractor invoices (paid, reportable)
+    const invoiceRows = await db.select().from(contractorInvoices).where(
+      and(
+        eq(contractorInvoices.companyId, companyId),
+        eq(contractorInvoices.contractorId, workerId),
+        eq(contractorInvoices.is1099Reportable, true),
+        eq(contractorInvoices.status, "paid")
+      )
+    );
+    // Only sum invoices for the target year based on invoiceDate
+    const cashTotal = invoiceRows
+      .filter(inv => inv.invoiceDate && inv.invoiceDate.startsWith(String(year)))
+      .reduce((sum, inv) => sum + parseFloat(inv.paidAmount || inv.amount), 0);
+
+    // FMV from trade transactions (completed or approved, reportable, included_in_1099)
+    const tradeRows = await db.select().from(tradeTransactions).where(
+      and(
+        eq(tradeTransactions.companyId, companyId),
+        eq(tradeTransactions.counterpartyId, workerId),
+        eq(tradeTransactions.isReportable, true),
+        inArray(tradeTransactions.status, ["approved", "completed"])
+      )
+    );
+    const tradeTotal = tradeRows
+      .filter(t => t.taxYear === year)
+      .reduce((sum, t) => sum + parseFloat(t.fairMarketValue), 0);
+
+    // W-9 check
+    const docs = await this.getContractorDocuments(companyId, workerId);
+    const hasW9 = docs.some(d => d.documentType === "w9");
+
+    return { cashTotal, tradeTotal, total: cashTotal + tradeTotal, missingW9: !hasW9 };
+  }
+
+  async generateAll1099Summaries(companyId: string, year: number): Promise<Contractor1099Summary[]> {
+    // Find all contractors in company with at least one invoice or trade tx
+    const companyWorkers = await db.select().from(workers).where(
+      and(eq(workers.companyId, companyId), eq(workers.workerType, "contractor" as any))
+    );
+
+    const results: Contractor1099Summary[] = [];
+    for (const worker of companyWorkers) {
+      const calc = await this.calculate1099Summary(companyId, worker.id, year);
+      const summary = await this.upsert1099Summary({
+        companyId,
+        workerId: worker.id,
+        taxYear: year,
+        cashTotal: calc.cashTotal.toFixed(2),
+        tradeTotal: calc.tradeTotal.toFixed(2),
+        totalCompensation: calc.total.toFixed(2),
+        meetsThreshold: calc.total >= 600,
+        threshold: "600",
+        missingW9: calc.missingW9,
+        status: calc.total >= 600 ? "ready" : "draft",
+        lastCalculatedAt: new Date(),
+      });
+      results.push(summary);
+    }
+    return results.sort((a, b) => parseFloat(b.totalCompensation) - parseFloat(a.totalCompensation));
   }
 }
 

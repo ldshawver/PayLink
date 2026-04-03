@@ -30,7 +30,8 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import {
   ArrowLeft, Plus, Upload, Trash2, Eye, CheckCircle2, XCircle, Send,
   Flag, Clock, AlertTriangle, FileText, Paperclip, History, DollarSign,
-  RefreshCw, ChevronRight, Download, BarChart3,
+  RefreshCw, ChevronRight, Download, BarChart3, Users, FileCheck,
+  Building2, Shield, ShieldAlert, ShieldCheck,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -91,6 +92,53 @@ interface TradeAuditLog {
   note: string | null;
   userId: string;
   createdAt: string;
+}
+
+interface ContractorWorker {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string | null;
+  companyId: string;
+  workerType: string;
+  ssn?: string | null;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+}
+
+interface ContractorDocument {
+  id: string;
+  companyId: string;
+  workerId: string;
+  documentType: string;
+  fileName: string;
+  fileUrl: string;
+  fileSize: number | null;
+  mimeType: string | null;
+  notes: string | null;
+  uploadedBy: string;
+  createdAt: string;
+}
+
+interface Contractor1099Summary {
+  id: string;
+  companyId: string;
+  workerId: string;
+  taxYear: number;
+  cashTotal: string;
+  tradeTotal: string;
+  totalCompensation: string;
+  meetsThreshold: boolean;
+  threshold: string;
+  missingW9: boolean;
+  status: string;
+  filedAt: string | null;
+  notes: string | null;
+  lastCalculatedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ── Status helpers ─────────────────────────────────────────────────────────
@@ -168,7 +216,12 @@ export default function TradeCompensationPage() {
   const [selectedTx, setSelectedTx] = useState<TradeTransaction | null>(null);
   const [showReviewDialog, setShowReviewDialog] = useState<{ action: "approve" | "reject" | null }>({ action: null });
   const [reviewNotes, setReviewNotes] = useState("");
+  const [pageTab, setPageTab] = useState<"transactions" | "contractors" | "reporting">("transactions");
+  const [reportingYear, setReportingYear] = useState<string>(String(new Date().getFullYear()));
+  const [selectedContractor, setSelectedContractor] = useState<ContractorWorker | null>(null);
+  const [show1099Detail, setShow1099Detail] = useState<Contractor1099Summary | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const w9FileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: companies = [] } = useQuery<{ id: string; name: string }[]>({
     queryKey: ["/api/companies"],
@@ -204,10 +257,70 @@ export default function TradeCompensationPage() {
     enabled: !!selectedTx,
   });
 
+  // ── Phase 2 queries ────────────────────────────────────────────────────
+  const { data: contractors = [] } = useQuery<ContractorWorker[]>({
+    queryKey: ["/api/contractors", selectedCompanyId],
+    queryFn: () => fetch(`/api/contractors?companyId=${selectedCompanyId}`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!selectedCompanyId,
+  });
+
+  const { data: contractorDocs = [] } = useQuery<ContractorDocument[]>({
+    queryKey: ["/api/contractor-documents", selectedCompanyId, selectedContractor?.id],
+    queryFn: () => {
+      const params = new URLSearchParams({ companyId: selectedCompanyId });
+      if (selectedContractor) params.set("workerId", selectedContractor.id);
+      return fetch(`/api/contractor-documents?${params}`, { credentials: "include" }).then(r => r.json());
+    },
+    enabled: !!selectedCompanyId,
+  });
+
+  const { data: summaries1099 = [], isLoading: loading1099 } = useQuery<Contractor1099Summary[]>({
+    queryKey: ["/api/1099-summaries", selectedCompanyId, reportingYear],
+    queryFn: () => fetch(`/api/1099-summaries?companyId=${selectedCompanyId}&year=${reportingYear}`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!selectedCompanyId && !!reportingYear,
+  });
+
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["/api/trade-transactions", selectedCompanyId] });
     if (selectedTx) qc.invalidateQueries({ queryKey: ["/api/trade-transactions", selectedTx.id] });
   };
+
+  const invalidate1099 = () => {
+    qc.invalidateQueries({ queryKey: ["/api/1099-summaries", selectedCompanyId, reportingYear] });
+  };
+
+  // ── Phase 2 mutations ──────────────────────────────────────────────────
+  const generate1099Mutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/1099-summaries/generate", { companyId: selectedCompanyId, year: parseInt(reportingYear) }),
+    onSuccess: async () => { toast({ title: "1099 summaries generated" }); invalidate1099(); },
+    onError: () => toast({ title: "Failed to generate summaries", variant: "destructive" }),
+  });
+
+  const markFiledMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/1099-summaries/${id}/mark-filed`),
+    onSuccess: () => { toast({ title: "Marked as filed" }); invalidate1099(); setShow1099Detail(null); },
+    onError: () => toast({ title: "Failed to mark as filed", variant: "destructive" }),
+  });
+
+  const uploadW9 = async (file: File, workerId: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("companyId", selectedCompanyId);
+    fd.append("workerId", workerId);
+    fd.append("documentType", "w9");
+    try {
+      const res = await fetch("/api/contractor-documents/upload", { method: "POST", credentials: "include", body: fd });
+      if (!res.ok) throw new Error();
+      toast({ title: "W-9 uploaded" });
+      qc.invalidateQueries({ queryKey: ["/api/contractor-documents", selectedCompanyId] });
+      invalidate1099();
+    } catch { toast({ title: "Upload failed", variant: "destructive" }); }
+  };
+
+  const deleteDocMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/contractor-documents/${id}`),
+    onSuccess: () => { toast({ title: "Document removed" }); qc.invalidateQueries({ queryKey: ["/api/contractor-documents", selectedCompanyId] }); },
+  });
 
   // ── Create / Update mutation ───────────────────────────────────────────
   const saveMutation = useMutation({
@@ -319,118 +432,475 @@ export default function TradeCompensationPage() {
   // LIST VIEW
   // ════════════════════════════════════════════════════════════════════════
   if (view === "list") {
+    const contractorDocsByWorker = contractorDocs.reduce<Record<string, ContractorDocument[]>>((acc, d) => {
+      if (!acc[d.workerId]) acc[d.workerId] = [];
+      acc[d.workerId].push(d);
+      return acc;
+    }, {});
+
+    const summaryByWorker = summaries1099.reduce<Record<string, Contractor1099Summary>>((acc, s) => {
+      acc[s.workerId] = s;
+      return acc;
+    }, {});
+
     return (
       <div className="p-6 space-y-6 max-w-7xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-foreground" data-testid="text-trade-title">Trade Compensation</h1>
-            <p className="text-sm text-muted-foreground mt-1">Record non-cash compensation arrangements for contractors, vendors, and counterparties.</p>
+            <h1 className="text-2xl font-bold text-foreground" data-testid="text-trade-title">Trade & Non-Cash Compensation</h1>
+            <p className="text-sm text-muted-foreground mt-1">Record and report non-cash compensation arrangements, manage W-9s, and generate 1099 summaries.</p>
           </div>
-          <Button onClick={openCreate} disabled={!selectedCompanyId} data-testid="button-new-trade">
-            <Plus className="h-4 w-4 mr-2" /> New Transaction
-          </Button>
-        </div>
-
-        {/* Compliance Notice */}
-        <Alert className="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20">
-          <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-          <AlertDescription className="text-amber-800 dark:text-amber-300 text-sm">
-            <strong>Compliance notice:</strong> Non-cash compensation may still be taxable. Barter arrangements with contractors may need to be reported on year-end 1099 forms. Recorded values may affect eligibility for certain public benefit programs. This tool supports recordkeeping and compliance reporting only.
-          </AlertDescription>
-        </Alert>
-
-        {/* Filters */}
-        <div className="flex flex-wrap gap-3">
-          <div className="w-52">
+          <div className="flex items-center gap-2">
             <Select value={selectedCompanyId} onValueChange={setSelectedCompanyId}>
-              <SelectTrigger data-testid="select-company">
+              <SelectTrigger className="w-52" data-testid="select-company">
                 <SelectValue placeholder="Select company…" />
               </SelectTrigger>
               <SelectContent>
                 {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
               </SelectContent>
             </Select>
-          </div>
-          <div className="w-44">
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger data-testid="select-status-filter">
-                <SelectValue placeholder="All statuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                {Object.entries(STATUS_CONFIG).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="w-28">
-            <Input placeholder="Year" value={yearFilter} onChange={e => setYearFilter(e.target.value)} data-testid="input-year-filter" />
+            {pageTab === "transactions" && (
+              <Button onClick={openCreate} disabled={!selectedCompanyId} data-testid="button-new-trade">
+                <Plus className="h-4 w-4 mr-2" /> New Transaction
+              </Button>
+            )}
           </div>
         </div>
 
-        {/* Table */}
-        <Card>
-          <CardContent className="p-0">
+        {/* Compliance Notice */}
+        <Alert className="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20">
+          <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+          <AlertDescription className="text-amber-800 dark:text-amber-300 text-sm">
+            <strong>Compliance notice:</strong> Non-cash compensation may still be taxable. Barter arrangements with contractors exceeding $600 annually must be reported on 1099-NEC forms. This tool supports recordkeeping and compliance reporting only — consult a tax professional.
+          </AlertDescription>
+        </Alert>
+
+        {/* Page-level tab navigation */}
+        <div className="border-b border-border">
+          <nav className="flex gap-1" aria-label="Page tabs">
+            {([
+              { id: "transactions", label: "Transactions", icon: DollarSign },
+              { id: "contractors", label: "Contractor Profiles", icon: Users },
+              { id: "reporting", label: "1099 Reporting", icon: BarChart3 },
+            ] as const).map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setPageTab(tab.id)}
+                data-testid={`tab-${tab.id}`}
+                className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${pageTab === tab.id ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground"}`}
+              >
+                <tab.icon className="h-4 w-4" />
+                {tab.label}
+                {tab.id === "contractors" && contractors.length > 0 && (
+                  <span className="ml-1 rounded-full bg-muted text-muted-foreground text-xs px-1.5 py-0.5">{contractors.length}</span>
+                )}
+                {tab.id === "reporting" && summaries1099.filter(s => s.meetsThreshold && s.status !== "filed").length > 0 && (
+                  <span className="ml-1 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-xs px-1.5 py-0.5">{summaries1099.filter(s => s.meetsThreshold && s.status !== "filed").length}</span>
+                )}
+              </button>
+            ))}
+          </nav>
+        </div>
+
+        {/* ── TRANSACTIONS TAB ── */}
+        {pageTab === "transactions" && (
+          <>
+            <div className="flex flex-wrap gap-3">
+              <div className="w-44">
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger data-testid="select-status-filter">
+                    <SelectValue placeholder="All statuses" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All statuses</SelectItem>
+                    {Object.entries(STATUS_CONFIG).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="w-28">
+                <Input placeholder="Year" value={yearFilter} onChange={e => setYearFilter(e.target.value)} data-testid="input-year-filter" />
+              </div>
+            </div>
+
+            <Card>
+              <CardContent className="p-0">
+                {!selectedCompanyId ? (
+                  <div className="py-16 text-center text-muted-foreground">
+                    <DollarSign className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                    <p className="text-sm">Select a company to view trade compensation records.</p>
+                  </div>
+                ) : isLoading ? (
+                  <div className="py-16 text-center text-muted-foreground text-sm">Loading…</div>
+                ) : transactions.length === 0 ? (
+                  <div className="py-16 text-center text-muted-foreground">
+                    <FileText className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                    <p className="text-sm font-medium">No trade compensation records yet</p>
+                    <p className="text-xs mt-1">Click "New Transaction" to record a non-cash compensation arrangement.</p>
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Title</TableHead>
+                        <TableHead>Counterparty</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>FMV</TableHead>
+                        <TableHead>Year</TableHead>
+                        <TableHead>Reportable</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Created</TableHead>
+                        <TableHead></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {transactions.map(tx => (
+                        <TableRow key={tx.id} className="cursor-pointer hover:bg-muted/50" data-testid={`row-trade-${tx.id}`}
+                          onClick={() => { setSelectedTx(tx); setView("detail"); }}>
+                          <TableCell className="font-medium">{tx.title}</TableCell>
+                          <TableCell>
+                            <div className="text-sm">{tx.counterpartyName}</div>
+                            <div className="text-xs text-muted-foreground capitalize">{tx.counterpartyType}</div>
+                          </TableCell>
+                          <TableCell className="capitalize text-sm">{tx.transactionType}</TableCell>
+                          <TableCell className="font-mono text-sm">{fmt(tx.fairMarketValue)}</TableCell>
+                          <TableCell className="text-sm">{tx.taxYear || "—"}</TableCell>
+                          <TableCell>{tx.isReportable ? <Flag className="h-3.5 w-3.5 text-amber-500" /> : <span className="text-muted-foreground text-xs">—</span>}</TableCell>
+                          <TableCell><StatusBadge status={tx.status} /></TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{fmtDate(tx.createdAt)}</TableCell>
+                          <TableCell><ChevronRight className="h-4 w-4 text-muted-foreground" /></TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+
+            {transactions.length > 0 && (
+              <div className="flex items-center gap-6 text-sm text-muted-foreground">
+                <span>{transactions.length} record{transactions.length !== 1 ? "s" : ""}</span>
+                <span>Total FMV: <strong className="text-foreground">{fmt(transactions.reduce((s, t) => s + parseFloat(t.fairMarketValue), 0))}</strong></span>
+                <span>Reportable: <strong className="text-amber-600">{fmt(transactions.filter(t => t.isReportable).reduce((s, t) => s + parseFloat(t.fairMarketValue), 0))}</strong></span>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ── CONTRACTORS TAB ── */}
+        {pageTab === "contractors" && (
+          <div className="space-y-4">
+            <input type="file" ref={w9FileInputRef} className="hidden" accept=".pdf,.jpg,.jpeg,.png"
+              onChange={e => {
+                const file = e.target.files?.[0];
+                if (file && selectedContractor) uploadW9(file, selectedContractor.id);
+                e.target.value = "";
+              }}
+            />
             {!selectedCompanyId ? (
               <div className="py-16 text-center text-muted-foreground">
-                <DollarSign className="h-10 w-10 mx-auto mb-3 opacity-30" />
-                <p className="text-sm">Select a company to view trade compensation records.</p>
+                <Users className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                <p className="text-sm">Select a company to view contractors.</p>
               </div>
-            ) : isLoading ? (
-              <div className="py-16 text-center text-muted-foreground text-sm">Loading…</div>
-            ) : transactions.length === 0 ? (
+            ) : contractors.length === 0 ? (
               <div className="py-16 text-center text-muted-foreground">
-                <FileText className="h-10 w-10 mx-auto mb-3 opacity-30" />
-                <p className="text-sm font-medium">No trade compensation records yet</p>
-                <p className="text-xs mt-1">Click "New Transaction" to record a non-cash compensation arrangement.</p>
+                <Users className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                <p className="text-sm font-medium">No contractors found</p>
+                <p className="text-xs mt-1">Add contractor-type workers in the Workers section to see them here.</p>
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Title</TableHead>
-                    <TableHead>Counterparty</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>FMV</TableHead>
-                    <TableHead>Year</TableHead>
-                    <TableHead>Reportable</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Created</TableHead>
-                    <TableHead></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {transactions.map(tx => (
-                    <TableRow key={tx.id} className="cursor-pointer hover:bg-muted/50" data-testid={`row-trade-${tx.id}`}
-                      onClick={() => { setSelectedTx(tx); setView("detail"); }}>
-                      <TableCell className="font-medium">{tx.title}</TableCell>
-                      <TableCell>
-                        <div className="text-sm">{tx.counterpartyName}</div>
-                        <div className="text-xs text-muted-foreground capitalize">{tx.counterpartyType}</div>
-                      </TableCell>
-                      <TableCell className="capitalize text-sm">{tx.transactionType}</TableCell>
-                      <TableCell className="font-mono text-sm">{fmt(tx.fairMarketValue)}</TableCell>
-                      <TableCell className="text-sm">{tx.taxYear || "—"}</TableCell>
-                      <TableCell>{tx.isReportable ? <Flag className="h-3.5 w-3.5 text-amber-500" /> : <span className="text-muted-foreground text-xs">—</span>}</TableCell>
-                      <TableCell><StatusBadge status={tx.status} /></TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{fmtDate(tx.createdAt)}</TableCell>
-                      <TableCell><ChevronRight className="h-4 w-4 text-muted-foreground" /></TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
+              <div className="grid gap-4">
+                {contractors.map(c => {
+                  const docs = contractorDocsByWorker[c.id] || [];
+                  const w9 = docs.find(d => d.documentType === "w9");
+                  const summary = summaryByWorker[c.id];
+                  const meetsThreshold = summary?.meetsThreshold ?? false;
+                  const total = summary ? parseFloat(summary.totalCompensation) : 0;
 
-        {/* Summary row */}
-        {transactions.length > 0 && (
-          <div className="flex items-center gap-6 text-sm text-muted-foreground">
-            <span>{transactions.length} record{transactions.length !== 1 ? "s" : ""}</span>
-            <span>Total FMV: <strong className="text-foreground">{fmt(transactions.reduce((s, t) => s + parseFloat(t.fairMarketValue), 0))}</strong></span>
-            <span>Reportable: <strong className="text-amber-600">{fmt(transactions.filter(t => t.isReportable).reduce((s, t) => s + parseFloat(t.fairMarketValue), 0))}</strong></span>
+                  return (
+                    <Card key={c.id} className="overflow-hidden" data-testid={`card-contractor-${c.id}`}>
+                      <CardContent className="p-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center shrink-0">
+                              <Users className="h-5 w-5 text-muted-foreground" />
+                            </div>
+                            <div>
+                              <p className="font-semibold text-sm">{c.firstName} {c.lastName}</p>
+                              <p className="text-xs text-muted-foreground">{c.email || "No email"}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 flex-wrap justify-end">
+                            {/* W-9 status */}
+                            {w9 ? (
+                              <span className="flex items-center gap-1 text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 px-2 py-1 rounded-full" data-testid={`badge-w9-${c.id}`}>
+                                <ShieldCheck className="h-3 w-3" /> W-9 on file
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 px-2 py-1 rounded-full" data-testid={`badge-w9-missing-${c.id}`}>
+                                <ShieldAlert className="h-3 w-3" /> W-9 missing
+                              </span>
+                            )}
+                            {/* Threshold */}
+                            {meetsThreshold && (
+                              <span className="flex items-center gap-1 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-1 rounded-full" data-testid={`badge-threshold-${c.id}`}>
+                                <AlertTriangle className="h-3 w-3" /> Exceeds $600
+                              </span>
+                            )}
+                            {total > 0 && (
+                              <span className="text-xs text-muted-foreground font-mono">{fmt(total)} total</span>
+                            )}
+                            <Button variant="outline" size="sm" className="h-7 text-xs"
+                              onClick={() => { setSelectedContractor(c); w9FileInputRef.current?.click(); }}
+                              data-testid={`button-upload-w9-${c.id}`}
+                            >
+                              <Upload className="h-3 w-3 mr-1" /> Upload W-9
+                            </Button>
+                          </div>
+                        </div>
+
+                        {/* Compliance warnings */}
+                        <div className="mt-3 space-y-1.5">
+                          {!w9 && meetsThreshold && (
+                            <Alert className="border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-900/20 py-2">
+                              <ShieldAlert className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                              <AlertDescription className="text-xs text-red-800 dark:text-red-300">
+                                This contractor has exceeded the $600 reporting threshold but is missing a W-9. A W-9 is required before filing a 1099-NEC.
+                              </AlertDescription>
+                            </Alert>
+                          )}
+                          {!w9 && !meetsThreshold && total > 0 && (
+                            <Alert className="border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-900/20 py-2">
+                              <AlertTriangle className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                              <AlertDescription className="text-xs text-amber-800 dark:text-amber-300">
+                                W-9 on file recommended before payments reach the $600 reporting threshold.
+                              </AlertDescription>
+                            </Alert>
+                          )}
+                        </div>
+
+                        {/* W-9 file list */}
+                        {docs.length > 0 && (
+                          <div className="mt-3 space-y-1">
+                            {docs.map(d => (
+                              <div key={d.id} className="flex items-center justify-between text-xs bg-muted/40 rounded px-2 py-1.5" data-testid={`row-doc-${d.id}`}>
+                                <div className="flex items-center gap-1.5">
+                                  <FileCheck className="h-3.5 w-3.5 text-muted-foreground" />
+                                  <span className="font-medium">{d.fileName}</span>
+                                  <span className="text-muted-foreground capitalize">{d.documentType.toUpperCase()}</span>
+                                  <span className="text-muted-foreground">· {fmtDate(d.createdAt)}</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" asChild data-testid={`button-download-doc-${d.id}`}>
+                                    <a href={d.fileUrl} target="_blank" rel="noopener noreferrer" download>
+                                      <Download className="h-3 w-3" />
+                                    </a>
+                                  </Button>
+                                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-red-500" onClick={() => deleteDocMutation.mutate(d.id)} data-testid={`button-delete-doc-${d.id}`}>
+                                    <Trash2 className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
+
+        {/* ── 1099 REPORTING TAB ── */}
+        {pageTab === "reporting" && (
+          <div className="space-y-4">
+            {/* Controls */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <Input className="w-28" placeholder="Tax year" value={reportingYear} onChange={e => setReportingYear(e.target.value)} data-testid="input-reporting-year" />
+              <Button onClick={() => generate1099Mutation.mutate()} disabled={!selectedCompanyId || generate1099Mutation.isPending} data-testid="button-generate-1099">
+                <RefreshCw className={`h-4 w-4 mr-2 ${generate1099Mutation.isPending ? "animate-spin" : ""}`} />
+                {generate1099Mutation.isPending ? "Generating…" : "Generate / Refresh Summaries"}
+              </Button>
+              {summaries1099.length > 0 && (
+                <Button variant="outline" asChild data-testid="button-export-1099">
+                  <a href={`/api/1099-summaries/export?companyId=${selectedCompanyId}&year=${reportingYear}`} download>
+                    <Download className="h-4 w-4 mr-2" /> Export CSV
+                  </a>
+                </Button>
+              )}
+            </div>
+
+            {/* Warning: contractors missing W-9 above threshold */}
+            {summaries1099.some(s => s.missingW9 && s.meetsThreshold) && (
+              <Alert className="border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-900/20">
+                <ShieldAlert className="h-4 w-4 text-red-600 dark:text-red-400" />
+                <AlertDescription className="text-sm text-red-800 dark:text-red-300">
+                  <strong>Action required:</strong> {summaries1099.filter(s => s.missingW9 && s.meetsThreshold).length} contractor{summaries1099.filter(s => s.missingW9 && s.meetsThreshold).length !== 1 ? "s" : ""} exceed the $600 threshold but {summaries1099.filter(s => s.missingW9 && s.meetsThreshold).length !== 1 ? "are" : "is"} missing a W-9. Go to Contractor Profiles to upload missing documents.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {/* Summary table */}
+            {!selectedCompanyId ? (
+              <div className="py-16 text-center text-muted-foreground">
+                <BarChart3 className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                <p className="text-sm">Select a company to view 1099 summaries.</p>
+              </div>
+            ) : loading1099 ? (
+              <div className="py-16 text-center text-muted-foreground text-sm">Loading…</div>
+            ) : summaries1099.length === 0 ? (
+              <div className="py-16 text-center text-muted-foreground">
+                <BarChart3 className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                <p className="text-sm font-medium">No 1099 summaries yet for {reportingYear}</p>
+                <p className="text-xs mt-1">Click "Generate / Refresh Summaries" to calculate totals for all contractors.</p>
+              </div>
+            ) : (
+              <Card>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Contractor</TableHead>
+                        <TableHead className="text-right">Cash Payments</TableHead>
+                        <TableHead className="text-right">Trade FMV</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                        <TableHead>Threshold</TableHead>
+                        <TableHead>W-9</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {summaries1099.map(s => {
+                        const worker = contractors.find(c => c.id === s.workerId);
+                        return (
+                          <TableRow key={s.id} className="cursor-pointer hover:bg-muted/50" data-testid={`row-1099-${s.id}`}
+                            onClick={() => setShow1099Detail(s)}>
+                            <TableCell className="font-medium">
+                              {worker ? `${worker.firstName} ${worker.lastName}` : s.workerId}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-sm">{fmt(s.cashTotal)}</TableCell>
+                            <TableCell className="text-right font-mono text-sm">{fmt(s.tradeTotal)}</TableCell>
+                            <TableCell className="text-right font-mono text-sm font-semibold">{fmt(s.totalCompensation)}</TableCell>
+                            <TableCell>
+                              {s.meetsThreshold
+                                ? <span className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400"><AlertTriangle className="h-3.5 w-3.5" /> Exceeds $600</span>
+                                : <span className="text-xs text-muted-foreground">Below $600</span>}
+                            </TableCell>
+                            <TableCell>
+                              {s.missingW9
+                                ? <span className="flex items-center gap-1 text-xs text-red-600 dark:text-red-400"><ShieldAlert className="h-3.5 w-3.5" /> Missing</span>
+                                : <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><ShieldCheck className="h-3.5 w-3.5" /> On file</span>}
+                            </TableCell>
+                            <TableCell>
+                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${s.status === "filed" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" : s.status === "ready" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"}`}>
+                                {s.status}
+                              </span>
+                            </TableCell>
+                            <TableCell><ChevronRight className="h-4 w-4 text-muted-foreground" /></TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Summary stats */}
+            {summaries1099.length > 0 && (
+              <div className="flex items-center gap-6 text-sm text-muted-foreground">
+                <span>{summaries1099.length} contractor{summaries1099.length !== 1 ? "s" : ""}</span>
+                <span>Above threshold: <strong className="text-amber-600">{summaries1099.filter(s => s.meetsThreshold).length}</strong></span>
+                <span>Missing W-9: <strong className="text-red-600">{summaries1099.filter(s => s.missingW9).length}</strong></span>
+                <span>Filed: <strong className="text-green-600">{summaries1099.filter(s => s.status === "filed").length}</strong></span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── 1099 Detail Modal ── */}
+        <Dialog open={!!show1099Detail} onOpenChange={() => setShow1099Detail(null)}>
+          <DialogContent className="max-w-md">
+            {show1099Detail && (() => {
+              const worker = contractors.find(c => c.id === show1099Detail.workerId);
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle>1099 Summary — {worker ? `${worker.firstName} ${worker.lastName}` : "Contractor"}</DialogTitle>
+                    <DialogDescription>Tax Year {show1099Detail.taxYear}</DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 py-2">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-muted/40 rounded-lg p-3">
+                        <p className="text-xs text-muted-foreground">Cash Payments</p>
+                        <p className="text-lg font-semibold font-mono">{fmt(show1099Detail.cashTotal)}</p>
+                      </div>
+                      <div className="bg-muted/40 rounded-lg p-3">
+                        <p className="text-xs text-muted-foreground">Trade FMV</p>
+                        <p className="text-lg font-semibold font-mono">{fmt(show1099Detail.tradeTotal)}</p>
+                      </div>
+                      <div className={`col-span-2 rounded-lg p-3 ${show1099Detail.meetsThreshold ? "bg-amber-50 dark:bg-amber-900/20" : "bg-muted/40"}`}>
+                        <p className="text-xs text-muted-foreground">Total Compensation</p>
+                        <p className={`text-2xl font-bold font-mono ${show1099Detail.meetsThreshold ? "text-amber-700 dark:text-amber-400" : ""}`}>{fmt(show1099Detail.totalCompensation)}</p>
+                        {show1099Detail.meetsThreshold && <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">Exceeds the $600 1099-NEC filing threshold</p>}
+                      </div>
+                    </div>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">W-9 Status</span>
+                        {show1099Detail.missingW9
+                          ? <span className="flex items-center gap-1 text-red-600 dark:text-red-400 text-xs font-medium"><ShieldAlert className="h-3.5 w-3.5" /> Missing</span>
+                          : <span className="flex items-center gap-1 text-green-700 dark:text-green-400 text-xs font-medium"><ShieldCheck className="h-3.5 w-3.5" /> On file</span>}
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Filing Status</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${show1099Detail.status === "filed" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" : show1099Detail.status === "ready" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"}`}>
+                          {show1099Detail.status}
+                        </span>
+                      </div>
+                      {show1099Detail.filedAt && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-muted-foreground">Filed On</span>
+                          <span>{fmtDate(show1099Detail.filedAt)}</span>
+                        </div>
+                      )}
+                      {show1099Detail.lastCalculatedAt && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-muted-foreground">Last Recalculated</span>
+                          <span className="text-xs">{fmtDate(show1099Detail.lastCalculatedAt)}</span>
+                        </div>
+                      )}
+                    </div>
+                    {show1099Detail.missingW9 && show1099Detail.meetsThreshold && (
+                      <Alert className="border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-900/20 py-2">
+                        <ShieldAlert className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                        <AlertDescription className="text-xs text-red-800 dark:text-red-300">
+                          Cannot file without a W-9. Upload one in Contractor Profiles.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setShow1099Detail(null)}>Close</Button>
+                    {show1099Detail.status !== "filed" && (
+                      <Button
+                        disabled={markFiledMutation.isPending || show1099Detail.missingW9}
+                        onClick={() => markFiledMutation.mutate(show1099Detail.id)}
+                        data-testid="button-mark-filed"
+                      >
+                        <FileCheck className="h-4 w-4 mr-1.5" />
+                        {markFiledMutation.isPending ? "Marking…" : "Mark as Filed"}
+                      </Button>
+                    )}
+                  </DialogFooter>
+                </>
+              );
+            })()}
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }

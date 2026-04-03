@@ -12034,7 +12034,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to delete trade transaction" }); }
   });
 
-  // Status transitions
+  // Status transitions (auto-recalculate 1099 when approved or completed)
   const tradeStatusTransition = (fromStatuses: string[], toStatus: string, action: string) =>
     async (req: any, res: any) => {
       try {
@@ -12044,6 +12044,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!fromStatuses.includes(tx.status)) return res.status(422).json({ message: `Cannot ${action} a transaction in status: ${tx.status}` });
         const updated = await storage.updateTradeTransaction(req.params.id, { status: toStatus, ...(action === "approve" || action === "reject" ? { reviewedBy: userId, reviewedAt: new Date(), reviewNotes: req.body.notes || null } : {}) });
         await storage.createTradeAuditLog({ tradeTransactionId: tx.id, companyId: tx.companyId, userId, action, oldStatus: tx.status, newStatus: toStatus, note: req.body.notes || null });
+        // Auto-recalculate 1099 summary when a reportable transaction changes to approved/completed
+        if (tx.isReportable && tx.counterpartyId && ["approved", "completed"].includes(toStatus)) {
+          const year = tx.taxYear || new Date().getFullYear();
+          storage.calculate1099Summary(tx.companyId, tx.counterpartyId, year).then(async calc => {
+            await storage.upsert1099Summary({
+              companyId: tx.companyId, workerId: tx.counterpartyId!, taxYear: year,
+              cashTotal: calc.cashTotal.toFixed(2), tradeTotal: calc.tradeTotal.toFixed(2),
+              totalCompensation: calc.total.toFixed(2), meetsThreshold: calc.total >= 600,
+              threshold: "600", missingW9: calc.missingW9,
+              status: calc.total >= 600 ? "ready" : "draft", lastCalculatedAt: new Date(),
+            });
+          }).catch(() => {});
+        }
         res.json(updated);
       } catch (e) { res.status(500).json({ message: `Failed to ${action} trade transaction` }); }
     };
@@ -12103,6 +12116,135 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/trade-transactions/:id/audit-logs", requireAuth, async (req, res) => {
     try { res.json(await storage.getTradeAuditLogs(req.params.id)); }
     catch (e) { res.status(500).json({ message: "Failed to fetch audit logs" }); }
+  });
+
+  // ── Phase 2: Contractor Documents (W-9 / W-8BEN) ─────────────────────────
+  app.get("/api/contractor-documents", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
+    try {
+      const { companyId, workerId } = req.query;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      res.json(await storage.getContractorDocuments(companyId as string, workerId as string | undefined));
+    } catch (e) { res.status(500).json({ message: "Failed to fetch contractor documents" }); }
+  });
+
+  app.post("/api/contractor-documents/upload", requireAuth, requireRole("admin", "manager"), upload.single("file"), async (req: any, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const userId = req.session.userId as string;
+      const { companyId, workerId, documentType, notes } = req.body;
+      if (!companyId || !workerId) return res.status(400).json({ message: "companyId and workerId required" });
+      const doc = await storage.createContractorDocument({
+        companyId, workerId,
+        documentType: documentType || "w9",
+        fileName: req.file.originalname,
+        fileUrl: `/uploads/${req.file.filename}`,
+        fileSize: req.file.size,
+        mimeType: req.file.mimetype,
+        notes: notes || null,
+        uploadedBy: userId,
+      });
+      // Recalculate 1099 after W-9 upload
+      const year = new Date().getFullYear();
+      await storage.calculate1099Summary(companyId, workerId, year);
+      res.status(201).json(doc);
+    } catch (e) { res.status(500).json({ message: "Failed to upload contractor document" }); }
+  });
+
+  app.delete("/api/contractor-documents/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      await storage.deleteContractorDocument(req.params.id);
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ message: "Failed to delete contractor document" }); }
+  });
+
+  // ── Phase 2: 1099 Summaries ───────────────────────────────────────────────
+  app.get("/api/1099-summaries/export", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
+    try {
+      const { companyId, year } = req.query;
+      if (!companyId || !year) return res.status(400).json({ message: "companyId and year required" });
+      const summaries = await storage.get1099Summaries(companyId as string, parseInt(year as string));
+      const allWorkers = await storage.getWorkers(companyId as string);
+      const workerMap = new Map(allWorkers.map(w => [w.id, w]));
+
+      const rows = summaries.map(s => {
+        const w = workerMap.get(s.workerId);
+        return [
+          w ? `${w.firstName} ${w.lastName}` : s.workerId,
+          w?.ssn || "",
+          w?.address || "",
+          `${w?.city || ""},${w?.state || ""} ${w?.zip || ""}`,
+          s.taxYear,
+          s.cashTotal,
+          s.tradeTotal,
+          s.totalCompensation,
+          s.meetsThreshold ? "YES" : "NO",
+          s.missingW9 ? "MISSING" : "ON FILE",
+          s.status,
+        ].join(",");
+      });
+
+      const csv = [
+        "Name,SSN,Address,City/State/Zip,Tax Year,Cash Payments,Trade FMV,Total Compensation,Meets $600 Threshold,W-9 Status,Summary Status",
+        ...rows,
+      ].join("\n");
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="1099-summaries-${year}.csv"`);
+      res.send(csv);
+    } catch (e) { res.status(500).json({ message: "Failed to export 1099 summaries" }); }
+  });
+
+  app.get("/api/1099-summaries", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
+    try {
+      const { companyId, year } = req.query;
+      if (!companyId || !year) return res.status(400).json({ message: "companyId and year required" });
+      res.json(await storage.get1099Summaries(companyId as string, parseInt(year as string)));
+    } catch (e) { res.status(500).json({ message: "Failed to fetch 1099 summaries" }); }
+  });
+
+  app.get("/api/1099-summaries/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const summary = await storage.get1099Summary(req.params.id);
+      if (!summary) return res.status(404).json({ message: "Not found" });
+      res.json(summary);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch 1099 summary" }); }
+  });
+
+  app.post("/api/1099-summaries/generate", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
+    try {
+      const { companyId, year } = req.body;
+      if (!companyId || !year) return res.status(400).json({ message: "companyId and year required" });
+      const summaries = await storage.generateAll1099Summaries(companyId, parseInt(year));
+      res.json({ generated: summaries.length, summaries });
+    } catch (e) { res.status(500).json({ message: "Failed to generate 1099 summaries" }); }
+  });
+
+  app.post("/api/1099-summaries/:id/mark-filed", requireAuth, requireRole("admin"), async (req: any, res) => {
+    try {
+      const summary = await storage.get1099Summary(req.params.id);
+      if (!summary) return res.status(404).json({ message: "Not found" });
+      if (summary.status === "filed") return res.status(422).json({ message: "Already filed" });
+      const updated = await storage.update1099Summary(req.params.id, { status: "filed", filedAt: new Date(), notes: req.body.notes || summary.notes });
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to mark as filed" }); }
+  });
+
+  app.patch("/api/1099-summaries/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const updated = await storage.update1099Summary(req.params.id, req.body);
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to update 1099 summary" }); }
+  });
+
+  // ── Phase 2: Contractor Profile endpoint ──────────────────────────────────
+  app.get("/api/contractors", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
+    try {
+      const { companyId } = req.query;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const allWorkers = await storage.getWorkers(companyId as string);
+      const contractors = allWorkers.filter(w => w.workerType === "contractor");
+      res.json(contractors);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch contractors" }); }
   });
 
   return httpServer;

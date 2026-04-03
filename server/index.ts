@@ -1474,6 +1474,38 @@ app.use((req, res, next) => {
       metadata TEXT,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+    await run("trade_transactions.included_in_1099", sql`ALTER TABLE trade_transactions ADD COLUMN IF NOT EXISTS included_in_1099 BOOLEAN NOT NULL DEFAULT FALSE`);
+    await run("contractor_documents table", sql`CREATE TABLE IF NOT EXISTS contractor_documents (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL,
+      worker_id VARCHAR NOT NULL,
+      document_type TEXT NOT NULL DEFAULT 'w9',
+      file_name TEXT NOT NULL,
+      file_url TEXT NOT NULL,
+      file_size INTEGER,
+      mime_type TEXT,
+      notes TEXT,
+      uploaded_by VARCHAR NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("contractor_1099_summaries table", sql`CREATE TABLE IF NOT EXISTS contractor_1099_summaries (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL,
+      worker_id VARCHAR NOT NULL,
+      tax_year INTEGER NOT NULL,
+      cash_total NUMERIC(12,2) NOT NULL DEFAULT 0,
+      trade_total NUMERIC(12,2) NOT NULL DEFAULT 0,
+      total_compensation NUMERIC(12,2) NOT NULL DEFAULT 0,
+      meets_threshold BOOLEAN NOT NULL DEFAULT FALSE,
+      threshold NUMERIC(12,2) NOT NULL DEFAULT 600,
+      missing_w9 BOOLEAN NOT NULL DEFAULT TRUE,
+      status TEXT NOT NULL DEFAULT 'draft',
+      filed_at TIMESTAMP,
+      notes TEXT,
+      last_calculated_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
 
     await run("system_documents seed payroll rules", sql`
       INSERT INTO system_documents (title, version, category, file_url, description, effective_date, change_log, is_active)

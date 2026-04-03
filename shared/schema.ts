@@ -2802,3 +2802,44 @@ export const tradeAuditLogs = pgTable("trade_audit_logs", {
 export const insertTradeAuditLogSchema = createInsertSchema(tradeAuditLogs).omit({ id: true, createdAt: true });
 export type TradeAuditLog = typeof tradeAuditLogs.$inferSelect;
 export type InsertTradeAuditLog = z.infer<typeof insertTradeAuditLogSchema>;
+
+// ── Contractor Documents (W-9, W-8BEN, etc.) ─────────────────────────────
+export const contractorDocuments = pgTable("contractor_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  workerId: varchar("worker_id").notNull(),
+  documentType: text("document_type").notNull().default("w9"), // w9 | w8ben | other
+  fileName: text("file_name").notNull(),
+  fileUrl: text("file_url").notNull(),
+  fileSize: integer("file_size"),
+  mimeType: text("mime_type"),
+  notes: text("notes"),
+  uploadedBy: varchar("uploaded_by").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertContractorDocumentSchema = createInsertSchema(contractorDocuments).omit({ id: true, createdAt: true });
+export type ContractorDocument = typeof contractorDocuments.$inferSelect;
+export type InsertContractorDocument = z.infer<typeof insertContractorDocumentSchema>;
+
+// ── Contractor 1099 Summaries ─────────────────────────────────────────────
+export const contractor1099Summaries = pgTable("contractor_1099_summaries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  workerId: varchar("worker_id").notNull(),
+  taxYear: integer("tax_year").notNull(),
+  cashTotal: numeric("cash_total", { precision: 12, scale: 2 }).notNull().default("0"),
+  tradeTotal: numeric("trade_total", { precision: 12, scale: 2 }).notNull().default("0"),
+  totalCompensation: numeric("total_compensation", { precision: 12, scale: 2 }).notNull().default("0"),
+  meetsThreshold: boolean("meets_threshold").notNull().default(false),
+  threshold: numeric("threshold", { precision: 12, scale: 2 }).notNull().default("600"),
+  missingW9: boolean("missing_w9").notNull().default(true),
+  status: text("status").notNull().default("draft"), // draft | ready | filed
+  filedAt: timestamp("filed_at"),
+  notes: text("notes"),
+  lastCalculatedAt: timestamp("last_calculated_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+export const insertContractor1099SummarySchema = createInsertSchema(contractor1099Summaries).omit({ id: true, createdAt: true, updatedAt: true });
+export type Contractor1099Summary = typeof contractor1099Summaries.$inferSelect;
+export type InsertContractor1099Summary = z.infer<typeof insertContractor1099SummarySchema>;
