@@ -2845,3 +2845,154 @@ export const contractor1099Summaries = pgTable("contractor_1099_summaries", {
 export const insertContractor1099SummarySchema = createInsertSchema(contractor1099Summaries).omit({ id: true, createdAt: true, updatedAt: true });
 export type Contractor1099Summary = typeof contractor1099Summaries.$inferSelect;
 export type InsertContractor1099Summary = z.infer<typeof insertContractor1099SummarySchema>;
+
+// ── Org Hierarchy Extensions ──────────────────────────────────────────────────
+
+export const locations = pgTable("locations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  legalEntityId: varchar("legal_entity_id").references(() => legalEntities.id),
+  name: text("name").notNull(),
+  code: text("code"),
+  address: text("address"),
+  city: text("city"),
+  state: text("state"),
+  zip: text("zip"),
+  country: text("country").default("US"),
+  phone: text("phone"),
+  timezone: text("timezone").default("America/Los_Angeles"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const teams = pgTable("teams", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  departmentId: varchar("department_id").references(() => departments.id),
+  locationId: varchar("location_id").references(() => locations.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  leadWorkerId: varchar("lead_worker_id"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const employeeManagerRelations = pgTable("employee_manager_relations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  employeeId: varchar("employee_id").notNull().references(() => workers.id),
+  managerId: varchar("manager_id").notNull().references(() => workers.id),
+  relationshipType: text("relationship_type").notNull().default("primary"),
+  effectiveDate: date("effective_date"),
+  endDate: date("end_date"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Permission Schema ─────────────────────────────────────────────────────────
+
+export const permissionScopeEnum = pgEnum("permission_scope", [
+  "self",
+  "direct_reports",
+  "department",
+  "location",
+  "legal_entity",
+  "entire_tenant",
+]);
+
+export const platformModules = pgTable("platform_modules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  key: text("key").notNull().unique(),
+  name: text("name").notNull(),
+  description: text("description"),
+  isEnabled: boolean("is_enabled").default(true),
+  isCoreModule: boolean("is_core_module").default(false),
+  displayOrder: integer("display_order").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const permissionGroups = pgTable("permission_groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  moduleId: varchar("module_id").references(() => platformModules.id),
+  name: text("name").notNull().unique(),
+  description: text("description"),
+  module: text("module").notNull(),
+  displayOrder: integer("display_order").default(0),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const permissions = pgTable("permissions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  permissionGroupId: varchar("permission_group_id").notNull().references(() => permissionGroups.id),
+  moduleId: varchar("module_id").references(() => platformModules.id),
+  name: text("name").notNull(),
+  code: text("code").notNull().unique(),
+  description: text("description"),
+  scope: permissionScopeEnum("scope").notNull().default("self"),
+  isCustomerFacing: boolean("is_customer_facing").default(false),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const enterpriseRolePermissions = pgTable("enterprise_role_permissions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  roleId: varchar("role_id").notNull().references(() => roles.id, { onDelete: "cascade" }),
+  permissionId: varchar("permission_id").notNull().references(() => permissions.id, { onDelete: "cascade" }),
+  scope: permissionScopeEnum("scope").notNull().default("self"),
+  isGranted: boolean("is_granted").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const userCompanyAccess = pgTable("user_company_access", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  roleId: varchar("role_id").notNull().references(() => roles.id),
+  isActive: boolean("is_active").default(true),
+  grantedAt: timestamp("granted_at").defaultNow(),
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const userPermissionOverrides = pgTable("user_permission_overrides", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  permissionId: varchar("permission_id").notNull().references(() => permissions.id),
+  scope: permissionScopeEnum("scope").notNull().default("self"),
+  isGranted: boolean("is_granted").notNull(),
+  reason: text("reason"),
+  grantedBy: varchar("granted_by").references(() => users.id),
+  expiresAt: timestamp("expires_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertPlatformModuleSchema = createInsertSchema(platformModules).omit({ id: true, createdAt: true });
+export const insertLocationSchema = createInsertSchema(locations).omit({ id: true, createdAt: true });
+export const insertTeamSchema = createInsertSchema(teams).omit({ id: true, createdAt: true });
+export const insertEmployeeManagerRelationSchema = createInsertSchema(employeeManagerRelations).omit({ id: true, createdAt: true });
+export const insertPermissionGroupSchema = createInsertSchema(permissionGroups).omit({ id: true, createdAt: true });
+export const insertPermissionSchema = createInsertSchema(permissions).omit({ id: true, createdAt: true });
+export const insertEnterpriseRolePermissionSchema = createInsertSchema(enterpriseRolePermissions).omit({ id: true, createdAt: true });
+export const insertUserCompanyAccessSchema = createInsertSchema(userCompanyAccess).omit({ id: true, createdAt: true });
+export const insertUserPermissionOverrideSchema = createInsertSchema(userPermissionOverrides).omit({ id: true, createdAt: true });
+
+export type PlatformModule = typeof platformModules.$inferSelect;
+export type InsertPlatformModule = z.infer<typeof insertPlatformModuleSchema>;
+export type Location = typeof locations.$inferSelect;
+export type InsertLocation = z.infer<typeof insertLocationSchema>;
+export type Team = typeof teams.$inferSelect;
+export type InsertTeam = z.infer<typeof insertTeamSchema>;
+export type EmployeeManagerRelation = typeof employeeManagerRelations.$inferSelect;
+export type InsertEmployeeManagerRelation = z.infer<typeof insertEmployeeManagerRelationSchema>;
+export type PermissionGroup = typeof permissionGroups.$inferSelect;
+export type InsertPermissionGroup = z.infer<typeof insertPermissionGroupSchema>;
+export type Permission = typeof permissions.$inferSelect;
+export type InsertPermission = z.infer<typeof insertPermissionSchema>;
+export type EnterpriseRolePermission = typeof enterpriseRolePermissions.$inferSelect;
+export type InsertEnterpriseRolePermission = z.infer<typeof insertEnterpriseRolePermissionSchema>;
+export type UserCompanyAccess = typeof userCompanyAccess.$inferSelect;
+export type InsertUserCompanyAccess = z.infer<typeof insertUserCompanyAccessSchema>;
+export type UserPermissionOverride = typeof userPermissionOverrides.$inferSelect;
+export type InsertUserPermissionOverride = z.infer<typeof insertUserPermissionOverrideSchema>;

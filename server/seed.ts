@@ -1,6 +1,6 @@
 import { db } from "./db";
-import { eq } from "drizzle-orm";
-import { companies, workers, timeEntries, schedules, taxesDeductions, users, roles, rolePermissions, userRoles, employeeGroupConfigs, tradeTransactions } from "@shared/schema";
+import { eq, sql } from "drizzle-orm";
+import { companies, workers, timeEntries, schedules, taxesDeductions, users, roles, rolePermissions, userRoles, employeeGroupConfigs, tradeTransactions, permissionGroups, permissions, enterpriseRolePermissions, locations, departments, legalEntities, platformModules } from "@shared/schema";
 import bcrypt from "bcrypt";
 
 const PERMISSION_RESOURCES = [
@@ -252,14 +252,421 @@ async function seedExpenseCategories() {
   console.log("Seeded expense categories");
 }
 
+async function seedEnterprisePermissions() {
+  try {
+    const existing = await db.select().from(permissionGroups);
+    if (existing.length > 0) {
+      console.log("Enterprise permission groups already seeded, skipping");
+      return;
+    }
+  } catch { return; }
+
+  const PERMISSION_GROUP_DEFS = [
+    { name: "Platform Administration", module: "platform", description: "System-wide platform configuration and administration", displayOrder: 1 },
+    { name: "Tenant Management", module: "tenant", description: "Enterprise and company provisioning, billing, and lifecycle", displayOrder: 2 },
+    { name: "Organization Structure", module: "org", description: "Manage hierarchy: enterprises, companies, legal entities, locations, departments, teams", displayOrder: 3 },
+    { name: "Workforce Management", module: "workforce", description: "Employee records, onboarding, terminations, and HR operations", displayOrder: 4 },
+    { name: "Time & Attendance", module: "time", description: "Time tracking, punches, timesheets, and schedules", displayOrder: 5 },
+    { name: "Payroll Processing", module: "payroll", description: "Payroll runs, pay items, deductions, and disbursements", displayOrder: 6 },
+    { name: "Compensation & Benefits", module: "compensation", description: "Pay rates, wage history, benefits, and accruals", displayOrder: 7 },
+    { name: "Compliance & Documents", module: "compliance", description: "Document management, retention policies, e-signatures, and audits", displayOrder: 8 },
+    { name: "Reporting & Analytics", module: "reporting", description: "Reports, dashboards, exports, and data analytics", displayOrder: 9 },
+    { name: "Access & Permissions", module: "access", description: "Role assignments, permission overrides, and user company access", displayOrder: 10 },
+    { name: "Billing & Subscriptions", module: "billing", description: "Subscription plans, payment methods, and invoicing", displayOrder: 11 },
+    { name: "Integrations & API", module: "integrations", description: "Third-party integrations, webhooks, and API key management", displayOrder: 12 },
+    { name: "Support & Impersonation", module: "support", description: "Customer support tools, audit logs, and impersonation", displayOrder: 13 },
+    { name: "Employee Self-Service", module: "self_service", description: "Employee-facing self-service: own profile, pay stubs, time off", displayOrder: 14 },
+  ];
+
+  // Build module lookup map (key → id) for FK linking
+  const moduleRows = await db.select().from(platformModules);
+  const moduleIdMap: Record<string, string> = {};
+  for (const m of moduleRows) {
+    moduleIdMap[m.key] = m.id;
+  }
+
+  const groupMap: Record<string, string> = {};
+  for (const g of PERMISSION_GROUP_DEFS) {
+    const [pg] = await db.insert(permissionGroups).values({
+      ...g,
+      moduleId: moduleIdMap[g.module] || null,
+    }).returning();
+    groupMap[g.module] = pg.id;
+  }
+
+  const PERMISSION_DEFS = [
+    // Platform Administration
+    { module: "platform", name: "View Platform Settings", code: "platform.settings.view", scope: "entire_tenant" as const, isCustomerFacing: false },
+    { module: "platform", name: "Edit Platform Settings", code: "platform.settings.edit", scope: "entire_tenant" as const, isCustomerFacing: false },
+    { module: "platform", name: "Manage System Users", code: "platform.users.manage", scope: "entire_tenant" as const, isCustomerFacing: false },
+    { module: "platform", name: "View Audit Logs", code: "platform.audit.view", scope: "entire_tenant" as const, isCustomerFacing: false },
+    // Tenant Management
+    { module: "tenant", name: "Create Tenant", code: "tenant.create", scope: "entire_tenant" as const, isCustomerFacing: false },
+    { module: "tenant", name: "Suspend Tenant", code: "tenant.suspend", scope: "entire_tenant" as const, isCustomerFacing: false },
+    { module: "tenant", name: "Delete Tenant", code: "tenant.delete", scope: "entire_tenant" as const, isCustomerFacing: false },
+    { module: "tenant", name: "View All Tenants", code: "tenant.view_all", scope: "entire_tenant" as const, isCustomerFacing: false },
+    { module: "tenant", name: "Manage Tenant Billing", code: "tenant.billing.manage", scope: "entire_tenant" as const, isCustomerFacing: false },
+    // Organization Structure
+    { module: "org", name: "View Organization", code: "org.view", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "org", name: "Manage Locations", code: "org.locations.manage", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "org", name: "Manage Departments", code: "org.departments.manage", scope: "legal_entity" as const, isCustomerFacing: true },
+    { module: "org", name: "Manage Teams", code: "org.teams.manage", scope: "department" as const, isCustomerFacing: true },
+    { module: "org", name: "Manage Positions", code: "org.positions.manage", scope: "legal_entity" as const, isCustomerFacing: true },
+    // Workforce Management
+    { module: "workforce", name: "View All Employees", code: "workforce.employees.view_all", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "workforce", name: "View Department Employees", code: "workforce.employees.view_dept", scope: "department" as const, isCustomerFacing: true },
+    { module: "workforce", name: "View Direct Reports", code: "workforce.employees.view_direct", scope: "direct_reports" as const, isCustomerFacing: true },
+    { module: "workforce", name: "View Own Profile", code: "workforce.employees.view_self", scope: "self" as const, isCustomerFacing: true },
+    { module: "workforce", name: "Create Employee", code: "workforce.employees.create", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "workforce", name: "Edit Employee", code: "workforce.employees.edit", scope: "department" as const, isCustomerFacing: true },
+    { module: "workforce", name: "Terminate Employee", code: "workforce.employees.terminate", scope: "legal_entity" as const, isCustomerFacing: true },
+    { module: "workforce", name: "Manage Manager Relations", code: "workforce.managers.manage", scope: "department" as const, isCustomerFacing: true },
+    // Time & Attendance
+    { module: "time", name: "View Own Timesheets", code: "time.timesheets.view_self", scope: "self" as const, isCustomerFacing: true },
+    { module: "time", name: "View Direct Report Timesheets", code: "time.timesheets.view_direct", scope: "direct_reports" as const, isCustomerFacing: true },
+    { module: "time", name: "View All Timesheets", code: "time.timesheets.view_all", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "time", name: "Approve Timesheets", code: "time.timesheets.approve", scope: "direct_reports" as const, isCustomerFacing: true },
+    { module: "time", name: "Manage Schedules", code: "time.schedules.manage", scope: "department" as const, isCustomerFacing: true },
+    { module: "time", name: "Override Punch", code: "time.punch.override", scope: "direct_reports" as const, isCustomerFacing: true },
+    // Payroll Processing
+    { module: "payroll", name: "View Own Pay Stubs", code: "payroll.paystubs.view_self", scope: "self" as const, isCustomerFacing: true },
+    { module: "payroll", name: "Run Payroll", code: "payroll.run", scope: "legal_entity" as const, isCustomerFacing: true },
+    { module: "payroll", name: "Approve Payroll", code: "payroll.approve", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "payroll", name: "View All Payroll", code: "payroll.view_all", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "payroll", name: "Manage Tax Deductions", code: "payroll.taxes.manage", scope: "legal_entity" as const, isCustomerFacing: true },
+    // Compensation & Benefits
+    { module: "compensation", name: "View Own Compensation", code: "compensation.view_self", scope: "self" as const, isCustomerFacing: true },
+    { module: "compensation", name: "View Direct Report Compensation", code: "compensation.view_direct", scope: "direct_reports" as const, isCustomerFacing: true },
+    { module: "compensation", name: "View All Compensation", code: "compensation.view_all", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "compensation", name: "Edit Compensation", code: "compensation.edit", scope: "legal_entity" as const, isCustomerFacing: true },
+    { module: "compensation", name: "Manage Benefits", code: "compensation.benefits.manage", scope: "legal_entity" as const, isCustomerFacing: true },
+    // Compliance & Documents
+    { module: "compliance", name: "View Own Documents", code: "compliance.documents.view_self", scope: "self" as const, isCustomerFacing: true },
+    { module: "compliance", name: "View All Documents", code: "compliance.documents.view_all", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "compliance", name: "Manage Documents", code: "compliance.documents.manage", scope: "legal_entity" as const, isCustomerFacing: true },
+    { module: "compliance", name: "Manage Retention Policies", code: "compliance.retention.manage", scope: "entire_tenant" as const, isCustomerFacing: false },
+    { module: "compliance", name: "Send for E-Signature", code: "compliance.esign.send", scope: "department" as const, isCustomerFacing: true },
+    // Reporting & Analytics
+    { module: "reporting", name: "View Standard Reports", code: "reporting.standard.view", scope: "department" as const, isCustomerFacing: true },
+    { module: "reporting", name: "View All Reports", code: "reporting.all.view", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "reporting", name: "Export Reports", code: "reporting.export", scope: "legal_entity" as const, isCustomerFacing: true },
+    { module: "reporting", name: "Create Custom Reports", code: "reporting.custom.create", scope: "entire_tenant" as const, isCustomerFacing: true },
+    // Access & Permissions
+    { module: "access", name: "View Role Assignments", code: "access.roles.view", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "access", name: "Assign Roles", code: "access.roles.assign", scope: "legal_entity" as const, isCustomerFacing: true },
+    { module: "access", name: "Create Custom Roles", code: "access.roles.create", scope: "entire_tenant" as const, isCustomerFacing: false },
+    { module: "access", name: "Grant Permission Overrides", code: "access.overrides.grant", scope: "entire_tenant" as const, isCustomerFacing: false },
+    // Billing & Subscriptions
+    { module: "billing", name: "View Own Invoices", code: "billing.invoices.view_self", scope: "self" as const, isCustomerFacing: true },
+    { module: "billing", name: "Manage Billing", code: "billing.manage", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "billing", name: "View All Billing", code: "billing.view_all", scope: "entire_tenant" as const, isCustomerFacing: false },
+    { module: "billing", name: "Adjust Subscription", code: "billing.subscription.adjust", scope: "entire_tenant" as const, isCustomerFacing: false },
+    // Integrations & API
+    { module: "integrations", name: "View Integrations", code: "integrations.view", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "integrations", name: "Manage Integrations", code: "integrations.manage", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "integrations", name: "Manage API Keys", code: "integrations.api_keys.manage", scope: "entire_tenant" as const, isCustomerFacing: true },
+    { module: "integrations", name: "View Webhooks", code: "integrations.webhooks.view", scope: "entire_tenant" as const, isCustomerFacing: true },
+    // Support & Impersonation
+    { module: "support", name: "View Support Tickets", code: "support.tickets.view", scope: "entire_tenant" as const, isCustomerFacing: false },
+    { module: "support", name: "Impersonate User", code: "support.impersonate", scope: "entire_tenant" as const, isCustomerFacing: false },
+    { module: "support", name: "View System Audit Logs", code: "support.audit.view", scope: "entire_tenant" as const, isCustomerFacing: false },
+    { module: "support", name: "Access Admin Tools", code: "support.admin_tools.access", scope: "entire_tenant" as const, isCustomerFacing: false },
+    // Employee Self-Service
+    { module: "self_service", name: "View Own Profile", code: "self_service.profile.view", scope: "self" as const, isCustomerFacing: true },
+    { module: "self_service", name: "Edit Own Profile", code: "self_service.profile.edit", scope: "self" as const, isCustomerFacing: true },
+    { module: "self_service", name: "View Own Schedule", code: "self_service.schedule.view", scope: "self" as const, isCustomerFacing: true },
+    { module: "self_service", name: "Submit Time Off Request", code: "self_service.time_off.request", scope: "self" as const, isCustomerFacing: true },
+    { module: "self_service", name: "View Own Pay Stubs", code: "self_service.pay_stubs.view", scope: "self" as const, isCustomerFacing: true },
+    { module: "self_service", name: "View Own Documents", code: "self_service.documents.view", scope: "self" as const, isCustomerFacing: true },
+  ];
+
+  const permMap: Record<string, string> = {};
+  for (const p of PERMISSION_DEFS) {
+    const [perm] = await db.insert(permissions).values({
+      permissionGroupId: groupMap[p.module],
+      moduleId: moduleIdMap[p.module] || null,
+      name: p.name,
+      code: p.code,
+      scope: p.scope,
+      isCustomerFacing: p.isCustomerFacing,
+    }).returning();
+    permMap[p.code] = perm.id;
+  }
+
+  const allRoles = await db.select().from(roles);
+  const roleMap: Record<string, string> = {};
+  for (const r of allRoles) {
+    roleMap[r.name] = r.id;
+  }
+
+  const ENTERPRISE_ROLES: { name: string; description: string; level: number }[] = [
+    { name: "Platform Super Admin", description: "Unrestricted access to entire platform across all tenants", level: 0 },
+    { name: "Platform Operations", description: "Operational access for platform team: provisioning, support, monitoring", level: 0 },
+    { name: "Enterprise Admin", description: "Full access within their enterprise across all companies", level: 1 },
+    { name: "Enterprise HR Director", description: "HR oversight across all entities within the enterprise", level: 1 },
+    { name: "Company Admin", description: "Full access within a single company", level: 2 },
+    { name: "Company HR Manager", description: "Manages employee records and HR operations for a company", level: 2 },
+    { name: "Payroll Manager", description: "Processes and approves payroll for a company", level: 2 },
+    { name: "Department Manager", description: "Manages employees and scheduling within a department", level: 3 },
+    { name: "Team Lead", description: "Limited management scope over a direct team", level: 4 },
+    { name: "Employee", description: "Standard self-service employee access", level: 5 },
+    { name: "Contractor", description: "External contractor with minimal access", level: 6 },
+    { name: "Support Agent", description: "Customer support read-only access", level: 0 },
+  ];
+
+  for (const rd of ENTERPRISE_ROLES) {
+    if (!roleMap[rd.name]) {
+      const [r] = await db.insert(roles).values({ ...rd, isSystem: true }).returning();
+      roleMap[rd.name] = r.id;
+    }
+  }
+
+  const ROLE_PERMISSION_MATRIX: Record<string, string[]> = {
+    "Platform Super Admin": Object.keys(permMap),
+    "Platform Operations": [
+      "platform.settings.view", "platform.audit.view", "platform.users.manage",
+      "tenant.view_all", "tenant.suspend",
+      "support.tickets.view", "support.impersonate", "support.audit.view", "support.admin_tools.access",
+      "org.view", "workforce.employees.view_all",
+      "reporting.all.view", "reporting.export",
+    ],
+    "Enterprise Admin": [
+      "org.view", "org.locations.manage", "org.departments.manage", "org.teams.manage", "org.positions.manage",
+      "workforce.employees.view_all", "workforce.employees.create", "workforce.employees.edit", "workforce.employees.terminate", "workforce.managers.manage",
+      "time.timesheets.view_all", "time.timesheets.approve", "time.schedules.manage", "time.punch.override",
+      "payroll.view_all", "payroll.run", "payroll.approve", "payroll.taxes.manage",
+      "compensation.view_all", "compensation.edit", "compensation.benefits.manage",
+      "compliance.documents.view_all", "compliance.documents.manage", "compliance.esign.send",
+      "reporting.all.view", "reporting.export", "reporting.custom.create",
+      "access.roles.view", "access.roles.assign", "access.roles.create",
+      "billing.view_all", "billing.manage",
+      "integrations.view", "integrations.manage", "integrations.api_keys.manage", "integrations.webhooks.view",
+    ],
+    "Enterprise HR Director": [
+      "org.view", "org.departments.manage", "org.positions.manage",
+      "workforce.employees.view_all", "workforce.employees.create", "workforce.employees.edit", "workforce.employees.terminate", "workforce.managers.manage",
+      "compensation.view_all", "compensation.edit", "compensation.benefits.manage",
+      "compliance.documents.view_all", "compliance.documents.manage", "compliance.esign.send", "compliance.retention.manage",
+      "reporting.all.view", "reporting.export",
+      "access.roles.view",
+    ],
+    "Company Admin": [
+      "org.view", "org.locations.manage", "org.departments.manage", "org.teams.manage", "org.positions.manage",
+      "workforce.employees.view_all", "workforce.employees.create", "workforce.employees.edit", "workforce.employees.terminate", "workforce.managers.manage",
+      "time.timesheets.view_all", "time.timesheets.approve", "time.schedules.manage", "time.punch.override",
+      "payroll.view_all", "payroll.run", "payroll.approve", "payroll.taxes.manage",
+      "compensation.view_all", "compensation.edit", "compensation.benefits.manage",
+      "compliance.documents.view_all", "compliance.documents.manage", "compliance.esign.send",
+      "reporting.all.view", "reporting.export", "reporting.custom.create",
+      "access.roles.view", "access.roles.assign",
+      "billing.manage",
+      "integrations.view", "integrations.manage", "integrations.api_keys.manage",
+    ],
+    "Company HR Manager": [
+      "org.view", "org.departments.manage",
+      "workforce.employees.view_all", "workforce.employees.create", "workforce.employees.edit", "workforce.employees.terminate", "workforce.managers.manage",
+      "compensation.view_all", "compensation.edit", "compensation.benefits.manage",
+      "compliance.documents.view_all", "compliance.documents.manage", "compliance.esign.send",
+      "reporting.standard.view", "reporting.export",
+      "access.roles.view",
+      "self_service.profile.view", "self_service.profile.edit", "self_service.schedule.view", "self_service.time_off.request", "self_service.pay_stubs.view", "self_service.documents.view",
+    ],
+    "Payroll Manager": [
+      "org.view",
+      "workforce.employees.view_all",
+      "time.timesheets.view_all", "time.timesheets.approve",
+      "payroll.view_all", "payroll.run", "payroll.approve", "payroll.taxes.manage",
+      "compensation.view_all",
+      "reporting.standard.view", "reporting.export",
+      "self_service.pay_stubs.view",
+    ],
+    "Department Manager": [
+      "org.view",
+      "workforce.employees.view_dept", "workforce.employees.view_direct", "workforce.employees.edit", "workforce.managers.manage",
+      "time.timesheets.view_direct", "time.timesheets.approve", "time.schedules.manage", "time.punch.override",
+      "payroll.paystubs.view_self",
+      "compensation.view_direct",
+      "compliance.esign.send",
+      "reporting.standard.view",
+      "self_service.profile.view", "self_service.profile.edit", "self_service.schedule.view", "self_service.time_off.request", "self_service.pay_stubs.view", "self_service.documents.view",
+    ],
+    "Team Lead": [
+      "org.view",
+      "workforce.employees.view_direct",
+      "time.timesheets.view_direct", "time.timesheets.approve", "time.schedules.manage",
+      "self_service.profile.view", "self_service.profile.edit", "self_service.schedule.view", "self_service.time_off.request", "self_service.pay_stubs.view", "self_service.documents.view",
+    ],
+    "Employee": [
+      "workforce.employees.view_self",
+      "self_service.profile.view", "self_service.profile.edit", "self_service.schedule.view", "self_service.time_off.request", "self_service.pay_stubs.view", "self_service.documents.view",
+    ],
+    "Contractor": [
+      "self_service.profile.view", "self_service.schedule.view", "self_service.pay_stubs.view",
+    ],
+    "Support Agent": [
+      "platform.audit.view",
+      "tenant.view_all",
+      "org.view",
+      "workforce.employees.view_all",
+      "support.tickets.view", "support.audit.view",
+    ],
+  };
+
+  for (const [roleName, permCodes] of Object.entries(ROLE_PERMISSION_MATRIX)) {
+    const roleId = roleMap[roleName];
+    if (!roleId) continue;
+    for (const code of permCodes) {
+      const permId = permMap[code];
+      if (!permId) continue;
+      const perm = PERMISSION_DEFS.find(p => p.code === code);
+      await db.insert(enterpriseRolePermissions).values({
+        roleId,
+        permissionId: permId,
+        scope: perm?.scope || "self",
+        isGranted: true,
+      }).onConflictDoNothing();
+    }
+  }
+
+  console.log("Enterprise permission system seeded: 14 permission groups, permissions, and role mappings");
+}
+
+async function seedPlatformModules() {
+  try {
+    const existing = await db.select().from(platformModules);
+    if (existing.length > 0) {
+      console.log("Platform modules already seeded, skipping");
+      return;
+    }
+  } catch { return; }
+
+  const MODULE_DEFS = [
+    { key: "platform", name: "Platform Administration", description: "System-wide platform configuration and administration", isCoreModule: true, displayOrder: 1 },
+    { key: "tenant", name: "Tenant Management", description: "Enterprise and company provisioning, billing, and lifecycle", isCoreModule: true, displayOrder: 2 },
+    { key: "org", name: "Organization Structure", description: "Manage hierarchy: enterprises, companies, legal entities, locations, departments, teams", isCoreModule: true, displayOrder: 3 },
+    { key: "workforce", name: "Workforce Management", description: "Employee records, onboarding, terminations, and HR operations", isCoreModule: true, displayOrder: 4 },
+    { key: "time", name: "Time & Attendance", description: "Time tracking, punches, timesheets, and schedules", isCoreModule: false, displayOrder: 5 },
+    { key: "payroll", name: "Payroll Processing", description: "Payroll runs, pay items, deductions, and disbursements", isCoreModule: false, displayOrder: 6 },
+    { key: "compensation", name: "Compensation & Benefits", description: "Pay rates, wage history, benefits, and accruals", isCoreModule: false, displayOrder: 7 },
+    { key: "compliance", name: "Compliance & Documents", description: "Document management, retention policies, e-signatures, and audits", isCoreModule: false, displayOrder: 8 },
+    { key: "reporting", name: "Reporting & Analytics", description: "Reports, dashboards, exports, and data analytics", isCoreModule: false, displayOrder: 9 },
+    { key: "access", name: "Access & Permissions", description: "Role assignments, permission overrides, and user company access", isCoreModule: true, displayOrder: 10 },
+    { key: "billing", name: "Billing & Subscriptions", description: "Subscription plans, payment methods, and invoicing", isCoreModule: false, displayOrder: 11 },
+    { key: "integrations", name: "Integrations & API", description: "Third-party integrations, webhooks, and API key management", isCoreModule: false, displayOrder: 12 },
+    { key: "support", name: "Support & Impersonation", description: "Customer support tools, audit logs, and impersonation", isCoreModule: false, displayOrder: 13 },
+    { key: "self_service", name: "Employee Self-Service", description: "Employee-facing self-service: own profile, pay stubs, time off", isCoreModule: true, displayOrder: 14 },
+  ];
+
+  for (const m of MODULE_DEFS) {
+    await db.insert(platformModules).values(m);
+  }
+  console.log(`Seeded ${MODULE_DEFS.length} platform modules`);
+}
+
+async function seedDemoHierarchy() {
+  try {
+    const existingLocations = await db.select().from(locations);
+    if (existingLocations.length > 0) {
+      console.log("Demo hierarchy already seeded, skipping");
+      return;
+    }
+  } catch { return; }
+
+  try {
+    // Ensure at least one company exists; create a demo one if not
+    let existingCompanies = await db.select().from(companies);
+    let company = existingCompanies[0];
+    if (!company) {
+      const [c] = await db.insert(companies).values({
+        name: "Demo Corp",
+        legalName: "Demo Corp LLC",
+        ein: "00-0000001",
+        entityType: "llc",
+        address: "100 Demo Way",
+        city: "Austin",
+        state: "TX",
+        zip: "78701",
+        phone: "(512) 555-0001",
+        payFrequency: "biweekly",
+        overtimeThreshold: 40,
+        overtimeMultiplier: "1.5",
+      }).returning();
+      company = c;
+      console.log("Created demo company for hierarchy seeding");
+    }
+
+    // Create a legal entity for the company
+    let legalEntityId: string | undefined;
+    try {
+      const [le] = await db.insert(legalEntities).values({
+        companyId: company.id,
+        legalName: `${company.legalName || company.name}`,
+        type: "llc",
+        status: "active",
+        address: company.address || "100 Demo Way",
+        city: company.city || "Austin",
+        state: company.state || "TX",
+        zip: company.zip || "78701",
+        country: "US",
+      }).returning();
+      legalEntityId = le.id;
+      console.log("Created demo legal entity");
+    } catch (e: any) {
+      console.log("Could not create legal entity:", e?.message?.substring(0, 80));
+    }
+
+    // Create sample departments
+    const [deptHQ, deptEng] = await db.insert(departments).values([
+      { companyId: company.id, name: "Headquarters", code: "HQ", isActive: true },
+      { companyId: company.id, name: "Engineering", code: "ENG", isActive: true },
+    ]).returning();
+
+    // Create sample locations linked to legal entity
+    await db.insert(locations).values([
+      {
+        companyId: company.id,
+        legalEntityId: legalEntityId,
+        name: "Headquarters",
+        code: "HQ",
+        address: "123 Main Street",
+        city: "Austin",
+        state: "TX",
+        zip: "78701",
+        country: "US",
+        timezone: "America/Chicago",
+      },
+      {
+        companyId: company.id,
+        legalEntityId: legalEntityId,
+        name: "West Office",
+        code: "WEST",
+        address: "789 Sunset Blvd",
+        city: "Los Angeles",
+        state: "CA",
+        zip: "90028",
+        country: "US",
+        timezone: "America/Los_Angeles",
+      },
+    ]);
+
+    console.log("Demo hierarchy seeded: company + legal entity + 2 departments + 2 locations");
+  } catch (e: any) {
+    console.log("Could not seed demo hierarchy:", e?.message || e);
+  }
+}
+
 export async function seedDatabase() {
   await ensureAdminUser();
   await seedRolesAndPermissions();
   await seedExpenseCategories();
+  await seedPlatformModules();
+  await seedEnterprisePermissions();
 
   try {
     const existingCompanies = await db.select().from(companies);
     if (existingCompanies.length > 0) {
+      // Companies already exist — still seed hierarchy (idempotent)
+      await seedDemoHierarchy();
       return;
     }
   } catch (e) {
@@ -562,6 +969,7 @@ export async function seedDatabase() {
 
   await seedEmployeeGroupConfigs();
   await seedTradeCompensationDemo(insertedWorkers, company1.id);
+  await seedDemoHierarchy();
 
   console.log("Database seeded successfully");
 }

@@ -166,6 +166,18 @@ import {
   contractorDocuments, contractor1099Summaries,
   type ContractorDocument, type InsertContractorDocument,
   type Contractor1099Summary, type InsertContractor1099Summary,
+  locations, teams, employeeManagerRelations,
+  platformModules, permissionGroups, permissions, enterpriseRolePermissions,
+  userCompanyAccess, userPermissionOverrides,
+  type PlatformModule, type InsertPlatformModule,
+  type Location, type InsertLocation,
+  type Team, type InsertTeam,
+  type EmployeeManagerRelation, type InsertEmployeeManagerRelation,
+  type PermissionGroup, type InsertPermissionGroup,
+  type Permission, type InsertPermission,
+  type EnterpriseRolePermission, type InsertEnterpriseRolePermission,
+  type UserCompanyAccess, type InsertUserCompanyAccess,
+  type UserPermissionOverride, type InsertUserPermissionOverride,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -774,6 +786,62 @@ export interface IStorage {
   update1099Summary(id: string, data: Partial<Contractor1099Summary>): Promise<Contractor1099Summary | undefined>;
   calculate1099Summary(companyId: string, workerId: string, year: number): Promise<{ cashTotal: number; tradeTotal: number; total: number; missingW9: boolean }>;
   generateAll1099Summaries(companyId: string, year: number): Promise<Contractor1099Summary[]>;
+
+  // Platform Modules
+  getPlatformModules(): Promise<PlatformModule[]>;
+  getPlatformModule(id: string): Promise<PlatformModule | undefined>;
+  createPlatformModule(data: InsertPlatformModule): Promise<PlatformModule>;
+  updatePlatformModule(id: string, data: Partial<PlatformModule>): Promise<PlatformModule | undefined>;
+
+  // Org Hierarchy
+  getLocations(companyId?: string): Promise<Location[]>;
+  getLocation(id: string): Promise<Location | undefined>;
+  createLocation(data: InsertLocation): Promise<Location>;
+  updateLocation(id: string, data: Partial<Location>): Promise<Location | undefined>;
+  deleteLocation(id: string): Promise<void>;
+
+  getTeams(companyId?: string): Promise<Team[]>;
+  getTeam(id: string): Promise<Team | undefined>;
+  createTeam(data: InsertTeam): Promise<Team>;
+  updateTeam(id: string, data: Partial<Team>): Promise<Team | undefined>;
+  deleteTeam(id: string): Promise<void>;
+
+  getEmployeeManagerRelations(companyId: string, employeeId?: string): Promise<EmployeeManagerRelation[]>;
+  getDirectReports(companyId: string, managerId: string): Promise<EmployeeManagerRelation[]>;
+  getDepartmentMembers(companyId: string, departmentId: string): Promise<Worker[]>;
+  getManagerChain(companyId: string, employeeId: string): Promise<EmployeeManagerRelation[]>;
+  createEmployeeManagerRelation(data: InsertEmployeeManagerRelation): Promise<EmployeeManagerRelation>;
+  updateEmployeeManagerRelation(id: string, data: Partial<EmployeeManagerRelation>): Promise<EmployeeManagerRelation | undefined>;
+  deleteEmployeeManagerRelation(id: string): Promise<void>;
+
+  // Permission System
+  getPlatformModules(): Promise<PlatformModule[]>;
+  getPlatformModule(id: string): Promise<PlatformModule | undefined>;
+  createPlatformModule(data: InsertPlatformModule): Promise<PlatformModule>;
+  updatePlatformModule(id: string, data: Partial<PlatformModule>): Promise<PlatformModule | undefined>;
+
+  getPermissionGroups(): Promise<PermissionGroup[]>;
+  createPermissionGroup(data: InsertPermissionGroup): Promise<PermissionGroup>;
+  updatePermissionGroup(id: string, data: Partial<PermissionGroup>): Promise<PermissionGroup | undefined>;
+
+  getPermissions(groupId?: string): Promise<Permission[]>;
+  getPermission(id: string): Promise<Permission | undefined>;
+  createPermission(data: InsertPermission): Promise<Permission>;
+  updatePermission(id: string, data: Partial<Permission>): Promise<Permission | undefined>;
+
+  getEnterpriseRolePermissions(roleId?: string): Promise<EnterpriseRolePermission[]>;
+  createEnterpriseRolePermission(data: InsertEnterpriseRolePermission): Promise<EnterpriseRolePermission>;
+  deleteEnterpriseRolePermission(id: string): Promise<void>;
+  getEffectivePermissions(userId: string, companyId: string): Promise<{ permission: Permission; scope: string; source: string }[]>;
+
+  getUserCompanyAccess(userId?: string, companyId?: string): Promise<UserCompanyAccess[]>;
+  createUserCompanyAccess(data: InsertUserCompanyAccess): Promise<UserCompanyAccess>;
+  updateUserCompanyAccess(id: string, data: Partial<UserCompanyAccess>): Promise<UserCompanyAccess | undefined>;
+  deleteUserCompanyAccess(id: string): Promise<void>;
+
+  getUserPermissionOverrides(userId: string, companyId?: string): Promise<UserPermissionOverride[]>;
+  createUserPermissionOverride(data: InsertUserPermissionOverride): Promise<UserPermissionOverride>;
+  deleteUserPermissionOverride(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3399,7 +3467,6 @@ export class DatabaseStorage implements IStorage {
   }
 
   async calculate1099Summary(companyId: string, workerId: string, year: number): Promise<{ cashTotal: number; tradeTotal: number; total: number; missingW9: boolean }> {
-    // Cash from contractor invoices (paid, reportable)
     const invoiceRows = await db.select().from(contractorInvoices).where(
       and(
         eq(contractorInvoices.companyId, companyId),
@@ -3408,12 +3475,10 @@ export class DatabaseStorage implements IStorage {
         eq(contractorInvoices.status, "paid")
       )
     );
-    // Only sum invoices for the target year based on invoiceDate
     const cashTotal = invoiceRows
       .filter(inv => inv.invoiceDate && inv.invoiceDate.startsWith(String(year)))
       .reduce((sum, inv) => sum + parseFloat(inv.paidAmount || inv.amount), 0);
 
-    // FMV from trade transactions (completed or approved, reportable, included_in_1099)
     const tradeRows = await db.select().from(tradeTransactions).where(
       and(
         eq(tradeTransactions.companyId, companyId),
@@ -3426,7 +3491,6 @@ export class DatabaseStorage implements IStorage {
       .filter(t => t.taxYear === year)
       .reduce((sum, t) => sum + parseFloat(t.fairMarketValue), 0);
 
-    // W-9 check
     const docs = await this.getContractorDocuments(companyId, workerId);
     const hasW9 = docs.some(d => d.documentType === "w9");
 
@@ -3434,7 +3498,6 @@ export class DatabaseStorage implements IStorage {
   }
 
   async generateAll1099Summaries(companyId: string, year: number): Promise<Contractor1099Summary[]> {
-    // Find all contractors in company with at least one invoice or trade tx
     const companyWorkers = await db.select().from(workers).where(
       and(eq(workers.companyId, companyId), eq(workers.workerType, "contractor" as any))
     );
@@ -3458,6 +3521,236 @@ export class DatabaseStorage implements IStorage {
       results.push(summary);
     }
     return results.sort((a, b) => parseFloat(b.totalCompensation) - parseFloat(a.totalCompensation));
+  }
+
+
+  // ── Platform Modules ─────────────────────────────────────────────────────
+  async getPlatformModules(): Promise<PlatformModule[]> {
+    return db.select().from(platformModules).orderBy(platformModules.displayOrder);
+  }
+  async getPlatformModule(id: string): Promise<PlatformModule | undefined> {
+    const [r] = await db.select().from(platformModules).where(eq(platformModules.id, id));
+    return r;
+  }
+  async createPlatformModule(data: InsertPlatformModule): Promise<PlatformModule> {
+    const [r] = await db.insert(platformModules).values(data).returning();
+    return r;
+  }
+  async updatePlatformModule(id: string, data: Partial<PlatformModule>): Promise<PlatformModule | undefined> {
+    const [r] = await db.update(platformModules).set(data).where(eq(platformModules.id, id)).returning();
+    return r;
+  }
+
+  // ── Org Hierarchy ──────────────────────────────────────────────────────────
+  async getLocations(companyId?: string): Promise<Location[]> {
+    if (companyId) return db.select().from(locations).where(eq(locations.companyId, companyId)).orderBy(locations.name);
+    return db.select().from(locations).orderBy(locations.name);
+  }
+  async getLocation(id: string): Promise<Location | undefined> {
+    const [r] = await db.select().from(locations).where(eq(locations.id, id));
+    return r;
+  }
+  async createLocation(data: InsertLocation): Promise<Location> {
+    const [r] = await db.insert(locations).values(data).returning();
+    return r;
+  }
+  async updateLocation(id: string, data: Partial<Location>): Promise<Location | undefined> {
+    const [r] = await db.update(locations).set(data).where(eq(locations.id, id)).returning();
+    return r;
+  }
+  async deleteLocation(id: string): Promise<void> {
+    await db.delete(locations).where(eq(locations.id, id));
+  }
+
+  async getTeams(companyId?: string): Promise<Team[]> {
+    if (companyId) return db.select().from(teams).where(eq(teams.companyId, companyId)).orderBy(teams.name);
+    return db.select().from(teams).orderBy(teams.name);
+  }
+  async getTeam(id: string): Promise<Team | undefined> {
+    const [r] = await db.select().from(teams).where(eq(teams.id, id));
+    return r;
+  }
+  async createTeam(data: InsertTeam): Promise<Team> {
+    const [r] = await db.insert(teams).values(data).returning();
+    return r;
+  }
+  async updateTeam(id: string, data: Partial<Team>): Promise<Team | undefined> {
+    const [r] = await db.update(teams).set(data).where(eq(teams.id, id)).returning();
+    return r;
+  }
+  async deleteTeam(id: string): Promise<void> {
+    await db.delete(teams).where(eq(teams.id, id));
+  }
+
+  async getEmployeeManagerRelations(companyId: string, employeeId?: string): Promise<EmployeeManagerRelation[]> {
+    if (employeeId) {
+      return db.select().from(employeeManagerRelations)
+        .where(and(eq(employeeManagerRelations.companyId, companyId), eq(employeeManagerRelations.employeeId, employeeId)));
+    }
+    return db.select().from(employeeManagerRelations).where(eq(employeeManagerRelations.companyId, companyId));
+  }
+  async getDirectReports(companyId: string, managerId: string): Promise<EmployeeManagerRelation[]> {
+    return db.select().from(employeeManagerRelations)
+      .where(and(
+        eq(employeeManagerRelations.companyId, companyId),
+        eq(employeeManagerRelations.managerId, managerId),
+        eq(employeeManagerRelations.isActive, true)
+      ));
+  }
+  async getDepartmentMembers(companyId: string, departmentId: string): Promise<Worker[]> {
+    return db.select().from(workers)
+      .where(and(
+        eq(workers.companyId, companyId),
+        eq(workers.departmentId, departmentId),
+        eq(workers.isActive, true)
+      ))
+      .orderBy(workers.lastName, workers.firstName);
+  }
+  async getManagerChain(companyId: string, employeeId: string): Promise<EmployeeManagerRelation[]> {
+    const chain: EmployeeManagerRelation[] = [];
+    let currentId = employeeId;
+    const visited = new Set<string>();
+    while (currentId && !visited.has(currentId)) {
+      visited.add(currentId);
+      const [rel] = await db.select().from(employeeManagerRelations)
+        .where(and(
+          eq(employeeManagerRelations.companyId, companyId),
+          eq(employeeManagerRelations.employeeId, currentId),
+          eq(employeeManagerRelations.relationshipType, "primary"),
+          eq(employeeManagerRelations.isActive, true)
+        ));
+      if (!rel) break;
+      chain.push(rel);
+      currentId = rel.managerId;
+    }
+    return chain;
+  }
+  async createEmployeeManagerRelation(data: InsertEmployeeManagerRelation): Promise<EmployeeManagerRelation> {
+    const [r] = await db.insert(employeeManagerRelations).values(data).returning();
+    return r;
+  }
+  async updateEmployeeManagerRelation(id: string, data: Partial<EmployeeManagerRelation>): Promise<EmployeeManagerRelation | undefined> {
+    const [r] = await db.update(employeeManagerRelations).set(data).where(eq(employeeManagerRelations.id, id)).returning();
+    return r;
+  }
+  async deleteEmployeeManagerRelation(id: string): Promise<void> {
+    await db.delete(employeeManagerRelations).where(eq(employeeManagerRelations.id, id));
+  }
+
+  // ── Permission System ─────────────────────────────────────────────────────
+  async getPermissionGroups(): Promise<PermissionGroup[]> {
+    return db.select().from(permissionGroups).orderBy(permissionGroups.displayOrder, permissionGroups.name);
+  }
+  async createPermissionGroup(data: InsertPermissionGroup): Promise<PermissionGroup> {
+    const [r] = await db.insert(permissionGroups).values(data).returning();
+    return r;
+  }
+  async updatePermissionGroup(id: string, data: Partial<PermissionGroup>): Promise<PermissionGroup | undefined> {
+    const [r] = await db.update(permissionGroups).set(data).where(eq(permissionGroups.id, id)).returning();
+    return r;
+  }
+
+  async getPermissions(groupId?: string): Promise<Permission[]> {
+    if (groupId) {
+      return db.select().from(permissions).where(eq(permissions.permissionGroupId, groupId)).orderBy(permissions.name);
+    }
+    return db.select().from(permissions).orderBy(permissions.name);
+  }
+  async getPermission(id: string): Promise<Permission | undefined> {
+    const [r] = await db.select().from(permissions).where(eq(permissions.id, id));
+    return r;
+  }
+  async createPermission(data: InsertPermission): Promise<Permission> {
+    const [r] = await db.insert(permissions).values(data).returning();
+    return r;
+  }
+  async updatePermission(id: string, data: Partial<Permission>): Promise<Permission | undefined> {
+    const [r] = await db.update(permissions).set(data).where(eq(permissions.id, id)).returning();
+    return r;
+  }
+
+  async getEnterpriseRolePermissions(roleId?: string): Promise<EnterpriseRolePermission[]> {
+    if (roleId) return db.select().from(enterpriseRolePermissions).where(eq(enterpriseRolePermissions.roleId, roleId));
+    return db.select().from(enterpriseRolePermissions);
+  }
+  async createEnterpriseRolePermission(data: InsertEnterpriseRolePermission): Promise<EnterpriseRolePermission> {
+    const [r] = await db.insert(enterpriseRolePermissions).values(data).returning();
+    return r;
+  }
+  async deleteEnterpriseRolePermission(id: string): Promise<void> {
+    await db.delete(enterpriseRolePermissions).where(eq(enterpriseRolePermissions.id, id));
+  }
+  async getEffectivePermissions(userId: string, companyId: string): Promise<{ permission: Permission; scope: string; source: string }[]> {
+    const userAccessList = await db.select().from(userCompanyAccess)
+      .where(and(eq(userCompanyAccess.userId, userId), eq(userCompanyAccess.companyId, companyId), eq(userCompanyAccess.isActive, true)));
+    const roleIds = userAccessList.map(a => a.roleId);
+    const result: { permission: Permission; scope: string; source: string }[] = [];
+    if (roleIds.length > 0) {
+      const rolePerms = await db.select().from(enterpriseRolePermissions)
+        .where(and(inArray(enterpriseRolePermissions.roleId, roleIds), eq(enterpriseRolePermissions.isGranted, true)));
+      for (const rp of rolePerms) {
+        const perm = await this.getPermission(rp.permissionId);
+        if (perm) result.push({ permission: perm, scope: rp.scope, source: "role" });
+      }
+    }
+    const overrides = await db.select().from(userPermissionOverrides)
+      .where(and(eq(userPermissionOverrides.userId, userId), eq(userPermissionOverrides.companyId, companyId)));
+    for (const ov of overrides) {
+      if (!ov.isGranted) {
+        const idx = result.findIndex(r => r.permission.id === ov.permissionId);
+        if (idx !== -1) result.splice(idx, 1);
+      } else {
+        const perm = await this.getPermission(ov.permissionId);
+        if (perm) result.push({ permission: perm, scope: ov.scope, source: "override" });
+      }
+    }
+    return result;
+  }
+
+  async getUserCompanyAccess(userId?: string, companyId?: string): Promise<UserCompanyAccess[]> {
+    if (userId && companyId) {
+      return db.select().from(userCompanyAccess)
+        .where(and(eq(userCompanyAccess.userId, userId), eq(userCompanyAccess.companyId, companyId)));
+    }
+    if (userId) return db.select().from(userCompanyAccess).where(eq(userCompanyAccess.userId, userId));
+    if (companyId) return db.select().from(userCompanyAccess).where(eq(userCompanyAccess.companyId, companyId));
+    return db.select().from(userCompanyAccess);
+  }
+  async createUserCompanyAccess(data: InsertUserCompanyAccess): Promise<UserCompanyAccess> {
+    const [r] = await db.insert(userCompanyAccess).values(data).returning();
+    return r;
+  }
+  async updateUserCompanyAccess(id: string, data: Partial<UserCompanyAccess>): Promise<UserCompanyAccess | undefined> {
+    const [r] = await db.update(userCompanyAccess).set(data).where(eq(userCompanyAccess.id, id)).returning();
+    return r;
+  }
+  async deleteUserCompanyAccess(id: string): Promise<void> {
+    await db.delete(userCompanyAccess).where(eq(userCompanyAccess.id, id));
+  }
+
+  async getUserPermissionOverrides(userId: string, companyId?: string): Promise<UserPermissionOverride[]> {
+    if (companyId) {
+      return db.select().from(userPermissionOverrides)
+        .where(and(eq(userPermissionOverrides.userId, userId), eq(userPermissionOverrides.companyId, companyId)));
+    }
+    return db.select().from(userPermissionOverrides).where(eq(userPermissionOverrides.userId, userId));
+  }
+  async createUserPermissionOverride(data: InsertUserPermissionOverride): Promise<UserPermissionOverride> {
+    const [r] = await db.insert(userPermissionOverrides).values(data).returning();
+    return r;
+  }
+  async deleteUserPermissionOverride(id: string): Promise<void> {
+    await db.delete(userPermissionOverrides).where(eq(userPermissionOverrides.id, id));
+  }
+
+  async getDepartmentMembers(companyId: string, departmentId: string): Promise<Worker[]> {
+    return db.select().from(workers)
+      .where(and(
+        eq(workers.companyId, companyId),
+        eq(workers.departmentId, departmentId),
+        eq(workers.isActive, true)
+      ))
+      .orderBy(workers.lastName, workers.firstName);
   }
 }
 
