@@ -169,6 +169,7 @@ import {
   locations, teams, employeeManagerRelations,
   platformModules, permissionGroups, permissions, enterpriseRolePermissions,
   userCompanyAccess, userPermissionOverrides,
+  payrollSummaries, achBatches, payrollTransactionRuns,
   type PlatformModule, type InsertPlatformModule,
   type Location, type InsertLocation,
   type Team, type InsertTeam,
@@ -180,6 +181,9 @@ import {
   type UserPermissionOverride, type InsertUserPermissionOverride,
   authorizationAuditLog,
   type AuthorizationAuditLog, type InsertAuthorizationAuditLog,
+  type PayrollSummary, type InsertPayrollSummary,
+  type AchBatch, type InsertAchBatch,
+  type PayrollTransactionRun, type InsertPayrollTransactionRun,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -842,6 +846,19 @@ export interface IStorage {
 
   getAuthorizationAuditLogs(limit?: number): Promise<AuthorizationAuditLog[]>;
   createAuthorizationAuditLog(data: InsertAuthorizationAuditLog): Promise<AuthorizationAuditLog>;
+
+  getPayrollSummary(payrollRunId: string): Promise<PayrollSummary | undefined>;
+  upsertPayrollSummary(payrollRunId: string, data: Partial<InsertPayrollSummary>): Promise<PayrollSummary>;
+
+  getAchBatch(payrollRunId: string): Promise<AchBatch | undefined>;
+  getAchBatchById(id: string): Promise<AchBatch | undefined>;
+  createAchBatch(data: InsertAchBatch): Promise<AchBatch>;
+  updateAchBatch(id: string, data: Partial<AchBatch>): Promise<AchBatch | undefined>;
+
+  getPayrollTransactionRuns(payrollRunId: string): Promise<PayrollTransactionRun[]>;
+  createPayrollTransactionRun(data: InsertPayrollTransactionRun): Promise<PayrollTransactionRun>;
+  updatePayrollTransactionRun(id: string, data: Partial<PayrollTransactionRun>): Promise<PayrollTransactionRun | undefined>;
+  deletePayrollTransactionRunsByRun(payrollRunId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3754,6 +3771,59 @@ export class DatabaseStorage implements IStorage {
   async createAuthorizationAuditLog(data: InsertAuthorizationAuditLog): Promise<AuthorizationAuditLog> {
     const [row] = await db.insert(authorizationAuditLog).values(data).returning();
     return row;
+  }
+
+  async getPayrollSummary(payrollRunId: string): Promise<PayrollSummary | undefined> {
+    const [r] = await db.select().from(payrollSummaries).where(eq(payrollSummaries.payrollRunId, payrollRunId));
+    return r;
+  }
+
+  async upsertPayrollSummary(payrollRunId: string, data: Partial<InsertPayrollSummary>): Promise<PayrollSummary> {
+    const existing = await this.getPayrollSummary(payrollRunId);
+    if (existing) {
+      const [r] = await db.update(payrollSummaries).set({ ...data, updatedAt: new Date() }).where(eq(payrollSummaries.payrollRunId, payrollRunId)).returning();
+      return r;
+    }
+    const [r] = await db.insert(payrollSummaries).values({ payrollRunId, ...data } as InsertPayrollSummary).returning();
+    return r;
+  }
+
+  async getAchBatch(payrollRunId: string): Promise<AchBatch | undefined> {
+    const [r] = await db.select().from(achBatches).where(eq(achBatches.payrollRunId, payrollRunId)).orderBy(desc(achBatches.createdAt));
+    return r;
+  }
+
+  async getAchBatchById(id: string): Promise<AchBatch | undefined> {
+    const [r] = await db.select().from(achBatches).where(eq(achBatches.id, id));
+    return r;
+  }
+
+  async createAchBatch(data: InsertAchBatch): Promise<AchBatch> {
+    const [r] = await db.insert(achBatches).values(data).returning();
+    return r;
+  }
+
+  async updateAchBatch(id: string, data: Partial<AchBatch>): Promise<AchBatch | undefined> {
+    const [r] = await db.update(achBatches).set({ ...data, updatedAt: new Date() }).where(eq(achBatches.id, id)).returning();
+    return r;
+  }
+
+  async getPayrollTransactionRuns(payrollRunId: string): Promise<PayrollTransactionRun[]> {
+    return db.select().from(payrollTransactionRuns).where(eq(payrollTransactionRuns.payrollRunId, payrollRunId));
+  }
+
+  async createPayrollTransactionRun(data: InsertPayrollTransactionRun): Promise<PayrollTransactionRun> {
+    const [r] = await db.insert(payrollTransactionRuns).values(data).returning();
+    return r;
+  }
+
+  async updatePayrollTransactionRun(id: string, data: Partial<PayrollTransactionRun>): Promise<PayrollTransactionRun | undefined> {
+    const [r] = await db.update(payrollTransactionRuns).set({ ...data, updatedAt: new Date() }).where(eq(payrollTransactionRuns.id, id)).returning();
+    return r;
+  }
+
+  async deletePayrollTransactionRunsByRun(payrollRunId: string): Promise<void> {
+    await db.delete(payrollTransactionRuns).where(eq(payrollTransactionRuns.payrollRunId, payrollRunId));
   }
 }
 

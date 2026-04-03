@@ -1510,6 +1510,72 @@ app.use((req, res, next) => {
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    await run("payroll_summaries table", sql`CREATE TABLE IF NOT EXISTS payroll_summaries (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      payroll_run_id VARCHAR NOT NULL REFERENCES payroll_runs(id),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      total_gross NUMERIC DEFAULT '0',
+      total_deductions NUMERIC DEFAULT '0',
+      total_net NUMERIC DEFAULT '0',
+      total_employer_taxes NUMERIC DEFAULT '0',
+      total_reimbursements NUMERIC DEFAULT '0',
+      total_funding_required NUMERIC DEFAULT '0',
+      ach_count INTEGER DEFAULT 0,
+      ach_amount NUMERIC DEFAULT '0',
+      check_count INTEGER DEFAULT 0,
+      check_amount NUMERIC DEFAULT '0',
+      cash_count INTEGER DEFAULT 0,
+      cash_amount NUMERIC DEFAULT '0',
+      trade_count INTEGER DEFAULT 0,
+      trade_amount NUMERIC DEFAULT '0',
+      other_count INTEGER DEFAULT 0,
+      other_amount NUMERIC DEFAULT '0',
+      worker_count INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("ach_batches table", sql`CREATE TABLE IF NOT EXISTS ach_batches (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      payroll_run_id VARCHAR NOT NULL REFERENCES payroll_runs(id),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      batch_id TEXT,
+      status TEXT DEFAULT 'submitted',
+      submitted_at TIMESTAMP,
+      settled_at TIMESTAMP,
+      settlement_status TEXT,
+      batch_file TEXT,
+      entry_count INTEGER DEFAULT 0,
+      total_amount NUMERIC DEFAULT '0',
+      failure_code TEXT,
+      failure_reason TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("payroll_transaction_runs table", sql`CREATE TABLE IF NOT EXISTS payroll_transaction_runs (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      payroll_run_id VARCHAR NOT NULL REFERENCES payroll_runs(id),
+      payroll_item_id VARCHAR REFERENCES payroll_items(id),
+      worker_id VARCHAR NOT NULL REFERENCES workers(id),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      payment_method TEXT DEFAULT 'check',
+      net_pay NUMERIC DEFAULT '0',
+      pay_date DATE,
+      status TEXT DEFAULT 'approved',
+      funding_account_id VARCHAR,
+      check_number TEXT,
+      ach_batch_id VARCHAR,
+      failure_reason TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("payroll_runs.is_locked", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT FALSE`);
+    await run("payroll_runs.funding_account_id", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS funding_account_id VARCHAR`);
+    await run("payroll_runs.ach_batch_id", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS ach_batch_id VARCHAR`);
+    await run("payroll_runs.payroll_summary_id", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS payroll_summary_id VARCHAR`);
+
     await run("system_documents seed payroll rules", sql`
       INSERT INTO system_documents (title, version, category, file_url, description, effective_date, change_log, is_active)
       SELECT

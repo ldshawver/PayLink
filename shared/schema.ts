@@ -207,6 +207,10 @@ export const payrollRuns = pgTable("payroll_runs", {
   processedAt: timestamp("processed_at"),
   payDate: date("pay_date"),
   useDirectDeposit: boolean("use_direct_deposit").default(true),
+  isLocked: boolean("is_locked").default(false),
+  fundingAccountId: varchar("funding_account_id"),
+  achBatchId: varchar("ach_batch_id"),
+  payrollSummaryId: varchar("payroll_summary_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -3013,3 +3017,79 @@ export type UserCompanyAccess = typeof userCompanyAccess.$inferSelect;
 export type InsertUserCompanyAccess = z.infer<typeof insertUserCompanyAccessSchema>;
 export type UserPermissionOverride = typeof userPermissionOverrides.$inferSelect;
 export type InsertUserPermissionOverride = z.infer<typeof insertUserPermissionOverrideSchema>;
+
+// ── Payroll Summaries ─────────────────────────────────────────────────────────
+export const payrollSummaries = pgTable("payroll_summaries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  payrollRunId: varchar("payroll_run_id").notNull().references(() => payrollRuns.id),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  totalGross: numeric("total_gross").default("0"),
+  totalDeductions: numeric("total_deductions").default("0"),
+  totalNet: numeric("total_net").default("0"),
+  totalEmployerTaxes: numeric("total_employer_taxes").default("0"),
+  totalReimbursements: numeric("total_reimbursements").default("0"),
+  totalFundingRequired: numeric("total_funding_required").default("0"),
+  achCount: integer("ach_count").default(0),
+  achAmount: numeric("ach_amount").default("0"),
+  checkCount: integer("check_count").default(0),
+  checkAmount: numeric("check_amount").default("0"),
+  cashCount: integer("cash_count").default(0),
+  cashAmount: numeric("cash_amount").default("0"),
+  tradeCount: integer("trade_count").default(0),
+  tradeAmount: numeric("trade_amount").default("0"),
+  otherCount: integer("other_count").default(0),
+  otherAmount: numeric("other_amount").default("0"),
+  workerCount: integer("worker_count").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertPayrollSummarySchema = createInsertSchema(payrollSummaries).omit({ id: true, createdAt: true, updatedAt: true });
+export type PayrollSummary = typeof payrollSummaries.$inferSelect;
+export type InsertPayrollSummary = z.infer<typeof insertPayrollSummarySchema>;
+
+// ── ACH Batches ───────────────────────────────────────────────────────────────
+export const achBatches = pgTable("ach_batches", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  payrollRunId: varchar("payroll_run_id").notNull().references(() => payrollRuns.id),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  batchId: text("batch_id"),
+  status: text("status").default("submitted"),
+  submittedAt: timestamp("submitted_at"),
+  settledAt: timestamp("settled_at"),
+  settlementStatus: text("settlement_status"),
+  batchFile: text("batch_file"),
+  entryCount: integer("entry_count").default(0),
+  totalAmount: numeric("total_amount").default("0"),
+  failureCode: text("failure_code"),
+  failureReason: text("failure_reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertAchBatchSchema = createInsertSchema(achBatches).omit({ id: true, createdAt: true, updatedAt: true });
+export type AchBatch = typeof achBatches.$inferSelect;
+export type InsertAchBatch = z.infer<typeof insertAchBatchSchema>;
+
+// ── Payroll Transaction Runs ──────────────────────────────────────────────────
+export const payrollTransactionRuns = pgTable("payroll_transaction_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  payrollRunId: varchar("payroll_run_id").notNull().references(() => payrollRuns.id),
+  payrollItemId: varchar("payroll_item_id").references(() => payrollItems.id),
+  workerId: varchar("worker_id").notNull().references(() => workers.id),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  paymentMethod: text("payment_method").default("check"),
+  netPay: numeric("net_pay").default("0"),
+  payDate: date("pay_date"),
+  status: text("status").default("approved"),
+  fundingAccountId: varchar("funding_account_id"),
+  checkNumber: text("check_number"),
+  achBatchId: varchar("ach_batch_id"),
+  failureReason: text("failure_reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertPayrollTransactionRunSchema = createInsertSchema(payrollTransactionRuns).omit({ id: true, createdAt: true, updatedAt: true });
+export type PayrollTransactionRun = typeof payrollTransactionRuns.$inferSelect;
+export type InsertPayrollTransactionRun = z.infer<typeof insertPayrollTransactionRunSchema>;

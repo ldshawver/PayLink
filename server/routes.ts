@@ -1049,6 +1049,10 @@ export async function registerRoutes(
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
 
+      if ((run as any).isLocked) {
+        return res.status(409).json({ message: "Cannot reprocess a locked payroll run. Unlock it first." });
+      }
+
       const company = await storage.getCompany(run.companyId);
       if (!company) return res.status(404).json({ message: "Company not found" });
 
@@ -1308,6 +1312,77 @@ export async function registerRoutes(
         processedAt: new Date(),
       });
 
+      // ── Auto-generate payroll summary ──────────────────────────────────────
+      try {
+        const createdItems = await storage.getPayrollItems(run.id);
+        // Group by paymentMethod for the payment-method breakout
+        const pmGroups: Record<string, { count: number; amount: number }> = {};
+        let summaryDeductions = 0;
+        for (const ci of createdItems) {
+          const pm = (ci.paymentMethod || "check").toLowerCase();
+          if (!pmGroups[pm]) pmGroups[pm] = { count: 0, amount: 0 };
+          pmGroups[pm].count++;
+          pmGroups[pm].amount += parseFloat(ci.netPay || "0");
+          summaryDeductions += parseFloat(ci.deductions || "0");
+        }
+        // Compute employer taxes from company tax/deduction records (employer-paid only)
+        const employerTaxRecords = companyDeductions.filter(d => d.isActive && d.isEmployerPaid && !d.isReferenceOnly);
+        let totalEmployerTaxes = 0;
+        for (const etd of employerTaxRecords) {
+          if (etd.calculationType === "percentage") {
+            totalEmployerTaxes += totalGross * (parseFloat(etd.rate || "0") / 100);
+          } else {
+            totalEmployerTaxes += parseFloat(etd.rate || "0") * createdItems.length;
+          }
+        }
+        const summary = await storage.upsertPayrollSummary(run.id, {
+          companyId: run.companyId,
+          totalGross: totalGross.toFixed(2),
+          totalDeductions: summaryDeductions.toFixed(2),
+          totalNet: totalNet.toFixed(2),
+          totalEmployerTaxes: totalEmployerTaxes.toFixed(2),
+          totalReimbursements: "0",
+          totalFundingRequired: (totalNet + totalEmployerTaxes).toFixed(2),
+          achCount: pmGroups["ach"]?.count || pmGroups["direct_deposit"]?.count || 0,
+          achAmount: ((pmGroups["ach"]?.amount || 0) + (pmGroups["direct_deposit"]?.amount || 0)).toFixed(2),
+          checkCount: pmGroups["check"]?.count || 0,
+          checkAmount: (pmGroups["check"]?.amount || 0).toFixed(2),
+          cashCount: pmGroups["cash"]?.count || 0,
+          cashAmount: (pmGroups["cash"]?.amount || 0).toFixed(2),
+          tradeCount: pmGroups["trade"]?.count || 0,
+          tradeAmount: (pmGroups["trade"]?.amount || 0).toFixed(2),
+          otherCount: Object.entries(pmGroups).filter(([k]) => !["ach","direct_deposit","check","cash","trade"].includes(k)).reduce((s,[,v])=>s+v.count,0),
+          otherAmount: Object.entries(pmGroups).filter(([k]) => !["ach","direct_deposit","check","cash","trade"].includes(k)).reduce((s,[,v])=>s+v.amount,0).toFixed(2),
+          workerCount: createdItems.length,
+        });
+        await storage.updatePayrollRun(run.id, { payrollSummaryId: summary.id });
+      } catch (summaryErr) {
+        console.error("Failed to generate payroll summary:", summaryErr);
+      }
+
+      // ── Auto-generate payroll transaction runs ─────────────────────────────
+      try {
+        await storage.deletePayrollTransactionRunsByRun(run.id);
+        const createdItems = await storage.getPayrollItems(run.id);
+        for (const ci of createdItems) {
+          await storage.createPayrollTransactionRun({
+            payrollRunId: run.id,
+            payrollItemId: ci.id,
+            workerId: ci.workerId,
+            companyId: run.companyId,
+            paymentMethod: ci.paymentMethod || "check",
+            netPay: ci.netPay || "0",
+            payDate: run.payDate || null,
+            status: "approved",
+            fundingAccountId: (run as any).fundingAccountId || null,
+            checkNumber: ci.checkNumber || null,
+            achBatchId: null,
+          });
+        }
+      } catch (txnErr) {
+        console.error("Failed to generate payroll transaction runs:", txnErr);
+      }
+
       const updatedRun = await storage.getPayrollRun(run.id);
       const finalItems = await storage.getPayrollItems(run.id);
 
@@ -1527,10 +1602,120 @@ export async function registerRoutes(
     }
   });
 
+  // ── Lock a payroll run ────────────────────────────────────────────────────
+  app.post("/api/payroll-runs/:id/lock", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      if (run.status !== "processed" && run.status !== "paid") {
+        return res.status(400).json({ message: "Payroll run must be processed before locking" });
+      }
+      if ((run as any).isLocked) {
+        return res.status(409).json({ message: "Payroll run is already locked" });
+      }
+      const updated = await storage.updatePayrollRun(run.id, { isLocked: true } as any);
+      res.json({ run: updated, message: "Payroll run locked successfully" });
+    } catch (error) {
+      console.error("Failed to lock payroll run:", error);
+      res.status(500).json({ message: "Failed to lock payroll run" });
+    }
+  });
+
+  // ── Get payroll summary ───────────────────────────────────────────────────
+  app.get("/api/payroll-runs/:id/summary", requireAuth, requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const summary = await storage.getPayrollSummary(run.id);
+      if (!summary) return res.status(404).json({ message: "Payroll summary not found" });
+      res.json(summary);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get payroll summary" });
+    }
+  });
+
+  // ── Get payroll transaction runs ──────────────────────────────────────────
+  app.get("/api/payroll-runs/:id/transaction-runs", requireAuth, requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const txnRuns = await storage.getPayrollTransactionRuns(run.id);
+      res.json(txnRuns);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get transaction runs" });
+    }
+  });
+
+  // ── Submit ACH batch ──────────────────────────────────────────────────────
+  app.post("/api/payroll-runs/:id/submit-ach", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      if (run.status !== "processed" && run.status !== "paid") {
+        return res.status(400).json({ message: "Payroll run must be processed before submitting ACH" });
+      }
+
+      const { batchFile, fundingAccountId } = req.body;
+
+      const batch = await storage.createAchBatch({
+        payrollRunId: run.id,
+        companyId: run.companyId,
+        batchId: `ACH-${run.id.substring(0, 8)}-${Date.now()}`,
+        status: "submitted",
+        submittedAt: new Date(),
+        batchFile: batchFile || null,
+        entryCount: 0,
+        totalAmount: "0",
+      });
+
+      await storage.updatePayrollRun(run.id, { achBatchId: batch.id } as any);
+
+      const txnRuns = await storage.getPayrollTransactionRuns(run.id);
+      let entryCount = 0;
+      let totalAmount = 0;
+      for (const txn of txnRuns) {
+        const pm = (txn.paymentMethod || "").toLowerCase();
+        if (pm === "ach" || pm === "direct_deposit") {
+          await storage.updatePayrollTransactionRun(txn.id, { status: "submitted", achBatchId: batch.id });
+          entryCount++;
+          totalAmount += parseFloat(txn.netPay || "0");
+        }
+      }
+
+      await storage.updateAchBatch(batch.id, { entryCount, totalAmount: totalAmount.toFixed(2), status: "submitted" });
+
+      if (fundingAccountId) {
+        await storage.updatePayrollRun(run.id, { fundingAccountId } as any);
+      }
+
+      const updatedBatch = await storage.getAchBatchById(batch.id);
+      res.status(201).json({ batch: updatedBatch, message: "ACH batch submitted successfully" });
+    } catch (error) {
+      console.error("Failed to submit ACH batch:", error);
+      res.status(500).json({ message: "Failed to submit ACH batch" });
+    }
+  });
+
+  // ── Get ACH batch status ──────────────────────────────────────────────────
+  app.get("/api/payroll-runs/:id/ach-batch", requireAuth, requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const batch = await storage.getAchBatch(run.id);
+      if (!batch) return res.status(404).json({ message: "No ACH batch found for this payroll run" });
+      res.json(batch);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get ACH batch" });
+    }
+  });
+
   app.delete("/api/payroll-runs/:id", requireRole("admin"), async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id as string);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      if ((run as any).isLocked) {
+        return res.status(409).json({ message: "Cannot delete a locked payroll run" });
+      }
       const items = await storage.getPayrollItems(run.id);
       for (const item of items) {
         await storage.deletePayrollItem(item.id);
@@ -4731,6 +4916,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/payroll-items/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
+      const { payrollItems: piTable } = await import("../shared/schema.js");
+      const [existingItem] = await db.select().from(piTable).where(eq(piTable.id, req.params.id as string));
+      if (existingItem) {
+        const parentRun = await storage.getPayrollRun(existingItem.payrollRunId);
+        if (parentRun && (parentRun as any).isLocked) {
+          return res.status(409).json({ message: "Cannot modify payroll items on a locked payroll run" });
+        }
+      }
       const item = await storage.updatePayrollItem(req.params.id as string, req.body);
       if (!item) return res.status(404).json({ message: "Payroll item not found" });
       res.json(item);
@@ -5373,6 +5566,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/pay-stub-transactions", async (req, res) => {
     try {
+      if (req.body.payrollItemId) {
+        const { payrollItems: piTable } = await import("../shared/schema.js");
+        const [pi] = await db.select().from(piTable).where(eq(piTable.id, req.body.payrollItemId));
+        if (pi) {
+          const parentRun = await storage.getPayrollRun(pi.payrollRunId);
+          if (parentRun && (parentRun as any).isLocked) {
+            return res.status(409).json({ message: "Cannot add pay stub transactions on a locked payroll run" });
+          }
+        }
+      }
       const transaction = await storage.createPayStubTransaction(req.body);
       res.status(201).json(transaction);
     } catch (error) {
@@ -5383,6 +5586,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/pay-stub-transactions/:id", async (req, res) => {
     try {
+      const { payStubTransactions: pstTable, payrollItems: piTable } = await import("../shared/schema.js");
+      const [existing] = await db.select().from(pstTable).where(eq(pstTable.id, req.params.id));
+      if (existing?.payrollItemId) {
+        const [pi] = await db.select().from(piTable).where(eq(piTable.id, existing.payrollItemId));
+        if (pi) {
+          const parentRun = await storage.getPayrollRun(pi.payrollRunId);
+          if (parentRun && (parentRun as any).isLocked) {
+            return res.status(409).json({ message: "Cannot modify pay stub transactions on a locked payroll run" });
+          }
+        }
+      }
       const transaction = await storage.updatePayStubTransaction(req.params.id, req.body);
       if (!transaction) return res.status(404).json({ message: "Not found" });
       res.json(transaction);
