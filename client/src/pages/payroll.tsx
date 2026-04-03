@@ -37,38 +37,21 @@ function useTabParam(): [string, (tab: string) => void] {
   return [tab, setTab];
 }
 
-// ── Pay-period helpers (weekly Sun–Sat, payday following Wednesday) ──────────
-// Given a Wednesday payday, the pay period is the prior Sun–Sat.
-// payDate(Wed)  → periodEnd = payDate - 4 days (Sat)
-//              → periodStart = payDate - 10 days (Sun)
-function computePeriodFromPayDate(payDate: string): { periodStart: string; periodEnd: string } | null {
-  if (!payDate) return null;
-  const d = new Date(payDate + "T12:00:00");
-  if (isNaN(d.getTime())) return null;
-  const endDate = new Date(d); endDate.setDate(d.getDate() - 4);   // Saturday
-  const startDate = new Date(d); startDate.setDate(d.getDate() - 10); // Sunday
-  const fmt = (dt: Date) => dt.toISOString().split("T")[0];
-  return { periodStart: fmt(startDate), periodEnd: fmt(endDate) };
-}
+// ── Pay-period resolution ─────────────────────────────────────────────────────
+// Period dates are now computed server-side from the company's active
+// Pay Period Schedule. The frontend calls /api/pay-period-schedules/resolve-period
+// and displays the server-resolved period — no local date math.
+type ResolvedPeriod = { periodStart: string; periodEnd: string; schedule: PayPeriodSchedule };
 
-function isWednesday(dateStr: string): boolean {
-  if (!dateStr) return false;
-  return new Date(dateStr + "T12:00:00").getDay() === 3;
-}
-
-function nextWednesday(): string {
-  const d = new Date();
-  const dayOfWeek = d.getDay(); // 0=Sun,1=Mon,...,3=Wed
-  const daysUntilWed = (3 - dayOfWeek + 7) % 7 || 7;
-  d.setDate(d.getDate() + daysUntilWed);
-  return d.toISOString().split("T")[0];
+function fmtPeriodDate(d: string) {
+  return new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
 function ProcessPayrollTab() {
   const { toast } = useToast();
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [formData, setFormData] = useState({ companyId: "", payDate: nextWednesday() });
+  const [formData, setFormData] = useState({ companyId: "", payDate: "" });
   const [showAll, setShowAll] = useState(false);
   const [dateSearch, setDateSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState("all");
@@ -78,19 +61,30 @@ function ProcessPayrollTab() {
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
   const { data: payrollRuns = [], isLoading } = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"] });
 
-  // Auto-compute pay period from the selected pay date
-  const computedPeriod = computePeriodFromPayDate(formData.payDate);
-  const payDateIsWednesday = isWednesday(formData.payDate);
+  // ── Resolve pay period from active schedule + payDate (server-side) ──────
+  const { data: resolvedPeriod, error: resolveError } = useQuery<ResolvedPeriod>({
+    queryKey: ["/api/pay-period-schedules/resolve-period", formData.companyId, formData.payDate],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/pay-period-schedules/resolve-period?companyId=${encodeURIComponent(formData.companyId)}&payDate=${encodeURIComponent(formData.payDate)}`
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw Object.assign(new Error(body.message || "Could not resolve period"), body);
+      }
+      return res.json();
+    },
+    enabled: !!(formData.companyId && formData.payDate),
+    retry: false,
+  });
 
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!formData.companyId) throw new Error("Please select a company");
       if (!formData.payDate) throw new Error("Please select a pay date");
-      if (!computedPeriod) throw new Error("Invalid pay date");
+      if (!resolvedPeriod) throw new Error("Pay period could not be resolved — check active schedule");
       const res = await apiRequest("POST", "/api/payroll-runs", {
         companyId: formData.companyId,
-        periodStart: computedPeriod.periodStart,
-        periodEnd: computedPeriod.periodEnd,
         payDate: formData.payDate,
       });
       return res.json();
@@ -99,7 +93,7 @@ function ProcessPayrollTab() {
       queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
       toast({ title: "Payroll run created" });
       setDialogOpen(false);
-      setFormData({ companyId: "", payDate: nextWednesday() });
+      setFormData({ companyId: "", payDate: "" });
     },
     onError: (err: Error) => {
       // Try to extract the JSON body message from throwIfResNotOk format "STATUS: {json}"
@@ -315,34 +309,38 @@ function ProcessPayrollTab() {
               </div>
 
               <div className="space-y-2">
-                <Label>Pay Date <span className="text-muted-foreground text-xs">(must be a Wednesday)</span></Label>
+                <Label>Pay Date</Label>
                 <Input
                   type="date"
                   data-testid="input-pay-date"
                   value={formData.payDate}
                   onChange={e => setFormData(p => ({ ...p, payDate: e.target.value }))}
                 />
-                {formData.payDate && !payDateIsWednesday && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                    <AlertCircle className="h-3.5 w-3.5" /> Pay dates should be Wednesdays — this date falls on a {new Date(formData.payDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "long" })}.
-                  </p>
-                )}
               </div>
 
-              {computedPeriod && (
+              {formData.companyId && formData.payDate && !resolvedPeriod && resolveError && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300 flex items-start gap-2">
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>{(resolveError as any)?.message || "Could not resolve pay period for this date."}</span>
+                </div>
+              )}
+
+              {resolvedPeriod && (
                 <div className="rounded-md border bg-muted/40 p-3 space-y-1.5 text-sm">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Pay Period (auto-calculated)</p>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                    Pay Period — {resolvedPeriod.schedule.name} ({resolvedPeriod.schedule.type})
+                  </p>
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Period start</span>
-                    <span className="font-medium">{new Date(computedPeriod.periodStart + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} (Sunday)</span>
+                    <span className="font-medium">{fmtPeriodDate(resolvedPeriod.periodStart)}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Period end</span>
-                    <span className="font-medium">{new Date(computedPeriod.periodEnd + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} (Saturday)</span>
+                    <span className="font-medium">{fmtPeriodDate(resolvedPeriod.periodEnd)}</span>
                   </div>
                   <div className="flex items-center justify-between border-t pt-1.5 mt-1">
                     <span className="text-muted-foreground">Payday</span>
-                    <span className="font-semibold text-emerald-600">{new Date(formData.payDate + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} (Wednesday)</span>
+                    <span className="font-semibold text-emerald-600">{fmtPeriodDate(formData.payDate)}</span>
                   </div>
                 </div>
               )}
@@ -350,7 +348,7 @@ function ProcessPayrollTab() {
               <Button
                 className="w-full"
                 data-testid="button-submit-payroll"
-                disabled={createMutation.isPending || !formData.companyId || !formData.payDate}
+                disabled={createMutation.isPending || !formData.companyId || !formData.payDate || !resolvedPeriod}
                 onClick={() => createMutation.mutate()}
               >
                 {createMutation.isPending ? "Creating..." : "Create Payroll Run"}
@@ -4490,11 +4488,46 @@ function PaymentRecordsTab() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Company</Label>
-                  <Select value={formData.companyId || "none"} onValueChange={v => setFormData(p => ({ ...p, companyId: v === "none" ? null : v }))}>
+                  <Select value={formData.companyId || "none"} onValueChange={v => setFormData(p => ({ ...p, companyId: v === "none" ? null : v, payrollRunId: null }))}>
                     <SelectTrigger><SelectValue placeholder="Select company" /></SelectTrigger>
                     <SelectContent><SelectItem value="none">None</SelectItem>{companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
+                <div className="space-y-2">
+                  <Label>Payroll Run <span className="text-muted-foreground text-xs">(auto-fills dates)</span></Label>
+                  <Select
+                    value={formData.payrollRunId || "none"}
+                    onValueChange={v => {
+                      if (v === "none") {
+                        setFormData(p => ({ ...p, payrollRunId: null }));
+                      } else {
+                        const run = runs.find(r => r.id === v);
+                        setFormData(p => ({
+                          ...p,
+                          payrollRunId: v,
+                          payDate: run?.payDate || p.payDate,
+                          payPeriodStart: run?.periodStart || p.payPeriodStart,
+                          payPeriodEnd: run?.periodEnd || p.payPeriodEnd,
+                          companyId: run?.companyId || p.companyId,
+                        }));
+                      }
+                    }}
+                  >
+                    <SelectTrigger data-testid="select-payment-record-run"><SelectValue placeholder="Select run (optional)" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None</SelectItem>
+                      {runs
+                        .filter(r => !formData.companyId || r.companyId === formData.companyId)
+                        .map(r => (
+                          <SelectItem key={r.id} value={r.id}>
+                            {r.periodStart} – {r.periodEnd}{r.payDate ? ` (pay ${r.payDate})` : ""}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Employee</Label>
                   <Select value={formData.workerId || "none"} onValueChange={v => setFormData(p => ({ ...p, workerId: v === "none" ? null : v }))}>

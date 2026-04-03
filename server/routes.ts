@@ -199,6 +199,79 @@ function deduplicateByPeriod<T extends RunLike>(runs: T[]): T[] {
   return [...best.values()];
 }
 
+// ── Pay-period resolution helper ───────────────────────────────────────────────
+// Given a company's active PayPeriodSchedule and a payDate string (YYYY-MM-DD),
+// computes the covered periodStart and periodEnd dates.
+// transactionDayOffset: days between periodEnd and payDate (default 3).
+type PayPeriodScheduleShape = {
+  type: string;
+  transactionDayOffset?: number | null;
+  semiMonthlyDay1?: number | null;
+  semiMonthlyDay2?: number | null;
+};
+function resolvePayPeriod(
+  schedule: PayPeriodScheduleShape,
+  payDate: string
+): { periodStart: string; periodEnd: string } | null {
+  const pay = new Date(payDate + "T12:00:00");
+  if (isNaN(pay.getTime())) return null;
+  const offset = schedule.transactionDayOffset ?? 3;
+  const fmt = (d: Date) => d.toISOString().split("T")[0];
+
+  if (schedule.type === "weekly") {
+    const end = new Date(pay);
+    end.setDate(pay.getDate() - offset);
+    const start = new Date(end);
+    start.setDate(end.getDate() - 6);
+    return { periodStart: fmt(start), periodEnd: fmt(end) };
+  }
+
+  if (schedule.type === "biweekly") {
+    const end = new Date(pay);
+    end.setDate(pay.getDate() - offset);
+    const start = new Date(end);
+    start.setDate(end.getDate() - 13);
+    return { periodStart: fmt(start), periodEnd: fmt(end) };
+  }
+
+  if (schedule.type === "semimonthly") {
+    const day1 = schedule.semiMonthlyDay1 ?? 1;
+    const day2 = schedule.semiMonthlyDay2 ?? 15;
+    // Determine which half of the month this payDate covers
+    const end = new Date(pay);
+    end.setDate(pay.getDate() - offset);
+    if (end.getDate() < day2) {
+      // First half: day1 → day2-1
+      const start = new Date(end.getFullYear(), end.getMonth(), day1);
+      const capEnd = new Date(end.getFullYear(), end.getMonth(), day2 - 1);
+      return { periodStart: fmt(start), periodEnd: fmt(capEnd) };
+    } else {
+      // Second half: day2 → last day of month
+      const start = new Date(end.getFullYear(), end.getMonth(), day2);
+      const capEnd = new Date(end.getFullYear(), end.getMonth() + 1, 0);
+      return { periodStart: fmt(start), periodEnd: fmt(capEnd) };
+    }
+  }
+
+  if (schedule.type === "monthly") {
+    const end = new Date(pay);
+    end.setDate(pay.getDate() - offset);
+    const start = new Date(end.getFullYear(), end.getMonth(), 1);
+    const capEnd = new Date(end.getFullYear(), end.getMonth() + 1, 0);
+    return { periodStart: fmt(start), periodEnd: fmt(capEnd) };
+  }
+
+  return null;
+}
+
+// Helper: periodsPerYear from schedule type
+function periodsPerYearFromSchedule(type: string): number {
+  if (type === "weekly") return 52;
+  if (type === "semimonthly") return 24;
+  if (type === "monthly") return 12;
+  return 26; // biweekly default
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -1001,6 +1074,13 @@ export async function registerRoutes(
         };
       }
 
+      // Load active pay period schedule for salary and period resolution
+      const companySchedules = await storage.getPayPeriodSchedules(run.companyId);
+      const activeSchedule = companySchedules.find(s => s.isActive);
+      const schedulePeriodsPerYear = activeSchedule
+        ? periodsPerYearFromSchedule(activeSchedule.type)
+        : periodsPerYearFromSchedule(company.payFrequency || "biweekly");
+
       // Load amendments and pay stub accounts for this pay period
       const allAmendments = await storage.getPayStubAmendments(run.companyId);
       console.log(`[PAYROLL] Run ${run.id} period: ${run.periodStart} -> ${run.periodEnd}`);
@@ -1040,12 +1120,8 @@ export async function registerRoutes(
         let regPay = 0, otPay = 0, dtPay = 0, grossPay = 0;
 
         if (worker.payType === "salary") {
-          let periodsPerYear = 26;
-          if (company.payFrequency === "weekly") periodsPerYear = 52;
-          else if (company.payFrequency === "monthly") periodsPerYear = 12;
-          else if (company.payFrequency === "semimonthly") periodsPerYear = 24;
           const hourlyEquiv = defaultRate / 2080;
-          regPay = defaultRate / periodsPerYear;
+          regPay = defaultRate / schedulePeriodsPerYear;
           otPay = otHrs * hourlyEquiv * otMultiplier;
           dtPay = dtHrs * hourlyEquiv * dtMultiplier;
           grossPay = regPay + otPay + dtPay;
@@ -1115,11 +1191,19 @@ export async function registerRoutes(
           return true;
         });
 
+        const ytd = existingYtdByWorker[worker.id] || { gross: 0, deductions: 0, net: 0 };
         let totalDeductions = 0;
         for (const ded of workerDeductions) {
           if (ded.calculationType === "percentage") {
-            const base = ded.maxAmount ? Math.min(grossPay, parseFloat(ded.maxAmount)) : grossPay;
-            totalDeductions += base * (parseFloat(ded.rate || "0") / 100);
+            if (ded.maxAmount) {
+              // Wage-base cap (e.g. Social Security $168,600): compare against YTD accumulated gross
+              const wageCap = parseFloat(ded.maxAmount);
+              const remainingCap = Math.max(0, wageCap - ytd.gross);
+              const base = Math.min(grossPay, remainingCap);
+              totalDeductions += base * (parseFloat(ded.rate || "0") / 100);
+            } else {
+              totalDeductions += grossPay * (parseFloat(ded.rate || "0") / 100);
+            }
           } else {
             totalDeductions += parseFloat(ded.rate || "0");
           }
@@ -1128,7 +1212,6 @@ export async function registerRoutes(
         totalDeductions += amendmentDeductions;
 
         const netPay = grossPay - totalDeductions;
-        const ytd = existingYtdByWorker[worker.id] || { gross: 0, deductions: 0, net: 0 };
 
         totalGross += grossPay;
         totalNet += netPay;
@@ -2058,10 +2141,39 @@ export async function registerRoutes(
 
   app.post("/api/payroll-runs", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const { companyId, periodStart, periodEnd } = req.body;
+      const { companyId } = req.body;
+      const clientPayDate = req.body?.payDate as string | undefined;
 
       const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ message: "Company not found" });
+
+      // ── Require an active Pay Period Schedule ──────────────────────────────
+      const companySchedules = await storage.getPayPeriodSchedules(companyId);
+      const activeSchedules = companySchedules.filter(s => s.isActive);
+      if (activeSchedules.length === 0) {
+        return res.status(422).json({
+          message: "No active Pay Period Schedule found for this company. " +
+            "Go to Settings → Pay Period Schedules and activate a schedule before running payroll.",
+        });
+      }
+      if (activeSchedules.length > 1) {
+        return res.status(422).json({
+          message: `${activeSchedules.length} active Pay Period Schedules found for this company. ` +
+            "Only one schedule may be active at a time. Deactivate the extras in Settings → Pay Period Schedules.",
+        });
+      }
+      const activeSchedule = activeSchedules[0];
+
+      // ── Resolve period dates server-side from schedule + payDate ───────────
+      if (!clientPayDate) return res.status(400).json({ message: "payDate is required" });
+      const resolved = resolvePayPeriod(activeSchedule, clientPayDate);
+      if (!resolved) {
+        return res.status(400).json({
+          message: "Could not resolve pay period from the active schedule and the provided payDate.",
+        });
+      }
+      const periodStart = resolved.periodStart;
+      const periodEnd = resolved.periodEnd;
 
       // ── Duplicate-period guard ──────────────────────────────────────────────
       // Reject if a finalized (processed/paid) run already exists for this
@@ -2079,6 +2191,8 @@ export async function registerRoutes(
         });
       }
 
+      const schedulePeriodsPerYear = periodsPerYearFromSchedule(activeSchedule.type);
+
       const entries = await storage.getTimeEntriesByDateRange(companyId, periodStart, periodEnd);
       const allWorkers = await storage.getWorkers(companyId);
       const activeWorkers = allWorkers.filter(w => w.isActive);
@@ -2095,9 +2209,8 @@ export async function registerRoutes(
 
       const allRuns = await storage.getPayrollRuns(companyId);
       // YTD year anchored to payDate if provided, otherwise periodStart year.
-      const previewPayDate = req.body?.payDate as string | undefined;
-      const previewYtdYear = previewPayDate
-        ? new Date(previewPayDate + "T00:00:00").getFullYear()
+      const previewYtdYear = clientPayDate
+        ? new Date(clientPayDate + "T00:00:00").getFullYear()
         : new Date(periodStart).getFullYear();
       const previewYtdFloor = `${previewYtdYear}-01-01`;
       const priorRunsRaw = allRuns.filter(r =>
@@ -2143,13 +2256,8 @@ export async function registerRoutes(
         let regPay = 0, otPay = 0, dtPay = 0, grossPay = 0;
 
         if (worker.payType === "salary") {
-          const payFreq = company.payFrequency || "biweekly";
-          let periodsPerYear = 26;
-          if (payFreq === "weekly") periodsPerYear = 52;
-          else if (payFreq === "semimonthly") periodsPerYear = 24;
-          else if (payFreq === "monthly") periodsPerYear = 12;
           const hourlyEquiv = defaultRate / 2080;
-          regPay = defaultRate / periodsPerYear;
+          regPay = defaultRate / schedulePeriodsPerYear;
           otPay = otHrs * hourlyEquiv * otMultiplier;
           dtPay = dtHrs * hourlyEquiv * dtMultiplier;
           grossPay = regPay + otPay + dtPay;
@@ -2188,18 +2296,25 @@ export async function registerRoutes(
           return true;
         });
 
+        const ytd = existingYtdByWorker[worker.id] || { gross: 0, deductions: 0, net: 0 };
         let totalDeductions = 0;
         for (const ded of workerDeds) {
           if (ded.calculationType === "percentage") {
-            const base = ded.maxAmount ? Math.min(grossPay, parseFloat(ded.maxAmount)) : grossPay;
-            totalDeductions += base * (parseFloat(ded.rate || "0") / 100);
+            if (ded.maxAmount) {
+              // Wage-base cap (e.g. Social Security $168,600): compare against YTD accumulated gross
+              const wageCap = parseFloat(ded.maxAmount);
+              const remainingCap = Math.max(0, wageCap - ytd.gross);
+              const base = Math.min(grossPay, remainingCap);
+              totalDeductions += base * (parseFloat(ded.rate || "0") / 100);
+            } else {
+              totalDeductions += grossPay * (parseFloat(ded.rate || "0") / 100);
+            }
           } else {
             totalDeductions += parseFloat(ded.rate || "0");
           }
         }
 
         const netPay = grossPay - totalDeductions;
-        const ytd = existingYtdByWorker[worker.id] || { gross: 0, deductions: 0, net: 0 };
 
         totalGross += grossPay;
         totalNet += netPay;
@@ -2230,7 +2345,7 @@ export async function registerRoutes(
         companyId,
         periodStart,
         periodEnd,
-        payDate: previewPayDate || null,
+        payDate: clientPayDate || null,
         status: "processed",
         totalGross: totalGross.toFixed(2),
         totalNet: totalNet.toFixed(2),
@@ -5224,6 +5339,41 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  // ── Resolve pay period from active schedule + payDate ─────────────────────
+  // Must be declared BEFORE /:id to avoid route conflict.
+  app.get("/api/pay-period-schedules/resolve-period", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string;
+      const payDate = req.query.payDate as string;
+      if (!companyId || !payDate) {
+        return res.status(400).json({ message: "companyId and payDate are required" });
+      }
+      const schedules = await storage.getPayPeriodSchedules(companyId);
+      const active = schedules.filter(s => s.isActive);
+      if (active.length === 0) {
+        return res.status(422).json({
+          message: "No active Pay Period Schedule found for this company.",
+          noSchedule: true,
+        });
+      }
+      if (active.length > 1) {
+        return res.status(422).json({
+          message: `${active.length} active schedules found. Only one may be active at a time.`,
+          multipleActive: true,
+        });
+      }
+      const schedule = active[0];
+      const resolved = resolvePayPeriod(schedule, payDate);
+      if (!resolved) {
+        return res.status(400).json({ message: "Could not resolve period for the provided payDate." });
+      }
+      res.json({ ...resolved, schedule });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to resolve pay period" });
+    }
+  });
+
   app.get("/api/pay-period-schedules", async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
@@ -5235,8 +5385,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/pay-period-schedules", async (req, res) => {
+  app.post("/api/pay-period-schedules", requireAuth, async (req, res) => {
     try {
+      // ── Enforce single active schedule per company ─────────────────────────
+      if (req.body.isActive) {
+        const existing = await storage.getPayPeriodSchedules(req.body.companyId);
+        for (const s of existing.filter(s => s.isActive)) {
+          await storage.updatePayPeriodSchedule(s.id, { isActive: false });
+        }
+      }
       const schedule = await storage.createPayPeriodSchedule(req.body);
       res.status(201).json(schedule);
     } catch (error) {
@@ -5245,8 +5402,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/pay-period-schedules/:id", async (req, res) => {
+  app.patch("/api/pay-period-schedules/:id", requireAuth, async (req, res) => {
     try {
+      const existing = await storage.getPayPeriodSchedule(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+
+      // ── Enforce single active schedule per company ─────────────────────────
+      if (req.body.isActive && !existing.isActive) {
+        const all = await storage.getPayPeriodSchedules(existing.companyId);
+        for (const s of all.filter(s => s.isActive && s.id !== req.params.id)) {
+          await storage.updatePayPeriodSchedule(s.id, { isActive: false });
+        }
+      }
+
       const schedule = await storage.updatePayPeriodSchedule(req.params.id, req.body);
       if (!schedule) return res.status(404).json({ message: "Not found" });
       res.json(schedule);
@@ -5256,7 +5424,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/pay-period-schedules/:id", async (req, res) => {
+  app.delete("/api/pay-period-schedules/:id", requireAuth, async (req, res) => {
     try {
       await storage.deletePayPeriodSchedule(req.params.id);
       res.json({ message: "Deleted" });
