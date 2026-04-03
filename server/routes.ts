@@ -11976,5 +11976,134 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to delete system document" }); }
   });
 
+  // ── Trade / Non-Cash Compensation ─────────────────────────────────────────
+  app.get("/api/trade-transactions", requireAuth, async (req: any, res) => {
+    try {
+      const { companyId, status, year } = req.query;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const rows = await storage.getTradeTransactions(companyId as string, status as string | undefined, year ? parseInt(year as string) : undefined);
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch trade transactions" }); }
+  });
+
+  app.get("/api/trade-transactions/reporting-summary", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
+    try {
+      const { companyId, year } = req.query;
+      if (!companyId || !year) return res.status(400).json({ message: "companyId and year required" });
+      const rows = await storage.getTradeReportingSummary(companyId as string, parseInt(year as string));
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch reporting summary" }); }
+  });
+
+  app.get("/api/trade-transactions/:id", requireAuth, async (req, res) => {
+    try {
+      const tx = await storage.getTradeTransaction(req.params.id);
+      if (!tx) return res.status(404).json({ message: "Not found" });
+      res.json(tx);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch trade transaction" }); }
+  });
+
+  app.post("/api/trade-transactions", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
+    try {
+      const userId = req.session.userId as string;
+      const data = { ...req.body, createdBy: userId, taxYear: req.body.taxYear ? parseInt(req.body.taxYear) : new Date().getFullYear() };
+      const tx = await storage.createTradeTransaction(data);
+      await storage.createTradeAuditLog({ tradeTransactionId: tx.id, companyId: tx.companyId, userId, action: "created", newStatus: tx.status, note: "Transaction created" });
+      res.status(201).json(tx);
+    } catch (e) { res.status(500).json({ message: "Failed to create trade transaction" }); }
+  });
+
+  app.patch("/api/trade-transactions/:id", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
+    try {
+      const userId = req.session.userId as string;
+      const existing = await storage.getTradeTransaction(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      const tx = await storage.updateTradeTransaction(req.params.id, req.body);
+      await storage.createTradeAuditLog({ tradeTransactionId: req.params.id, companyId: existing.companyId, userId, action: "updated", oldStatus: existing.status, newStatus: tx?.status, note: "Transaction updated" });
+      res.json(tx);
+    } catch (e) { res.status(500).json({ message: "Failed to update trade transaction" }); }
+  });
+
+  app.delete("/api/trade-transactions/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const tx = await storage.getTradeTransaction(req.params.id);
+      if (!tx) return res.status(404).json({ message: "Not found" });
+      if (!["draft", "cancelled"].includes(tx.status)) return res.status(422).json({ message: "Only draft or cancelled transactions can be deleted" });
+      await storage.deleteTradeTransaction(req.params.id);
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ message: "Failed to delete trade transaction" }); }
+  });
+
+  // Status transitions
+  const tradeStatusTransition = (fromStatuses: string[], toStatus: string, action: string) =>
+    async (req: any, res: any) => {
+      try {
+        const userId = req.session.userId as string;
+        const tx = await storage.getTradeTransaction(req.params.id);
+        if (!tx) return res.status(404).json({ message: "Not found" });
+        if (!fromStatuses.includes(tx.status)) return res.status(422).json({ message: `Cannot ${action} a transaction in status: ${tx.status}` });
+        const updated = await storage.updateTradeTransaction(req.params.id, { status: toStatus, ...(action === "approve" || action === "reject" ? { reviewedBy: userId, reviewedAt: new Date(), reviewNotes: req.body.notes || null } : {}) });
+        await storage.createTradeAuditLog({ tradeTransactionId: tx.id, companyId: tx.companyId, userId, action, oldStatus: tx.status, newStatus: toStatus, note: req.body.notes || null });
+        res.json(updated);
+      } catch (e) { res.status(500).json({ message: `Failed to ${action} trade transaction` }); }
+    };
+
+  app.post("/api/trade-transactions/:id/submit", requireAuth, requireRole("admin", "manager"), tradeStatusTransition(["draft", "rejected"], "pending_review", "submitted"));
+  app.post("/api/trade-transactions/:id/approve", requireAuth, requireRole("admin"), tradeStatusTransition(["pending_review"], "approved", "approve"));
+  app.post("/api/trade-transactions/:id/reject", requireAuth, requireRole("admin"), tradeStatusTransition(["pending_review"], "rejected", "reject"));
+  app.post("/api/trade-transactions/:id/complete", requireAuth, requireRole("admin", "manager"), tradeStatusTransition(["approved"], "completed", "complete"));
+  app.post("/api/trade-transactions/:id/cancel", requireAuth, requireRole("admin", "manager"), tradeStatusTransition(["draft", "pending_review", "approved", "rejected"], "cancelled", "cancel"));
+
+  // Line items
+  app.get("/api/trade-transactions/:id/items", requireAuth, async (req, res) => {
+    try { res.json(await storage.getTradeTransactionItems(req.params.id)); }
+    catch (e) { res.status(500).json({ message: "Failed to fetch items" }); }
+  });
+
+  app.post("/api/trade-transactions/:id/items", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const item = await storage.createTradeTransactionItem({ ...req.body, tradeTransactionId: req.params.id });
+      res.status(201).json(item);
+    } catch (e) { res.status(500).json({ message: "Failed to add item" }); }
+  });
+
+  app.delete("/api/trade-transactions/:id/items/:itemId", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      await storage.deleteTradeTransactionItem(req.params.itemId);
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ message: "Failed to delete item" }); }
+  });
+
+  // Attachments
+  app.get("/api/trade-transactions/:id/attachments", requireAuth, async (req, res) => {
+    try { res.json(await storage.getTradeAttachments(req.params.id)); }
+    catch (e) { res.status(500).json({ message: "Failed to fetch attachments" }); }
+  });
+
+  app.post("/api/trade-transactions/:id/attachments", requireAuth, requireRole("admin", "manager"), upload.single("file"), async (req: any, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const userId = req.session.userId as string;
+      const tx = await storage.getTradeTransaction(req.params.id);
+      if (!tx) return res.status(404).json({ message: "Not found" });
+      const attachment = await storage.createTradeAttachment({ tradeTransactionId: req.params.id, fileName: req.file.originalname, fileUrl: `/uploads/${req.file.filename}`, fileSize: req.file.size, mimeType: req.file.mimetype, uploadedBy: userId });
+      await storage.createTradeAuditLog({ tradeTransactionId: req.params.id, companyId: tx.companyId, userId, action: "attachment_added", note: `Attached: ${req.file.originalname}` });
+      res.status(201).json(attachment);
+    } catch (e) { res.status(500).json({ message: "Failed to upload attachment" }); }
+  });
+
+  app.delete("/api/trade-transactions/:id/attachments/:attachId", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
+    try {
+      await storage.deleteTradeAttachment(req.params.attachId);
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ message: "Failed to delete attachment" }); }
+  });
+
+  // Audit logs
+  app.get("/api/trade-transactions/:id/audit-logs", requireAuth, async (req, res) => {
+    try { res.json(await storage.getTradeAuditLogs(req.params.id)); }
+    catch (e) { res.status(500).json({ message: "Failed to fetch audit logs" }); }
+  });
+
   return httpServer;
 }

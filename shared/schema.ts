@@ -2729,3 +2729,76 @@ export const systemDocuments = pgTable("system_documents", {
 export const insertSystemDocumentSchema = createInsertSchema(systemDocuments).omit({ id: true, createdAt: true, updatedAt: true });
 export type SystemDocument = typeof systemDocuments.$inferSelect;
 export type InsertSystemDocument = z.infer<typeof insertSystemDocumentSchema>;
+
+// ── Trade / Non-Cash Compensation ──────────────────────────────────────────
+export const tradeTransactions = pgTable("trade_transactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  title: text("title").notNull(),
+  transactionType: text("transaction_type").notNull().default("services"), // goods | services | mixed
+  counterpartyType: text("counterparty_type").notNull().default("manual"), // contractor | vendor | customer | manual
+  counterpartyId: varchar("counterparty_id"),
+  counterpartyName: text("counterparty_name").notNull(),
+  description: text("description"),
+  fairMarketValue: numeric("fair_market_value", { precision: 12, scale: 2 }).notNull().default("0"),
+  currency: text("currency").notNull().default("USD"),
+  status: text("status").notNull().default("draft"), // draft | pending_review | approved | rejected | completed | cancelled
+  isReportable: boolean("is_reportable").notNull().default(false),
+  taxYear: integer("tax_year"),
+  reportingNotes: text("reporting_notes"),
+  reviewedBy: varchar("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewNotes: text("review_notes"),
+  createdBy: varchar("created_by").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+export const insertTradeTransactionSchema = createInsertSchema(tradeTransactions).omit({ id: true, createdAt: true, updatedAt: true });
+export type TradeTransaction = typeof tradeTransactions.$inferSelect;
+export type InsertTradeTransaction = z.infer<typeof insertTradeTransactionSchema>;
+
+export const tradeTransactionItems = pgTable("trade_transaction_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tradeTransactionId: varchar("trade_transaction_id").notNull(),
+  description: text("description").notNull(),
+  itemType: text("item_type").notNull().default("services"), // goods | services | other
+  direction: text("direction").notNull().default("given"), // given | received
+  fairMarketValue: numeric("fair_market_value", { precision: 12, scale: 2 }).notNull().default("0"),
+  quantity: numeric("quantity", { precision: 10, scale: 4 }).notNull().default("1"),
+  unit: text("unit"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertTradeTransactionItemSchema = createInsertSchema(tradeTransactionItems).omit({ id: true, createdAt: true });
+export type TradeTransactionItem = typeof tradeTransactionItems.$inferSelect;
+export type InsertTradeTransactionItem = z.infer<typeof insertTradeTransactionItemSchema>;
+
+export const tradeAttachments = pgTable("trade_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tradeTransactionId: varchar("trade_transaction_id").notNull(),
+  fileName: text("file_name").notNull(),
+  fileUrl: text("file_url").notNull(),
+  fileSize: integer("file_size"),
+  mimeType: text("mime_type"),
+  uploadedBy: varchar("uploaded_by").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertTradeAttachmentSchema = createInsertSchema(tradeAttachments).omit({ id: true, createdAt: true });
+export type TradeAttachment = typeof tradeAttachments.$inferSelect;
+export type InsertTradeAttachment = z.infer<typeof insertTradeAttachmentSchema>;
+
+export const tradeAuditLogs = pgTable("trade_audit_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tradeTransactionId: varchar("trade_transaction_id").notNull(),
+  companyId: varchar("company_id").notNull(),
+  userId: varchar("user_id").notNull(),
+  action: text("action").notNull(), // created | updated | submitted | approved | rejected | completed | cancelled | attachment_added
+  oldStatus: text("old_status"),
+  newStatus: text("new_status"),
+  note: text("note"),
+  metadata: text("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertTradeAuditLogSchema = createInsertSchema(tradeAuditLogs).omit({ id: true, createdAt: true });
+export type TradeAuditLog = typeof tradeAuditLogs.$inferSelect;
+export type InsertTradeAuditLog = z.infer<typeof insertTradeAuditLogSchema>;

@@ -41,6 +41,7 @@ import PortalOnboardingPage from "@/pages/portal-onboarding";
 import LoginPage from "@/pages/login";
 import NotificationSettingsPage from "@/pages/notification-settings";
 import MessagesPage from "@/pages/messages";
+import TradeCompensationPage from "@/pages/trade-compensation";
 import { Loader2, Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -94,6 +95,7 @@ function AuthenticatedRouter() {
       <Route path="/app/my-profile" component={MyProfilePage} />
       <Route path="/app/notification-settings" component={NotificationSettingsPage} />
       <Route path="/app/messages" component={MessagesPage} />
+      <Route path="/app/trade-compensation">{() => <RoleGuard roles={["admin", "manager"]}><TradeCompensationPage /></RoleGuard>}</Route>
       <Route component={NotFound} />
     </Switch>
   );

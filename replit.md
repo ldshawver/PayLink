@@ -74,6 +74,7 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
     -   **Automation Engine:** Rules-based automation with event logging.
     -   **Notifications System:** Company/user-scoped notification tracking.
     -   **System Documents:** Source-of-truth policy documents stored in DB (`system_documents` table) and version-controlled in `/docs/`. Served statically at `/docs/*`. Seeded with Payroll Processing Rules v1.0. Surfaced in Settings > System Documents (with download links) and linked in the Run Payroll dialog header. API: `GET/POST/PATCH/DELETE /api/system-documents`.
+    -   **Trade / Non-Cash Compensation:** Full recordkeeping and workflow system for non-cash compensation arrangements. Phase 1 includes: `trade_transactions`, `trade_transaction_items`, `trade_attachments`, `trade_audit_logs` tables; CRUD + status workflow (draft → pending_review → approved/rejected → completed/cancelled); line items with direction (given/received); file attachments; full audit trail; FMV tracking; year-end reporting flag; contractor annual totals summary. UI: `/app/trade-compensation` (admin/manager). Compliance warnings shown throughout. API: `GET/POST/PATCH/DELETE /api/trade-transactions` + status transition endpoints + items/attachments/audit-logs sub-resources + `/api/trade-transactions/reporting-summary`.
 
 **Database:**
 -   **Type:** PostgreSQL, managed with Drizzle ORM.

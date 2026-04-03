@@ -65,6 +65,7 @@ import {
   Rss,
   Bell,
   MessageSquare,
+  ArrowLeftRight,
 } from "lucide-react";
 import {
   Sidebar,
@@ -296,6 +297,15 @@ const navSections: NavSection[] = [
       { title: "Invoices", url: "/app/invoices?tab=invoices", icon: FileText },
       { title: "Recurring Billing", url: "/app/invoices?tab=recurring", icon: Repeat },
       { title: "Payments", url: "/app/invoices?tab=payments", icon: DollarSign },
+    ],
+  },
+  {
+    label: "Trade Compensation",
+    icon: ArrowLeftRight,
+    url: "/app/trade-compensation",
+    roles: ["admin", "manager"],
+    items: [
+      { title: "Transactions", url: "/app/trade-compensation", icon: ArrowLeftRight },
     ],
   },
   {

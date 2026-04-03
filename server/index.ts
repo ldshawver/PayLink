@@ -1418,6 +1418,63 @@ app.use((req, res, next) => {
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
     // Seed the canonical Payroll Processing Rules document if not already present
+    await run("trade_transactions table", sql`CREATE TABLE IF NOT EXISTS trade_transactions (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL,
+      title TEXT NOT NULL,
+      transaction_type TEXT NOT NULL DEFAULT 'services',
+      counterparty_type TEXT NOT NULL DEFAULT 'manual',
+      counterparty_id VARCHAR,
+      counterparty_name TEXT NOT NULL,
+      description TEXT,
+      fair_market_value NUMERIC(12,2) NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'USD',
+      status TEXT NOT NULL DEFAULT 'draft',
+      is_reportable BOOLEAN NOT NULL DEFAULT FALSE,
+      tax_year INTEGER,
+      reporting_notes TEXT,
+      reviewed_by VARCHAR,
+      reviewed_at TIMESTAMP,
+      review_notes TEXT,
+      created_by VARCHAR NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("trade_transaction_items table", sql`CREATE TABLE IF NOT EXISTS trade_transaction_items (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      trade_transaction_id VARCHAR NOT NULL,
+      description TEXT NOT NULL,
+      item_type TEXT NOT NULL DEFAULT 'services',
+      direction TEXT NOT NULL DEFAULT 'given',
+      fair_market_value NUMERIC(12,2) NOT NULL DEFAULT 0,
+      quantity NUMERIC(10,4) NOT NULL DEFAULT 1,
+      unit TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("trade_attachments table", sql`CREATE TABLE IF NOT EXISTS trade_attachments (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      trade_transaction_id VARCHAR NOT NULL,
+      file_name TEXT NOT NULL,
+      file_url TEXT NOT NULL,
+      file_size INTEGER,
+      mime_type TEXT,
+      uploaded_by VARCHAR NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("trade_audit_logs table", sql`CREATE TABLE IF NOT EXISTS trade_audit_logs (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      trade_transaction_id VARCHAR NOT NULL,
+      company_id VARCHAR NOT NULL,
+      user_id VARCHAR NOT NULL,
+      action TEXT NOT NULL,
+      old_status TEXT,
+      new_status TEXT,
+      note TEXT,
+      metadata TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
     await run("system_documents seed payroll rules", sql`
       INSERT INTO system_documents (title, version, category, file_url, description, effective_date, change_log, is_active)
       SELECT

@@ -158,6 +158,11 @@ import {
   type DeviceToken, type InsertDeviceToken,
   systemDocuments,
   type SystemDocument, type InsertSystemDocument,
+  tradeTransactions, tradeTransactionItems, tradeAttachments, tradeAuditLogs,
+  type TradeTransaction, type InsertTradeTransaction,
+  type TradeTransactionItem, type InsertTradeTransactionItem,
+  type TradeAttachment, type InsertTradeAttachment,
+  type TradeAuditLog, type InsertTradeAuditLog,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -736,6 +741,22 @@ export interface IStorage {
   getDeviceTokensByUsers(userIds: string[]): Promise<DeviceToken[]>;
   registerDeviceToken(data: InsertDeviceToken): Promise<DeviceToken>;
   deactivateDeviceToken(userId: string, token: string): Promise<void>;
+
+  // Trade / Non-Cash Compensation
+  getTradeTransactions(companyId: string, status?: string, year?: number): Promise<TradeTransaction[]>;
+  getTradeTransaction(id: string): Promise<TradeTransaction | undefined>;
+  createTradeTransaction(data: InsertTradeTransaction): Promise<TradeTransaction>;
+  updateTradeTransaction(id: string, data: Partial<TradeTransaction>): Promise<TradeTransaction | undefined>;
+  deleteTradeTransaction(id: string): Promise<void>;
+  getTradeTransactionItems(tradeTransactionId: string): Promise<TradeTransactionItem[]>;
+  createTradeTransactionItem(data: InsertTradeTransactionItem): Promise<TradeTransactionItem>;
+  deleteTradeTransactionItem(id: string): Promise<void>;
+  getTradeAttachments(tradeTransactionId: string): Promise<TradeAttachment[]>;
+  createTradeAttachment(data: InsertTradeAttachment): Promise<TradeAttachment>;
+  deleteTradeAttachment(id: string): Promise<void>;
+  getTradeAuditLogs(tradeTransactionId: string): Promise<TradeAuditLog[]>;
+  createTradeAuditLog(data: InsertTradeAuditLog): Promise<TradeAuditLog>;
+  getTradeReportingSummary(companyId: string, year: number): Promise<{ counterpartyId: string | null; counterpartyName: string; totalFairMarketValue: string; transactionCount: number }[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3243,6 +3264,81 @@ export class DatabaseStorage implements IStorage {
     await db.update(deviceTokens).set({ isActive: false, updatedAt: new Date() }).where(
       and(eq(deviceTokens.userId, userId), eq(deviceTokens.token, token))
     );
+  }
+
+  // ── Trade / Non-Cash Compensation ─────────────────────────────────────────
+  async getTradeTransactions(companyId: string, status?: string, year?: number): Promise<TradeTransaction[]> {
+    const conditions = [eq(tradeTransactions.companyId, companyId)];
+    if (status) conditions.push(eq(tradeTransactions.status, status));
+    if (year) conditions.push(eq(tradeTransactions.taxYear, year));
+    return db.select().from(tradeTransactions).where(and(...conditions)).orderBy(desc(tradeTransactions.createdAt));
+  }
+  async getTradeTransaction(id: string): Promise<TradeTransaction | undefined> {
+    const [r] = await db.select().from(tradeTransactions).where(eq(tradeTransactions.id, id));
+    return r;
+  }
+  async createTradeTransaction(data: InsertTradeTransaction): Promise<TradeTransaction> {
+    const [r] = await db.insert(tradeTransactions).values(data).returning();
+    return r;
+  }
+  async updateTradeTransaction(id: string, data: Partial<TradeTransaction>): Promise<TradeTransaction | undefined> {
+    const [r] = await db.update(tradeTransactions).set({ ...data, updatedAt: new Date() }).where(eq(tradeTransactions.id, id)).returning();
+    return r;
+  }
+  async deleteTradeTransaction(id: string): Promise<void> {
+    await db.delete(tradeAuditLogs).where(eq(tradeAuditLogs.tradeTransactionId, id));
+    await db.delete(tradeAttachments).where(eq(tradeAttachments.tradeTransactionId, id));
+    await db.delete(tradeTransactionItems).where(eq(tradeTransactionItems.tradeTransactionId, id));
+    await db.delete(tradeTransactions).where(eq(tradeTransactions.id, id));
+  }
+  async getTradeTransactionItems(tradeTransactionId: string): Promise<TradeTransactionItem[]> {
+    return db.select().from(tradeTransactionItems).where(eq(tradeTransactionItems.tradeTransactionId, tradeTransactionId)).orderBy(tradeTransactionItems.createdAt);
+  }
+  async createTradeTransactionItem(data: InsertTradeTransactionItem): Promise<TradeTransactionItem> {
+    const [r] = await db.insert(tradeTransactionItems).values(data).returning();
+    return r;
+  }
+  async deleteTradeTransactionItem(id: string): Promise<void> {
+    await db.delete(tradeTransactionItems).where(eq(tradeTransactionItems.id, id));
+  }
+  async getTradeAttachments(tradeTransactionId: string): Promise<TradeAttachment[]> {
+    return db.select().from(tradeAttachments).where(eq(tradeAttachments.tradeTransactionId, tradeTransactionId)).orderBy(desc(tradeAttachments.createdAt));
+  }
+  async createTradeAttachment(data: InsertTradeAttachment): Promise<TradeAttachment> {
+    const [r] = await db.insert(tradeAttachments).values(data).returning();
+    return r;
+  }
+  async deleteTradeAttachment(id: string): Promise<void> {
+    await db.delete(tradeAttachments).where(eq(tradeAttachments.id, id));
+  }
+  async getTradeAuditLogs(tradeTransactionId: string): Promise<TradeAuditLog[]> {
+    return db.select().from(tradeAuditLogs).where(eq(tradeAuditLogs.tradeTransactionId, tradeTransactionId)).orderBy(desc(tradeAuditLogs.createdAt));
+  }
+  async createTradeAuditLog(data: InsertTradeAuditLog): Promise<TradeAuditLog> {
+    const [r] = await db.insert(tradeAuditLogs).values(data).returning();
+    return r;
+  }
+  async getTradeReportingSummary(companyId: string, year: number): Promise<{ counterpartyId: string | null; counterpartyName: string; totalFairMarketValue: string; transactionCount: number }[]> {
+    const rows = await db.select().from(tradeTransactions).where(
+      and(
+        eq(tradeTransactions.companyId, companyId),
+        eq(tradeTransactions.taxYear, year),
+        eq(tradeTransactions.isReportable, true),
+        inArray(tradeTransactions.status, ["approved", "completed"])
+      )
+    );
+    const map = new Map<string, { counterpartyId: string | null; counterpartyName: string; total: number; count: number }>();
+    for (const row of rows) {
+      const key = row.counterpartyId || row.counterpartyName;
+      const existing = map.get(key);
+      if (existing) {
+        existing.total += parseFloat(row.fairMarketValue);
+        existing.count++;
+      } else {
+        map.set(key, { counterpartyId: row.counterpartyId, counterpartyName: row.counterpartyName, total: parseFloat(row.fairMarketValue), count: 1 });
+      }
+    }
+    return Array.from(map.values()).map(v => ({ counterpartyId: v.counterpartyId, counterpartyName: v.counterpartyName, totalFairMarketValue: v.total.toFixed(2), transactionCount: v.count })).sort((a, b) => parseFloat(b.totalFairMarketValue) - parseFloat(a.totalFairMarketValue));
   }
 }
 
