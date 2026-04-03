@@ -763,7 +763,7 @@ function PunchesTab() {
   const [editPunch, setEditPunch] = useState<TimePunch | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ punchTime: "", note: "" });
+  const [editForm, setEditForm] = useState({ punchType: "clock_in", punchTime: "", note: "" });
   const [addForm, setAddForm] = useState({
     workerId: "",
     companyId: "",
@@ -833,6 +833,7 @@ function PunchesTab() {
   const openEdit = (punch: TimePunch) => {
     setEditPunch(punch);
     setEditForm({
+      punchType: punch.punchType,
       punchTime: toLocalDatetimeString(punch.punchTime),
       note: punch.note || "",
     });
@@ -985,11 +986,23 @@ function PunchesTab() {
           <DialogHeader><DialogTitle>Edit Punch</DialogTitle></DialogHeader>
           {editPunch && (
             <div className="grid gap-3 mt-2">
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm text-muted-foreground font-medium">
                 {workerMap.get(editPunch.workerId)
                   ? `${workerMap.get(editPunch.workerId)!.firstName} ${workerMap.get(editPunch.workerId)!.lastName}`
-                  : "Unknown"} — <PunchTypeBadge type={editPunch.punchType} />
+                  : "Unknown"}
               </p>
+              <div className="grid gap-1.5">
+                <Label>Punch Type</Label>
+                <Select value={editForm.punchType} onValueChange={v => setEditForm(f => ({ ...f, punchType: v }))}>
+                  <SelectTrigger data-testid="select-edit-punch-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="clock_in">Clock In</SelectItem>
+                    <SelectItem value="clock_out">Clock Out</SelectItem>
+                    <SelectItem value="break_start">Break In</SelectItem>
+                    <SelectItem value="break_end">Break Out</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="grid gap-1.5">
                 <Label>Punch Time</Label>
                 <Input type="datetime-local" value={editForm.punchTime} onChange={e => setEditForm(f => ({ ...f, punchTime: e.target.value }))} data-testid="input-edit-punch-time" />
@@ -1002,6 +1015,7 @@ function PunchesTab() {
                 onClick={() => updatePunch.mutate({
                   id: editPunch.id,
                   data: {
+                    punchType: editForm.punchType,
                     punchTime: editForm.punchTime ? new Date(editForm.punchTime).toISOString() : undefined,
                     note: editForm.note,
                   },
