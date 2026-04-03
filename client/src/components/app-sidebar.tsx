@@ -67,6 +67,7 @@ import {
   MessageSquare,
   ArrowLeftRight,
   KeyRound,
+  ServerCog,
 } from "lucide-react";
 import {
   Sidebar,
@@ -323,6 +324,13 @@ const navSections: NavSection[] = [
       { title: "HR Reports", url: "/app/reports?tab=hr", icon: PieChart },
       { title: "Expense Reports", url: "/app/reports?tab=expense", icon: Receipt },
     ],
+  },
+  {
+    label: "Provisioning",
+    icon: ServerCog,
+    url: "/app/provisioning",
+    roles: ["admin"],
+    items: [],
   },
   {
     label: "Permissions",

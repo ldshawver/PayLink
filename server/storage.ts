@@ -170,6 +170,7 @@ import {
   platformModules, permissionGroups, permissions, enterpriseRolePermissions,
   userCompanyAccess, userPermissionOverrides,
   payrollSummaries, achBatches, payrollTransactionRuns,
+  tenantCommercialGates, tenantProvisioningAuditLogs, tenantImplementationProjects,
   type PlatformModule, type InsertPlatformModule,
   type Location, type InsertLocation,
   type Team, type InsertTeam,
@@ -184,6 +185,9 @@ import {
   type PayrollSummary, type InsertPayrollSummary,
   type AchBatch, type InsertAchBatch,
   type PayrollTransactionRun, type InsertPayrollTransactionRun,
+  type TenantCommercialGate, type InsertTenantCommercialGate,
+  type TenantProvisioningAuditLog, type InsertTenantProvisioningAuditLog,
+  type TenantImplementationProject, type InsertTenantImplementationProject,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -859,6 +863,14 @@ export interface IStorage {
   createPayrollTransactionRun(data: InsertPayrollTransactionRun): Promise<PayrollTransactionRun>;
   updatePayrollTransactionRun(id: string, data: Partial<PayrollTransactionRun>): Promise<PayrollTransactionRun | undefined>;
   deletePayrollTransactionRunsByRun(payrollRunId: string): Promise<void>;
+
+  // Tenant Provisioning
+  getTenantCommercialGates(): Promise<(TenantCommercialGate & { company: Company })[]>;
+  getTenantCommercialGate(companyId: string): Promise<TenantCommercialGate | undefined>;
+  upsertTenantCommercialGate(companyId: string, data: Partial<InsertTenantCommercialGate>): Promise<TenantCommercialGate>;
+  getTenantProvisioningAuditLogs(companyId: string): Promise<TenantProvisioningAuditLog[]>;
+  getTenantImplementationProject(companyId: string): Promise<TenantImplementationProject | undefined>;
+  updateTenantImplementationProject(id: string, data: Partial<TenantImplementationProject>): Promise<TenantImplementationProject | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3824,6 +3836,57 @@ export class DatabaseStorage implements IStorage {
 
   async deletePayrollTransactionRunsByRun(payrollRunId: string): Promise<void> {
     await db.delete(payrollTransactionRuns).where(eq(payrollTransactionRuns.payrollRunId, payrollRunId));
+  }
+
+  async getTenantCommercialGates(): Promise<(TenantCommercialGate & { company: Company })[]> {
+    const gates = await db.select().from(tenantCommercialGates).orderBy(desc(tenantCommercialGates.createdAt));
+    const result: (TenantCommercialGate & { company: Company })[] = [];
+    for (const gate of gates) {
+      const [company] = await db.select().from(companies).where(eq(companies.id, gate.companyId));
+      if (company) result.push({ ...gate, company });
+    }
+    return result;
+  }
+
+  async getTenantCommercialGate(companyId: string): Promise<TenantCommercialGate | undefined> {
+    const [gate] = await db.select().from(tenantCommercialGates).where(eq(tenantCommercialGates.companyId, companyId));
+    return gate;
+  }
+
+  async upsertTenantCommercialGate(companyId: string, data: Partial<InsertTenantCommercialGate>): Promise<TenantCommercialGate> {
+    const existing = await this.getTenantCommercialGate(companyId);
+    if (existing) {
+      const [updated] = await db.update(tenantCommercialGates)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(tenantCommercialGates.companyId, companyId))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db.insert(tenantCommercialGates)
+        .values({ companyId, ...data })
+        .returning();
+      return created;
+    }
+  }
+
+  async getTenantProvisioningAuditLogs(companyId: string): Promise<TenantProvisioningAuditLog[]> {
+    return db.select().from(tenantProvisioningAuditLogs)
+      .where(eq(tenantProvisioningAuditLogs.companyId, companyId))
+      .orderBy(desc(tenantProvisioningAuditLogs.createdAt));
+  }
+
+  async getTenantImplementationProject(companyId: string): Promise<TenantImplementationProject | undefined> {
+    const [project] = await db.select().from(tenantImplementationProjects)
+      .where(eq(tenantImplementationProjects.companyId, companyId));
+    return project;
+  }
+
+  async updateTenantImplementationProject(id: string, data: Partial<TenantImplementationProject>): Promise<TenantImplementationProject | undefined> {
+    const [updated] = await db.update(tenantImplementationProjects)
+      .set(data)
+      .where(eq(tenantImplementationProjects.id, id))
+      .returning();
+    return updated;
   }
 }
 

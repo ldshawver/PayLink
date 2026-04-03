@@ -12666,5 +12666,70 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to fetch contractors" }); }
   });
 
+  // ── Tenant Provisioning ────────────────────────────────────────────────────
+  {
+    const { handleProvisioningEvent, getProvisioningStatus } = await import("./provisioning/TenantProvisioningService");
+    const { implementationTemplates } = await import("./provisioning/implementationTemplates");
+
+    app.get("/api/provisioning/templates", requireAuth, requireRole("admin"), async (_req, res) => {
+      res.json(implementationTemplates);
+    });
+
+    app.get("/api/provisioning/tenants", requireAuth, requireRole("admin"), async (_req, res) => {
+      try {
+        const gates = await storage.getTenantCommercialGates();
+        res.json(gates);
+      } catch (e) { res.status(500).json({ message: "Failed to fetch provisioning tenants" }); }
+    });
+
+    app.get("/api/provisioning/tenants/:companyId", requireAuth, requireRole("admin"), async (req, res) => {
+      try {
+        const status = await getProvisioningStatus(req.params.companyId);
+        res.json(status);
+      } catch (e) { res.status(500).json({ message: "Failed to fetch provisioning status" }); }
+    });
+
+    app.get("/api/provisioning/tenants/:companyId/audit", requireAuth, requireRole("admin"), async (req, res) => {
+      try {
+        const logs = await storage.getTenantProvisioningAuditLogs(req.params.companyId);
+        res.json(logs);
+      } catch (e) { res.status(500).json({ message: "Failed to fetch audit logs" }); }
+    });
+
+    app.post("/api/provisioning/event", requireAuth, requireRole("admin"), async (req, res) => {
+      try {
+        const { companyId, event, payload } = req.body;
+        if (!companyId || !event) return res.status(400).json({ message: "companyId and event are required" });
+        const result = await handleProvisioningEvent(companyId, event, payload || {}, "admin");
+        res.json(result);
+      } catch (e) { res.status(500).json({ message: "Failed to handle provisioning event" }); }
+    });
+
+    app.post("/api/provisioning/tenants/:companyId/retry", requireAuth, requireRole("admin"), async (req, res) => {
+      try {
+        const { companyId } = req.params;
+        const gate = await storage.getTenantCommercialGate(companyId);
+        if (!gate) return res.status(404).json({ message: "No provisioning record found for this tenant" });
+        const result = await handleProvisioningEvent(companyId, "tenant.provisioning.requested", {}, "admin");
+        res.json(result);
+      } catch (e) { res.status(500).json({ message: "Failed to retry provisioning" }); }
+    });
+
+    app.patch("/api/provisioning/tenants/:companyId/gates", requireAuth, requireRole("admin"), async (req, res) => {
+      try {
+        const { companyId } = req.params;
+        const gate = await storage.upsertTenantCommercialGate(companyId, req.body);
+        res.json(gate);
+      } catch (e) { res.status(500).json({ message: "Failed to update commercial gates" }); }
+    });
+
+    app.patch("/api/provisioning/projects/:id", requireAuth, requireRole("admin"), async (req, res) => {
+      try {
+        const updated = await storage.updateTenantImplementationProject(req.params.id, req.body);
+        res.json(updated);
+      } catch (e) { res.status(500).json({ message: "Failed to update implementation project" }); }
+    });
+  }
+
   return httpServer;
 }

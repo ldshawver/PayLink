@@ -43,6 +43,7 @@ import NotificationSettingsPage from "@/pages/notification-settings";
 import MessagesPage from "@/pages/messages";
 import TradeCompensationPage from "@/pages/trade-compensation";
 import PermissionsPage from "@/pages/permissions";
+import ProvisioningPage from "@/pages/provisioning";
 import { Loader2, Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -98,6 +99,7 @@ function AuthenticatedRouter() {
       <Route path="/app/messages" component={MessagesPage} />
       <Route path="/app/trade-compensation">{() => <RoleGuard roles={["admin", "manager"]}><TradeCompensationPage /></RoleGuard>}</Route>
       <Route path="/app/permissions">{() => <RoleGuard roles={["admin", "platform_super_admin"]}><PermissionsPage /></RoleGuard>}</Route>
+      <Route path="/app/provisioning">{() => <RoleGuard roles={["admin"]}><ProvisioningPage /></RoleGuard>}</Route>
       <Route component={NotFound} />
     </Switch>
   );

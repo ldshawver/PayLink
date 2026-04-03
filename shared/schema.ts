@@ -3044,6 +3044,34 @@ export const payrollSummaries = pgTable("payroll_summaries", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// ── Tenant Provisioning ───────────────────────────────────────────────────────
+
+export const tenantLifecycleStateEnum = pgEnum("tenant_lifecycle_state", [
+  "pending_activation",
+  "active",
+  "grace_period",
+  "suspended",
+  "reactivated",
+  "cancelled",
+]);
+
+export const tenantCommercialGates = pgTable("tenant_commercial_gates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  agreementStatus: text("agreement_status").notNull().default("pending"), // pending | signed
+  implementationFeeStatus: text("implementation_fee_status").notNull().default("pending"), // pending | paid
+  subscriptionStatus: text("subscription_status").notNull().default("pending"), // pending | active
+  paymentMethodStatus: text("payment_method_status").notNull().default("pending"), // pending | verified
+  lifecycleState: tenantLifecycleStateEnum("lifecycle_state").notNull().default("pending_activation"),
+  selectedTemplate: text("selected_template"), // template key
+  provisionedAt: timestamp("provisioned_at"),
+  suspendedAt: timestamp("suspended_at"),
+  cancelledAt: timestamp("cancelled_at"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 export const insertPayrollSummarySchema = createInsertSchema(payrollSummaries).omit({ id: true, createdAt: true, updatedAt: true });
 export type PayrollSummary = typeof payrollSummaries.$inferSelect;
 export type InsertPayrollSummary = z.infer<typeof insertPayrollSummarySchema>;
@@ -3093,3 +3121,40 @@ export const payrollTransactionRuns = pgTable("payroll_transaction_runs", {
 export const insertPayrollTransactionRunSchema = createInsertSchema(payrollTransactionRuns).omit({ id: true, createdAt: true, updatedAt: true });
 export type PayrollTransactionRun = typeof payrollTransactionRuns.$inferSelect;
 export type InsertPayrollTransactionRun = z.infer<typeof insertPayrollTransactionRunSchema>;
+
+export const tenantProvisioningAuditLogs = pgTable("tenant_provisioning_audit_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  eventType: text("event_type").notNull(),
+  step: text("step"),
+  status: text("status").notNull().default("success"), // success | failed | skipped
+  details: text("details"),
+  triggeredBy: text("triggered_by").default("system"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const tenantImplementationProjects = pgTable("tenant_implementation_projects", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  templateKey: text("template_key").notNull(),
+  templateName: text("template_name").notNull(),
+  status: text("status").notNull().default("in_progress"), // in_progress | completed | on_hold
+  completedSteps: integer("completed_steps").notNull().default(0),
+  totalSteps: integer("total_steps").notNull().default(0),
+  checklistItems: text("checklist_items"), // JSON array
+  internalTasks: text("internal_tasks"), // JSON array
+  startedAt: timestamp("started_at").defaultNow(),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertTenantCommercialGateSchema = createInsertSchema(tenantCommercialGates).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertTenantProvisioningAuditLogSchema = createInsertSchema(tenantProvisioningAuditLogs).omit({ id: true, createdAt: true });
+export const insertTenantImplementationProjectSchema = createInsertSchema(tenantImplementationProjects).omit({ id: true, createdAt: true });
+
+export type TenantCommercialGate = typeof tenantCommercialGates.$inferSelect;
+export type InsertTenantCommercialGate = z.infer<typeof insertTenantCommercialGateSchema>;
+export type TenantProvisioningAuditLog = typeof tenantProvisioningAuditLogs.$inferSelect;
+export type InsertTenantProvisioningAuditLog = z.infer<typeof insertTenantProvisioningAuditLogSchema>;
+export type TenantImplementationProject = typeof tenantImplementationProjects.$inferSelect;
+export type InsertTenantImplementationProject = z.infer<typeof insertTenantImplementationProjectSchema>;
