@@ -152,6 +152,21 @@ app.post(
         }
       }
 
+      // ── Tenant billing lifecycle events ────────────────────────────────
+      if (
+        eventType === "invoice.payment_failed" ||
+        eventType === "customer.subscription.deleted" ||
+        eventType === "invoice.payment_succeeded" ||
+        eventType === "customer.subscription.updated"
+      ) {
+        try {
+          const { handleTenantBillingEvent } = await import('./billingLifecycle');
+          await handleTenantBillingEvent(eventType, event.data.object);
+        } catch (be: any) {
+          console.error('[BillingLifecycle] Handler error:', be.message);
+        }
+      }
+
       res.status(200).json({ received: true });
     } catch (error: any) {
       console.error('Webhook error:', error.message);
@@ -1587,6 +1602,30 @@ app.use((req, res, next) => {
     await run("payroll_runs.funding_account_id", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS funding_account_id VARCHAR`);
     await run("payroll_runs.ach_batch_id", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS ach_batch_id VARCHAR`);
     await run("payroll_runs.payroll_summary_id", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS payroll_summary_id VARCHAR`);
+
+    await run("companies.grace_period_end", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS grace_period_end TIMESTAMP`);
+    await run("companies.grace_period_days", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS grace_period_days INTEGER DEFAULT 14`);
+    await run("companies.stripe_customer_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`);
+    await run("companies.stripe_subscription_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT`);
+
+    await run("authorization_audit_log table", sql`
+      CREATE TABLE IF NOT EXISTS authorization_audit_log (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        actor_user_id VARCHAR NOT NULL,
+        target_user_id VARCHAR,
+        target_role_id VARCHAR,
+        target_resource TEXT,
+        change_type TEXT NOT NULL,
+        before_value TEXT,
+        after_value TEXT,
+        note TEXT,
+        company_id VARCHAR,
+        tenant_id VARCHAR,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await run("authorization_audit_log.company_id", sql`ALTER TABLE authorization_audit_log ADD COLUMN IF NOT EXISTS company_id VARCHAR`);
+    await run("authorization_audit_log.tenant_id", sql`ALTER TABLE authorization_audit_log ADD COLUMN IF NOT EXISTS tenant_id VARCHAR`);
 
     await run("system_documents seed payroll rules", sql`
       INSERT INTO system_documents (title, version, category, file_url, description, effective_date, change_log, is_active)

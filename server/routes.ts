@@ -155,12 +155,31 @@ async function requireActiveSubscription(req: Request, res: Response, next: Next
   try {
     const user = await storage.getUser(req.session.userId!);
     if (!user?.companyId) return next();
-    const rows = await db.execute(sql`SELECT subscription_status, trial_end FROM companies WHERE id = ${user.companyId}`);
+    const rows = await db.execute(sql`SELECT subscription_status, trial_end, grace_period_end FROM companies WHERE id = ${user.companyId}`);
     if (rows.rows.length === 0) return next();
     const company = rows.rows[0] as any;
     const status = company.subscription_status;
-    if (status === "trial_expired" || status === "suspended" || status === "canceled") {
+    if (status === "suspended" || status === "canceled") {
+      return res.status(403).json({
+        message: "Account suspended. Please resolve your billing to restore access.",
+        reason: "tenant_suspended",
+        subscriptionStatus: status,
+      });
+    }
+    if (status === "trial_expired") {
       return res.status(403).json({ message: "Your subscription is inactive. Please upgrade to continue." });
+    }
+    if (status === "grace_period") {
+      const gracePeriodEnd = company.grace_period_end ? new Date(company.grace_period_end) : null;
+      if (gracePeriodEnd && new Date() > gracePeriodEnd) {
+        await db.execute(sql`UPDATE companies SET subscription_status = 'suspended', billing_active = FALSE WHERE id = ${user.companyId}`);
+        return res.status(403).json({
+          message: "Your grace period has expired. Account is now suspended. Please resolve billing to restore access.",
+          reason: "tenant_suspended",
+          subscriptionStatus: "suspended",
+        });
+      }
+      return next();
     }
     if (status === "trial_active" && company.trial_end) {
       const trialEnd = new Date(company.trial_end);
@@ -12616,6 +12635,107 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const logs = await storage.getAuthorizationAuditLogs(limit);
       res.json(logs);
     } catch (e) { res.status(500).json({ message: "Failed to fetch audit log" }); }
+  });
+
+  app.get("/api/audit-log", requireAuth, requireRole("admin", "platform_super_admin"), async (req: any, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+      const offset = parseInt(req.query.offset as string) || 0;
+      const { changeType, companyId, actorUserId, fromDate, toDate } = req.query;
+
+      const currentUser = await storage.getUser(req.session?.userId);
+      const isSuperAdmin = currentUser?.role === "platform_super_admin";
+      const resolvedCompanyId = isSuperAdmin
+        ? (companyId as string | undefined)
+        : (currentUser?.companyId ?? undefined);
+
+      const result = await storage.getAuthorizationAuditLogsFiltered({
+        limit,
+        offset,
+        changeType: changeType as string | undefined,
+        companyId: resolvedCompanyId,
+        actorUserId: actorUserId as string | undefined,
+        fromDate: fromDate as string | undefined,
+        toDate: toDate as string | undefined,
+      });
+      res.json(result);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch audit log" }); }
+  });
+
+  app.get("/api/audit-log/export-csv", requireAuth, requireRole("admin", "platform_super_admin"), async (req: any, res) => {
+    try {
+      const { changeType, companyId, actorUserId, fromDate, toDate } = req.query;
+
+      const currentUser = await storage.getUser(req.session?.userId);
+      const isSuperAdmin = currentUser?.role === "platform_super_admin";
+      const resolvedCompanyId = isSuperAdmin
+        ? (companyId as string | undefined)
+        : (currentUser?.companyId ?? undefined);
+
+      const result = await storage.getAuthorizationAuditLogsFiltered({
+        limit: 10000,
+        offset: 0,
+        changeType: changeType as string | undefined,
+        companyId: resolvedCompanyId,
+        actorUserId: actorUserId as string | undefined,
+        fromDate: fromDate as string | undefined,
+        toDate: toDate as string | undefined,
+      });
+
+      const headers = ["ID", "Timestamp", "Actor", "Event Type", "Target User", "Target Role", "Target Resource", "Before", "After", "Company", "Note"];
+      const rows = result.rows.map(r => [
+        r.id,
+        r.createdAt ? new Date(r.createdAt).toISOString() : "",
+        r.actorUserId,
+        r.changeType,
+        r.targetUserId || "",
+        r.targetRoleId || "",
+        r.targetResource || "",
+        r.beforeValue || "",
+        r.afterValue || "",
+        r.companyId || "",
+        (r.note || "").replace(/"/g, '""'),
+      ]);
+
+      const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename=audit-log-${new Date().toISOString().split("T")[0]}.csv`);
+      res.send(csv);
+    } catch (e) { res.status(500).json({ message: "Failed to export audit log" }); }
+  });
+
+  app.get("/api/admin/lifecycle-overview", requireAuth, requireRole("platform_super_admin"), async (_req: any, res) => {
+    try {
+      const result = await db.execute(sql`
+        SELECT
+          subscription_status,
+          COUNT(*) as count
+        FROM companies
+        WHERE is_demo = FALSE OR is_demo IS NULL
+        GROUP BY subscription_status
+        ORDER BY count DESC
+      `);
+
+      const statusCounts: Record<string, number> = {};
+      for (const row of result.rows as any[]) {
+        statusCounts[row.subscription_status || "unknown"] = parseInt(row.count);
+      }
+
+      const flagged = await db.execute(sql`
+        SELECT id, name, subscription_status, grace_period_end
+        FROM companies
+        WHERE subscription_status IN ('grace_period', 'suspended')
+          AND (is_demo = FALSE OR is_demo IS NULL)
+        ORDER BY subscription_status, grace_period_end ASC
+        LIMIT 50
+      `);
+
+      res.json({
+        statusCounts,
+        flaggedTenants: flagged.rows,
+        total: Object.values(statusCounts).reduce((a, b) => a + b, 0),
+      });
+    } catch (e) { res.status(500).json({ message: "Failed to fetch lifecycle overview" }); }
   });
 
   app.get("/api/permissions/export-csv", requireAuth, requireRole("admin"), async (req: any, res) => {

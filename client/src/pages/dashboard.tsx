@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { Link } from "wouter";
 import {
   LayoutDashboard,
   Settings,
@@ -36,6 +37,11 @@ import {
   Coffee,
   ArrowRight,
   LogIn,
+  Shield,
+  Activity,
+  XCircle,
+  CheckCircle2,
+  Hourglass,
 } from "lucide-react";
 
 const DASHLET_STORAGE_KEY = "paylink-dashlets";
@@ -681,6 +687,124 @@ function DashboardClockCard() {
   );
 }
 
+const LIFECYCLE_STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
+  active_paid: { label: "Active (Paid)", color: "text-green-600 dark:text-green-400", icon: CheckCircle2 },
+  trial_active: { label: "Trial Active", color: "text-blue-600 dark:text-blue-400", icon: Activity },
+  grace_period: { label: "Grace Period", color: "text-amber-600 dark:text-amber-400", icon: Hourglass },
+  suspended: { label: "Suspended", color: "text-red-600 dark:text-red-400", icon: XCircle },
+  canceled: { label: "Canceled", color: "text-gray-500 dark:text-gray-400", icon: XCircle },
+  trial_expired: { label: "Trial Expired", color: "text-orange-600 dark:text-orange-400", icon: AlertTriangle },
+};
+
+function LifecycleOverviewWidget() {
+  const { data, isLoading } = useQuery<{
+    statusCounts: Record<string, number>;
+    flaggedTenants: { id: string; name: string; subscription_status: string; grace_period_end?: string }[];
+    total: number;
+  }>({
+    queryKey: ["/api/admin/lifecycle-overview"],
+    queryFn: async () => {
+      const r = await fetch("/api/admin/lifecycle-overview");
+      if (!r.ok) throw new Error("Not authorized");
+      return r.json();
+    },
+    staleTime: 60000,
+    retry: false,
+  });
+
+  if (isLoading) {
+    return (
+      <Card data-testid="widget-lifecycle-overview">
+        <CardHeader>
+          <Skeleton className="h-5 w-40" />
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-20 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!data) return null;
+
+  const flaggedCount = (data.statusCounts["grace_period"] || 0) + (data.statusCounts["suspended"] || 0);
+
+  return (
+    <Card data-testid="widget-lifecycle-overview" className="col-span-full">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Shield className="h-4 w-4 text-blue-600" />
+            Tenant Lifecycle Overview
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            {flaggedCount > 0 && (
+              <Badge variant="destructive" className="text-xs" data-testid="badge-flagged-count">
+                {flaggedCount} require attention
+              </Badge>
+            )}
+            <Link href="/app/audit-log">
+              <Button variant="outline" size="sm" data-testid="button-view-audit-log">
+                View Audit Log
+              </Button>
+            </Link>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+          {Object.entries(data.statusCounts).map(([status, count]) => {
+            const cfg = LIFECYCLE_STATUS_CONFIG[status] || { label: status, color: "text-gray-500", icon: Activity };
+            const Icon = cfg.icon;
+            return (
+              <div
+                key={status}
+                className="flex flex-col items-center p-3 rounded-lg border bg-card"
+                data-testid={`stat-lifecycle-${status}`}
+              >
+                <Icon className={`h-5 w-5 mb-1 ${cfg.color}`} />
+                <span className="text-xl font-bold">{count}</span>
+                <span className="text-xs text-muted-foreground text-center leading-tight">{cfg.label}</span>
+              </div>
+            );
+          })}
+        </div>
+        {data.flaggedTenants.length > 0 && (
+          <div className="mt-3">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Tenants Needing Attention</p>
+            <div className="space-y-1.5 max-h-48 overflow-y-auto">
+              {data.flaggedTenants.map(t => {
+                const cfg = LIFECYCLE_STATUS_CONFIG[t.subscription_status] || { label: t.subscription_status, color: "text-gray-500", icon: Activity };
+                const Icon = cfg.icon;
+                return (
+                  <div
+                    key={t.id}
+                    className="flex items-center justify-between px-3 py-2 rounded-md border bg-muted/30 text-sm"
+                    data-testid={`row-flagged-tenant-${t.id}`}
+                  >
+                    <span className="font-medium truncate">{t.name}</span>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {t.grace_period_end && (
+                        <span className="text-xs text-muted-foreground">
+                          until {new Date(t.grace_period_end).toLocaleDateString()}
+                        </span>
+                      )}
+                      <span className={`flex items-center gap-1 text-xs font-medium ${cfg.color}`}>
+                        <Icon className="h-3.5 w-3.5" />
+                        {cfg.label}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Dashboard() {
   const { user } = useAuth();
   const userRole = (user as any)?.role || "employee";
@@ -754,6 +878,12 @@ export default function Dashboard() {
       <OnboardingChecklist />
 
       <DashboardClockCard />
+
+      {userRole === "platform_super_admin" && (
+        <div className="grid grid-cols-1 gap-4">
+          <LifecycleOverviewWidget />
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {allowedDashlets.filter((d) => visibility[d.id] !== false).map((d) => (

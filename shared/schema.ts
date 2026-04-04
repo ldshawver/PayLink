@@ -2844,10 +2844,12 @@ export const authorizationAuditLog = pgTable("authorization_audit_log", {
   targetUserId: varchar("target_user_id"),
   targetRoleId: varchar("target_role_id"),
   targetResource: text("target_resource"),
-  changeType: text("change_type").notNull(), // "role_assigned" | "role_removed" | "permission_changed" | "override_added" | "override_removed"
+  changeType: text("change_type").notNull(),
   beforeValue: text("before_value"),
   afterValue: text("after_value"),
   note: text("note"),
+  companyId: varchar("company_id"),
+  tenantId: varchar("tenant_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 export const insertAuthorizationAuditLogSchema = createInsertSchema(authorizationAuditLog).omit({ id: true, createdAt: true });

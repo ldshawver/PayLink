@@ -340,6 +340,13 @@ const navSections: NavSection[] = [
     items: [],
   },
   {
+    label: "Audit Log",
+    icon: ShieldCheck,
+    url: "/app/audit-log",
+    roles: ["admin", "platform_super_admin"],
+    items: [],
+  },
+  {
     label: "Billing",
     icon: CreditCard,
     url: "/app/billing",

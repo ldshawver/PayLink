@@ -849,6 +849,15 @@ export interface IStorage {
   deleteUserPermissionOverride(id: string): Promise<void>;
 
   getAuthorizationAuditLogs(limit?: number): Promise<AuthorizationAuditLog[]>;
+  getAuthorizationAuditLogsFiltered(opts: {
+    limit?: number;
+    offset?: number;
+    changeType?: string;
+    companyId?: string;
+    actorUserId?: string;
+    fromDate?: string;
+    toDate?: string;
+  }): Promise<{ rows: AuthorizationAuditLog[]; total: number }>;
   createAuthorizationAuditLog(data: InsertAuthorizationAuditLog): Promise<AuthorizationAuditLog>;
 
   getPayrollSummary(payrollRunId: string): Promise<PayrollSummary | undefined>;
@@ -3778,6 +3787,42 @@ export class DatabaseStorage implements IStorage {
       .from(authorizationAuditLog)
       .orderBy(desc(authorizationAuditLog.createdAt))
       .limit(limit);
+  }
+
+  async getAuthorizationAuditLogsFiltered(opts: {
+    limit?: number;
+    offset?: number;
+    changeType?: string;
+    companyId?: string;
+    actorUserId?: string;
+    fromDate?: string;
+    toDate?: string;
+  }): Promise<{ rows: AuthorizationAuditLog[]; total: number }> {
+    const { sql: drizzleSql } = await import("drizzle-orm");
+    const conditions: any[] = [];
+    if (opts.changeType) conditions.push(eq(authorizationAuditLog.changeType, opts.changeType));
+    if (opts.companyId) conditions.push(eq(authorizationAuditLog.companyId, opts.companyId));
+    if (opts.actorUserId) conditions.push(eq(authorizationAuditLog.actorUserId, opts.actorUserId));
+    if (opts.fromDate) conditions.push(sql`${authorizationAuditLog.createdAt} >= ${opts.fromDate}::timestamptz`);
+    if (opts.toDate) conditions.push(sql`${authorizationAuditLog.createdAt} <= ${opts.toDate}::timestamptz`);
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [countRow] = await db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(authorizationAuditLog)
+      .where(where);
+    const total = Number(countRow?.count ?? 0);
+
+    const rows = await db
+      .select()
+      .from(authorizationAuditLog)
+      .where(where)
+      .orderBy(desc(authorizationAuditLog.createdAt))
+      .limit(opts.limit ?? 50)
+      .offset(opts.offset ?? 0);
+
+    return { rows, total };
   }
 
   async createAuthorizationAuditLog(data: InsertAuthorizationAuditLog): Promise<AuthorizationAuditLog> {
