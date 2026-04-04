@@ -7,7 +7,7 @@ import { sendScheduleEmailNotification, sendScheduleSmsNotification } from "./no
 import path from "path";
 import { db } from "./db";
 import { sql, eq } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
@@ -148,6 +148,32 @@ function enforceCompanyScope(source: "query" | "body" = "query") {
     (req as any)._companyId = sessionCompanyId;
     next();
   };
+}
+
+async function writeAuditLog(opts: {
+  actorUserId: string;
+  targetResource: string;
+  changeType: string;
+  beforeValue?: string | null;
+  afterValue?: string | null;
+  note?: string | null;
+  companyId?: string | null;
+  targetUserId?: string | null;
+}) {
+  try {
+    await db.insert(authorizationAuditLog).values({
+      actorUserId: opts.actorUserId,
+      targetResource: opts.targetResource,
+      changeType: opts.changeType,
+      beforeValue: opts.beforeValue ?? null,
+      afterValue: opts.afterValue ?? null,
+      note: opts.note ?? null,
+      companyId: opts.companyId ?? null,
+      targetUserId: opts.targetUserId ?? null,
+    });
+  } catch (e) {
+    console.error("[auditLog] Failed to write audit entry:", e);
+  }
 }
 
 async function requireActiveSubscription(req: Request, res: Response, next: NextFunction) {
@@ -1760,7 +1786,7 @@ export async function registerRoutes(
 
 
   // ── Per-agency liability breakdown ────────────────────────────────────────
-  app.get("/api/payroll-runs/:id/agency-liabilities", requireAuth, requireActiveSubscription, async (req, res) => {
+  app.get("/api/payroll-runs/:id/agency-liabilities", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -1800,7 +1826,7 @@ export async function registerRoutes(
   });
 
   // ── Get payroll summary ───────────────────────────────────────────────────
-  app.get("/api/payroll-runs/:id/summary", requireAuth, requireActiveSubscription, async (req, res) => {
+  app.get("/api/payroll-runs/:id/summary", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -1813,7 +1839,7 @@ export async function registerRoutes(
   });
 
   // ── Get payroll transaction runs ──────────────────────────────────────────
-  app.get("/api/payroll-runs/:id/transaction-runs", requireAuth, requireActiveSubscription, async (req, res) => {
+  app.get("/api/payroll-runs/:id/transaction-runs", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -1826,7 +1852,7 @@ export async function registerRoutes(
 
 
   // ── Get ACH batch status ──────────────────────────────────────────────────
-  app.get("/api/payroll-runs/:id/ach-batch", requireAuth, requireActiveSubscription, async (req, res) => {
+  app.get("/api/payroll-runs/:id/ach-batch", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -3286,6 +3312,13 @@ export async function registerRoutes(
         data.workerId = user.workerId;
       }
       const contact = await storage.createEmployeeContact(data);
+      await writeAuditLog({
+        actorUserId: req.session.userId!,
+        targetResource: `employee_contact:${contact.id}`,
+        changeType: "employee_contact_created",
+        afterValue: JSON.stringify({ workerId: contact.workerId, contactType: (contact as any).contactType }),
+        companyId: user?.companyId,
+      });
       res.status(201).json(contact);
     } catch (error) {
       console.error(error);
@@ -3306,6 +3339,13 @@ export async function registerRoutes(
       if (!contact) {
         return res.status(404).json({ message: "Employee contact not found" });
       }
+      await writeAuditLog({
+        actorUserId: req.session.userId!,
+        targetResource: `employee_contact:${req.params.id}`,
+        changeType: "employee_contact_updated",
+        afterValue: JSON.stringify({ updatedFields: Object.keys(req.body) }),
+        companyId: user?.companyId,
+      });
       res.json(contact);
     } catch (error) {
       console.error(error);
@@ -3315,7 +3355,14 @@ export async function registerRoutes(
 
   app.delete("/api/employee-contacts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
       await storage.deleteEmployeeContact(req.params.id);
+      await writeAuditLog({
+        actorUserId: req.session.userId!,
+        targetResource: `employee_contact:${req.params.id}`,
+        changeType: "employee_contact_deleted",
+        companyId: user?.companyId,
+      });
       res.json({ message: "Employee contact deleted" });
     } catch (error) {
       console.error(error);
@@ -3333,7 +3380,18 @@ export async function registerRoutes(
         workerId = user.workerId;
       }
       const methods = await storage.getPayMethods(workerId);
-      res.json(methods);
+      // Mask sensitive fields for non-admin roles: show only last 4 digits of account number
+      const isAdmin = user?.role === "admin" || user?.role === "platform_super_admin";
+      const masked = methods.map(m => ({
+        ...m,
+        accountNumber: m.accountNumber
+          ? (isAdmin ? m.accountNumber : `****${String(m.accountNumber).slice(-4)}`)
+          : null,
+        routingNumber: m.routingNumber
+          ? (isAdmin ? m.routingNumber : `*****${String(m.routingNumber).slice(-4)}`)
+          : null,
+      }));
+      res.json(masked);
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to fetch pay methods" });
@@ -3349,6 +3407,13 @@ export async function registerRoutes(
         data.workerId = user.workerId;
       }
       const method = await storage.createPayMethod(data);
+      await writeAuditLog({
+        actorUserId: req.session.userId!,
+        targetResource: `pay_method:${method.id}`,
+        changeType: "pay_method_created",
+        afterValue: JSON.stringify({ workerId: method.workerId, methodType: method.methodType, accountType: method.accountType }),
+        companyId: user?.companyId,
+      });
       res.status(201).json(method);
     } catch (error) {
       console.error(error);
@@ -3370,6 +3435,13 @@ export async function registerRoutes(
       if (!method) {
         return res.status(404).json({ message: "Pay method not found" });
       }
+      await writeAuditLog({
+        actorUserId: req.session.userId!,
+        targetResource: `pay_method:${req.params.id}`,
+        changeType: "pay_method_updated",
+        afterValue: JSON.stringify({ updatedFields: Object.keys(req.body) }),
+        companyId: user?.companyId,
+      });
       res.json(method);
     } catch (error) {
       console.error(error);
@@ -3388,6 +3460,12 @@ export async function registerRoutes(
         }
       }
       await storage.deletePayMethod(req.params.id);
+      await writeAuditLog({
+        actorUserId: req.session.userId!,
+        targetResource: `pay_method:${req.params.id}`,
+        changeType: "pay_method_deleted",
+        companyId: user?.companyId,
+      });
       res.json({ message: "Pay method deleted" });
     } catch (error) {
       console.error(error);
@@ -5586,7 +5664,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/worker-documents", requireAuth, async (req, res) => {
     try {
-      const workerId = req.query.workerId as string;
+      const user = await storage.getUser(req.session.userId!);
+      let workerId = req.query.workerId as string;
+      // Employees can only see their own documents
+      if (user?.role === "employee") {
+        if (!user.workerId) return res.json([]);
+        workerId = user.workerId;
+      } else if (user?.role === "manager" && workerId) {
+        // Managers can only access workers in their company
+        const worker = await storage.getWorker(workerId);
+        if (!worker || worker.companyId !== user.companyId) {
+          return res.status(403).json({ message: "Not authorized" });
+        }
+      }
       if (!workerId) return res.status(400).json({ message: "workerId required" });
       const docs = await storage.getWorkerDocuments(workerId);
       res.json(docs);
@@ -5600,7 +5690,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const fileUrl = `/uploads/${req.file.filename}`;
-      const { workerId, name, documentType, notes } = req.body;
+      const user = await storage.getUser(req.session.userId!);
+      let { workerId, name, documentType, notes } = req.body;
+      // Employees can only upload documents for themselves
+      if (user?.role === "employee") {
+        if (!user.workerId) return res.status(403).json({ message: "No linked worker profile" });
+        workerId = user.workerId;
+      } else if (user?.role === "manager" && workerId) {
+        const worker = await storage.getWorker(workerId);
+        if (!worker || worker.companyId !== user.companyId) {
+          return res.status(403).json({ message: "Not authorized" });
+        }
+      }
       if (!workerId || !name) return res.status(400).json({ message: "workerId and name required" });
       const worker = await storage.getWorker(workerId);
       if (!worker) return res.status(404).json({ message: "Worker not found" });
@@ -5614,6 +5715,28 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/worker-documents/:id", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      // Employees can only delete their own documents; managers scoped to company
+      if (user?.role === "employee" || user?.role === "manager") {
+        const allDocs = user.workerId ? await storage.getWorkerDocuments(user.workerId) : [];
+        if (user?.role === "employee") {
+          if (!allDocs.some(d => d.id === req.params.id)) {
+            return res.status(403).json({ message: "Not authorized" });
+          }
+        } else if (user?.role === "manager") {
+          // For managers, get the doc and confirm it belongs to a worker in their company
+          const allWorkers = await storage.getWorkers(user.companyId ?? undefined);
+          const allWorkerIds = new Set(allWorkers.map(w => w.id));
+          let allManagerDocs: any[] = [];
+          for (const wid of Array.from(allWorkerIds)) {
+            const wDocs = await storage.getWorkerDocuments(wid);
+            allManagerDocs = allManagerDocs.concat(wDocs);
+          }
+          if (!allManagerDocs.some(d => d.id === req.params.id)) {
+            return res.status(403).json({ message: "Not authorized" });
+          }
+        }
+      }
       await storage.deleteWorkerDocument(req.params.id as string);
       res.json({ message: "Document deleted" });
     } catch (error) {
@@ -6085,7 +6208,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/wage-history", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
       const entry = await storage.createWageHistory(req.body);
+      await writeAuditLog({
+        actorUserId: req.session.userId!,
+        targetResource: `wage_history:${entry.id}`,
+        changeType: "wage_history_created",
+        afterValue: JSON.stringify({ workerId: entry.workerId, payType: entry.payType, rate: entry.rate }),
+        companyId: user?.companyId,
+      });
       res.status(201).json(entry);
     } catch (error) {
       console.error(error);
@@ -6095,8 +6226,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/wage-history/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
       const entry = await storage.updateWageHistory(req.params.id, req.body);
       if (!entry) return res.status(404).json({ message: "Not found" });
+      await writeAuditLog({
+        actorUserId: req.session.userId!,
+        targetResource: `wage_history:${req.params.id}`,
+        changeType: "wage_history_updated",
+        afterValue: JSON.stringify({ updatedFields: Object.keys(req.body) }),
+        companyId: user?.companyId,
+      });
       res.json(entry);
     } catch (error) {
       console.error(error);
@@ -6106,7 +6245,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/wage-history/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
       await storage.deleteWageHistory(req.params.id);
+      await writeAuditLog({
+        actorUserId: req.session.userId!,
+        targetResource: `wage_history:${req.params.id}`,
+        changeType: "wage_history_deleted",
+        companyId: user?.companyId,
+      });
       res.json({ message: "Deleted" });
     } catch (error) {
       console.error(error);
@@ -7866,17 +8012,27 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Payroll Payment Records ───────────────────────────────────────────────
-  app.get("/api/payroll-payment-records", async (req, res) => {
+  app.get("/api/payroll-payment-records", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const user = await storage.getUser(req.session.userId!);
+      let companyId = req.query.companyId as string | undefined;
       const payrollRunId = req.query.payrollRunId as string | undefined;
+      // Managers are scoped to their company
+      if (user?.role === "manager" && user.companyId) {
+        companyId = user.companyId;
+      }
       res.json(await storage.getPayrollPaymentRecords(companyId, payrollRunId));
     } catch (e) { res.status(500).json({ message: "Failed to fetch payment records" }); }
   });
 
-  app.get("/api/payroll-payment-records/ytd-summary", async (req, res) => {
+  app.get("/api/payroll-payment-records/ytd-summary", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const user = await storage.getUser(req.session.userId!);
+      let companyId = req.query.companyId as string | undefined;
+      // Managers are scoped to their company
+      if (user?.role === "manager" && user.companyId) {
+        companyId = user.companyId;
+      }
       const taxYear = req.query.taxYear ? Number(req.query.taxYear) : new Date().getFullYear();
       const records = await storage.getPayrollPaymentRecords(companyId);
       const yearRecords = records.filter(r => r.taxYear === taxYear || (r.payDate && new Date(r.payDate).getFullYear() === taxYear));
@@ -7953,6 +8109,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(400).json({ message: "No editable fields provided" });
       }
       const updated = await storage.updateWorker(user.workerId, filtered);
+      await writeAuditLog({
+        actorUserId: req.session.userId!,
+        targetResource: `worker:${user.workerId}`,
+        changeType: "self_service_profile_update",
+        afterValue: JSON.stringify({ updatedFields: Object.keys(filtered) }),
+        companyId: user?.companyId,
+        targetUserId: req.session.userId!,
+      });
       res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to update profile" }); }
   });
@@ -13395,19 +13559,29 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ─── Worker Onboarding ─────────────────────────────────────────────────────
-  app.get("/api/worker-onboarding", requireAuth, async (req, res) => {
+  app.get("/api/worker-onboarding", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const companyId = req.query.companyId as string;
+      const user = await storage.getUser(req.session.userId!);
+      // Managers can only see onboardings for their company
+      let companyId = req.query.companyId as string;
+      if (user?.role === "manager" && user.companyId) {
+        companyId = user.companyId;
+      }
       if (!companyId) return res.status(400).json({ message: "companyId required" });
       const list = await storage.getWorkerOnboardings(companyId);
       res.json(list);
     } catch (e) { res.status(500).json({ message: "Failed to fetch onboardings" }); }
   });
 
-  app.get("/api/worker-onboarding/:id", requireAuth, async (req, res) => {
+  app.get("/api/worker-onboarding/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
       const o = await storage.getWorkerOnboarding(req.params.id);
       if (!o) return res.status(404).json({ message: "Onboarding not found" });
+      // Managers can only view onboardings from their company
+      if (user?.role === "manager" && user.companyId && o.companyId !== user.companyId) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
       res.json(o);
     } catch (e) { res.status(500).json({ message: "Failed to fetch onboarding" }); }
   });
@@ -13522,21 +13696,27 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               await storage.updateWorker(o.workerId, profileUpdate);
             }
           }
-          // bank_info step → create pay method record
+          // bank_info step → create pay method record (idempotent: skip if identical record already exists)
           const bankStep = steps.find(s => s.stepKey === "bank_info" && s.workerData);
           if (bankStep?.workerData) {
             const bd = JSON.parse(bankStep.workerData as string);
             if (bd.routingNumber && bd.accountNumber) {
-              await storage.createPayMethod({
-                workerId: o.workerId,
-                methodType: bd.methodType || "direct_deposit",
-                bankName: bd.bankName || null,
-                accountType: bd.accountType || "checking",
-                routingNumber: bd.routingNumber,
-                accountNumber: bd.accountNumber,
-                isPrimary: true,
-                amountType: "remainder",
-              });
+              const existingMethods = await storage.getPayMethods(o.workerId);
+              const alreadyExists = existingMethods.some(
+                m => m.routingNumber === bd.routingNumber && m.accountNumber === bd.accountNumber
+              );
+              if (!alreadyExists) {
+                await storage.createPayMethod({
+                  workerId: o.workerId,
+                  methodType: bd.methodType || "direct_deposit",
+                  bankName: bd.bankName || null,
+                  accountType: bd.accountType || "checking",
+                  routingNumber: bd.routingNumber,
+                  accountNumber: bd.accountNumber,
+                  isPrimary: true,
+                  amountType: "remainder",
+                });
+              }
             }
           }
         } catch (profileErr) {
@@ -13557,8 +13737,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Get steps for an onboarding
-  app.get("/api/worker-onboarding/:id/steps", requireAuth, async (req, res) => {
+  app.get("/api/worker-onboarding/:id/steps", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      const o = await storage.getWorkerOnboarding(req.params.id);
+      if (!o) return res.status(404).json({ message: "Onboarding not found" });
+      // Managers can only view onboarding from their own company
+      if (user?.role === "manager" && user.companyId && o.companyId !== user.companyId) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
       const steps = await storage.getOnboardingSteps(req.params.id);
       res.json(steps);
     } catch (e) { res.status(500).json({ message: "Failed to fetch steps" }); }
