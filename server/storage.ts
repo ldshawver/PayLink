@@ -188,6 +188,13 @@ import {
   type TenantCommercialGate, type InsertTenantCommercialGate,
   type TenantProvisioningAuditLog, type InsertTenantProvisioningAuditLog,
   type TenantImplementationProject, type InsertTenantImplementationProject,
+  agreementTemplates, workerAgreements, workerOnboarding, onboardingSteps, workerOnboardingDocuments, onboardingAuditLog,
+  type AgreementTemplate, type InsertAgreementTemplate,
+  type WorkerAgreement, type InsertWorkerAgreement,
+  type WorkerOnboarding, type InsertWorkerOnboarding,
+  type OnboardingStep, type InsertOnboardingStep,
+  type WorkerOnboardingDocument, type InsertWorkerOnboardingDocument,
+  type OnboardingAuditLogEntry, type InsertOnboardingAuditLogEntry,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -880,6 +887,44 @@ export interface IStorage {
   getTenantProvisioningAuditLogs(companyId: string): Promise<TenantProvisioningAuditLog[]>;
   getTenantImplementationProject(companyId: string): Promise<TenantImplementationProject | undefined>;
   updateTenantImplementationProject(id: string, data: Partial<TenantImplementationProject>): Promise<TenantImplementationProject | undefined>;
+
+  // Agreement Templates
+  getAgreementTemplates(companyId?: string): Promise<AgreementTemplate[]>;
+  getAgreementTemplate(id: string): Promise<AgreementTemplate | undefined>;
+  createAgreementTemplate(data: InsertAgreementTemplate): Promise<AgreementTemplate>;
+  updateAgreementTemplate(id: string, data: Partial<AgreementTemplate>): Promise<AgreementTemplate | undefined>;
+  deleteAgreementTemplate(id: string): Promise<void>;
+
+  // Worker Agreements
+  getWorkerAgreements(companyId: string, workerId?: string): Promise<WorkerAgreement[]>;
+  getWorkerAgreement(id: string): Promise<WorkerAgreement | undefined>;
+  createWorkerAgreement(data: InsertWorkerAgreement): Promise<WorkerAgreement>;
+  updateWorkerAgreement(id: string, data: Partial<WorkerAgreement>): Promise<WorkerAgreement | undefined>;
+  deleteWorkerAgreement(id: string): Promise<void>;
+
+  // Worker Onboarding
+  getWorkerOnboardings(companyId: string): Promise<WorkerOnboarding[]>;
+  getWorkerOnboarding(id: string): Promise<WorkerOnboarding | undefined>;
+  getWorkerOnboardingByToken(tokenHash: string): Promise<WorkerOnboarding | undefined>;
+  createWorkerOnboarding(data: InsertWorkerOnboarding): Promise<WorkerOnboarding>;
+  updateWorkerOnboarding(id: string, data: Partial<WorkerOnboarding>): Promise<WorkerOnboarding | undefined>;
+  deleteWorkerOnboarding(id: string): Promise<void>;
+
+  // Onboarding Steps
+  getOnboardingSteps(onboardingId: string): Promise<OnboardingStep[]>;
+  getOnboardingStep(id: string): Promise<OnboardingStep | undefined>;
+  createOnboardingStep(data: InsertOnboardingStep): Promise<OnboardingStep>;
+  updateOnboardingStep(id: string, data: Partial<OnboardingStep>): Promise<OnboardingStep | undefined>;
+  bulkCreateOnboardingSteps(steps: InsertOnboardingStep[]): Promise<OnboardingStep[]>;
+
+  // Worker Onboarding Documents
+  getWorkerOnboardingDocuments(onboardingId: string): Promise<WorkerOnboardingDocument[]>;
+  createWorkerOnboardingDocument(data: InsertWorkerOnboardingDocument): Promise<WorkerOnboardingDocument>;
+  updateWorkerOnboardingDocument(id: string, data: Partial<WorkerOnboardingDocument>): Promise<WorkerOnboardingDocument | undefined>;
+
+  // Onboarding Audit Log
+  getOnboardingAuditLog(onboardingId: string): Promise<OnboardingAuditLogEntry[]>;
+  createOnboardingAuditLogEntry(data: InsertOnboardingAuditLogEntry): Promise<OnboardingAuditLogEntry>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3932,6 +3977,123 @@ export class DatabaseStorage implements IStorage {
       .where(eq(tenantImplementationProjects.id, id))
       .returning();
     return updated;
+  }
+
+  // ── Agreement Templates ───────────────────────────────────────────────────
+  async getAgreementTemplates(companyId?: string): Promise<AgreementTemplate[]> {
+    if (companyId) {
+      return db.select().from(agreementTemplates)
+        .where(or(eq(agreementTemplates.companyId, companyId), isNull(agreementTemplates.companyId)))
+        .orderBy(desc(agreementTemplates.createdAt));
+    }
+    return db.select().from(agreementTemplates).orderBy(desc(agreementTemplates.createdAt));
+  }
+  async getAgreementTemplate(id: string): Promise<AgreementTemplate | undefined> {
+    const [t] = await db.select().from(agreementTemplates).where(eq(agreementTemplates.id, id));
+    return t;
+  }
+  async createAgreementTemplate(data: InsertAgreementTemplate): Promise<AgreementTemplate> {
+    const [t] = await db.insert(agreementTemplates).values(data).returning();
+    return t;
+  }
+  async updateAgreementTemplate(id: string, data: Partial<AgreementTemplate>): Promise<AgreementTemplate | undefined> {
+    const [t] = await db.update(agreementTemplates).set({ ...data, updatedAt: new Date() }).where(eq(agreementTemplates.id, id)).returning();
+    return t;
+  }
+  async deleteAgreementTemplate(id: string): Promise<void> {
+    await db.delete(agreementTemplates).where(eq(agreementTemplates.id, id));
+  }
+
+  // ── Worker Agreements ─────────────────────────────────────────────────────
+  async getWorkerAgreements(companyId: string, workerId?: string): Promise<WorkerAgreement[]> {
+    if (workerId) {
+      return db.select().from(workerAgreements)
+        .where(and(eq(workerAgreements.companyId, companyId), eq(workerAgreements.workerId, workerId)))
+        .orderBy(desc(workerAgreements.createdAt));
+    }
+    return db.select().from(workerAgreements).where(eq(workerAgreements.companyId, companyId)).orderBy(desc(workerAgreements.createdAt));
+  }
+  async getWorkerAgreement(id: string): Promise<WorkerAgreement | undefined> {
+    const [a] = await db.select().from(workerAgreements).where(eq(workerAgreements.id, id));
+    return a;
+  }
+  async createWorkerAgreement(data: InsertWorkerAgreement): Promise<WorkerAgreement> {
+    const [a] = await db.insert(workerAgreements).values(data).returning();
+    return a;
+  }
+  async updateWorkerAgreement(id: string, data: Partial<WorkerAgreement>): Promise<WorkerAgreement | undefined> {
+    const [a] = await db.update(workerAgreements).set({ ...data, updatedAt: new Date() }).where(eq(workerAgreements.id, id)).returning();
+    return a;
+  }
+  async deleteWorkerAgreement(id: string): Promise<void> {
+    await db.delete(workerAgreements).where(eq(workerAgreements.id, id));
+  }
+
+  // ── Worker Onboarding ─────────────────────────────────────────────────────
+  async getWorkerOnboardings(companyId: string): Promise<WorkerOnboarding[]> {
+    return db.select().from(workerOnboarding).where(eq(workerOnboarding.companyId, companyId)).orderBy(desc(workerOnboarding.createdAt));
+  }
+  async getWorkerOnboarding(id: string): Promise<WorkerOnboarding | undefined> {
+    const [o] = await db.select().from(workerOnboarding).where(eq(workerOnboarding.id, id));
+    return o;
+  }
+  async getWorkerOnboardingByToken(tokenHash: string): Promise<WorkerOnboarding | undefined> {
+    const [o] = await db.select().from(workerOnboarding).where(eq(workerOnboarding.inviteTokenHash, tokenHash));
+    return o;
+  }
+  async createWorkerOnboarding(data: InsertWorkerOnboarding): Promise<WorkerOnboarding> {
+    const [o] = await db.insert(workerOnboarding).values(data).returning();
+    return o;
+  }
+  async updateWorkerOnboarding(id: string, data: Partial<WorkerOnboarding>): Promise<WorkerOnboarding | undefined> {
+    const [o] = await db.update(workerOnboarding).set({ ...data, updatedAt: new Date() }).where(eq(workerOnboarding.id, id)).returning();
+    return o;
+  }
+  async deleteWorkerOnboarding(id: string): Promise<void> {
+    await db.delete(workerOnboarding).where(eq(workerOnboarding.id, id));
+  }
+
+  // ── Onboarding Steps ──────────────────────────────────────────────────────
+  async getOnboardingSteps(onboardingId: string): Promise<OnboardingStep[]> {
+    return db.select().from(onboardingSteps).where(eq(onboardingSteps.onboardingId, onboardingId)).orderBy(onboardingSteps.sequence);
+  }
+  async getOnboardingStep(id: string): Promise<OnboardingStep | undefined> {
+    const [s] = await db.select().from(onboardingSteps).where(eq(onboardingSteps.id, id));
+    return s;
+  }
+  async createOnboardingStep(data: InsertOnboardingStep): Promise<OnboardingStep> {
+    const [s] = await db.insert(onboardingSteps).values(data).returning();
+    return s;
+  }
+  async updateOnboardingStep(id: string, data: Partial<OnboardingStep>): Promise<OnboardingStep | undefined> {
+    const [s] = await db.update(onboardingSteps).set({ ...data, updatedAt: new Date() }).where(eq(onboardingSteps.id, id)).returning();
+    return s;
+  }
+  async bulkCreateOnboardingSteps(steps: InsertOnboardingStep[]): Promise<OnboardingStep[]> {
+    if (!steps.length) return [];
+    return db.insert(onboardingSteps).values(steps).returning();
+  }
+
+  // ── Worker Onboarding Documents ───────────────────────────────────────────
+  async getWorkerOnboardingDocuments(onboardingId: string): Promise<WorkerOnboardingDocument[]> {
+    return db.select().from(workerOnboardingDocuments).where(eq(workerOnboardingDocuments.onboardingId, onboardingId)).orderBy(desc(workerOnboardingDocuments.createdAt));
+  }
+  async createWorkerOnboardingDocument(data: InsertWorkerOnboardingDocument): Promise<WorkerOnboardingDocument> {
+    const [d] = await db.insert(workerOnboardingDocuments).values(data).returning();
+    return d;
+  }
+  async updateWorkerOnboardingDocument(id: string, data: Partial<WorkerOnboardingDocument>): Promise<WorkerOnboardingDocument | undefined> {
+    const [d] = await db.update(workerOnboardingDocuments).set({ ...data, updatedAt: new Date() }).where(eq(workerOnboardingDocuments.id, id)).returning();
+    return d;
+  }
+
+  // ── Onboarding Audit Log ──────────────────────────────────────────────────
+  async getOnboardingAuditLog(onboardingId: string): Promise<OnboardingAuditLogEntry[]> {
+    return db.select().from(onboardingAuditLog).where(eq(onboardingAuditLog.onboardingId, onboardingId)).orderBy(desc(onboardingAuditLog.createdAt));
+  }
+  async createOnboardingAuditLogEntry(data: InsertOnboardingAuditLogEntry): Promise<OnboardingAuditLogEntry> {
+    const [e] = await db.insert(onboardingAuditLog).values(data).returning();
+    return e;
   }
 }
 

@@ -3170,3 +3170,152 @@ export type TenantProvisioningAuditLog = typeof tenantProvisioningAuditLogs.$inf
 export type InsertTenantProvisioningAuditLog = z.infer<typeof insertTenantProvisioningAuditLogSchema>;
 export type TenantImplementationProject = typeof tenantImplementationProjects.$inferSelect;
 export type InsertTenantImplementationProject = z.infer<typeof insertTenantImplementationProjectSchema>;
+
+// ── Agreement Templates ─────────────────────────────────────────────────────
+export const agreementTemplates = pgTable("agreement_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "cascade" }),
+  templateKey: text("template_key").notNull(),
+  templateName: text("template_name").notNull(),
+  workerType: text("worker_type").notNull().default("contractor"),
+  version: integer("version").notNull().default(1),
+  status: text("status").notNull().default("draft"),
+  htmlBody: text("html_body").notNull(),
+  plainTextBody: text("plain_text_body"),
+  schemaJson: text("schema_json"),
+  isDefault: boolean("is_default").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertAgreementTemplateSchema = createInsertSchema(agreementTemplates).omit({ id: true, createdAt: true, updatedAt: true });
+export type AgreementTemplate = typeof agreementTemplates.$inferSelect;
+export type InsertAgreementTemplate = z.infer<typeof insertAgreementTemplateSchema>;
+
+// ── Worker Agreements ───────────────────────────────────────────────────────
+export const workerAgreements = pgTable("worker_agreements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  workerId: varchar("worker_id").notNull().references(() => workers.id, { onDelete: "cascade" }),
+  onboardingId: varchar("onboarding_id"),
+  templateId: varchar("template_id").references(() => agreementTemplates.id),
+  templateVersion: integer("template_version").notNull().default(1),
+  renderedHtml: text("rendered_html").notNull(),
+  status: text("status").notNull().default("pending_signature"),
+  signatureProvider: text("signature_provider").default("internal"),
+  signedAt: timestamp("signed_at"),
+  signedByName: text("signed_by_name"),
+  signedByWorkerId: varchar("signed_by_worker_id"),
+  voidedAt: timestamp("voided_at"),
+  voidReason: text("void_reason"),
+  mergeData: text("merge_data"),
+  sentAt: timestamp("sent_at"),
+  viewedAt: timestamp("viewed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertWorkerAgreementSchema = createInsertSchema(workerAgreements).omit({ id: true, createdAt: true, updatedAt: true });
+export type WorkerAgreement = typeof workerAgreements.$inferSelect;
+export type InsertWorkerAgreement = z.infer<typeof insertWorkerAgreementSchema>;
+
+// ── Worker Onboarding ───────────────────────────────────────────────────────
+export const workerOnboarding = pgTable("worker_onboarding", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  workerId: varchar("worker_id").notNull().references(() => workers.id, { onDelete: "cascade" }),
+  workerType: text("worker_type").notNull().default("contractor"),
+  packageKey: text("package_key").notNull().default("contractor_standard"),
+  status: text("status").notNull().default("draft"),
+  inviteTokenHash: text("invite_token_hash"),
+  inviteExpiresAt: timestamp("invite_expires_at"),
+  startedAt: timestamp("started_at"),
+  submittedAt: timestamp("submitted_at"),
+  approvedAt: timestamp("approved_at"),
+  approvedBy: varchar("approved_by"),
+  completionPercent: integer("completion_percent").default(0),
+  currentStepKey: text("current_step_key"),
+  managerNotes: text("manager_notes"),
+  managerData: text("manager_data"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertWorkerOnboardingSchema = createInsertSchema(workerOnboarding).omit({ id: true, createdAt: true, updatedAt: true });
+export type WorkerOnboarding = typeof workerOnboarding.$inferSelect;
+export type InsertWorkerOnboarding = z.infer<typeof insertWorkerOnboardingSchema>;
+
+// ── Onboarding Steps ────────────────────────────────────────────────────────
+export const onboardingSteps = pgTable("onboarding_steps", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  onboardingId: varchar("onboarding_id").notNull().references(() => workerOnboarding.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  workerId: varchar("worker_id").notNull().references(() => workers.id, { onDelete: "cascade" }),
+  stepKey: text("step_key").notNull(),
+  stepType: text("step_type").notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  sequence: integer("sequence").notNull().default(0),
+  required: boolean("required").default(true),
+  status: text("status").notNull().default("not_started"),
+  assignedToRole: text("assigned_to_role").notNull().default("worker"),
+  dependsOnStepKeys: text("depends_on_step_keys"),
+  dataJson: text("data_json"),
+  reviewNotes: text("review_notes"),
+  submittedAt: timestamp("submitted_at"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewedBy: varchar("reviewed_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertOnboardingStepSchema = createInsertSchema(onboardingSteps).omit({ id: true, createdAt: true, updatedAt: true });
+export type OnboardingStep = typeof onboardingSteps.$inferSelect;
+export type InsertOnboardingStep = z.infer<typeof insertOnboardingStepSchema>;
+
+// ── Worker Onboarding Documents ─────────────────────────────────────────────
+export const workerOnboardingDocuments = pgTable("worker_onboarding_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  workerId: varchar("worker_id").notNull().references(() => workers.id, { onDelete: "cascade" }),
+  onboardingId: varchar("onboarding_id").notNull().references(() => workerOnboarding.id, { onDelete: "cascade" }),
+  stepId: varchar("step_id").references(() => onboardingSteps.id),
+  documentType: text("document_type").notNull(),
+  fileUrl: text("file_url"),
+  storageKey: text("storage_key"),
+  mimeType: text("mime_type"),
+  documentStatus: text("document_status").notNull().default("uploaded"),
+  templateId: varchar("template_id"),
+  workerAgreementId: varchar("worker_agreement_id"),
+  signatureCompletedAt: timestamp("signature_completed_at"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewedBy: varchar("reviewed_by"),
+  metadataJson: text("metadata_json"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertWorkerOnboardingDocumentSchema = createInsertSchema(workerOnboardingDocuments).omit({ id: true, createdAt: true, updatedAt: true });
+export type WorkerOnboardingDocument = typeof workerOnboardingDocuments.$inferSelect;
+export type InsertWorkerOnboardingDocument = z.infer<typeof insertWorkerOnboardingDocumentSchema>;
+
+// ── Onboarding Audit Log ────────────────────────────────────────────────────
+export const onboardingAuditLog = pgTable("onboarding_audit_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  workerId: varchar("worker_id").notNull().references(() => workers.id, { onDelete: "cascade" }),
+  onboardingId: varchar("onboarding_id").notNull().references(() => workerOnboarding.id, { onDelete: "cascade" }),
+  stepId: varchar("step_id"),
+  actorUserId: varchar("actor_user_id"),
+  actorType: text("actor_type").notNull().default("system"),
+  eventType: text("event_type").notNull(),
+  beforeJson: text("before_json"),
+  afterJson: text("after_json"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertOnboardingAuditLogSchema = createInsertSchema(onboardingAuditLog).omit({ id: true, createdAt: true });
+export type OnboardingAuditLogEntry = typeof onboardingAuditLog.$inferSelect;
+export type InsertOnboardingAuditLogEntry = z.infer<typeof insertOnboardingAuditLogSchema>;

@@ -311,6 +311,25 @@ const navSections: NavSection[] = [
     ],
   },
   {
+    label: "Agreements",
+    icon: FileText,
+    url: "/app/agreements",
+    roles: ["admin", "manager"],
+    items: [
+      { title: "Templates", url: "/app/agreements?tab=templates", icon: FileText },
+      { title: "Signed Agreements", url: "/app/agreements?tab=agreements", icon: ClipboardCheck },
+    ],
+  },
+  {
+    label: "Contractor Onboarding",
+    icon: UserCheck,
+    url: "/app/contractor-onboarding",
+    roles: ["admin", "manager"],
+    items: [
+      { title: "Onboarding List", url: "/app/contractor-onboarding", icon: ClipboardList },
+    ],
+  },
+  {
     label: "Report",
     icon: BarChart3,
     url: "/app/reports",

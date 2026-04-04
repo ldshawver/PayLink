@@ -43,77 +43,37 @@ Schema Change Rules (CRITICAL - NEVER VIOLATE):
 PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL database, following a microservices-inspired approach.
 
 **Frontend:**
--   **Technology Stack:** React + TypeScript, Tailwind CSS, shadcn/ui for components, Wouter for routing, TanStack Query for data fetching.
--   **UI/UX Design:** Features a sidebar with collapsible navigation and a consistent teal-to-blue gradient color theme (primary HSL(180, 55%, 42%)). Responsive components ensure adaptability across devices.
--   **PWA Configuration:** Utilizes `vite-plugin-pwa` for service worker and manifest generation, offering offline capabilities and installability.
+-   **Technology Stack:** React + TypeScript, Tailwind CSS, shadcn/ui, Wouter, TanStack Query.
+-   **UI/UX Design:** Sidebar navigation, teal-to-blue gradient theme (primary HSL(180, 55%, 42%)), responsive design.
+-   **PWA Configuration:** Utilizes `vite-plugin-pwa` for offline capabilities and installability.
 
 **Backend:**
 -   **Framework:** Express.js + TypeScript.
--   **Authentication:** Session-based using `express-session` and `connect-pg-simple` with `bcrypt`.
--   **Authorization (RBAC):** Role-based access control (admin, manager, employee) at both frontend and backend for navigation visibility and API protection.
--   **API Design:** RESTful API endpoints for managing companies, workers, time, payroll, and HR functions. Includes specialized endpoints for payroll summaries and time clock punches.
--   **Key Features:**
-    -   **Time & Attendance:** Time tracking, accrual management, scheduling, shift marketplace, and overtime calculations.
-    -   **Employee Management:** CRUD for employees, contacts, wages, pay methods, and documents, including self-service.
-    -   **Company Management:** Management of company structure, legal entities, and universal entities.
-    -   **Payroll Processing:** Multi-step tax wizard, tax form generation, pay stub management, complex tax/deduction rules, NACHA ACH direct deposit.
-    -   **Policy & HR Management:** Extensive HR and payroll policy engine, CRUD for reviews, qualifications, skills, education, languages, memberships, and licenses.
-    -   **Reporting:** Various reports (Employee, Timesheet, Payroll, Tax, Expense, Job Cost) with CSV export.
-    -   **Expense Management:** CRUD for expense receipts, photo uploads, approval workflows, check printing, and AI-powered receipt scanning.
-    -   **User Account Management:** Admin management of user accounts, roles, and worker linkages. Supports PIN, username/password, and kiosk login.
-    -   **Schedule Publishing & Time-Off:** Managers publish schedules with notifications; time-off requests with approval workflows.
-    -   **Payroll Audit:** Scans for missing data and inconsistencies.
-    -   **Worker Groups:** Seven distinct worker groups influencing payroll.
-    -   **Shift Marketplace:** Allows employees to post/pick up shifts with approval.
-    -   **SaaS Trial & Billing System:** Manages trial periods and subscription statuses.
-    -   **Interactive Demo Mode:** Public-facing demo with pre-seeded data, tenant provisioning, and 24-hour expiration.
-    -   **Onboarding:** Customer Onboarding Hub with deal pipeline, project management, templates, and engagement feed. Employee Onboarding Workflows with template-driven packets and external portal access for workers.
-    -   **Invoicing System:** Create, edit, and manage invoices with line items, statuses, and payment tracking. Supports multiple payment methods with configurable fees.
-    -   **Document Management:** Handles folders, documents, versioning, signature requests, and audit logs. Includes tamper-evident versioning, legal hold, compliance retention, and e-signature provider integration.
-    -   **Integration Event Bus:** Outbound webhook system for events like document creation/updates and signature requests, with HMAC-signed events and audit logging.
-    -   **Automation Engine:** Rules-based automation with event logging.
-    -   **Notifications System:** Company/user-scoped notification tracking.
-    -   **System Documents:** Source-of-truth policy documents stored in DB (`system_documents` table) and version-controlled in `/docs/`. Served statically at `/docs/*`. Seeded with Payroll Processing Rules v1.0. Surfaced in Settings > System Documents (with download links) and linked in the Run Payroll dialog header. API: `GET/POST/PATCH/DELETE /api/system-documents`.
-    -   **Trade / Non-Cash Compensation:** Full recordkeeping and workflow system for non-cash compensation arrangements. Phase 1 includes: `trade_transactions`, `trade_transaction_items`, `trade_attachments`, `trade_audit_logs` tables; CRUD + status workflow (draft → pending_review → approved/rejected → completed/cancelled); line items with direction (given/received); file attachments; full audit trail; FMV tracking; year-end reporting flag; contractor annual totals summary. UI: `/app/trade-compensation` (admin/manager). Compliance warnings shown throughout. API: `GET/POST/PATCH/DELETE /api/trade-transactions` + status transition endpoints + items/attachments/audit-logs sub-resources + `/api/trade-transactions/reporting-summary`. Phase 2 adds: `contractor_documents` (W-9/W-8BEN uploads per contractor), `contractor_1099_summaries` (per-contractor per-year aggregated totals with $600 threshold flag and W-9 status); 3-tab page UI (Transactions | Contractor Profiles | 1099 Reporting); W-9 upload/view/delete; auto-recalculation of 1099 summaries when trades reach approved/completed; Generate All Summaries button; Mark as Filed; CSV export. API: `GET /api/contractors`, `GET/POST/DELETE /api/contractor-documents`, `POST /api/contractor-documents/upload`, `GET/POST /api/1099-summaries`, `GET /api/1099-summaries/:id`, `POST /api/1099-summaries/generate`, `POST /api/1099-summaries/:id/mark-filed`, `GET /api/1099-summaries/export`.
+-   **Authentication:** Session-based with `express-session`, `connect-pg-simple`, and `bcrypt`.
+-   **Authorization (RBAC):** Role-based access control (admin, manager, employee) for frontend and API protection.
+-   **API Design:** RESTful API for managing companies, workers, time, payroll, and HR functions, including payroll summaries and time clock punches.
+-   **Key Features:** Time & Attendance, Employee Management, Company Management, Payroll Processing (multi-step wizard, tax form generation, ACH direct deposit), Policy & HR Management, Reporting (with CSV export), Expense Management (photo uploads, approval, AI receipt scanning), User Account Management (PIN, username/password, kiosk login), Schedule Publishing & Time-Off, Payroll Audit, Worker Groups, Shift Marketplace, SaaS Trial & Billing, Interactive Demo Mode, Onboarding (Customer & Employee), Invoicing System, Document Management (versioning, e-signatures, audit logs), Integration Event Bus (webhooks), Automation Engine, Notifications System, System Documents, Contractor Onboarding + Agreement System, Trade / Non-Cash Compensation.
 
 **Database:**
 -   **Type:** PostgreSQL, managed with Drizzle ORM.
--   **Schema Design:** Supports an enterprise hierarchy, core operational data, and extended functionalities with granular role-based access control.
+-   **Schema Design:** Supports enterprise hierarchy, core operational data, and granular role-based access control.
 
 **Production Deployment:**
--   **Environment:** Consolidated under `mypaylink.app` (single-domain setup). Nginx reverse-proxies `/app/*`, `/api/*`, `/clock-in`, `/login`, and related paths to the Node app (port 8000), while all other paths go to the marketing site (port 3000). The legacy `app.mypaylink.app` subdomain 301-redirects to `mypaylink.app/app`.
--   **URL Structure:** `/login` → login page, `/clock-in` → time clock (both public). All authenticated pages are under `/app/*` (e.g. `/app/dashboard`, `/app/attendance`).
--   **Security:** Enforces secure cookie settings scoped to `.mypaylink.app` domain in production, hides sensitive error details, and uses security headers.
--   **Logout:** Redirects to `https://mypaylink.app` (marketing home) after session destruction.
--   **Public Marketing Website:** A separate static site hosted as the marketing/public site, running on port 3000.
+-   **Environment:** Consolidated under `mypaylink.app`. Nginx reverse-proxies app paths to Node.js (port 8000); other paths to marketing site (port 3000). Legacy `app.mypaylink.app` redirects to `mypaylink.app/app`.
+-   **URL Structure:** `/login`, `/clock-in` (public); authenticated pages under `/app/*`.
+-   **Security:** Secure cookie settings, hidden error details, security headers.
+-   **Logout:** Redirects to `https://mypaylink.app`.
 
-## Mobile App (Capacitor)
-PayLink includes Capacitor configuration for building native Android and iOS apps from the web codebase.
-
--   **Config:** `capacitor.config.ts` — app ID `app.mypaylink.paylink`, web assets from `dist/public/`
--   **Plugins installed:** push-notifications, camera, filesystem, haptics, keyboard, status-bar, app, share, browser, capacitor-native-biometric
--   **CORS:** Express middleware in `server/index.ts` accepts Capacitor WebView origins (`capacitor://localhost` for iOS, `http://localhost` for Android) with credentials
--   **Session cookies:** `sameSite: "none"` in production so cross-origin cookies work in the WebView
--   **API base URL:** `client/src/lib/queryClient.ts` detects native platform via `Capacitor.isNativePlatform()` and prepends the production API URL to all fetch calls
--   **Asset directories:** `resources/android/` and `resources/ios/` with icon and splash subdirectories; see `resources/ASSET_GENERATION.md`
--   **Build guide:** `MOBILE_BUILD_GUIDE.md` — complete step-by-step instructions for local Android/iOS builds
--   **Native Feature Hooks:**
-    -   `use-push-notifications.ts` — Device token registration (Capacitor PushNotifications), permission management, push listener setup
-    -   `use-biometric-auth.ts` — Face ID/Touch ID/Fingerprint via BiometricAuth plugin, signed restore tokens stored in SecureStoragePlugin/keychain
-    -   `use-native-camera.ts` — Camera capture + photo library + file picker via Capacitor Camera plugin
-    -   `use-native-platform.ts` — StatusBar management, keyboard height tracking, haptic feedback (impact/notification), page transition animations, app lifecycle (resume) listener
--   **Native Backend Endpoints:**
-    -   `POST /api/device-tokens` — Register device push token
-    -   `DELETE /api/device-tokens` — Deactivate device token
-    -   `GET /api/notification-preferences` — Get per-category notification preferences
-    -   `PUT /api/notification-preferences` — Update notification channel toggles (push/email/SMS/in-app)
-    -   `POST /api/notifications/dispatch` — Dispatch notifications with tenant-scoped targeting
-    -   `POST /api/auth/issue-restore-token` — Issue HMAC-signed biometric restore token (requires auth)
-    -   `POST /api/auth/token-restore` — Validate signed restore token and restore session (unauthenticated)
--   **Native UI Pages:**
-    -   `/notification-settings` — Category-based notification preference toggles with per-channel control
-    -   My Profile > Preferences tab includes Security & Native Features card (biometric toggle, push status)
--   **NativeFileUpload component** — Drop-in replacement for file inputs; shows Take Photo / Photo Library / Choose File on native, standard file input on web; integrated into company-documents upload
+**Mobile App (Capacitor):**
+-   **Configuration:** `capacitor.config.ts`, app ID `app.mypaylink.paylink`, web assets from `dist/public/`.
+-   **Plugins:** Push-notifications, camera, filesystem, haptics, keyboard, status-bar, app, share, browser, capacitor-native-biometric.
+-   **CORS:** Express middleware configured for Capacitor WebView origins.
+-   **Session cookies:** `sameSite: "none"` for cross-origin WebView compatibility.
+-   **API base URL:** Detects native platform to prepend production API URL.
+-   **Native Feature Hooks:** Push notifications, biometric authentication, native camera/photo library, status bar/keyboard management, haptic feedback.
+-   **Native Backend Endpoints:** Device token management, notification preferences, biometric restore tokens.
+-   **Native UI Pages:** Notification settings, biometric toggle in profile.
+-   **NativeFileUpload component:** Replaces file inputs for native camera/photo library integration.
 
 ## External Dependencies
 -   **PostgreSQL:** Primary application database.
@@ -122,4 +82,4 @@ PayLink includes Capacitor configuration for building native Android and iOS app
 -   **Nodemailer:** For email notifications.
 -   **Twilio:** For SMS notifications.
 -   **OpenAI:** Utilized for AI-powered receipt scanning via GPT-4o vision.
--   **Capacitor:** Cross-platform native runtime for wrapping the web app as Android/iOS apps.
+-   **Capacitor:** Cross-platform native runtime for Android and iOS apps.

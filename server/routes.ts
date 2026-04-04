@@ -7,7 +7,7 @@ import { sendScheduleEmailNotification, sendScheduleSmsNotification } from "./no
 import path from "path";
 import { db } from "./db";
 import { sql, eq } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
@@ -12914,6 +12914,353 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       } catch (e) { res.status(500).json({ message: "Failed to update implementation project" }); }
     });
   }
+
+  // ─── Agreement Templates ───────────────────────────────────────────────────
+  app.get("/api/agreement-templates", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const templates = await storage.getAgreementTemplates(companyId);
+      res.json(templates);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch agreement templates" }); }
+  });
+
+  app.get("/api/agreement-templates/:id", requireAuth, async (req, res) => {
+    try {
+      const t = await storage.getAgreementTemplate(req.params.id);
+      if (!t) return res.status(404).json({ message: "Template not found" });
+      res.json(t);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch template" }); }
+  });
+
+  app.post("/api/agreement-templates", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const data = insertAgreementTemplateSchema.parse(req.body);
+      const t = await storage.createAgreementTemplate(data);
+      res.status(201).json(t);
+    } catch (e: any) { res.status(400).json({ message: e.message || "Failed to create template" }); }
+  });
+
+  app.patch("/api/agreement-templates/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const t = await storage.updateAgreementTemplate(req.params.id, req.body);
+      if (!t) return res.status(404).json({ message: "Template not found" });
+      res.json(t);
+    } catch (e) { res.status(500).json({ message: "Failed to update template" }); }
+  });
+
+  app.delete("/api/agreement-templates/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      await storage.deleteAgreementTemplate(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete template" }); }
+  });
+
+  // ─── Worker Agreements ─────────────────────────────────────────────────────
+  app.get("/api/worker-agreements", requireAuth, async (req, res) => {
+    try {
+      const { companyId, workerId } = req.query as { companyId: string; workerId?: string };
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const agreements = await storage.getWorkerAgreements(companyId, workerId);
+      res.json(agreements);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch worker agreements" }); }
+  });
+
+  app.get("/api/worker-agreements/:id", requireAuth, async (req, res) => {
+    try {
+      const a = await storage.getWorkerAgreement(req.params.id);
+      if (!a) return res.status(404).json({ message: "Agreement not found" });
+      res.json(a);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch agreement" }); }
+  });
+
+  app.post("/api/worker-agreements", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const data = insertWorkerAgreementSchema.parse(req.body);
+      const a = await storage.createWorkerAgreement(data);
+      res.status(201).json(a);
+    } catch (e: any) { res.status(400).json({ message: e.message || "Failed to create agreement" }); }
+  });
+
+  app.patch("/api/worker-agreements/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const a = await storage.updateWorkerAgreement(req.params.id, req.body);
+      if (!a) return res.status(404).json({ message: "Agreement not found" });
+      res.json(a);
+    } catch (e) { res.status(500).json({ message: "Failed to update agreement" }); }
+  });
+
+  app.delete("/api/worker-agreements/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      await storage.deleteWorkerAgreement(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete agreement" }); }
+  });
+
+  // Sign endpoint (admin/manager marks as signed on behalf, or triggered internally)
+  app.post("/api/worker-agreements/:id/sign", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { signedByName, signatureData } = req.body;
+      const a = await storage.updateWorkerAgreement(req.params.id, {
+        status: "signed",
+        signedAt: new Date(),
+        signedByName: signedByName || null,
+        signatureData: signatureData || null,
+      });
+      if (!a) return res.status(404).json({ message: "Agreement not found" });
+      res.json(a);
+    } catch (e) { res.status(500).json({ message: "Failed to sign agreement" }); }
+  });
+
+  // ─── Worker Onboarding ─────────────────────────────────────────────────────
+  app.get("/api/worker-onboarding", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const list = await storage.getWorkerOnboardings(companyId);
+      res.json(list);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch onboardings" }); }
+  });
+
+  app.get("/api/worker-onboarding/:id", requireAuth, async (req, res) => {
+    try {
+      const o = await storage.getWorkerOnboarding(req.params.id);
+      if (!o) return res.status(404).json({ message: "Onboarding not found" });
+      res.json(o);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch onboarding" }); }
+  });
+
+  app.post("/api/worker-onboarding", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const data = insertWorkerOnboardingSchema.parse(req.body);
+      // Generate invite token
+      const rawToken = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+      const o = await storage.createWorkerOnboarding({ ...data, inviteTokenHash: tokenHash, inviteExpiresAt: expiresAt });
+
+      // Create default steps based on packageKey
+      const packageKey = data.packageKey || "contractor_standard";
+      const defaultSteps: { stepKey: string; stepTitle: string; stepType: string; sequence: number; isRequired: boolean; metadata?: string }[] = [
+        { stepKey: "personal_info", stepTitle: "Personal Information", stepType: "form", sequence: 1, isRequired: true },
+        { stepKey: "agreement_sign", stepTitle: "Review & Sign Agreement", stepType: "signature", sequence: 2, isRequired: true },
+        { stepKey: "tax_info", stepTitle: "Tax Information (W-9)", stepType: "document_upload", sequence: 3, isRequired: true },
+        { stepKey: "bank_info", stepTitle: "Banking / Payment Details", stepType: "form", sequence: 4, isRequired: false },
+        { stepKey: "review_complete", stepTitle: "Submission Complete", stepType: "review", sequence: 5, isRequired: true },
+      ];
+      if (packageKey === "contractor_1099") {
+        // Already has W-9 step; 1099-specific extras would go here
+      }
+      await storage.bulkCreateOnboardingSteps(defaultSteps.map(s => ({
+        ...s,
+        onboardingId: o.id,
+        companyId: o.companyId,
+        workerId: o.workerId,
+        status: "pending",
+      })));
+
+      // Log creation
+      await storage.createOnboardingAuditLogEntry({
+        companyId: o.companyId,
+        workerId: o.workerId,
+        onboardingId: o.id,
+        action: "onboarding_created",
+        performedBy: (req as any).user?.id || "system",
+        notes: `Onboarding package '${packageKey}' created`,
+      });
+
+      res.status(201).json({ onboarding: o, inviteToken: rawToken });
+    } catch (e: any) { res.status(400).json({ message: e.message || "Failed to create onboarding" }); }
+  });
+
+  app.patch("/api/worker-onboarding/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const o = await storage.updateWorkerOnboarding(req.params.id, req.body);
+      if (!o) return res.status(404).json({ message: "Onboarding not found" });
+      res.json(o);
+    } catch (e) { res.status(500).json({ message: "Failed to update onboarding" }); }
+  });
+
+  app.delete("/api/worker-onboarding/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      await storage.deleteWorkerOnboarding(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete onboarding" }); }
+  });
+
+  // Regenerate invite token
+  app.post("/api/worker-onboarding/:id/regenerate-token", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const rawToken = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const o = await storage.updateWorkerOnboarding(req.params.id, { inviteTokenHash: tokenHash, inviteExpiresAt: expiresAt, status: "invited" });
+      if (!o) return res.status(404).json({ message: "Onboarding not found" });
+      res.json({ onboarding: o, inviteToken: rawToken });
+    } catch (e) { res.status(500).json({ message: "Failed to regenerate token" }); }
+  });
+
+  // Review/approve/reject
+  app.post("/api/worker-onboarding/:id/review", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { action, notes } = req.body; // action: 'approve' | 'reject'
+      if (!["approve", "reject"].includes(action)) return res.status(400).json({ message: "action must be 'approve' or 'reject'" });
+      const newStatus = action === "approve" ? "approved" : "rejected";
+      const o = await storage.updateWorkerOnboarding(req.params.id, {
+        status: newStatus,
+        reviewedAt: new Date(),
+        reviewedBy: (req as any).user?.id || null,
+        reviewNotes: notes || null,
+      });
+      if (!o) return res.status(404).json({ message: "Onboarding not found" });
+      await storage.createOnboardingAuditLogEntry({
+        companyId: o.companyId,
+        workerId: o.workerId,
+        onboardingId: o.id,
+        action: `onboarding_${newStatus}`,
+        performedBy: (req as any).user?.id || "system",
+        notes: notes || null,
+      });
+      res.json(o);
+    } catch (e) { res.status(500).json({ message: "Failed to review onboarding" }); }
+  });
+
+  // Get steps for an onboarding
+  app.get("/api/worker-onboarding/:id/steps", requireAuth, async (req, res) => {
+    try {
+      const steps = await storage.getOnboardingSteps(req.params.id);
+      res.json(steps);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch steps" }); }
+  });
+
+  // Update a step (admin)
+  app.patch("/api/worker-onboarding/:id/steps/:stepId", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const step = await storage.updateOnboardingStep(req.params.stepId, req.body);
+      if (!step) return res.status(404).json({ message: "Step not found" });
+      res.json(step);
+    } catch (e) { res.status(500).json({ message: "Failed to update step" }); }
+  });
+
+  // Get documents for an onboarding
+  app.get("/api/worker-onboarding/:id/documents", requireAuth, async (req, res) => {
+    try {
+      const docs = await storage.getWorkerOnboardingDocuments(req.params.id);
+      res.json(docs);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch documents" }); }
+  });
+
+  // Get audit log for an onboarding
+  app.get("/api/worker-onboarding/:id/audit-log", requireAuth, async (req, res) => {
+    try {
+      const log = await storage.getOnboardingAuditLog(req.params.id);
+      res.json(log);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch audit log" }); }
+  });
+
+  // ─── Public Onboarding Portal (token-based, no auth required) ─────────────
+  // GET portal state
+  app.get("/api/onboarding/portal/:token", async (req, res) => {
+    try {
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      const o = await storage.getWorkerOnboardingByToken(tokenHash);
+      if (!o) return res.status(404).json({ message: "Onboarding not found or link invalid" });
+      if (o.inviteExpiresAt && new Date(o.inviteExpiresAt) < new Date()) {
+        return res.status(410).json({ message: "This invitation link has expired" });
+      }
+      if (o.status === "approved" || o.status === "rejected") {
+        return res.status(200).json({ onboarding: o, steps: [], expired: false, completed: true });
+      }
+      const steps = await storage.getOnboardingSteps(o.id);
+      // Mark onboarding as in_progress when first accessed
+      if (o.status === "invited" || o.status === "pending") {
+        await storage.updateWorkerOnboarding(o.id, { status: "in_progress" });
+        await storage.createOnboardingAuditLogEntry({
+          companyId: o.companyId,
+          workerId: o.workerId,
+          onboardingId: o.id,
+          action: "portal_accessed",
+          performedBy: "worker",
+          notes: "Worker first accessed onboarding portal",
+        });
+      }
+      // Strip sensitive fields from response
+      const { inviteTokenHash: _ith, ...safeOnboarding } = o as any;
+      res.json({ onboarding: safeOnboarding, steps, expired: false, completed: false });
+    } catch (e) { res.status(500).json({ message: "Failed to load onboarding portal" }); }
+  });
+
+  // Complete a step (worker, public)
+  app.post("/api/onboarding/portal/:token/steps/:stepId/complete", async (req, res) => {
+    try {
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      const o = await storage.getWorkerOnboardingByToken(tokenHash);
+      if (!o) return res.status(404).json({ message: "Onboarding not found" });
+      if (o.inviteExpiresAt && new Date(o.inviteExpiresAt) < new Date()) return res.status(410).json({ message: "Link expired" });
+      const { formData, notes } = req.body;
+      const step = await storage.updateOnboardingStep(req.params.stepId, {
+        status: "completed",
+        completedAt: new Date(),
+        workerData: formData ? JSON.stringify(formData) : null,
+      });
+      if (!step) return res.status(404).json({ message: "Step not found" });
+      await storage.createOnboardingAuditLogEntry({
+        companyId: o.companyId,
+        workerId: o.workerId,
+        onboardingId: o.id,
+        stepId: req.params.stepId,
+        action: "step_completed",
+        performedBy: "worker",
+        notes: notes || `Step '${step.stepTitle}' completed`,
+      });
+      // Check if all required steps are done → mark submitted
+      const allSteps = await storage.getOnboardingSteps(o.id);
+      const allRequiredDone = allSteps.filter(s => s.isRequired).every(s => s.status === "completed" || s.id === step.id);
+      if (allRequiredDone) {
+        await storage.updateWorkerOnboarding(o.id, { status: "submitted", submittedAt: new Date() });
+        await storage.createOnboardingAuditLogEntry({
+          companyId: o.companyId,
+          workerId: o.workerId,
+          onboardingId: o.id,
+          action: "onboarding_submitted",
+          performedBy: "worker",
+          notes: "All required steps completed — onboarding submitted for review",
+        });
+      }
+      res.json({ step, allRequiredDone });
+    } catch (e) { res.status(500).json({ message: "Failed to complete step" }); }
+  });
+
+  // Sign agreement (worker, public)
+  app.post("/api/onboarding/portal/:token/sign", async (req, res) => {
+    try {
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      const o = await storage.getWorkerOnboardingByToken(tokenHash);
+      if (!o) return res.status(404).json({ message: "Onboarding not found" });
+      if (o.inviteExpiresAt && new Date(o.inviteExpiresAt) < new Date()) return res.status(410).json({ message: "Link expired" });
+      const { signedByName, signatureData, agreementTemplateId } = req.body;
+      if (!signedByName) return res.status(400).json({ message: "signedByName is required" });
+      // Create worker agreement record
+      const agreement = await storage.createWorkerAgreement({
+        companyId: o.companyId,
+        workerId: o.workerId,
+        onboardingId: o.id,
+        templateId: agreementTemplateId || o.agreementTemplateId || null,
+        status: "signed",
+        signedAt: new Date(),
+        signedByName,
+        signatureData: signatureData || null,
+      });
+      await storage.createOnboardingAuditLogEntry({
+        companyId: o.companyId,
+        workerId: o.workerId,
+        onboardingId: o.id,
+        action: "agreement_signed",
+        performedBy: "worker",
+        notes: `Agreement signed by ${signedByName}`,
+      });
+      res.json(agreement);
+    } catch (e) { res.status(500).json({ message: "Failed to sign agreement" }); }
+  });
 
   return httpServer;
 }

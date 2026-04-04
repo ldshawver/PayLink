@@ -1627,6 +1627,181 @@ app.use((req, res, next) => {
     await run("authorization_audit_log.company_id", sql`ALTER TABLE authorization_audit_log ADD COLUMN IF NOT EXISTS company_id VARCHAR`);
     await run("authorization_audit_log.tenant_id", sql`ALTER TABLE authorization_audit_log ADD COLUMN IF NOT EXISTS tenant_id VARCHAR`);
 
+    await run("agreement_templates table", sql`CREATE TABLE IF NOT EXISTS agreement_templates (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id) ON DELETE CASCADE,
+      template_key TEXT NOT NULL,
+      template_name TEXT NOT NULL,
+      worker_type TEXT NOT NULL DEFAULT 'contractor',
+      version INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'draft',
+      html_body TEXT NOT NULL,
+      plain_text_body TEXT,
+      schema_json TEXT,
+      is_default BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("worker_agreements table", sql`CREATE TABLE IF NOT EXISTS worker_agreements (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      worker_id VARCHAR NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+      onboarding_id VARCHAR,
+      template_id VARCHAR REFERENCES agreement_templates(id),
+      template_version INTEGER NOT NULL DEFAULT 1,
+      rendered_html TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending_signature',
+      signature_provider TEXT DEFAULT 'internal',
+      signed_at TIMESTAMP,
+      signed_by_name TEXT,
+      signed_by_worker_id VARCHAR,
+      voided_at TIMESTAMP,
+      void_reason TEXT,
+      merge_data TEXT,
+      sent_at TIMESTAMP,
+      viewed_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("worker_onboarding table", sql`CREATE TABLE IF NOT EXISTS worker_onboarding (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      worker_id VARCHAR NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+      worker_type TEXT NOT NULL DEFAULT 'contractor',
+      package_key TEXT NOT NULL DEFAULT 'contractor_standard',
+      status TEXT NOT NULL DEFAULT 'draft',
+      invite_token_hash TEXT,
+      invite_expires_at TIMESTAMP,
+      started_at TIMESTAMP,
+      submitted_at TIMESTAMP,
+      approved_at TIMESTAMP,
+      approved_by VARCHAR,
+      completion_percent INTEGER DEFAULT 0,
+      current_step_key TEXT,
+      manager_notes TEXT,
+      manager_data TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("onboarding_steps table", sql`CREATE TABLE IF NOT EXISTS onboarding_steps (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      onboarding_id VARCHAR NOT NULL REFERENCES worker_onboarding(id) ON DELETE CASCADE,
+      company_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      worker_id VARCHAR NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+      step_key TEXT NOT NULL,
+      step_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      sequence INTEGER NOT NULL DEFAULT 0,
+      required BOOLEAN DEFAULT TRUE,
+      status TEXT NOT NULL DEFAULT 'not_started',
+      assigned_to_role TEXT NOT NULL DEFAULT 'worker',
+      depends_on_step_keys TEXT,
+      data_json TEXT,
+      review_notes TEXT,
+      submitted_at TIMESTAMP,
+      reviewed_at TIMESTAMP,
+      reviewed_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("worker_onboarding_documents table", sql`CREATE TABLE IF NOT EXISTS worker_onboarding_documents (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      worker_id VARCHAR NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+      onboarding_id VARCHAR NOT NULL REFERENCES worker_onboarding(id) ON DELETE CASCADE,
+      step_id VARCHAR REFERENCES onboarding_steps(id),
+      document_type TEXT NOT NULL,
+      file_url TEXT,
+      storage_key TEXT,
+      mime_type TEXT,
+      document_status TEXT NOT NULL DEFAULT 'uploaded',
+      template_id VARCHAR,
+      worker_agreement_id VARCHAR,
+      signature_completed_at TIMESTAMP,
+      reviewed_at TIMESTAMP,
+      reviewed_by VARCHAR,
+      metadata_json TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("onboarding_audit_log table", sql`CREATE TABLE IF NOT EXISTS onboarding_audit_log (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      worker_id VARCHAR NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+      onboarding_id VARCHAR NOT NULL REFERENCES worker_onboarding(id) ON DELETE CASCADE,
+      step_id VARCHAR,
+      actor_user_id VARCHAR,
+      actor_type TEXT NOT NULL DEFAULT 'system',
+      event_type TEXT NOT NULL,
+      before_json TEXT,
+      after_json TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Seed default contractor agreement template using parameterized insert
+    await (async () => {
+      const label = "agreement_templates seed default contractor";
+      try {
+        const existing = await db.execute(sql`SELECT 1 FROM agreement_templates WHERE template_key = 'contractor_standard_v1' LIMIT 1`);
+        if (existing.rows.length === 0) {
+          const htmlBody = `<div style="font-family: Georgia, serif; max-width: 800px; margin: 0 auto; padding: 40px; line-height: 1.7; color: #1a1a1a;">
+<h1 style="text-align:center; font-size:1.3em; font-weight:bold; margin-bottom:8px;">INDEPENDENT CONTRACTOR AGREEMENT</h1>
+<p style="text-align:center; margin-bottom:24px; font-size:0.9em; color:#555;">MyPayLink Platform — Contractor Agreement Template v1.0</p>
+<p>This Independent Contractor Agreement ("Agreement") is made effective as of <strong>{{effective_date}}</strong> by and between <strong>{{company_name}}</strong> ("Company"), located at {{company_address_line1}}, {{company_city}}, {{company_state}} {{company_zip}}, and <strong>{{contractor_legal_name}}</strong> ("Independent Contractor"), located at {{contractor_address_line1}}, {{contractor_city}}, {{contractor_state}} {{contractor_zip}}.</p>
+<h2 style="font-size:1em; margin-top:24px; border-bottom:1px solid #ccc; padding-bottom:4px;">RECITALS</h2>
+<p>The Company desires to engage Contractor to perform the services described in this Agreement. Contractor represents that Contractor is operating as an independent contractor and has complied with all applicable laws relating to business permits, licenses, registrations, tax reporting, and other legal requirements.</p>
+<p>Tax ID Type: <strong>{{contractor_tax_id_type}}</strong><br/>Tax ID: <strong>{{contractor_tax_id_masked}}</strong></p>
+<h2 style="font-size:1em; margin-top:24px; border-bottom:1px solid #ccc; padding-bottom:4px;">1. INDEPENDENT CONTRACTOR STATUS</h2>
+<p>The parties intend that Contractor shall remain an independent contractor and not an employee of Company for any purpose, including federal and state tax purposes, unemployment insurance, workers compensation, employee benefits, or any other employment-related law or program.</p>
+<h2 style="font-size:1em; margin-top:24px; border-bottom:1px solid #ccc; padding-bottom:4px;">2. SCOPE OF WORK</h2>
+<p>Project / Role: <strong>{{project_name}}</strong><br/>Department / Team: <strong>{{department_name}}</strong><br/>Manager / Contact: <strong>{{manager_name}}</strong><br/>Work Location: {{work_location}}</p>
+<p><strong>Scope Summary:</strong><br/>{{scope_of_work_summary}}</p>
+<p><strong>Detailed Scope:</strong><br/>{{scope_of_work_details}}</p>
+<p>Target Completion Date: {{completion_target_date}}</p>
+<h2 style="font-size:1em; margin-top:24px; border-bottom:1px solid #ccc; padding-bottom:4px;">3. COMPENSATION</h2>
+<p>Compensation Model: <strong>{{compensation_model}}</strong></p>
+<ul><li>Hourly Rate: {{hourly_rate}}</li><li>Special Event Rate: {{special_event_rate}}</li><li>Fixed Project Amount: {{fixed_project_amount}}</li></ul>
+<p>Payment Schedule: {{payment_schedule}}<br/>Submission Window: {{submission_window}}<br/>Pay Cycle: {{pay_cycle_description}}</p>
+<p>All time tracking, invoicing, and payment processing must be conducted through <strong>{{platform_name}}</strong> at <strong>{{platform_url}}</strong>. Use of the platform is a condition of payment.</p>
+<h2 style="font-size:1em; margin-top:24px; border-bottom:1px solid #ccc; padding-bottom:4px;">4. TAX DOCUMENTATION AND WITHHOLDING</h2>
+<p>Contractor is responsible for all tax filings, self-employment taxes, and related reporting obligations. Contractor agrees to complete Form W-9 and any other required tax documentation. Company may issue Form 1099-NEC as applicable.</p>
+<h2 style="font-size:1em; margin-top:24px; border-bottom:1px solid #ccc; padding-bottom:4px;">5. BENEFITS WAIVER</h2>
+<p>Contractor is not eligible for employee benefits including health insurance, retirement benefits, paid time off, or any other employee benefit programs.</p>
+<h2 style="font-size:1em; margin-top:24px; border-bottom:1px solid #ccc; padding-bottom:4px;">6. CONFIDENTIALITY AND PROPRIETARY INFORMATION</h2>
+<p>Contractor shall not use or disclose Company confidential or proprietary information except as necessary to perform services under this Agreement. All work product created within the scope of this engagement shall be owned exclusively by Company unless otherwise stated in writing.</p>
+<h2 style="font-size:1em; margin-top:24px; border-bottom:1px solid #ccc; padding-bottom:4px;">7. NON-SOLICITATION</h2>
+<p>During the term and for {{non_solicit_months}} months after termination, Contractor shall not directly solicit Company customers with whom Contractor had material business contact through this engagement.</p>
+<h2 style="font-size:1em; margin-top:24px; border-bottom:1px solid #ccc; padding-bottom:4px;">8. TERM AND TERMINATION</h2>
+<p>This Agreement begins on <strong>{{start_date}}</strong> and continues until <strong>{{end_date}}</strong> unless earlier terminated. Either party may terminate for material breach not cured within {{cure_period_days}} days after written notice.</p>
+<h2 style="font-size:1em; margin-top:24px; border-bottom:1px solid #ccc; padding-bottom:4px;">9. GOVERNING LAW</h2>
+<p>This Agreement shall be governed by the laws of <strong>{{governing_state}}</strong>. Venue for any permitted court proceeding shall be in {{governing_county}} County, {{governing_state}}.</p>
+<h2 style="font-size:1em; margin-top:24px; border-bottom:1px solid #ccc; padding-bottom:4px;">10. ELECTRONIC SIGNATURES</h2>
+<p>The parties agree that electronic signatures and electronic records shall have the same force and effect as original signatures.</p>
+<div style="margin-top:48px; display:flex; gap:60px;">
+<div style="flex:1; border-top:1px solid #333; padding-top:12px;"><strong>COMPANY</strong><br/>{{company_signatory_name}}<br/>{{company_signatory_title}}<br/>Date: {{company_signature_date}}</div>
+<div style="flex:1; border-top:1px solid #333; padding-top:12px;"><strong>CONTRACTOR</strong><br/>{{contractor_signature_name}}<br/>Date: {{contractor_signature_date}}<br/><em style="font-size:0.8em; color:#666;">Audit Ref: {{esign_audit_id}}</em></div>
+</div></div>`;
+          await db.execute(sql`
+            INSERT INTO agreement_templates (template_key, template_name, worker_type, version, status, is_default, html_body)
+            VALUES ('contractor_standard_v1', 'Independent Contractor Agreement', 'contractor', 1, 'active', TRUE, ${htmlBody})
+          `);
+          console.log(`Auto-migration OK: ${label}`);
+        } else {
+          console.log(`Auto-migration OK: ${label} (already exists)`);
+        }
+      } catch (e: any) {
+        console.warn(`Auto-migration skipped (${label}): ${e.message}`);
+      }
+    })();
+
     await run("system_documents seed payroll rules", sql`
       INSERT INTO system_documents (title, version, category, file_url, description, effective_date, change_log, is_active)
       SELECT

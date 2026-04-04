@@ -42,6 +42,9 @@ import LoginPage from "@/pages/login";
 import NotificationSettingsPage from "@/pages/notification-settings";
 import MessagesPage from "@/pages/messages";
 import TradeCompensationPage from "@/pages/trade-compensation";
+import AgreementsPage from "@/pages/agreements";
+import OnboardingAdminPage from "@/pages/onboarding-admin";
+import OnboardingPortalPage from "@/pages/onboarding-portal";
 import PermissionsPage from "@/pages/permissions";
 import ProvisioningPage from "@/pages/provisioning";
 import AuditLogPage from "@/pages/audit-log";
@@ -99,6 +102,8 @@ function AuthenticatedRouter() {
       <Route path="/app/notification-settings" component={NotificationSettingsPage} />
       <Route path="/app/messages" component={MessagesPage} />
       <Route path="/app/trade-compensation">{() => <RoleGuard roles={["admin", "manager"]}><TradeCompensationPage /></RoleGuard>}</Route>
+      <Route path="/app/agreements">{() => <RoleGuard roles={["admin", "manager"]}><AgreementsPage /></RoleGuard>}</Route>
+      <Route path="/app/contractor-onboarding">{() => <RoleGuard roles={["admin", "manager"]}><OnboardingAdminPage /></RoleGuard>}</Route>
       <Route path="/app/permissions">{() => <RoleGuard roles={["admin", "platform_super_admin"]}><PermissionsPage /></RoleGuard>}</Route>
       <Route path="/app/provisioning">{() => <RoleGuard roles={["admin"]}><ProvisioningPage /></RoleGuard>}</Route>
       <Route path="/app/audit-log">{() => <RoleGuard roles={["admin", "platform_super_admin"]}><AuditLogPage /></RoleGuard>}</Route>
@@ -269,6 +274,10 @@ function AppContent() {
 
   if (location.startsWith("/portal/onboarding/")) {
     return <PortalOnboardingPage />;
+  }
+
+  if (location.startsWith("/onboarding/")) {
+    return <OnboardingPortalPage />;
   }
 
   if (location.startsWith("/pay/")) {
