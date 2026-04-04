@@ -1808,7 +1808,7 @@ app.use((req, res, next) => {
         'MyPayLink Payroll Processing Rules',
         'v1.0',
         'Payroll',
-        '/docs/payroll/MyPayLink_Payroll_Processing_Rules_v1.0.docx',
+        '/docs/paylink/payroll/MyPayLink_Payroll_Processing_Rules_v1.0.docx',
         'Official payroll processing rules, data integrity requirements, and system behaviors. Covers pay period calculation, YTD logic, duplicate prevention, reimbursement handling, and check/stub requirements.',
         '2026-04-02',
         'v1.0 (2026-04-02): Initial release. Covers payroll period schedule, run workflow, amendment rules, expense/reimbursement deduplication, duplicate-run prevention, YTD snapshot rules, and check/stub display requirements.',
@@ -1817,6 +1817,43 @@ app.use((req, res, next) => {
         SELECT 1 FROM system_documents WHERE title = 'MyPayLink Payroll Processing Rules' AND version = 'v1.0'
       )
     `);
+
+    // ── Phase 1: Payroll Correctness ──────────────────────────────────────
+    await run("pay_stub_amendments.applied_payroll_run_id", sql`ALTER TABLE pay_stub_amendments ADD COLUMN IF NOT EXISTS applied_payroll_run_id VARCHAR`);
+    await run("pay_stub_amendments.applied_at", sql`ALTER TABLE pay_stub_amendments ADD COLUMN IF NOT EXISTS applied_at TIMESTAMP`);
+    await run("pay_stub_amendments.end_date", sql`ALTER TABLE pay_stub_amendments ADD COLUMN IF NOT EXISTS end_date DATE`);
+    await run("pay_stub_amendments.is_recurring", sql`ALTER TABLE pay_stub_amendments ADD COLUMN IF NOT EXISTS is_recurring BOOLEAN DEFAULT FALSE`);
+
+    // ── Phase 2: Source-of-truth wiring ──────────────────────────────────
+    await run("taxes_deductions.remittance_agency_id", sql`ALTER TABLE taxes_deductions ADD COLUMN IF NOT EXISTS remittance_agency_id VARCHAR`);
+    await run("taxes_deductions.effective_date", sql`ALTER TABLE taxes_deductions ADD COLUMN IF NOT EXISTS effective_date DATE`);
+    await run("taxes_deductions.expiry_date", sql`ALTER TABLE taxes_deductions ADD COLUMN IF NOT EXISTS expiry_date DATE`);
+    await run("funding_accounts.remittance_source_id", sql`ALTER TABLE funding_accounts ADD COLUMN IF NOT EXISTS remittance_source_id VARCHAR`);
+
+    // ── Phase 3: Tax Filing Snapshots ─────────────────────────────────────
+    await run("tax_filing_snapshots table", sql`CREATE TABLE IF NOT EXISTS tax_filing_snapshots (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      legal_entity_id VARCHAR,
+      tax_year INTEGER NOT NULL,
+      tax_period TEXT,
+      form_type TEXT NOT NULL,
+      period_start DATE,
+      period_end DATE,
+      status TEXT DEFAULT 'draft',
+      generated_data_json TEXT,
+      generated_at TIMESTAMP,
+      generated_by_user_id VARCHAR,
+      reviewed_at TIMESTAMP,
+      reviewed_by_user_id VARCHAR,
+      approved_at TIMESTAMP,
+      approved_by_user_id VARCHAR,
+      filed_at TIMESTAMP,
+      filed_by_user_id VARCHAR,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");

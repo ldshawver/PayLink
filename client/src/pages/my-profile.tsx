@@ -37,6 +37,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Settings,
   Receipt,
@@ -50,6 +51,10 @@ import {
   Plus,
   Trash2,
   Download,
+  User,
+  Phone,
+  Mail,
+  MapPin,
 } from "lucide-react";
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -78,6 +83,143 @@ function RatingStars({ rating }: { rating: number | null }) {
       {[1, 2, 3, 4, 5].map((i) => (
         <Star key={i} className={`h-4 w-4 ${i <= rating ? "fill-yellow-400 text-yellow-400" : "text-muted-foreground"}`} />
       ))}
+    </div>
+  );
+}
+
+// ─── Contact Info Tab (employee self-service) ───────────────────────────────
+
+function ContactInfoTab({ worker }: { worker: Worker | null }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({
+    phone: worker?.phone || "",
+    mobilePhone: worker?.mobilePhone || "",
+    homePhone: worker?.homePhone || "",
+    workEmail: worker?.workEmail || "",
+    homeEmail: worker?.homeEmail || "",
+    address: worker?.address || "",
+    address2: worker?.address2 || "",
+    city: worker?.city || "",
+    state: worker?.state || "",
+    zip: worker?.zip || "",
+    country: worker?.country || "US",
+    emergencyContactName: worker?.emergencyContactName || "",
+    emergencyContactRelationship: worker?.emergencyContactRelationship || "",
+    emergencyContactPhone: worker?.emergencyContactPhone || "",
+    emergencyContactEmail: worker?.emergencyContactEmail || "",
+  });
+
+  const mutation = useMutation({
+    mutationFn: async (data: typeof form) => {
+      const res = await apiRequest("PATCH", "/api/my/worker", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/my/worker"] });
+      toast({ title: "Contact info saved" });
+    },
+    onError: () => toast({ title: "Failed to save contact info", variant: "destructive" }),
+  });
+
+  if (!worker) {
+    return (
+      <Card>
+        <CardContent className="p-6 text-center text-muted-foreground">
+          <User className="h-10 w-10 mx-auto mb-2" />
+          <p>Your account is not linked to an employee record.</p>
+          <p className="text-sm mt-1">Contact your administrator to link your account.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <Card>
+        <CardHeader><CardTitle className="text-base flex items-center gap-2"><Phone className="h-4 w-4" />Phone Numbers</CardTitle></CardHeader>
+        <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>Mobile / Cell</Label>
+            <Input data-testid="input-mobile-phone" value={form.mobilePhone} onChange={e => setForm(p => ({ ...p, mobilePhone: e.target.value }))} placeholder="+1 (555) 000-0000" />
+          </div>
+          <div className="space-y-2">
+            <Label>Home Phone</Label>
+            <Input data-testid="input-home-phone" value={form.homePhone} onChange={e => setForm(p => ({ ...p, homePhone: e.target.value }))} />
+          </div>
+          <div className="space-y-2">
+            <Label>Primary Phone</Label>
+            <Input data-testid="input-phone" value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle className="text-base flex items-center gap-2"><Mail className="h-4 w-4" />Email Addresses</CardTitle></CardHeader>
+        <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>Work Email</Label>
+            <Input type="email" data-testid="input-work-email" value={form.workEmail} onChange={e => setForm(p => ({ ...p, workEmail: e.target.value }))} />
+          </div>
+          <div className="space-y-2">
+            <Label>Personal Email</Label>
+            <Input type="email" data-testid="input-home-email" value={form.homeEmail} onChange={e => setForm(p => ({ ...p, homeEmail: e.target.value }))} />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle className="text-base flex items-center gap-2"><MapPin className="h-4 w-4" />Home Address</CardTitle></CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Street Address</Label>
+            <Input data-testid="input-address" value={form.address} onChange={e => setForm(p => ({ ...p, address: e.target.value }))} />
+          </div>
+          <div className="space-y-2">
+            <Label>Apt / Suite</Label>
+            <Input data-testid="input-address2" value={form.address2} onChange={e => setForm(p => ({ ...p, address2: e.target.value }))} />
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            <div className="col-span-2 sm:col-span-1 space-y-2">
+              <Label>City</Label>
+              <Input data-testid="input-city" value={form.city} onChange={e => setForm(p => ({ ...p, city: e.target.value }))} />
+            </div>
+            <div className="space-y-2">
+              <Label>State</Label>
+              <Input data-testid="input-state" value={form.state} onChange={e => setForm(p => ({ ...p, state: e.target.value }))} maxLength={2} placeholder="CA" />
+            </div>
+            <div className="space-y-2">
+              <Label>ZIP</Label>
+              <Input data-testid="input-zip" value={form.zip} onChange={e => setForm(p => ({ ...p, zip: e.target.value }))} />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle className="text-base flex items-center gap-2"><User className="h-4 w-4" />Emergency Contact</CardTitle></CardHeader>
+        <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>Full Name</Label>
+            <Input data-testid="input-emergency-name" value={form.emergencyContactName} onChange={e => setForm(p => ({ ...p, emergencyContactName: e.target.value }))} />
+          </div>
+          <div className="space-y-2">
+            <Label>Relationship</Label>
+            <Input data-testid="input-emergency-relationship" value={form.emergencyContactRelationship} onChange={e => setForm(p => ({ ...p, emergencyContactRelationship: e.target.value }))} placeholder="Spouse, Parent, etc." />
+          </div>
+          <div className="space-y-2">
+            <Label>Phone</Label>
+            <Input data-testid="input-emergency-phone" value={form.emergencyContactPhone} onChange={e => setForm(p => ({ ...p, emergencyContactPhone: e.target.value }))} />
+          </div>
+          <div className="space-y-2">
+            <Label>Email</Label>
+            <Input type="email" data-testid="input-emergency-email" value={form.emergencyContactEmail} onChange={e => setForm(p => ({ ...p, emergencyContactEmail: e.target.value }))} />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Button onClick={() => mutation.mutate(form)} disabled={mutation.isPending} data-testid="button-save-contact-info">
+        {mutation.isPending ? "Saving..." : "Save Contact Info"}
+      </Button>
     </div>
   );
 }
@@ -929,6 +1071,9 @@ export default function MyProfilePage() {
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex flex-wrap gap-1 h-auto">
+          <TabsTrigger value="contact" data-testid="tab-contact" className="flex items-center gap-1">
+            <User className="h-4 w-4" />Contact Info
+          </TabsTrigger>
           <TabsTrigger value="preferences" data-testid="tab-preferences" className="flex items-center gap-1">
             <Settings className="h-4 w-4" />Preferences
           </TabsTrigger>
@@ -952,6 +1097,9 @@ export default function MyProfilePage() {
           </TabsTrigger>
         </TabsList>
 
+        <TabsContent value="contact" className="mt-4">
+          <ContactInfoTab worker={worker || null} />
+        </TabsContent>
         <TabsContent value="preferences" className="mt-4">
           <PreferencesTab worker={worker || null} />
         </TabsContent>

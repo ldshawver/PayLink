@@ -632,11 +632,17 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       const companyId = req.query.companyId as string | undefined;
-      const allWorkers = await storage.getWorkers(companyId && companyId !== "all" ? companyId : undefined);
+      // Employees can only see themselves
       if (user && user.role === "employee" && user.workerId) {
+        const allWorkers = await storage.getWorkers();
         const selfWorker = allWorkers.filter(w => w.id === user.workerId);
         return res.json(selfWorker);
       }
+      // Managers are scoped to their company unless admin or explicit companyId query
+      const scopedCompanyId = companyId && companyId !== "all"
+        ? companyId
+        : (user?.role === "manager" && user.companyId ? user.companyId : undefined);
+      const allWorkers = await storage.getWorkers(scopedCompanyId);
       res.json(allWorkers);
     } catch (error) {
       console.error("Failed to fetch workers:", error);
@@ -1063,7 +1069,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/payroll-runs/:id/process", requireActiveSubscription, async (req, res) => {
+  app.post("/api/payroll-runs/:id/process", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
@@ -1170,10 +1176,19 @@ export async function registerRoutes(
       });
       const periodAmendments = allAmendments.filter(a => {
         const effDate = a.effectiveDate ? String(a.effectiveDate) : null;
-        return a.status === "active" &&
-          (!effDate || (effDate >= String(run.periodStart) && effDate <= String(run.periodEnd)));
+        const endDate = (a as any).endDate ? String((a as any).endDate) : null;
+        const isRecurring = (a as any).isRecurring === true;
+        // Non-recurring amendments that were already applied to ANY prior run are skipped.
+        // Recurring amendments re-apply every period within their date range.
+        const alreadyApplied = !isRecurring && (a as any).appliedPayrollRunId && (a as any).appliedPayrollRunId !== run.id;
+        if (alreadyApplied) return false;
+        // Date-range guard
+        const inPeriodStart = !effDate || effDate <= String(run.periodEnd);
+        const inPeriodEnd = !endDate || endDate >= String(run.periodStart);
+        return a.status === "active" && inPeriodStart && inPeriodEnd;
       });
       console.log(`[PAYROLL] Period amendments after filter: ${periodAmendments.length}`);
+      const appliedAmendmentIds: string[] = [];
       const allPsAccounts = await storage.getPayStubAccounts(run.companyId);
       const psAccountMap: Record<string, string> = {};
       for (const acc of allPsAccounts) { psAccountMap[acc.id] = acc.type || "earning"; }
@@ -1243,6 +1258,7 @@ export async function registerRoutes(
           } else {
             amendmentEarnings += amAmt;
           }
+          appliedAmendmentIds.push(am.id);
         }
         console.log(`[PAYROLL] Worker ${worker.firstName}: earnings_adj=${amendmentEarnings} deductions_adj=${amendmentDeductions} grossBefore=${grossPay}`);
         grossPay += amendmentEarnings;
@@ -1319,6 +1335,19 @@ export async function registerRoutes(
         await storage.createPayrollItem(item);
       }
 
+      // ── Mark non-recurring amendments as applied to prevent double-apply ──
+      const appliedNow = new Date();
+      const uniqueAppliedIds = [...new Set(appliedAmendmentIds)];
+      for (const amId of uniqueAppliedIds) {
+        const am = allAmendments.find(a => a.id === amId);
+        if (am && !(am as any).isRecurring) {
+          await storage.updatePayStubAmendment(amId, {
+            appliedPayrollRunId: run.id,
+            appliedAt: appliedNow,
+          } as any);
+        }
+      }
+
       await storage.updateCompany(run.companyId, { nextCheckNumber: checkNum });
 
       await storage.updatePayrollRun(run.id, {
@@ -1354,14 +1383,29 @@ export async function registerRoutes(
             totalEmployerTaxes += parseFloat(etd.rate || "0") * createdItems.length;
           }
         }
+        // ── Real reimbursements: sum approved expenses for this pay period ──
+        let totalReimbursements = 0;
+        try {
+          const periodExpenses = await storage.getExpenses(run.companyId);
+          const approvedReimbursements = periodExpenses.filter(e =>
+            e.reimbursementRequested &&
+            (e.reimbursementStatus === "approved" || e.status === "approved") &&
+            e.expenseDate >= run.periodStart &&
+            e.expenseDate <= run.periodEnd
+          );
+          totalReimbursements = approvedReimbursements.reduce((sum, e) => sum + parseFloat(e.amount || "0"), 0);
+        } catch (reimErr) {
+          console.warn("[PAYROLL] Could not load reimbursements:", reimErr);
+        }
+
         const summary = await storage.upsertPayrollSummary(run.id, {
           companyId: run.companyId,
           totalGross: totalGross.toFixed(2),
           totalDeductions: summaryDeductions.toFixed(2),
           totalNet: totalNet.toFixed(2),
           totalEmployerTaxes: totalEmployerTaxes.toFixed(2),
-          totalReimbursements: "0",
-          totalFundingRequired: (totalNet + totalEmployerTaxes).toFixed(2),
+          totalReimbursements: totalReimbursements.toFixed(2),
+          totalFundingRequired: (totalNet + totalEmployerTaxes + totalReimbursements).toFixed(2),
           achCount: pmGroups["ach"]?.count || pmGroups["direct_deposit"]?.count || 0,
           achAmount: ((pmGroups["ach"]?.amount || 0) + (pmGroups["direct_deposit"]?.amount || 0)).toFixed(2),
           checkCount: pmGroups["check"]?.count || 0,
@@ -1463,6 +1507,34 @@ export async function registerRoutes(
         achBatchId: batchId,
         status: "paid",
       });
+
+      // ── Auto-create payment records (idempotent) ───────────────────────────
+      try {
+        const items = await storage.getPayrollItems(run.id);
+        const existingRecords = await storage.getPayrollPaymentRecords(run.companyId, run.id);
+        const existingWorkerIds = new Set(existingRecords.map(r => r.workerId));
+        for (const item of items) {
+          if (existingWorkerIds.has(item.workerId)) continue;
+          await storage.createPayrollPaymentRecord({
+            companyId: run.companyId,
+            payrollRunId: run.id,
+            payrollItemId: item.id,
+            workerId: item.workerId,
+            payDate: run.payDate || new Date().toISOString().split("T")[0],
+            grossPayAmount: item.grossPay || "0",
+            netPayAmount: item.netPay || "0",
+            employeeTaxWithheld: item.deductions || "0",
+            paymentMethodCode: item.paymentMethod || "check",
+            fundingAccountId: run.fundingAccountId || null,
+            achBatchId: batchId,
+            status: "paid",
+            taxYear: run.payDate ? new Date(run.payDate + "T00:00:00").getFullYear() : new Date().getFullYear(),
+          } as any);
+        }
+      } catch (prErr) {
+        console.error("[PAYROLL] Auto-create payment records error:", prErr);
+      }
+
       res.json(updated);
     } catch (error) {
       console.error("Submit ACH error:", error);
@@ -1686,6 +1758,46 @@ export async function registerRoutes(
     }
   });
 
+
+  // ── Per-agency liability breakdown ────────────────────────────────────────
+  app.get("/api/payroll-runs/:id/agency-liabilities", requireAuth, requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const items = await storage.getPayrollItems(run.id);
+      const allDeductions = await storage.getTaxesDeductions(run.companyId);
+      const allAgencies = await storage.getRemittanceAgencies(run.companyId);
+      const agencyMap: Record<string, { id: string; name: string; type: string; totalLiability: number; deductions: Array<{ name: string; amount: number }> }> = {};
+      const unlinked: Array<{ name: string; amount: number }> = [];
+      for (const ded of allDeductions) {
+        if (!ded.isActive || ded.isReferenceOnly) continue;
+        let dedTotal = 0;
+        for (const item of items) {
+          const gross = parseFloat(item.grossPay || "0");
+          if (ded.calculationType === "percentage") {
+            dedTotal += gross * (parseFloat(ded.rate || "0") / 100);
+          } else {
+            dedTotal += parseFloat(ded.rate || "0");
+          }
+        }
+        const agencyId = (ded as any).remittanceAgencyId;
+        if (agencyId) {
+          if (!agencyMap[agencyId]) {
+            const agency = allAgencies.find(a => a.id === agencyId);
+            agencyMap[agencyId] = { id: agencyId, name: agency?.name || agencyId, type: agency?.type || "unknown", totalLiability: 0, deductions: [] };
+          }
+          agencyMap[agencyId].totalLiability += dedTotal;
+          agencyMap[agencyId].deductions.push({ name: ded.name, amount: dedTotal });
+        } else {
+          unlinked.push({ name: ded.name, amount: dedTotal });
+        }
+      }
+      res.json({ agencies: Object.values(agencyMap), unlinked });
+    } catch (err) {
+      console.error("Agency liabilities error:", err);
+      res.status(500).json({ message: "Failed to compute agency liabilities" });
+    }
+  });
 
   // ── Get payroll summary ───────────────────────────────────────────────────
   app.get("/api/payroll-runs/:id/summary", requireAuth, requireActiveSubscription, async (req, res) => {
@@ -2360,10 +2472,15 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/payroll-runs", async (req, res) => {
+  app.get("/api/payroll-runs", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
       const companyId = req.query.companyId as string | undefined;
-      const runs = await storage.getPayrollRuns(companyId);
+      // Managers scoped to their company
+      const scopedCompanyId = companyId && companyId !== "all"
+        ? companyId
+        : (user?.role === "manager" && user.companyId ? user.companyId : companyId);
+      const runs = await storage.getPayrollRuns(scopedCompanyId);
       res.json(runs);
     } catch (error) {
       console.error(error);
@@ -2371,7 +2488,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/payroll-runs/:id", async (req, res) => {
+  app.get("/api/payroll-runs/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) {
@@ -2384,7 +2501,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/payroll-runs/:id/items", async (req, res) => {
+  app.get("/api/payroll-runs/:id/items", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const items = await storage.getPayrollItems(req.params.id);
       res.json(items);
@@ -2491,6 +2608,19 @@ export async function registerRoutes(
 
       const otMultiplier = Number(company.overtimeMultiplier || 1.5);
       const dtMultiplier = 2.0;
+
+      // ── Load worker payment methods to set per-worker paymentMethod ────────
+      const allWorkerPayMethods = await storage.getPayMethods();
+      const workerPayMethodMap: Record<string, string> = {};
+      for (const pm of allWorkerPayMethods) {
+        const wId = (pm as any).workerId;
+        if (!wId) continue;
+        if (pm.isPrimary || !workerPayMethodMap[wId]) {
+          const mt = (pm.methodType || "check").toLowerCase();
+          workerPayMethodMap[wId] = mt === "direct_deposit" || mt === "ach" ? "ach" : mt;
+        }
+      }
+
       const items: any[] = [];
       let totalGross = 0, totalNet = 0, totalHoursSum = 0, totalOT = 0;
       let checkNum = company.nextCheckNumber || 1;
@@ -2576,6 +2706,7 @@ export async function registerRoutes(
         totalHoursSum += totalHrs;
         totalOT += otHrs;
 
+        const resolvedPaymentMethod = workerPayMethodMap[worker.id] || "check";
         items.push({
           workerId: worker.id,
           regularHours: regHrs.toFixed(2),
@@ -2589,6 +2720,7 @@ export async function registerRoutes(
           netPay: netPay.toFixed(2),
           payRate: defaultRate.toFixed(2),
           payType: worker.payType || "hourly",
+          paymentMethod: resolvedPaymentMethod,
           checkNumber: String(checkNum++),
           ytdGross: (ytd.gross + grossPay).toFixed(2),
           ytdDeductions: (ytd.deductions + totalDeductions).toFixed(2),
@@ -3089,9 +3221,14 @@ export async function registerRoutes(
   });
 
   // Accrual Balances
-  app.get("/api/accrual-balances", async (req, res) => {
+  app.get("/api/accrual-balances", requireAuth, async (req, res) => {
     try {
-      const workerId = req.query.workerId as string | undefined;
+      const user = await storage.getUser(req.session.userId!);
+      let workerId = req.query.workerId as string | undefined;
+      // Employees can only see their own balances
+      if (user?.role === "employee" && user.workerId) {
+        workerId = user.workerId;
+      }
       const balances = await storage.getAccrualBalances(workerId);
       res.json(balances);
     } catch (error) {
@@ -3100,7 +3237,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/accrual-balances", async (req, res) => {
+  app.post("/api/accrual-balances", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const balance = await storage.createAccrualBalance(req.body);
       res.status(201).json(balance);
@@ -3110,7 +3247,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/accrual-balances/:id", async (req, res) => {
+  app.patch("/api/accrual-balances/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const balance = await storage.updateAccrualBalance(req.params.id, req.body);
       if (!balance) {
@@ -3124,9 +3261,14 @@ export async function registerRoutes(
   });
 
   // Employee Contacts
-  app.get("/api/employee-contacts", async (req, res) => {
+  app.get("/api/employee-contacts", requireAuth, async (req, res) => {
     try {
-      const workerId = req.query.workerId as string | undefined;
+      const user = await storage.getUser(req.session.userId!);
+      let workerId = req.query.workerId as string | undefined;
+      // Employees can only see their own contacts
+      if (user?.role === "employee" && user.workerId) {
+        workerId = user.workerId;
+      }
       const contacts = await storage.getEmployeeContacts(workerId);
       res.json(contacts);
     } catch (error) {
@@ -3135,9 +3277,15 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/employee-contacts", async (req, res) => {
+  app.post("/api/employee-contacts", requireAuth, async (req, res) => {
     try {
-      const contact = await storage.createEmployeeContact(req.body);
+      const user = await storage.getUser(req.session.userId!);
+      const data = { ...req.body };
+      // Employees can only create contacts for themselves
+      if (user?.role === "employee" && user.workerId) {
+        data.workerId = user.workerId;
+      }
+      const contact = await storage.createEmployeeContact(data);
       res.status(201).json(contact);
     } catch (error) {
       console.error(error);
@@ -3145,8 +3293,15 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/employee-contacts/:id", async (req, res) => {
+  app.patch("/api/employee-contacts/:id", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      // Employees can only edit their own contacts
+      if (user?.role === "employee" && user.workerId) {
+        const existing = await storage.getEmployeeContacts(user.workerId);
+        const isOwned = existing.some(c => c.id === req.params.id);
+        if (!isOwned) return res.status(403).json({ message: "Not authorized" });
+      }
       const contact = await storage.updateEmployeeContact(req.params.id, req.body);
       if (!contact) {
         return res.status(404).json({ message: "Employee contact not found" });
@@ -3158,7 +3313,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/employee-contacts/:id", async (req, res) => {
+  app.delete("/api/employee-contacts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteEmployeeContact(req.params.id);
       res.json({ message: "Employee contact deleted" });
@@ -3168,10 +3323,15 @@ export async function registerRoutes(
     }
   });
 
-  // Pay Methods
-  app.get("/api/pay-methods", async (req, res) => {
+  // Pay Methods — contains sensitive banking details; requires auth + employee scoping
+  app.get("/api/pay-methods", requireAuth, async (req, res) => {
     try {
-      const workerId = req.query.workerId as string | undefined;
+      const user = await storage.getUser(req.session.userId!);
+      let workerId = req.query.workerId as string | undefined;
+      // Employees can only see their own pay methods
+      if (user?.role === "employee" && user.workerId) {
+        workerId = user.workerId;
+      }
       const methods = await storage.getPayMethods(workerId);
       res.json(methods);
     } catch (error) {
@@ -3180,9 +3340,15 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/pay-methods", async (req, res) => {
+  app.post("/api/pay-methods", requireAuth, async (req, res) => {
     try {
-      const method = await storage.createPayMethod(req.body);
+      const user = await storage.getUser(req.session.userId!);
+      const data = { ...req.body };
+      // Employees can only add pay methods for themselves
+      if (user?.role === "employee" && user.workerId) {
+        data.workerId = user.workerId;
+      }
+      const method = await storage.createPayMethod(data);
       res.status(201).json(method);
     } catch (error) {
       console.error(error);
@@ -3190,8 +3356,16 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/pay-methods/:id", async (req, res) => {
+  app.patch("/api/pay-methods/:id", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      // Employees can only edit their own pay methods
+      if (user?.role === "employee" && user.workerId) {
+        const owned = await storage.getPayMethods(user.workerId);
+        if (!owned.some(m => m.id === req.params.id)) {
+          return res.status(403).json({ message: "Not authorized" });
+        }
+      }
       const method = await storage.updatePayMethod(req.params.id, req.body);
       if (!method) {
         return res.status(404).json({ message: "Pay method not found" });
@@ -3203,8 +3377,16 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/pay-methods/:id", async (req, res) => {
+  app.delete("/api/pay-methods/:id", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      // Employees can only delete their own pay methods
+      if (user?.role === "employee" && user.workerId) {
+        const owned = await storage.getPayMethods(user.workerId);
+        if (!owned.some(m => m.id === req.params.id)) {
+          return res.status(403).json({ message: "Not authorized" });
+        }
+      }
       await storage.deletePayMethod(req.params.id);
       res.json({ message: "Pay method deleted" });
     } catch (error) {
@@ -5885,9 +6067,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // Wage History
-  app.get("/api/wage-history", async (req, res) => {
+  app.get("/api/wage-history", requireAuth, async (req, res) => {
     try {
-      const workerId = req.query.workerId as string | undefined;
+      const user = await storage.getUser(req.session.userId!);
+      let workerId = req.query.workerId as string | undefined;
+      // Employees can only see their own wage history
+      if (user?.role === "employee" && user.workerId) {
+        workerId = user.workerId;
+      }
       const entries = await storage.getWageHistory(workerId);
       res.json(entries);
     } catch (error) {
@@ -5896,7 +6083,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/wage-history", async (req, res) => {
+  app.post("/api/wage-history", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const entry = await storage.createWageHistory(req.body);
       res.status(201).json(entry);
@@ -5906,7 +6093,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/wage-history/:id", async (req, res) => {
+  app.patch("/api/wage-history/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const entry = await storage.updateWageHistory(req.params.id, req.body);
       if (!entry) return res.status(404).json({ message: "Not found" });
@@ -5917,7 +6104,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/wage-history/:id", async (req, res) => {
+  app.delete("/api/wage-history/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       await storage.deleteWageHistory(req.params.id);
       res.json({ message: "Deleted" });
@@ -7336,6 +7523,176 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     res.json({ url, filename: req.file.filename });
   });
 
+  // ── Tax Wizard — Real Backend Calculations + Filing Snapshots ────────────
+  app.get("/api/tax-wizard/snapshots", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const snapshots = await storage.getTaxFilingSnapshots(companyId);
+      res.json(snapshots);
+    } catch (err) { res.status(500).json({ message: "Failed to fetch tax filing snapshots" }); }
+  });
+
+  app.post("/api/tax-wizard/calculate", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { companyId, taxYear, taxPeriod, formType, legalEntityId } = req.body;
+      if (!companyId || !taxYear || !formType) return res.status(400).json({ message: "companyId, taxYear, formType required" });
+
+      const company = await storage.getCompany(companyId);
+      if (!company) return res.status(404).json({ message: "Company not found" });
+
+      const allRuns = await storage.getPayrollRuns(companyId);
+      const taxYearNum = Number(taxYear);
+      const yearRuns = allRuns.filter(r => {
+        if (r.status !== "processed" && r.status !== "paid") return false;
+        const yr = r.periodStart ? new Date(r.periodStart + "T00:00:00").getFullYear() : 0;
+        return yr === taxYearNum;
+      });
+
+      // Quarter filter for 941/quarterly forms
+      let periodRuns = yearRuns;
+      let periodStart = `${taxYearNum}-01-01`;
+      let periodEnd = `${taxYearNum}-12-31`;
+      if (taxPeriod && taxPeriod.startsWith("Q")) {
+        const quarter = parseInt(taxPeriod.slice(1));
+        const qStart = [1, 4, 7, 10][quarter - 1];
+        const qEnd = [3, 6, 9, 12][quarter - 1];
+        periodStart = `${taxYearNum}-${String(qStart).padStart(2, "0")}-01`;
+        const lastDay = new Date(taxYearNum, qEnd, 0).getDate();
+        periodEnd = `${taxYearNum}-${String(qEnd).padStart(2, "0")}-${lastDay}`;
+        periodRuns = yearRuns.filter(r => r.periodStart >= periodStart && r.periodEnd <= periodEnd);
+      }
+
+      const allWorkers = await storage.getWorkers(companyId);
+      const workerMap: Record<string, any> = {};
+      for (const w of allWorkers) workerMap[w.id] = w;
+
+      const allDeductions = await storage.getTaxesDeductions(companyId);
+
+      // Aggregate payroll items for all period runs
+      let totalWages = 0, totalTaxWithheld = 0, totalEmployerTaxes = 0;
+      const workerSummaries: Record<string, { name: string; workerType: string; wages: number; taxWithheld: number; ssWages: number; medicareWages: number }> = {};
+
+      for (const run of periodRuns) {
+        const items = await storage.getPayrollItems(run.id);
+        for (const item of items) {
+          const gross = parseFloat(item.grossPay || "0");
+          const deductions = parseFloat(item.deductions || "0");
+          totalWages += gross;
+          totalTaxWithheld += deductions;
+          const worker = workerMap[item.workerId];
+          if (!workerSummaries[item.workerId]) {
+            workerSummaries[item.workerId] = {
+              name: worker ? `${worker.firstName} ${worker.lastName}` : item.workerId,
+              workerType: worker?.workerType || "employee",
+              wages: 0, taxWithheld: 0, ssWages: 0, medicareWages: 0,
+            };
+          }
+          workerSummaries[item.workerId].wages += gross;
+          workerSummaries[item.workerId].taxWithheld += deductions;
+          workerSummaries[item.workerId].ssWages += gross;
+          workerSummaries[item.workerId].medicareWages += gross;
+        }
+      }
+
+      const employerTaxRecs = allDeductions.filter(d => d.isActive && d.isEmployerPaid && !d.isReferenceOnly);
+      for (const etd of employerTaxRecs) {
+        if (etd.calculationType === "percentage") {
+          totalEmployerTaxes += totalWages * (parseFloat(etd.rate || "0") / 100);
+        } else {
+          totalEmployerTaxes += parseFloat(etd.rate || "0") * periodRuns.length;
+        }
+      }
+
+      const employees = Object.values(workerSummaries).filter(w => w.workerType !== "contractor");
+      const contractors = Object.values(workerSummaries).filter(w => w.workerType === "contractor");
+      const employeeCount = employees.length;
+      const contractorCount = contractors.length;
+      const totalSSWages = employees.reduce((s, w) => s + Math.min(w.ssWages, 168600), 0);
+      const totalMedicareWages = employees.reduce((s, w) => s + w.medicareWages, 0);
+      const ssTaxTotal = totalSSWages * 0.124;
+      const medicareTaxTotal = totalMedicareWages * 0.029;
+
+      const generatedData: any = {
+        company: { id: company.id, name: company.name, ein: company.ein, address: (company as any).address },
+        taxYear: taxYearNum, taxPeriod, formType,
+        periodStart, periodEnd,
+        summary: {
+          totalWages: totalWages.toFixed(2),
+          totalTaxWithheld: totalTaxWithheld.toFixed(2),
+          totalEmployerTaxes: totalEmployerTaxes.toFixed(2),
+          employeeCount, contractorCount,
+          payrollRunCount: periodRuns.length,
+        },
+        workerSummaries: Object.values(workerSummaries),
+      };
+
+      if (formType === "941") {
+        generatedData.form941 = {
+          line1_employees: employeeCount,
+          line2_wages: totalWages.toFixed(2),
+          line3_federal_tax_withheld: employees.reduce((s, w) => s + w.taxWithheld, 0).toFixed(2),
+          line5a_ss_wages: totalSSWages.toFixed(2),
+          line5a_ss_tax: ssTaxTotal.toFixed(2),
+          line5c_medicare_wages: totalMedicareWages.toFixed(2),
+          line5c_medicare_tax: medicareTaxTotal.toFixed(2),
+          line6_total_taxes: (employees.reduce((s, w) => s + w.taxWithheld, 0) + ssTaxTotal + medicareTaxTotal).toFixed(2),
+        };
+      } else if (formType === "W-2") {
+        generatedData.w2Records = employees.map(w => ({
+          name: w.name, wages: w.wages.toFixed(2),
+          federalTaxWithheld: w.taxWithheld.toFixed(2),
+          ssWages: Math.min(w.ssWages, 168600).toFixed(2),
+          medicareWages: w.medicareWages.toFixed(2),
+        }));
+      } else if (formType === "1099-NEC") {
+        generatedData.necRecords = contractors.map(w => ({
+          name: w.name, nonemployeeComp: w.wages.toFixed(2), federalTaxWithheld: w.taxWithheld.toFixed(2),
+        }));
+      }
+
+      const snapshot = await storage.createTaxFilingSnapshot({
+        companyId, legalEntityId: legalEntityId || null,
+        taxYear: taxYearNum, taxPeriod: taxPeriod || null,
+        formType, periodStart, periodEnd,
+        status: "generated",
+        generatedDataJson: JSON.stringify(generatedData),
+        generatedAt: new Date(),
+        generatedByUserId: req.session?.userId || null,
+      });
+
+      res.json({ snapshot, data: generatedData });
+    } catch (err) {
+      console.error("Tax wizard calculate error:", err);
+      res.status(500).json({ message: "Failed to calculate tax data" });
+    }
+  });
+
+  app.patch("/api/tax-wizard/snapshots/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { status, notes, reviewedByUserId, approvedByUserId, filedByUserId } = req.body;
+      const userId = req.session?.userId;
+      const updates: any = {};
+      if (status) {
+        updates.status = status;
+        if (status === "reviewed") { updates.reviewedAt = new Date(); updates.reviewedByUserId = userId; }
+        if (status === "approved") { updates.approvedAt = new Date(); updates.approvedByUserId = userId; }
+        if (status === "filed") { updates.filedAt = new Date(); updates.filedByUserId = userId; }
+      }
+      if (notes !== undefined) updates.notes = notes;
+      const snapshot = await storage.updateTaxFilingSnapshot(req.params.id, updates);
+      if (!snapshot) return res.status(404).json({ message: "Snapshot not found" });
+      res.json(snapshot);
+    } catch (err) { res.status(500).json({ message: "Failed to update snapshot" }); }
+  });
+
+  app.delete("/api/tax-wizard/snapshots/:id", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      await storage.deleteTaxFilingSnapshot(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (err) { res.status(500).json({ message: "Failed to delete snapshot" }); }
+  });
+
   app.get("/api/check-templates", requireAuth, async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
@@ -7572,6 +7929,32 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const worker = await storage.getWorker(user.workerId);
       res.json(worker || null);
     } catch (e) { res.status(500).json({ message: "Failed to fetch worker" }); }
+  });
+
+  // Employee self-service: update own contact info, address, emergency contact (not pay/role fields)
+  app.patch("/api/my/worker", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) return res.status(403).json({ message: "No linked worker profile" });
+      // Whitelist of fields employees are allowed to self-update
+      const ALLOWED_SELF_EDIT = [
+        "phone", "mobilePhone", "homePhone", "workPhone", "workPhoneExt", "fax",
+        "email", "homeEmail", "workEmail",
+        "address", "address2", "city", "state", "zip", "country",
+        "emergencyContactName", "emergencyContactRelationship",
+        "emergencyContactPhone", "emergencyContactEmail",
+        "preferences", "note"
+      ];
+      const filtered: Record<string, any> = {};
+      for (const key of ALLOWED_SELF_EDIT) {
+        if (key in req.body) filtered[key] = req.body[key];
+      }
+      if (Object.keys(filtered).length === 0) {
+        return res.status(400).json({ message: "No editable fields provided" });
+      }
+      const updated = await storage.updateWorker(user.workerId, filtered);
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to update profile" }); }
   });
 
   app.patch("/api/my/preferences", requireAuth, async (req, res) => {
@@ -13112,6 +13495,55 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         reviewNotes: notes || null,
       });
       if (!o) return res.status(404).json({ message: "Onboarding not found" });
+      // On approval: populate worker profile from step form data
+      if (action === "approve" && o.workerId) {
+        try {
+          const steps = await storage.getOnboardingSteps(o.id);
+          // personal_info step → update worker profile
+          const personalStep = steps.find(s => s.stepKey === "personal_info" && s.workerData);
+          if (personalStep?.workerData) {
+            const pd = JSON.parse(personalStep.workerData as string);
+            const profileUpdate: Record<string, any> = {};
+            const fieldMap: Record<string, string> = {
+              phone: "phone", mobilePhone: "mobilePhone", homePhone: "homePhone",
+              email: "email", homeEmail: "homeEmail", workEmail: "workEmail",
+              address: "address", address2: "address2", city: "city",
+              state: "state", zip: "zip", country: "country",
+              birthDate: "birthDate", ssn: "ssn", gender: "gender",
+              emergencyContactName: "emergencyContactName",
+              emergencyContactRelationship: "emergencyContactRelationship",
+              emergencyContactPhone: "emergencyContactPhone",
+              emergencyContactEmail: "emergencyContactEmail",
+            };
+            for (const [src, dest] of Object.entries(fieldMap)) {
+              if (pd[src] !== undefined && pd[src] !== "") profileUpdate[dest] = pd[src];
+            }
+            if (Object.keys(profileUpdate).length > 0) {
+              await storage.updateWorker(o.workerId, profileUpdate);
+            }
+          }
+          // bank_info step → create pay method record
+          const bankStep = steps.find(s => s.stepKey === "bank_info" && s.workerData);
+          if (bankStep?.workerData) {
+            const bd = JSON.parse(bankStep.workerData as string);
+            if (bd.routingNumber && bd.accountNumber) {
+              await storage.createPayMethod({
+                workerId: o.workerId,
+                methodType: bd.methodType || "direct_deposit",
+                bankName: bd.bankName || null,
+                accountType: bd.accountType || "checking",
+                routingNumber: bd.routingNumber,
+                accountNumber: bd.accountNumber,
+                isPrimary: true,
+                amountType: "remainder",
+              });
+            }
+          }
+        } catch (profileErr) {
+          console.error("[onboarding approve] Failed to sync worker profile:", profileErr);
+          // Non-fatal — onboarding approval still succeeds
+        }
+      }
       await storage.createOnboardingAuditLogEntry({
         companyId: o.companyId,
         workerId: o.workerId,

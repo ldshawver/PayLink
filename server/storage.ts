@@ -591,6 +591,12 @@ export interface IStorage {
   updatePayrollPaymentRecord(id: string, data: Partial<PayrollPaymentRecord>): Promise<PayrollPaymentRecord | undefined>;
   deletePayrollPaymentRecord(id: string): Promise<void>;
 
+  getTaxFilingSnapshots(companyId: string): Promise<any[]>;
+  getTaxFilingSnapshot(id: string): Promise<any | undefined>;
+  createTaxFilingSnapshot(data: any): Promise<any>;
+  updateTaxFilingSnapshot(id: string, data: any): Promise<any | undefined>;
+  deleteTaxFilingSnapshot(id: string): Promise<void>;
+
   getCustomers(companyId: string, customerType?: string): Promise<Customer[]>;
   getCustomer(id: string): Promise<Customer | undefined>;
   createCustomer(data: InsertCustomer): Promise<Customer>;
@@ -2490,6 +2496,31 @@ export class DatabaseStorage implements IStorage {
   }
   async deletePayrollPaymentRecord(id: string): Promise<void> {
     await db.delete(payrollPaymentRecords).where(eq(payrollPaymentRecords.id, id));
+  }
+
+  // Tax Filing Snapshots
+  async getTaxFilingSnapshots(companyId: string): Promise<any[]> {
+    const { taxFilingSnapshots } = await import("../shared/schema.js");
+    return db.select().from(taxFilingSnapshots).where(eq(taxFilingSnapshots.companyId, companyId)).orderBy(desc(taxFilingSnapshots.createdAt));
+  }
+  async getTaxFilingSnapshot(id: string): Promise<any | undefined> {
+    const { taxFilingSnapshots } = await import("../shared/schema.js");
+    const [r] = await db.select().from(taxFilingSnapshots).where(eq(taxFilingSnapshots.id, id));
+    return r;
+  }
+  async createTaxFilingSnapshot(data: any): Promise<any> {
+    const { taxFilingSnapshots } = await import("../shared/schema.js");
+    const [r] = await db.insert(taxFilingSnapshots).values(data).returning();
+    return r;
+  }
+  async updateTaxFilingSnapshot(id: string, data: any): Promise<any | undefined> {
+    const { taxFilingSnapshots } = await import("../shared/schema.js");
+    const [r] = await db.update(taxFilingSnapshots).set({ ...data, updatedAt: new Date() }).where(eq(taxFilingSnapshots.id, id)).returning();
+    return r;
+  }
+  async deleteTaxFilingSnapshot(id: string): Promise<void> {
+    const { taxFilingSnapshots } = await import("../shared/schema.js");
+    await db.delete(taxFilingSnapshots).where(eq(taxFilingSnapshots.id, id));
   }
 
   // Time-Off Requests

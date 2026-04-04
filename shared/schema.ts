@@ -412,6 +412,9 @@ export const taxesDeductions = pgTable("taxes_deductions", {
   isReferenceOnly: boolean("is_reference_only").default(false),
   appliesTo: text("applies_to").default("all"),
   isActive: boolean("is_active").default(true),
+  remittanceAgencyId: varchar("remittance_agency_id"),
+  effectiveDate: date("effective_date"),
+  expiryDate: date("expiry_date"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -589,6 +592,10 @@ export const payStubAmendments = pgTable("pay_stub_amendments", {
   description: text("description"),
   publicNote: text("public_note"),
   effectiveDate: date("effective_date"),
+  endDate: date("end_date"),
+  isRecurring: boolean("is_recurring").default(false),
+  appliedPayrollRunId: varchar("applied_payroll_run_id"),
+  appliedAt: timestamp("applied_at"),
   approvalStatus: text("approval_status").default("pending"),
   approvedBy: varchar("approved_by"),
   approvedAt: timestamp("approved_at"),
@@ -1386,6 +1393,7 @@ export const fundingAccounts = pgTable("funding_accounts", {
   openingBalance: numeric("opening_balance").default("0"),
   currentBalance: numeric("current_balance"),
   notes: text("notes"),
+  remittanceSourceId: varchar("remittance_source_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -3319,3 +3327,32 @@ export const onboardingAuditLog = pgTable("onboarding_audit_log", {
 export const insertOnboardingAuditLogSchema = createInsertSchema(onboardingAuditLog).omit({ id: true, createdAt: true });
 export type OnboardingAuditLogEntry = typeof onboardingAuditLog.$inferSelect;
 export type InsertOnboardingAuditLogEntry = z.infer<typeof insertOnboardingAuditLogSchema>;
+
+// ── Tax Filing Snapshots (persisted tax wizard calculations) ────────────────
+export const taxFilingSnapshots = pgTable("tax_filing_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  legalEntityId: varchar("legal_entity_id"),
+  taxYear: integer("tax_year").notNull(),
+  taxPeriod: text("tax_period"),
+  formType: text("form_type").notNull(),
+  periodStart: date("period_start"),
+  periodEnd: date("period_end"),
+  status: text("status").default("draft"),
+  generatedDataJson: text("generated_data_json"),
+  generatedAt: timestamp("generated_at"),
+  generatedByUserId: varchar("generated_by_user_id"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  approvedAt: timestamp("approved_at"),
+  approvedByUserId: varchar("approved_by_user_id"),
+  filedAt: timestamp("filed_at"),
+  filedByUserId: varchar("filed_by_user_id"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertTaxFilingSnapshotSchema = createInsertSchema(taxFilingSnapshots).omit({ id: true, createdAt: true, updatedAt: true });
+export type TaxFilingSnapshot = typeof taxFilingSnapshots.$inferSelect;
+export type InsertTaxFilingSnapshot = z.infer<typeof insertTaxFilingSnapshotSchema>;
