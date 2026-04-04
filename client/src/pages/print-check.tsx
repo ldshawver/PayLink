@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
-import { useParams } from "wouter";
+import { useParams, useSearch } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Printer, ArrowLeft } from "lucide-react";
+import { Printer, ArrowLeft, FileText, Lock, AlertTriangle } from "lucide-react";
 import { Link } from "wouter";
 import type { PayrollRun, PayrollItem, Worker, Company, TaxDeduction, CheckTemplate, PayStubAccount, AccrualAccount, AccrualBalance, PayStubAmendment, RemittanceSource } from "@shared/schema";
 
@@ -118,9 +118,9 @@ function MicrLine({ routing, account, checkNum }: { routing: string; account: st
   const SYM_H = 18;
   const numSpan = (text: string, mx = 0) => (
     <span style={{
-      fontFamily: "'MICRNumeric', 'Courier New', monospace",
+      fontFamily: "'MICRNumeric'",
       fontSize: "12.5pt",
-      letterSpacing: "3px",
+      letterSpacing: 0,
       lineHeight: 1,
       verticalAlign: "middle",
       marginLeft: mx,
@@ -153,12 +153,9 @@ function CheckPortion({
 }) {
   const remittanceSource = remittanceSources.find(s => s.companyId === company.id && s.status === "enabled") || remittanceSources.find(s => s.companyId === company.id);
   const netPay = overrideNetPay !== undefined ? overrideNetPay : Number(item.netPay || 0);
-  // Prefer explicit pay date → processedAt → today
   const checkDate = run.payDate
     ? new Date(run.payDate + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
-    : run.processedAt
-      ? new Date(run.processedAt).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
-      : new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
+    : "—";
   const periodStart = run.periodStart ? new Date(run.periodStart + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "";
   const periodEnd = run.periodEnd ? new Date(run.periodEnd + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "";
   const memoText = periodStart && periodEnd ? `Pay period ${periodStart} – ${periodEnd}` : "";
@@ -484,7 +481,7 @@ function StubSummarySection({
               )}
               <div style={{ fontWeight: "bold" }}>Pay Date: {run.payDate
                 ? new Date(run.payDate + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
-                : run.processedAt ? new Date(run.processedAt).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "—"}</div>
+                : "—"}</div>
             </div>
           </div>
           {isContractor && (
@@ -647,7 +644,7 @@ function StubDetailSection({
     .filter(d => d.amount > 0);
 
   const workerAmendmentDeductions = (amendments || [])
-    .filter(a => a.workerId === item.workerId && a.status === "active" && (a as any).amendmentType === "deduction")
+    .filter(a => a.workerId === item.workerId && a.status === "active" && a.amendmentType === "deduction")
     .map(a => ({ name: a.description || "Pay Stub Deduction", amount: Number(a.amount || 0) }))
     .filter(a => a.amount > 0);
 
@@ -690,7 +687,7 @@ function StubDetailSection({
         <div style={{ textAlign: "right" }}>
           <div><span style={{ fontWeight: "bold" }}>Pay Period Start:</span> {fmtDate(run.periodStart)}</div>
           <div><span style={{ fontWeight: "bold" }}>Pay Period End:</span> {fmtDate(run.periodEnd)}</div>
-          <div><span style={{ fontWeight: "bold" }}>Pay Date:</span> {run.payDate ? fmtDate(run.payDate) : run.processedAt ? fmtDate(new Date(run.processedAt).toISOString().split('T')[0]) : '—'}</div>
+          <div><span style={{ fontWeight: "bold" }}>Pay Date:</span> {run.payDate ? fmtDate(run.payDate) : '—'}</div>
           <div style={{ marginTop: "2px" }}>
             <span style={{ fontWeight: "bold" }}>Payment:</span>{' '}
             {paymentMethodLabel}{paymentPlatformLabel ? ` — ${paymentPlatformLabel}` : ''}
@@ -889,7 +886,7 @@ function StubPortion({
     .filter(d => d.amount > 0);
 
   const workerAmendmentDeductions = (amendments || [])
-    .filter(a => a.workerId === item.workerId && a.status === "active" && (a as any).amendmentType === "deduction")
+    .filter(a => a.workerId === item.workerId && a.status === "active" && a.amendmentType === "deduction")
     .map(a => ({ name: a.description || "Pay Stub Deduction", amount: Number(a.amount || 0) }))
     .filter(a => a.amount > 0);
 
@@ -944,7 +941,7 @@ function StubPortion({
           {config.showCheckNumber && <div style={{ alignSelf: "center" }}><strong>Check #:</strong> {item.checkNumber || "—"}</div>}
           <div style={{ alignSelf: "center" }}><strong>Pay Date:</strong> {run.payDate
             ? new Date(run.payDate + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
-            : run.processedAt ? new Date(run.processedAt).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "—"}</div>
+            : "—"}</div>
         </div>
       )}
 
@@ -1162,7 +1159,7 @@ function computeCheckNetPay(item: PayrollItem, worker: Worker, deductions: TaxDe
     })
     .filter(a => a > 0);
   const amendLines = amendments
-    .filter(a => a.workerId === item.workerId && a.status === "active" && (a as any).amendmentType === "deduction")
+    .filter(a => a.workerId === item.workerId && a.status === "active" && a.amendmentType === "deduction")
     .map(a => Number(a.amount || 0))
     .filter(a => a > 0);
   const totalDed = [...taxLines, ...amendLines].reduce((s, v) => s + v, 0);
@@ -1222,20 +1219,248 @@ function ThreePartCheck({ item, worker, company, run, deductions, config, payStu
   );
 }
 
+function PayrollPacketSummaryPage({
+  run, items, workers, company,
+}: {
+  run: PayrollRun;
+  items: PayrollItem[];
+  workers: Worker[];
+  company: Company;
+}) {
+  const fmtDate = (d: string | null | undefined) => {
+    if (!d) return "—";
+    const parts = String(d).split("-");
+    return parts.length === 3 ? `${parts[1]}/${parts[2]}/${parts[0]}` : String(d);
+  };
+
+  const payDate = run.payDate ? fmtDate(run.payDate) : "—";
+
+  const totalGross = items.reduce((s, i) => s + Number(i.grossPay || 0), 0);
+  const totalDeductions = items.reduce((s, i) => s + Number(i.deductions || 0), 0);
+  const totalNet = items.reduce((s, i) => s + Number(i.netPay || 0), 0);
+  const totalRegHrs = items.reduce((s, i) => s + Number(i.regularHours || 0), 0);
+  const totalOtHrs = items.reduce((s, i) => s + Number(i.overtimeHours || 0), 0);
+  const totalDtHrs = items.reduce((s, i) => s + Number(i.doubleTimeHours || 0), 0);
+
+  const checkItems = items.filter(i => !i.paymentMethod || i.paymentMethod === "check");
+  const achItems = items.filter(i => i.paymentMethod === "direct_deposit");
+  const cashItems = items.filter(i => i.paymentMethod === "cash");
+  const tradeItems = items.filter(i => i.paymentMethod === "trade");
+  const otherItems = items.filter(i => i.paymentMethod && !["check", "direct_deposit", "cash", "trade"].includes(i.paymentMethod));
+
+  const achTotal = achItems.reduce((s, i) => s + Number(i.netPay || 0), 0);
+  const checkTotal = checkItems.reduce((s, i) => s + Number(i.netPay || 0), 0);
+  const cashTotal = cashItems.reduce((s, i) => s + Number(i.netPay || 0), 0);
+  const tradeTotal = tradeItems.reduce((s, i) => s + Number(i.netPay || 0), 0);
+  const otherTotal = otherItems.reduce((s, i) => s + Number(i.netPay || 0), 0);
+  const fundingRequired = totalNet;
+
+  const getWorkerName = (id: string) => {
+    const w = workers.find(w => w.id === id);
+    return w ? `${w.firstName} ${w.lastName}` : id;
+  };
+
+  const methodLabel = (m: string | null | undefined) => {
+    if (!m || m === "check") return "Check";
+    if (m === "direct_deposit") return "Direct Deposit / ACH";
+    if (m === "cash") return "Cash";
+    return m;
+  };
+
+  return (
+    <div className="packet-page" style={{
+      width: "8.5in", minHeight: "11in", padding: "0.5in 0.6in", boxSizing: "border-box",
+      fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif", fontSize: "10px",
+      background: "white", pageBreakAfter: "always",
+    }}>
+      {/* Header */}
+      <div style={{ borderBottom: "2px solid #000", paddingBottom: "8px", marginBottom: "16px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontSize: "18px", fontWeight: "bold" }}>PAYROLL PACKET</div>
+            <div style={{ fontSize: "11px", color: "#444", marginTop: "2px" }}>{company.name}{company.ein ? ` — EIN: ${company.ein}` : ""}</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: "11px", fontWeight: "bold" }}>Pay Date: {payDate}</div>
+            <div style={{ fontSize: "9px", color: "#555" }}>Period: {fmtDate(run.periodStart)} — {fmtDate(run.periodEnd)}</div>
+            <div style={{ fontSize: "9px", color: "#555" }}>Status: {run.status?.toUpperCase()}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Payroll Summary */}
+      <div style={{ marginBottom: "16px" }}>
+        <div style={{ fontSize: "13px", fontWeight: "bold", borderBottom: "1px solid #555", paddingBottom: "3px", marginBottom: "8px" }}>
+          PAYROLL SUMMARY
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px" }}>
+          {[
+            { label: "Total Workers", value: String(items.length) },
+            { label: "Total Regular Hrs", value: totalRegHrs.toFixed(2) },
+            { label: "Total Overtime Hrs", value: totalOtHrs.toFixed(2) },
+            { label: "Total Double Time Hrs", value: totalDtHrs.toFixed(2) },
+            { label: "Total Gross Pay", value: `$${fmt(totalGross)}` },
+            { label: "Total Deductions", value: `$${fmt(totalDeductions)}` },
+            { label: "Total Net Pay", value: `$${fmt(totalNet)}` },
+            { label: "Funding Required", value: `$${fmt(fundingRequired)}` },
+          ].map(({ label, value }) => (
+            <div key={label} style={{ border: "1px solid #ddd", padding: "6px 8px", borderRadius: "3px" }}>
+              <div style={{ fontSize: "8px", color: "#666", marginBottom: "2px" }}>{label}</div>
+              <div style={{ fontSize: "12px", fontWeight: "bold" }}>{value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Payment Method Totals */}
+      <div style={{ marginBottom: "16px" }}>
+        <div style={{ fontSize: "13px", fontWeight: "bold", borderBottom: "1px solid #555", paddingBottom: "3px", marginBottom: "8px" }}>
+          PAYMENT METHOD TOTALS
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "10px" }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid #000" }}>
+              <th style={{ textAlign: "left", padding: "4px 6px", fontWeight: "bold" }}>Method</th>
+              <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: "bold" }}>Count</th>
+              <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: "bold" }}>Total Net</th>
+            </tr>
+          </thead>
+          <tbody>
+            {checkItems.length > 0 && (
+              <tr style={{ borderBottom: "1px solid #eee" }}>
+                <td style={{ padding: "3px 6px" }}>Check</td>
+                <td style={{ textAlign: "right", padding: "3px 6px" }}>{checkItems.length}</td>
+                <td style={{ textAlign: "right", padding: "3px 6px" }}>${fmt(checkTotal)}</td>
+              </tr>
+            )}
+            {achItems.length > 0 && (
+              <tr style={{ borderBottom: "1px solid #eee" }}>
+                <td style={{ padding: "3px 6px" }}>Direct Deposit / ACH</td>
+                <td style={{ textAlign: "right", padding: "3px 6px" }}>{achItems.length}</td>
+                <td style={{ textAlign: "right", padding: "3px 6px" }}>${fmt(achTotal)}</td>
+              </tr>
+            )}
+            {cashItems.length > 0 && (
+              <tr style={{ borderBottom: "1px solid #eee" }}>
+                <td style={{ padding: "3px 6px" }}>Cash</td>
+                <td style={{ textAlign: "right", padding: "3px 6px" }}>{cashItems.length}</td>
+                <td style={{ textAlign: "right", padding: "3px 6px" }}>${fmt(cashTotal)}</td>
+              </tr>
+            )}
+            {tradeItems.length > 0 && (
+              <tr style={{ borderBottom: "1px solid #eee" }}>
+                <td style={{ padding: "3px 6px" }}>Trade / Non-Cash Compensation</td>
+                <td style={{ textAlign: "right", padding: "3px 6px" }}>{tradeItems.length}</td>
+                <td style={{ textAlign: "right", padding: "3px 6px" }}>${fmt(tradeTotal)}</td>
+              </tr>
+            )}
+            {otherItems.length > 0 && (
+              <tr style={{ borderBottom: "1px solid #eee" }}>
+                <td style={{ padding: "3px 6px" }}>Other</td>
+                <td style={{ textAlign: "right", padding: "3px 6px" }}>{otherItems.length}</td>
+                <td style={{ textAlign: "right", padding: "3px 6px" }}>${fmt(otherTotal)}</td>
+              </tr>
+            )}
+            <tr style={{ borderTop: "2px solid #000", fontWeight: "bold" }}>
+              <td style={{ padding: "4px 6px" }}>TOTAL</td>
+              <td style={{ textAlign: "right", padding: "4px 6px" }}>{items.length}</td>
+              <td style={{ textAlign: "right", padding: "4px 6px" }}>${fmt(totalNet)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* Payroll Transaction Run List */}
+      <div style={{ marginBottom: "16px" }}>
+        <div style={{ fontSize: "13px", fontWeight: "bold", borderBottom: "1px solid #555", paddingBottom: "3px", marginBottom: "8px" }}>
+          PAYROLL TRANSACTION RUN — ALL WORKERS
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "9px" }}>
+          <thead>
+            <tr style={{ borderBottom: "1.5px solid #000", background: "#f5f5f5" }}>
+              <th style={{ textAlign: "left", padding: "3px 4px", fontWeight: "bold" }}>Worker</th>
+              <th style={{ textAlign: "left", padding: "3px 4px", fontWeight: "bold" }}>Type</th>
+              <th style={{ textAlign: "right", padding: "3px 4px", fontWeight: "bold" }}>Reg Hrs</th>
+              <th style={{ textAlign: "right", padding: "3px 4px", fontWeight: "bold" }}>OT Hrs</th>
+              <th style={{ textAlign: "right", padding: "3px 4px", fontWeight: "bold" }}>Gross</th>
+              <th style={{ textAlign: "right", padding: "3px 4px", fontWeight: "bold" }}>Deductions</th>
+              <th style={{ textAlign: "right", padding: "3px 4px", fontWeight: "bold" }}>Net Pay</th>
+              <th style={{ textAlign: "center", padding: "3px 4px", fontWeight: "bold" }}>Method</th>
+              <th style={{ textAlign: "center", padding: "3px 4px", fontWeight: "bold" }}>Check #</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item, idx) => (
+              <tr key={item.id} style={{ borderBottom: "1px solid #eee", background: idx % 2 === 0 ? "white" : "#fafafa" }}>
+                <td style={{ padding: "2px 4px" }}>{getWorkerName(item.workerId)}</td>
+                <td style={{ padding: "2px 4px" }}>{item.payType || "hourly"}</td>
+                <td style={{ textAlign: "right", padding: "2px 4px" }}>{Number(item.regularHours || 0).toFixed(2)}</td>
+                <td style={{ textAlign: "right", padding: "2px 4px" }}>{Number(item.overtimeHours || 0).toFixed(2)}</td>
+                <td style={{ textAlign: "right", padding: "2px 4px" }}>${fmt(item.grossPay)}</td>
+                <td style={{ textAlign: "right", padding: "2px 4px" }}>${fmt(item.deductions)}</td>
+                <td style={{ textAlign: "right", padding: "2px 4px", fontWeight: "bold" }}>${fmt(item.netPay)}</td>
+                <td style={{ textAlign: "center", padding: "2px 4px" }}>{methodLabel(item.paymentMethod)}</td>
+                <td style={{ textAlign: "center", padding: "2px 4px", fontFamily: "monospace" }}>{item.checkNumber || "—"}</td>
+              </tr>
+            ))}
+            <tr style={{ borderTop: "2px solid #000", fontWeight: "bold", background: "#f5f5f5" }}>
+              <td colSpan={4} style={{ padding: "3px 4px" }}>TOTALS</td>
+              <td style={{ textAlign: "right", padding: "3px 4px" }}>${fmt(totalGross)}</td>
+              <td style={{ textAlign: "right", padding: "3px 4px" }}>${fmt(totalDeductions)}</td>
+              <td style={{ textAlign: "right", padding: "3px 4px" }}>${fmt(totalNet)}</td>
+              <td colSpan={2}></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* ACH / Direct Deposit Batch section */}
+      {achItems.length > 0 && (
+        <div style={{ marginBottom: "16px" }}>
+          <div style={{ fontSize: "13px", fontWeight: "bold", borderBottom: "1px solid #555", paddingBottom: "3px", marginBottom: "6px" }}>
+            ACH / DIRECT DEPOSIT BATCH
+          </div>
+          <div style={{ fontSize: "10px" }}>
+            <div style={{ display: "flex", gap: "24px", marginBottom: "4px" }}>
+              <div><span style={{ color: "#666" }}>Employees via ACH:</span> <strong>{achItems.length}</strong></div>
+              <div><span style={{ color: "#666" }}>ACH Total:</span> <strong>${fmt(achTotal)}</strong></div>
+              <div><span style={{ color: "#666" }}>Effective Date:</span> <strong>{payDate !== "—" ? payDate : "See Pay Date"}</strong></div>
+              <div><span style={{ color: "#666" }}>Batch Status:</span> <strong>{run.status === "paid" ? "Settled" : run.status === "processed" ? "Approved — Pending Settlement" : "Pending"}</strong></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Footer */}
+      <div style={{ borderTop: "1px solid #ccc", paddingTop: "8px", marginTop: "auto", fontSize: "8px", color: "#999", textAlign: "center" }}>
+        Payroll Packet — {company.name} — Printed {new Date().toLocaleDateString("en-US")} — CONFIDENTIAL
+      </div>
+    </div>
+  );
+}
+
 export default function PrintCheckPage() {
   const { runId } = useParams<{ runId: string }>();
+  const search = useSearch();
+  const searchParams = new URLSearchParams(search);
+  const isPacketMode = searchParams.get("packet") === "1";
+  const workerFilter = searchParams.get("worker") || null;
   const [fontReady, setFontReady] = useState(false);
+  const [micrFontLoaded, setMicrFontLoaded] = useState<boolean | null>(null);
 
   useEffect(() => {
-    // Wait for all web fonts (including MICRNumeric) to finish loading before
-    // enabling the Print button. This guarantees the font is embedded when the
-    // browser's PDF renderer walks the document.
-    document.fonts.ready.then(() => setFontReady(true));
+    document.fonts.ready.then(async () => {
+      setFontReady(true);
+      try {
+        const loaded = await document.fonts.load("12px MICRNumeric", "1234567890");
+        setMicrFontLoaded(loaded.length > 0);
+      } catch {
+        setMicrFontLoaded(false);
+      }
+    });
   }, []);
 
   async function handlePrint() {
-    // Re-check fonts in case the ready promise resolved before the font file
-    // arrived (e.g. cache miss on first load).
     await document.fonts.ready;
     window.print();
   }
@@ -1316,6 +1541,7 @@ export default function PrintCheckPage() {
     );
   }
 
+  const isLocked = run.status === "processed" || run.status === "paid";
   const companyDeductions = taxesDeductions.filter(d => d.companyId === run.companyId);
   const companyPSAccounts = payStubAccounts.filter(a => a.companyId === run.companyId);
   const companyAccrualAccounts = accrualAccountsList.filter(a => a.companyId === run.companyId);
@@ -1323,6 +1549,18 @@ export default function PrintCheckPage() {
 
   const CheckComponent = templateType === "voucher" ? VoucherCheck :
     templateType === "three-part" ? ThreePartCheck : StandardCheck;
+
+  // Per-stub mode (?worker=): show that specific worker's stub regardless of payment method
+  // Batch checks mode (no ?worker=): filter to check-payment workers only
+  const checkWorkerItems = workerFilter
+    ? items.filter(item => item.workerId === workerFilter)
+    : items.filter(item => !item.paymentMethod || item.paymentMethod === "check");
+
+  const printLabel = isPacketMode
+    ? "Print Payroll Packet"
+    : workerFilter
+      ? `Print Pay Stub (1)`
+      : `Print Checks (${checkWorkerItems.length})`;
 
   return (
     <div>
@@ -1333,36 +1571,104 @@ export default function PrintCheckPage() {
           </Button>
         </Link>
         <Button onClick={handlePrint} disabled={!fontReady} data-testid="button-print-checks">
-          <Printer className="mr-2 h-4 w-4" />{fontReady ? "Print Checks" : "Loading fonts…"}
+          <Printer className="mr-2 h-4 w-4" />{fontReady ? printLabel : "Loading fonts…"}
         </Button>
+        {!isPacketMode && (
+          <Link href={`/app/print-check/${runId}?packet=1`}>
+            <Button variant="outline" size="sm" data-testid="button-switch-to-packet">
+              <FileText className="mr-2 h-4 w-4" />Print Payroll Packet
+            </Button>
+          </Link>
+        )}
+        {isPacketMode && (
+          <Link href={`/app/print-check/${runId}`}>
+            <Button variant="outline" size="sm" data-testid="button-switch-to-checks">
+              <Printer className="mr-2 h-4 w-4" />Print Checks Only
+            </Button>
+          </Link>
+        )}
         <span className="text-sm text-muted-foreground" data-testid="text-check-info">
-          {items.length} check(s) for {company?.name || ""} — Template: {activeTemplate?.name || "Default"}
-          {fontReady && <span className="ml-2 text-green-600 font-medium text-xs">● MICR font ready</span>}
+          {isPacketMode ? "Payroll Packet" : workerFilter ? "Pay Stub" : `${checkWorkerItems.length} check(s)`} for {company?.name || ""} — Template: {activeTemplate?.name || "Default"}
+          {fontReady && micrFontLoaded === true && (
+            <span className="ml-2 text-green-600 font-medium text-xs">● MICR font ready</span>
+          )}
+          {fontReady && micrFontLoaded === false && (
+            <span className="ml-2 text-red-600 font-medium text-xs" data-testid="badge-micr-warning">⚠ MICR font not detected</span>
+          )}
         </span>
       </div>
 
+      {isLocked && (
+        <div className="mx-4 mb-3 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300 flex items-center gap-2 print-hide" data-testid="banner-finalized-readonly">
+          <Lock className="h-4 w-4 shrink-0" />
+          <span>
+            <strong>Finalized — Read Only.</strong> This payroll run is {run.status}. Check and stub outputs are read-only snapshots. To make changes, reopen the run for editing from the Payroll tab.
+          </span>
+        </div>
+      )}
+
+      {fontReady && micrFontLoaded === false && !isPacketMode && (
+        <div className="mx-4 mb-3 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 flex items-center gap-2" data-testid="banner-micr-noncompliant">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>⚠ MICR NOT COMPLIANT — DO NOT USE FOR LIVE CHECKS. The MICR E-13B font did not load. The routing/account line may not be machine-readable by bank equipment.</span>
+        </div>
+      )}
+
       <div className="print-content">
-        {items.map((item) => {
-          const worker = getWorker(item.workerId);
-          if (!worker || !company) return null;
-          return (
-            <CheckComponent
-              key={item.id}
-              item={item}
-              worker={worker}
-              company={company}
-              run={run}
-              deductions={companyDeductions}
-              config={config}
-              payStubAccounts={companyPSAccounts}
-              accrualAccounts={companyAccrualAccounts}
-              accrualBalances={accrualBalancesList}
-              amendments={amendments}
-              remittanceSources={remittanceSources}
-            />
-          );
-        })}
+        {isPacketMode && company ? (
+          <>
+            <PayrollPacketSummaryPage run={run} items={items} workers={workers} company={company} />
+            {checkWorkerItems.map((item) => {
+              const worker = getWorker(item.workerId);
+              if (!worker || !company) return null;
+              return (
+                <CheckComponent
+                  key={item.id}
+                  item={item}
+                  worker={worker}
+                  company={company}
+                  run={run}
+                  deductions={companyDeductions}
+                  config={config}
+                  payStubAccounts={companyPSAccounts}
+                  accrualAccounts={companyAccrualAccounts}
+                  accrualBalances={accrualBalancesList}
+                  amendments={amendments}
+                  remittanceSources={remittanceSources}
+                />
+              );
+            })}
+          </>
+        ) : (
+          checkWorkerItems.map((item) => {
+            const worker = getWorker(item.workerId);
+            if (!worker || !company) return null;
+            return (
+              <CheckComponent
+                key={item.id}
+                item={item}
+                worker={worker}
+                company={company}
+                run={run}
+                deductions={companyDeductions}
+                config={config}
+                payStubAccounts={companyPSAccounts}
+                accrualAccounts={companyAccrualAccounts}
+                accrualBalances={accrualBalancesList}
+                amendments={amendments}
+                remittanceSources={remittanceSources}
+              />
+            );
+          })
+        )}
       </div>
+
+      {/* MICR non-compliance watermark on check pages when font didn't load */}
+      {fontReady && micrFontLoaded === false && !isPacketMode && (
+        <div style={{ display: "none" }}>
+          {/* Non-compliance handled via visible banner above — shown in print too */}
+        </div>
+      )}
 
       <style>{`
         @media print {
@@ -1371,6 +1677,7 @@ export default function PrintCheckPage() {
           [data-sidebar], [data-sidebar="sidebar"], aside, nav,
           .trial-banner, [role="banner"], header { display: none !important; }
           .check-page { page-break-after: always; }
+          .packet-page { page-break-after: always; }
           .print-content { display: block; }
           .flex.h-screen { display: block !important; }
           main { overflow: visible !important; }
@@ -1385,6 +1692,10 @@ export default function PrintCheckPage() {
             padding: 20px;
           }
           .check-page {
+            background: white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+          }
+          .packet-page {
             background: white;
             box-shadow: 0 2px 8px rgba(0,0,0,0.15);
           }

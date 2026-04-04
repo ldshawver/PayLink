@@ -4939,14 +4939,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/payroll-items/:id", requireRole("admin", "manager"), async (req, res) => {
+  app.patch("/api/payroll-items/:id", requireRole("admin", "platform_super_admin"), async (req, res) => {
     try {
       const { payrollItems: piTable } = await import("../shared/schema.js");
       const [existingItem] = await db.select().from(piTable).where(eq(piTable.id, req.params.id as string));
       if (existingItem) {
         const parentRun = await storage.getPayrollRun(existingItem.payrollRunId);
-        if (parentRun && (parentRun.lockedAt || parentRun.isLocked)) {
-          return res.status(409).json({ message: "Cannot modify payroll items on a locked payroll run" });
+        if (parentRun && (parentRun.lockedAt || parentRun.isLocked || parentRun.status === "processed" || parentRun.status === "paid")) {
+          return res.status(409).json({ message: "Cannot modify payroll items on a locked or finalized payroll run" });
         }
       }
       const item = await storage.updatePayrollItem(req.params.id as string, req.body);
@@ -4955,6 +4955,64 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to update payroll item" });
+    }
+  });
+
+  // Transactional stub amendment endpoint: atomically updates pay stub values and records amendment audit entry
+  app.post("/api/payroll-items/:id/amend", requireRole("admin", "platform_super_admin"), async (req, res) => {
+    try {
+      const { payrollItems: piTable, payStubAmendments } = await import("../shared/schema.js");
+      const [existingItem] = await db.select().from(piTable).where(eq(piTable.id, req.params.id as string));
+      if (!existingItem) return res.status(404).json({ message: "Payroll item not found" });
+
+      const parentRun = await storage.getPayrollRun(existingItem.payrollRunId);
+      if (parentRun && (parentRun.status === "processed" || parentRun.status === "paid")) {
+        return res.status(409).json({ message: "Cannot amend a finalized payroll run" });
+      }
+
+      const { grossPay, deductions, netPay, note } = req.body;
+
+      // Validate numeric inputs
+      const gp = parseFloat(grossPay);
+      const ded = parseFloat(deductions);
+      const np = parseFloat(netPay);
+      if (isNaN(gp) || isNaN(ded) || isNaN(np) || gp < 0 || ded < 0 || np < 0) {
+        return res.status(400).json({ message: "grossPay, deductions, and netPay must be non-negative numbers" });
+      }
+
+      // Derive linkage fields from server-side data to preserve audit integrity
+      const amendCompanyId = parentRun?.companyId ?? "";
+      const amendWorkerId = existingItem.workerId;
+      const amendEffectiveDate = parentRun?.periodEnd || null;
+
+      // Atomically update item and insert amendment record in a single transaction
+      await db.transaction(async (tx) => {
+        await tx.update(piTable)
+          .set({
+            grossPay: String(gp),
+            deductions: String(ded),
+            netPay: String(np),
+          })
+          .where(eq(piTable.id, req.params.id as string));
+
+        await tx.insert(payStubAmendments).values({
+          companyId: amendCompanyId,
+          workerId: amendWorkerId,
+          amendmentType: "stub_edit",
+          status: "active",
+          amountType: "fixed",
+          amount: "0",
+          description: `Pay stub edit — prior values: gross ${existingItem.grossPay}, deductions ${existingItem.deductions}, net ${existingItem.netPay}`,
+          publicNote: note || "Manual pay stub amendment",
+          effectiveDate: amendEffectiveDate,
+        });
+      });
+
+      const [updatedItem] = await db.select().from(piTable).where(eq(piTable.id, req.params.id as string));
+      res.json(updatedItem);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to amend pay stub" });
     }
   });
 

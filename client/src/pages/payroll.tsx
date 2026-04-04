@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import type { Company, Worker, PayrollRun, PayrollItem, PayPeriod, TaxDeduction, RemittanceSource, RemittanceAgency, RemittanceAgencyEvent, PayStubAccount, PayStubAmendment, PayStubTransaction, PayPeriodSchedule, LegalEntity, CheckTemplate, PayrollPaymentMethod, FundingAccount, PayrollPaymentRecord } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -552,7 +553,7 @@ function PayrollRunCard({
   });
   const amendmentsByWorker: Record<string, PayStubAmendment[]> = {};
   for (const a of allAmendments) {
-    if ((a as any).amendmentType === "deduction" && a.status === "active") {
+    if (a.amendmentType === "deduction" && a.status === "active") {
       if (!amendmentsByWorker[a.workerId]) amendmentsByWorker[a.workerId] = [];
       amendmentsByWorker[a.workerId].push(a);
     }
@@ -1145,6 +1146,13 @@ function PayrollRunCard({
                       </Button>
                     </Link>
                   )}
+                  {(run.status === "processed" || run.status === "paid") && (
+                    <Link href={`/app/print-check/${run.id}?packet=1`}>
+                      <Button variant="outline" size="sm" data-testid={`button-print-packet-${run.id}`}>
+                        <FileText className="mr-2 h-4 w-4" />Print Payroll Packet
+                      </Button>
+                    </Link>
+                  )}
                   <Button variant="outline" size="sm" data-testid={`button-export-csv-${run.id}`} onClick={() => onExportCSV(run, items)}>
                     <Download className="mr-2 h-4 w-4" />Export CSV
                   </Button>
@@ -1235,20 +1243,355 @@ function PayrollRunCard({
   );
 }
 
+type PayStubItemWithRun = PayrollItem & { _run: PayrollRun };
+
+function PayStubViewModal({ item, worker, company, run, taxesDeductions, onClose }: {
+  item: PayStubItemWithRun;
+  worker: Worker | undefined;
+  company: Company | undefined;
+  run: PayrollRun;
+  taxesDeductions: TaxDeduction[];
+  onClose: () => void;
+}) {
+  const { data: amendments = [] } = useQuery<PayStubAmendment[]>({ queryKey: ["/api/pay-stub-amendments"] });
+  const isLocked = run.status === "processed" || run.status === "paid";
+  const grossPay = Number(item.grossPay || 0);
+  const netPay = Number(item.netPay || 0);
+  const deductions = Number(item.deductions || 0);
+  const fmtDate = (d: string | null | undefined) => {
+    if (!d) return "—";
+    const parts = d.split("-");
+    return parts.length === 3 ? `${parts[1]}/${parts[2]}/${parts[0]}` : d;
+  };
+
+  const payDate = run.payDate ? fmtDate(run.payDate) : "—";
+
+  const companyDeductions = taxesDeductions.filter(d => d.companyId === run.companyId && d.isActive && !d.isEmployerPaid && !d.isReferenceOnly);
+  const isContractor = worker?.workerType === "contractor";
+  const workerAmendments = amendments.filter(a => a.workerId === item.workerId && a.status === "active" && a.amendmentType === "deduction");
+  // Scope stub edit history to this specific run by matching the periodEnd (set as effectiveDate during edit)
+  const stubHistory = amendments.filter(a =>
+    a.workerId === item.workerId &&
+    a.amendmentType === "stub_edit" &&
+    a.effectiveDate === run.periodEnd
+  );
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <FileText className="h-4 w-4" />
+            Pay Stub — {worker ? `${worker.firstName} ${worker.lastName}` : "Employee"}
+            {isLocked && <Badge variant="secondary" className="text-xs">Read Only</Badge>}
+          </DialogTitle>
+        </DialogHeader>
+
+        {isLocked && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300 flex items-center gap-2" data-testid="banner-stub-locked">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            Finalized — Read Only. This pay stub belongs to a processed payroll run and cannot be edited.
+          </div>
+        )}
+
+        <div className="space-y-4">
+          {/* Header info */}
+          <div className="grid grid-cols-2 gap-4 text-sm border rounded-lg p-4 bg-muted/20">
+            <div>
+              <div className="text-xs text-muted-foreground mb-0.5">Company</div>
+              <div className="font-medium">{company?.name || "—"}</div>
+              {company?.ein && <div className="text-xs text-muted-foreground">EIN: {company.ein}</div>}
+            </div>
+            <div className="text-right">
+              <div className="text-xs text-muted-foreground mb-0.5">Pay Date</div>
+              <div className="font-semibold text-emerald-600">{payDate}</div>
+              <div className="text-xs text-muted-foreground">
+                Period: {fmtDate(run.periodStart)} — {fmtDate(run.periodEnd)}
+              </div>
+            </div>
+          </div>
+
+          {/* Employee info */}
+          {worker && (
+            <div className="text-sm border rounded-lg p-4">
+              <div className="font-semibold mb-1">{worker.firstName} {worker.lastName}</div>
+              {worker.address && <div className="text-muted-foreground text-xs">{worker.address}</div>}
+              {(worker.city || worker.state || worker.zip) && (
+                <div className="text-muted-foreground text-xs">{[worker.city, worker.state, worker.zip].filter(Boolean).join(", ")}</div>
+              )}
+              {worker.ssn && (
+                <div className="text-xs text-muted-foreground mt-1">SSN: ***-**-{worker.ssn.replace(/\D/g, "").slice(-4) || "****"}</div>
+              )}
+            </div>
+          )}
+
+          {/* Earnings */}
+          <div className="border rounded-lg overflow-hidden">
+            <div className="bg-muted/40 px-4 py-2 text-xs font-semibold uppercase tracking-wide">Earnings</div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-xs">Type</TableHead>
+                  <TableHead className="text-right text-xs">Hours</TableHead>
+                  <TableHead className="text-right text-xs">Rate</TableHead>
+                  <TableHead className="text-right text-xs">Amount</TableHead>
+                  <TableHead className="text-right text-xs">YTD</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow>
+                  <TableCell className="text-sm">Regular</TableCell>
+                  <TableCell className="text-right text-sm">{Number(item.regularHours || 0).toFixed(2)}</TableCell>
+                  <TableCell className="text-right text-sm">${Number(item.payRate || 0).toFixed(2)}</TableCell>
+                  <TableCell className="text-right text-sm">${Number(item.regularPay || 0).toFixed(2)}</TableCell>
+                  <TableCell className="text-right text-sm">${Number(item.ytdGross || 0).toFixed(2)}</TableCell>
+                </TableRow>
+                {Number(item.overtimeHours || 0) > 0 && (
+                  <TableRow>
+                    <TableCell className="text-sm">Overtime (1.5×)</TableCell>
+                    <TableCell className="text-right text-sm">{Number(item.overtimeHours || 0).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">${(Number(item.payRate || 0) * 1.5).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">${Number(item.overtimePay || 0).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">—</TableCell>
+                  </TableRow>
+                )}
+                {Number(item.doubleTimeHours || 0) > 0 && (
+                  <TableRow>
+                    <TableCell className="text-sm">Double Time (2×)</TableCell>
+                    <TableCell className="text-right text-sm">{Number(item.doubleTimeHours || 0).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">${(Number(item.payRate || 0) * 2).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">${Number(item.doubleTimePay || 0).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">—</TableCell>
+                  </TableRow>
+                )}
+                <TableRow className="font-semibold bg-muted/20">
+                  <TableCell className="text-sm" colSpan={3}>Gross Pay</TableCell>
+                  <TableCell className="text-right text-sm">${grossPay.toFixed(2)}</TableCell>
+                  <TableCell className="text-right text-sm">${Number(item.ytdGross || 0).toFixed(2)}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Deductions */}
+          <div className="border rounded-lg overflow-hidden">
+            <div className="bg-muted/40 px-4 py-2 text-xs font-semibold uppercase tracking-wide">Deductions</div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-xs">Description</TableHead>
+                  <TableHead className="text-right text-xs">Amount</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {companyDeductions
+                  .filter(d => {
+                    const appliesTo = d.appliesTo || "all";
+                    if (appliesTo === "employee" && isContractor) return false;
+                    if (appliesTo === "contractor" && !isContractor) return false;
+                    return true;
+                  })
+                  .map(d => {
+                    let amount = 0;
+                    if (d.calculationType === "percentage") {
+                      const base = d.maxAmount ? Math.min(grossPay, Number(d.maxAmount)) : grossPay;
+                      amount = base * (Number(d.rate || 0) / 100);
+                    } else {
+                      amount = Number(d.rate || 0);
+                    }
+                    if (amount <= 0) return null;
+                    return (
+                      <TableRow key={d.id}>
+                        <TableCell className="text-sm">{d.name}</TableCell>
+                        <TableCell className="text-right text-sm">${amount.toFixed(2)}</TableCell>
+                      </TableRow>
+                    );
+                  })
+                  .filter(Boolean)
+                }
+                {workerAmendments.map(a => (
+                  <TableRow key={a.id}>
+                    <TableCell className="text-sm text-red-600 dark:text-red-400">{a.description || "Pay Stub Deduction"}</TableCell>
+                    <TableCell className="text-right text-sm text-red-600 dark:text-red-400">${Number(a.amount || 0).toFixed(2)}</TableCell>
+                  </TableRow>
+                ))}
+                <TableRow className="font-semibold bg-muted/20">
+                  <TableCell className="text-sm">Total Deductions</TableCell>
+                  <TableCell className="text-right text-sm">${deductions.toFixed(2)}</TableCell>
+                </TableRow>
+                <TableRow className="font-bold">
+                  <TableCell className="text-sm">Net Pay</TableCell>
+                  <TableCell className="text-right text-sm text-emerald-600">${netPay.toFixed(2)}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* YTD Summary */}
+          <div className="grid grid-cols-3 gap-3 text-sm">
+            <div className="border rounded-lg p-3 text-center">
+              <div className="text-xs text-muted-foreground mb-0.5">YTD Gross</div>
+              <div className="font-semibold">${Number(item.ytdGross || 0).toFixed(2)}</div>
+            </div>
+            <div className="border rounded-lg p-3 text-center">
+              <div className="text-xs text-muted-foreground mb-0.5">YTD Deductions</div>
+              <div className="font-semibold">${Number(item.ytdDeductions || 0).toFixed(2)}</div>
+            </div>
+            <div className="border rounded-lg p-3 text-center">
+              <div className="text-xs text-muted-foreground mb-0.5">YTD Net</div>
+              <div className="font-semibold text-emerald-600">${Number(item.ytdNet || 0).toFixed(2)}</div>
+            </div>
+          </div>
+
+          {/* Audit History */}
+          {stubHistory.length > 0 && (
+            <div className="border rounded-lg overflow-hidden">
+              <div className="bg-muted/40 px-4 py-2 text-xs font-semibold uppercase tracking-wide flex items-center gap-2">
+                <FileText className="h-3 w-3" />Amendment History
+              </div>
+              <div className="p-3 space-y-2">
+                {stubHistory.map(h => (
+                  <div key={h.id} className="text-xs border-l-2 border-amber-400 pl-3 py-1">
+                    <div className="font-medium">{h.description || "Amendment"}</div>
+                    <div className="text-muted-foreground">{h.publicNote}</div>
+                    <div className="text-muted-foreground">{h.createdAt ? new Date(h.createdAt).toLocaleString() : ""}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {item.checkNumber && (
+            <div className="flex justify-between text-sm border rounded-lg p-3 bg-muted/20">
+              <span className="text-muted-foreground">Check Number</span>
+              <span className="font-mono font-medium">#{item.checkNumber}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" onClick={onClose} data-testid="button-close-stub-modal">Close</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PayStubEditModal({ item, run, onClose, onSaved }: {
+  item: PayStubItemWithRun;
+  run: PayrollRun;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { toast } = useToast();
+  const isLocked = run.status === "processed" || run.status === "paid";
+
+  const [note, setNote] = useState("");
+  const [grossPay, setGrossPay] = useState(String(item.grossPay || "0"));
+  const [deductions, setDeductions] = useState(String(item.deductions || "0"));
+  const [netPay, setNetPay] = useState(String(item.netPay || "0"));
+
+  const amendMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", `/api/payroll-items/${item.id}/amend`, {
+        grossPay,
+        deductions,
+        netPay,
+        note: note || "Manual pay stub amendment",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      queryClient.invalidateQueries({ predicate: q => (q.queryKey[0] as string)?.startsWith?.("/api/all-payroll-items") });
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-stub-amendments"] });
+      toast({ title: "Pay stub amended", description: "Prior values saved to audit history." });
+      onSaved();
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit Pay Stub</DialogTitle>
+        </DialogHeader>
+        {isLocked && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive flex items-center gap-2" data-testid="banner-edit-locked">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            This payroll run is locked (status: {run.status}). Editing is not permitted.
+          </div>
+        )}
+        {!isLocked && (
+          <div className="space-y-4">
+            <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-3 text-xs text-amber-800 dark:text-amber-300">
+              Editing this stub will record the prior values as an amendment in the audit history.
+            </div>
+            <div className="grid grid-cols-1 gap-3">
+              <div className="grid gap-1">
+                <Label className="text-xs">Gross Pay</Label>
+                <Input type="number" step="0.01" value={grossPay} onChange={e => setGrossPay(e.target.value)} data-testid="input-stub-edit-gross" />
+              </div>
+              <div className="grid gap-1">
+                <Label className="text-xs">Deductions</Label>
+                <Input type="number" step="0.01" value={deductions} onChange={e => setDeductions(e.target.value)} data-testid="input-stub-edit-deductions" />
+              </div>
+              <div className="grid gap-1">
+                <Label className="text-xs">Net Pay</Label>
+                <Input type="number" step="0.01" value={netPay} onChange={e => setNetPay(e.target.value)} data-testid="input-stub-edit-net" />
+              </div>
+              <div className="grid gap-1">
+                <Label className="text-xs">Amendment Note (required for audit)</Label>
+                <Textarea
+                  value={note}
+                  onChange={e => setNote(e.target.value)}
+                  placeholder="Reason for amendment..."
+                  rows={2}
+                  data-testid="input-stub-edit-note"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={onClose}>Cancel</Button>
+              <Button
+                disabled={amendMutation.isPending || !note.trim()}
+                onClick={() => amendMutation.mutate()}
+                data-testid="button-submit-stub-edit"
+              >
+                {amendMutation.isPending ? "Saving..." : "Save Amendment"}
+              </Button>
+            </div>
+          </div>
+        )}
+        {isLocked && (
+          <div className="flex justify-end">
+            <Button variant="outline" onClick={onClose}>Close</Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PayStubsTab() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin" || user?.role === "platform_super_admin";
   const [ytdCompanyId, setYtdCompanyId] = useState("");
   const [filterCompanyId, setFilterCompanyId] = useState("all");
   const [filterWorkerId, setFilterWorkerId] = useState("all");
   const [filterPeriod, setFilterPeriod] = useState("");
+  const [viewItem, setViewItem] = useState<PayStubItemWithRun | null>(null);
+  const [editItem, setEditItem] = useState<PayStubItemWithRun | null>(null);
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: payrollRuns = [], isLoading: runsLoading } = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"] });
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
+  const { data: taxesDeductions = [] } = useQuery<TaxDeduction[]>({ queryKey: ["/api/taxes-deductions"] });
 
-  const allItemsQuery = useQuery<Array<PayrollItem & { _run: PayrollRun }>>({
+  const allItemsQuery = useQuery<PayStubItemWithRun[]>({
     queryKey: ["/api/all-payroll-items", payrollRuns.map(r => r.id).join(",")],
     queryFn: async () => {
-      const allItems: Array<PayrollItem & { _run: PayrollRun }> = [];
+      const allItems: PayStubItemWithRun[] = [];
       for (const run of payrollRuns) {
         try {
           const res = await fetch(`/api/payroll-runs/${run.id}/items`, { credentials: "include" });
@@ -1275,8 +1618,9 @@ function PayStubsTab() {
   });
 
   const items = allItemsQuery.data || [];
+  const getWorker = (id: string) => workers.find(w => w.id === id);
   const getWorkerName = (id: string) => {
-    const w = workers.find(w => w.id === id);
+    const w = getWorker(id);
     return w ? `${w.firstName} ${w.lastName}` : id;
   };
 
@@ -1294,6 +1638,10 @@ function PayStubsTab() {
     }
     return true;
   });
+
+  const handlePrintStub = (item: PayStubItemWithRun) => {
+    window.open(`/app/print-check/${item._run.id}?worker=${item.workerId}`, "_blank");
+  };
 
   if (runsLoading) {
     return <div data-testid="loading-pay-stubs"><Skeleton className="h-64 w-full" /></div>;
@@ -1376,24 +1724,73 @@ function PayStubsTab() {
                 <TableHead>Employee</TableHead>
                 <TableHead>Company</TableHead>
                 <TableHead>Period</TableHead>
+                <TableHead>Pay Date</TableHead>
                 <TableHead>Gross Pay</TableHead>
                 <TableHead>Net Pay</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead className="w-32">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredItems.map(item => (
-                <TableRow key={item.id} data-testid={`row-pay-stub-${item.id}`}>
-                  <TableCell>{getWorkerName(item.workerId)}</TableCell>
-                  <TableCell className="text-muted-foreground text-sm">{companies.find(c => c.id === item._run.companyId)?.name || "—"}</TableCell>
-                  <TableCell>{item._run.periodStart} — {item._run.periodEnd}</TableCell>
-                  <TableCell>${Number(item.grossPay || 0).toFixed(2)}</TableCell>
-                  <TableCell>${Number(item.netPay || 0).toFixed(2)}</TableCell>
-                  <TableCell><Badge variant="outline">{item._run.status || "draft"}</Badge></TableCell>
-                </TableRow>
-              ))}
+              {filteredItems.map(item => {
+                const isLocked = item._run.status === "processed" || item._run.status === "paid";
+                const company = companies.find(c => c.id === item._run.companyId);
+                const worker = getWorker(item.workerId);
+                const payDate = item._run.payDate
+                  ? new Date(item._run.payDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                  : "—";
+                return (
+                  <TableRow key={item.id} data-testid={`row-pay-stub-${item.id}`}>
+                    <TableCell>{getWorkerName(item.workerId)}</TableCell>
+                    <TableCell className="text-muted-foreground text-sm">{company?.name || "—"}</TableCell>
+                    <TableCell className="text-sm">{item._run.periodStart} — {item._run.periodEnd}</TableCell>
+                    <TableCell className="text-sm font-medium text-emerald-600">{payDate}</TableCell>
+                    <TableCell>${Number(item.grossPay || 0).toFixed(2)}</TableCell>
+                    <TableCell>${Number(item.netPay || 0).toFixed(2)}</TableCell>
+                    <TableCell>
+                      <Badge variant={isLocked ? "secondary" : "outline"} data-testid={`badge-stub-status-${item.id}`}>
+                        {isLocked ? "finalized" : (item._run.status || "draft")}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          title="View pay stub"
+                          onClick={() => setViewItem(item)}
+                          data-testid={`button-view-stub-${item.id}`}
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          title="Print pay stub"
+                          onClick={() => handlePrintStub(item)}
+                          data-testid={`button-print-stub-${item.id}`}
+                        >
+                          <Printer className="h-4 w-4" />
+                        </Button>
+                        {isAdmin && (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            title={isLocked ? "Locked — cannot edit" : "Edit pay stub (admin)"}
+                            disabled={isLocked}
+                            onClick={() => !isLocked && setEditItem(item)}
+                            data-testid={`button-edit-stub-${item.id}`}
+                          >
+                            <Pencil className={`h-4 w-4 ${isLocked ? "opacity-30" : ""}`} />
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
               {filteredItems.length === 0 && (
-                <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                   {items.length === 0 ? "No pay stubs available" : "No stubs match the selected filters"}
                 </TableCell></TableRow>
               )}
@@ -1402,6 +1799,25 @@ function PayStubsTab() {
         </div>
       </CardContent>
     </Card>
+
+    {viewItem && (
+      <PayStubViewModal
+        item={viewItem}
+        worker={getWorker(viewItem.workerId)}
+        company={companies.find(c => c.id === viewItem._run.companyId)}
+        run={viewItem._run}
+        taxesDeductions={taxesDeductions}
+        onClose={() => setViewItem(null)}
+      />
+    )}
+    {editItem && (
+      <PayStubEditModal
+        item={editItem}
+        run={editItem._run}
+        onClose={() => setEditItem(null)}
+        onSaved={() => setEditItem(null)}
+      />
+    )}
     </div>
   );
 }
@@ -3399,13 +3815,13 @@ function PayStubAmendmentsTab() {
                   <TableRow key={am.id} data-testid={`row-pay-stub-amendment-${am.id}`}>
                     <TableCell className="font-medium">{getWorkerName(am.workerId)}</TableCell>
                     <TableCell>
-                      <Badge variant={(am as any).amendmentType === "deduction" ? "destructive" : "default"}
+                      <Badge variant={am.amendmentType === "deduction" ? "destructive" : "default"}
                         data-testid={`badge-psam-type-${am.id}`}>
-                        {(am as any).amendmentType === "deduction" ? "Deduction" : "Earning"}
+                        {am.amendmentType === "deduction" ? "Deduction" : "Earning"}
                       </Badge>
                     </TableCell>
-                    <TableCell className={(am as any).amendmentType === "deduction" ? "text-red-600 font-medium" : "text-green-600 font-medium"}>
-                      {(am as any).amendmentType === "deduction" ? "-" : "+"}${Number(am.amount || 0).toFixed(2)}
+                    <TableCell className={am.amendmentType === "deduction" ? "text-red-600 font-medium" : "text-green-600 font-medium"}>
+                      {am.amendmentType === "deduction" ? "-" : "+"}${Number(am.amount || 0).toFixed(2)}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm">{am.description || "—"}</TableCell>
                     <TableCell>{am.effectiveDate || "—"}</TableCell>
