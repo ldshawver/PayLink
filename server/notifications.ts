@@ -1,5 +1,19 @@
 import nodemailer from "nodemailer";
 
+/**
+ * Normalize a phone number to E.164 format (+1XXXXXXXXXX) for Twilio.
+ * Strips spaces, dashes, dots, parentheses.  If the result is 10 digits
+ * it assumes a US number and prepends +1.  If it's 11 digits starting
+ * with 1 it prepends +.  Already-formatted +1XXXXXXXXXX passes through.
+ */
+function normalizePhone(raw: string): string {
+  const digits = raw.replace(/[^\d+]/g, "");
+  if (digits.startsWith("+")) return digits;
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return `+${digits}`;
+}
+
 export interface ShiftMarketplaceNotificationPayload {
   recipientName: string;
   email?: string | null;
@@ -141,7 +155,7 @@ export async function sendShiftMarketplaceSms(payload: ShiftMarketplaceNotificat
   try {
     const twilio = (await import("twilio")).default;
     const client = twilio(accountSid, authToken);
-    await client.messages.create({ body: payload.bodyText, from: fromNumber, to: payload.phone });
+    await client.messages.create({ body: payload.bodyText, from: normalizePhone(fromNumber), to: normalizePhone(payload.phone) });
     console.log(`[SMS] Shift marketplace notification sent to ${payload.phone}`);
     return { sent: true };
   } catch (err: any) {
@@ -229,7 +243,7 @@ export async function sendApprovalReminderSms(payload: ApprovalReminderPayload):
   try {
     const twilio = (await import("twilio")).default;
     const client = twilio(accountSid, authToken);
-    await client.messages.create({ body: message, from: fromNumber, to: payload.phone });
+    await client.messages.create({ body: message, from: normalizePhone(fromNumber), to: normalizePhone(payload.phone) });
     console.log(`[SMS] Approval reminder sent to ${payload.phone}`);
     return { sent: true };
   } catch (err: any) {
@@ -261,7 +275,7 @@ export async function sendScheduleSmsNotification(payload: ScheduleNotificationP
   try {
     const twilio = (await import("twilio")).default;
     const client = twilio(accountSid, authToken);
-    await client.messages.create({ body: message, from: fromNumber, to: phone });
+    await client.messages.create({ body: message, from: normalizePhone(fromNumber), to: normalizePhone(phone) });
     console.log(`[SMS] Sent schedule notification to ${phone}`);
     return { sent: true };
   } catch (err: any) {
