@@ -8284,6 +8284,62 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to delete membership" }); }
   });
 
+  // ── Security: Change PIN ────────────────────────────────────────────────────
+  app.post("/api/my/change-pin", requireAuth, async (req, res) => {
+    try {
+      const { currentPin, newPin, confirmPin } = req.body;
+      if (!currentPin || !newPin || !confirmPin) {
+        return res.status(400).json({ message: "All fields are required" });
+      }
+      if (newPin !== confirmPin) {
+        return res.status(400).json({ message: "New PIN and confirmation do not match" });
+      }
+      if (!/^\d{4,8}$/.test(newPin)) {
+        return res.status(400).json({ message: "PIN must be 4–8 digits" });
+      }
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId) {
+        return res.status(403).json({ message: "No linked worker record — PIN change not available" });
+      }
+      const worker = await storage.getWorker(user.workerId);
+      if (!worker) return res.status(404).json({ message: "Worker record not found" });
+      if (worker.pin !== currentPin) {
+        return res.status(401).json({ message: "Current PIN is incorrect" });
+      }
+      await storage.updateWorker(user.workerId, { pin: newPin });
+      res.json({ message: "PIN updated successfully" });
+    } catch (e) {
+      res.status(500).json({ message: "Failed to update PIN" });
+    }
+  });
+
+  // ── Security: Change Password ───────────────────────────────────────────────
+  app.post("/api/my/change-password", requireAuth, async (req, res) => {
+    try {
+      const { currentPassword, newPassword, confirmPassword } = req.body;
+      if (!currentPassword || !newPassword || !confirmPassword) {
+        return res.status(400).json({ message: "All fields are required" });
+      }
+      if (newPassword !== confirmPassword) {
+        return res.status(400).json({ message: "New password and confirmation do not match" });
+      }
+      if (newPassword.length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters" });
+      }
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      const valid = await bcrypt.compare(currentPassword, user.password);
+      if (!valid) {
+        return res.status(401).json({ message: "Current password is incorrect" });
+      }
+      const hashed = await bcrypt.hash(newPassword, 10);
+      await storage.updateUser(user.id, { password: hashed });
+      res.json({ message: "Password updated successfully" });
+    } catch (e) {
+      res.status(500).json({ message: "Failed to update password" });
+    }
+  });
+
   // ── Time-Off Requests ──────────────────────────────────────────────────────
   app.get("/api/time-off-requests", requireAuth, async (req, res) => {
     try {

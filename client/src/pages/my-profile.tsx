@@ -55,6 +55,10 @@ import {
   Phone,
   Mail,
   MapPin,
+  KeyRound,
+  Shield,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -1036,6 +1040,137 @@ function MembershipsTab({ worker }: { worker: Worker | null }) {
   );
 }
 
+// ─── Security Tab ──────────────────────────────────────────────────────────────
+
+function PasswordField({ label, id, value, onChange, testId }: { label: string; id: string; value: string; onChange: (v: string) => void; testId: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      <div className="relative">
+        <Input
+          id={id}
+          type={show ? "text" : "password"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          autoComplete="off"
+          className="pr-10"
+          data-testid={testId}
+        />
+        <button
+          type="button"
+          onClick={() => setShow((s) => !s)}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          tabIndex={-1}
+        >
+          {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SecurityTab({ worker }: { worker: Worker | null }) {
+  const { toast } = useToast();
+
+  const [pinForm, setPinForm] = useState({ currentPin: "", newPin: "", confirmPin: "" });
+  const [passForm, setPassForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
+
+  function parseApiError(e: any): string {
+    try {
+      const match = e.message?.match(/^\d+: (.+)$/);
+      if (match) {
+        const parsed = JSON.parse(match[1]);
+        return parsed.message || match[1];
+      }
+    } catch {}
+    return e.message || "An error occurred";
+  }
+
+  const pinMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/my/change-pin", pinForm).then((r) => r.json()),
+    onSuccess: () => {
+      toast({ title: "PIN updated", description: "Your time clock PIN has been changed." });
+      setPinForm({ currentPin: "", newPin: "", confirmPin: "" });
+    },
+    onError: (e: any) => toast({ title: "Failed to update PIN", description: parseApiError(e), variant: "destructive" }),
+  });
+
+  const passMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/my/change-password", passForm).then((r) => r.json()),
+    onSuccess: () => {
+      toast({ title: "Password updated", description: "Your login password has been changed." });
+      setPassForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+    },
+    onError: (e: any) => toast({ title: "Failed to update password", description: parseApiError(e), variant: "destructive" }),
+  });
+
+  return (
+    <div className="space-y-6 max-w-lg">
+
+      {/* ── Change PIN ── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <KeyRound className="h-4 w-4 text-teal-600" />
+            Change Time Clock PIN
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Your PIN is used to clock in and out at the time clock kiosk (4–8 digits).
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!worker ? (
+            <p className="text-sm text-amber-600 dark:text-amber-400">
+              Your account is not linked to an employee record. PIN change is not available.
+            </p>
+          ) : (
+            <>
+              <PasswordField label="Current PIN" id="currentPin" value={pinForm.currentPin} onChange={(v) => setPinForm((f) => ({ ...f, currentPin: v }))} testId="input-current-pin" />
+              <PasswordField label="New PIN (4–8 digits)" id="newPin" value={pinForm.newPin} onChange={(v) => setPinForm((f) => ({ ...f, newPin: v }))} testId="input-new-pin" />
+              <PasswordField label="Confirm New PIN" id="confirmPin" value={pinForm.confirmPin} onChange={(v) => setPinForm((f) => ({ ...f, confirmPin: v }))} testId="input-confirm-pin" />
+              <Button
+                onClick={() => pinMutation.mutate()}
+                disabled={pinMutation.isPending || !pinForm.currentPin || !pinForm.newPin || !pinForm.confirmPin}
+                className="bg-teal-600 hover:bg-teal-700 text-white"
+                data-testid="button-change-pin"
+              >
+                {pinMutation.isPending ? "Updating…" : "Update PIN"}
+              </Button>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Change Password ── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Shield className="h-4 w-4 text-teal-600" />
+            Change Login Password
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Your password is used to log into the dashboard. Must be at least 8 characters.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <PasswordField label="Current Password" id="currentPassword" value={passForm.currentPassword} onChange={(v) => setPassForm((f) => ({ ...f, currentPassword: v }))} testId="input-current-password" />
+          <PasswordField label="New Password" id="newPassword" value={passForm.newPassword} onChange={(v) => setPassForm((f) => ({ ...f, newPassword: v }))} testId="input-new-password" />
+          <PasswordField label="Confirm New Password" id="confirmPassword" value={passForm.confirmPassword} onChange={(v) => setPassForm((f) => ({ ...f, confirmPassword: v }))} testId="input-confirm-password" />
+          <Button
+            onClick={() => passMutation.mutate()}
+            disabled={passMutation.isPending || !passForm.currentPassword || !passForm.newPassword || !passForm.confirmPassword}
+            className="bg-teal-600 hover:bg-teal-700 text-white"
+            data-testid="button-change-password"
+          >
+            {passMutation.isPending ? "Updating…" : "Update Password"}
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 // ─── Main Page ──────────────────────────────────────────────────────────────────
 
 export default function MyProfilePage() {
@@ -1095,6 +1230,9 @@ export default function MyProfilePage() {
           <TabsTrigger value="memberships" data-testid="tab-memberships" className="flex items-center gap-1">
             <IdCard className="h-4 w-4" />Memberships
           </TabsTrigger>
+          <TabsTrigger value="security" data-testid="tab-security" className="flex items-center gap-1">
+            <Shield className="h-4 w-4" />Security
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="contact" className="mt-4">
@@ -1120,6 +1258,9 @@ export default function MyProfilePage() {
         </TabsContent>
         <TabsContent value="memberships" className="mt-4">
           <MembershipsTab worker={worker || null} />
+        </TabsContent>
+        <TabsContent value="security" className="mt-4">
+          <SecurityTab worker={worker || null} />
         </TabsContent>
       </Tabs>
     </div>

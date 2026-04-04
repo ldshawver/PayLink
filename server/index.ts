@@ -34,6 +34,15 @@ const CAPACITOR_ORIGINS = [
   'https://app.mypaylink.paylink',
 ];
 
+/* ── URL masking: redirect app.mypaylink.app → mypaylink.app ────────────── */
+app.use((req, res, next) => {
+  const host = (req.headers['x-forwarded-host'] || req.headers.host || '').toString().split(':')[0];
+  if (host === 'app.mypaylink.app') {
+    return res.redirect(301, `https://mypaylink.app${req.originalUrl}`);
+  }
+  next();
+});
+
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && CAPACITOR_ORIGINS.includes(origin)) {
