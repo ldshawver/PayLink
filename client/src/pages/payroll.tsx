@@ -22,9 +22,23 @@ import {
   Calculator, FileText, CreditCard, CalendarDays, Settings, Building, Building2, Receipt, Zap,
   ChevronLeft, ChevronRight, Check, AlertCircle, ArrowRight, Pencil, Trash2,
   Layout, Eye, EyeOff, Image, Save, Copy, ExternalLink, RefreshCw,
-  Banknote, Wallet, BadgeCheck, CircleDot, ToggleLeft, ToggleRight, BarChart3
+  Banknote, Wallet, BadgeCheck, CircleDot, ToggleLeft, ToggleRight, BarChart3,
+  Lock, LockOpen, Send, ShieldCheck, Info, CheckCircle2, XCircle
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+
+function PolicyDocLink() {
+  return (
+    <a
+      href="/app/company-documents?category=payroll"
+      className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
+      data-testid="link-payroll-processing-rules"
+    >
+      <FileText className="h-3 w-3" />
+      Payroll Processing Rules
+    </a>
+  );
+}
 
 function useTabParam(): [string, (tab: string) => void] {
   const search = useSearch();
@@ -190,6 +204,14 @@ function ProcessPayrollTab() {
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <p className="text-sm text-muted-foreground">
+            Create, process, approve, and lock payroll runs. Each run moves through a linear workflow: Draft → Processed → Approved → ACH/Checks → Locked.
+          </p>
+        </div>
+        <PolicyDocLink />
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
@@ -391,6 +413,112 @@ function ProcessPayrollTab() {
   );
 }
 
+function AchStatusBadge({ achStatus }: { achStatus: string | null | undefined }) {
+  if (!achStatus) return <Badge variant="outline" className="text-xs">Not submitted</Badge>;
+  const map: Record<string, { label: string; className: string }> = {
+    file_ready: { label: "NACHA file ready", className: "border-blue-300 text-blue-700 dark:text-blue-400" },
+    submitted: { label: "ACH Submitted", className: "border-emerald-300 text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/20" },
+    settled: { label: "ACH Settled", className: "border-emerald-500 text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/30" },
+    failed: { label: "ACH Failed", className: "border-red-300 text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/20" },
+  };
+  const cfg = map[achStatus] || { label: achStatus, className: "" };
+  return <Badge variant="outline" className={`text-xs ${cfg.className}`}>{cfg.label}</Badge>;
+}
+
+function PayrollSummaryPanel({ run, items }: { run: PayrollRun; items: PayrollItem[] }) {
+  const itemGross = items.reduce((s, i) => s + Number(i.grossPay || 0), 0);
+  const itemDeductions = items.reduce((s, i) => s + Number(i.deductions || 0), 0);
+  const itemNet = items.reduce((s, i) => s + Number(i.netPay || 0), 0);
+  const totalHours = items.reduce((s, i) => s + Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0), 0);
+
+  const totalGross = Number(run.totalGross || 0) || itemGross;
+  const totalDeductions = Number(run.totalDeductions || 0) || itemDeductions;
+  const totalNet = Number(run.totalNet || 0) || itemNet;
+  const totalEmployerTaxes = Number(run.totalEmployerTaxes || 0);
+  const totalReimbursements = Number(run.totalReimbursements || 0);
+  const totalFundingRequired = totalNet + totalEmployerTaxes;
+
+  const byMethod: Record<string, { count: number; net: number }> = {};
+  for (const item of items) {
+    const m = item.paymentMethod || "unspecified";
+    if (!byMethod[m]) byMethod[m] = { count: 0, net: 0 };
+    byMethod[m].count++;
+    byMethod[m].net += Number(item.netPay || 0);
+  }
+
+  const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  return (
+    <div className="rounded-lg border bg-muted/20 p-4 space-y-4 print:bg-white print:border-gray-300" data-testid={`payroll-summary-panel-${run.id}`}>
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-sm flex items-center gap-2"><BarChart3 className="h-4 w-4" />Payroll Summary</h3>
+        <Button variant="ghost" size="sm" className="print:hidden" onClick={() => window.print()} data-testid={`button-print-summary-${run.id}`}>
+          <Printer className="h-3 w-3 mr-1" />Print
+        </Button>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+        <div className="space-y-0.5">
+          <p className="text-xs text-muted-foreground">Pay Period</p>
+          <p className="font-medium">{run.periodStart} – {run.periodEnd}</p>
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-xs text-muted-foreground">Pay Date</p>
+          <p className="font-medium text-emerald-700 dark:text-emerald-400">{run.payDate || "—"}</p>
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-xs text-muted-foreground">Employees</p>
+          <p className="font-medium">{run.workerCount ?? items.length}</p>
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-xs text-muted-foreground">Total Hours</p>
+          <p className="font-medium">{(Number(run.totalHours) || totalHours).toFixed(1)}</p>
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-xs text-muted-foreground">Gross Pay</p>
+          <p className="font-semibold text-base">${fmt(totalGross)}</p>
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-xs text-muted-foreground">Employee Deductions</p>
+          <p className="font-medium text-red-700 dark:text-red-400">–${fmt(totalDeductions)}</p>
+        </div>
+        <div className="space-y-0.5">
+          <p className="text-xs text-muted-foreground">Employer Taxes</p>
+          <p className="font-medium text-amber-700 dark:text-amber-400">${fmt(totalEmployerTaxes)}</p>
+        </div>
+        {totalReimbursements > 0 && (
+          <div className="space-y-0.5">
+            <p className="text-xs text-muted-foreground">Reimbursements</p>
+            <p className="font-medium text-blue-700 dark:text-blue-400">${fmt(totalReimbursements)}</p>
+          </div>
+        )}
+        <div className="space-y-0.5">
+          <p className="text-xs text-muted-foreground">Net Pay (Employee)</p>
+          <p className="font-semibold text-base text-emerald-700 dark:text-emerald-400">${fmt(totalNet)}</p>
+        </div>
+        <div className="space-y-0.5 col-span-2 md:col-span-1">
+          <p className="text-xs text-muted-foreground">Total Funding Required</p>
+          <p className="font-bold text-base">${fmt(totalFundingRequired)}</p>
+          {totalEmployerTaxes > 0 && <p className="text-xs text-muted-foreground">(net pay + employer taxes)</p>}
+        </div>
+      </div>
+      {Object.keys(byMethod).length > 0 && (
+        <div className="border-t pt-3">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Payment Method Breakout</p>
+          <div className="flex flex-wrap gap-3">
+            {Object.entries(byMethod).map(([method, data]) => (
+              <div key={method} className="flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm">
+                <Badge variant="outline" className="text-xs capitalize">{method.replace("_", " ")}</Badge>
+                <span className="text-muted-foreground">{data.count} emp</span>
+                <span className="font-medium">${fmt(data.net)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PayrollRunCard({
   run, companyName, expanded, onToggle, getWorkerName, onExportCSV, filterWorkerId = "all",
 }: {
@@ -413,11 +541,15 @@ function PayrollRunCard({
     enabled: expanded,
   });
 
+  const { data: fundingAccts = [] } = useQuery<FundingAccount[]>({
+    queryKey: ["/api/funding-accounts"],
+    enabled: expanded,
+  });
+
   const { data: allAmendments = [] } = useQuery<PayStubAmendment[]>({
     queryKey: ["/api/pay-stub-amendments"],
     enabled: expanded,
   });
-  // Active deduction amendments for this company's workers
   const amendmentsByWorker: Record<string, PayStubAmendment[]> = {};
   for (const a of allAmendments) {
     if ((a as any).amendmentType === "deduction" && a.status === "active") {
@@ -427,6 +559,20 @@ function PayrollRunCard({
   }
 
   const displayItems = filterWorkerId === "all" ? items : items.filter(i => i.workerId === filterWorkerId);
+
+  const isLocked = !!(run.lockedAt) || !!(run.isLocked);
+  const isApproved = !!(run.approvedAt);
+  const achStatus: string | null = run.achStatus || null;
+  const achSubmittedAt: string | null = run.achSubmittedAt ? String(run.achSubmittedAt) : null;
+  const achBatchId: string | null = run.achBatchId || null;
+
+  const totalNet = items.reduce((s, i) => s + Number(i.netPay || 0), 0);
+  const totalEmployerTaxesCalc = Number(run.totalEmployerTaxes || 0);
+  const totalFundingRequired = totalNet + totalEmployerTaxesCalc;
+  const linkedAccount = fundingAccts.find(a => a.id === run.fundingAccountId);
+  const accountBalance = linkedAccount ? Number(linkedAccount.currentBalance || linkedAccount.openingBalance || 0) : null;
+  const isFundingShort = accountBalance !== null && totalFundingRequired > accountBalance;
+  const noFundingAccount = expanded && items.length > 0 && run.status !== "draft" && !run.fundingAccountId;
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editItem, setEditItem] = useState<PayrollItem | null>(null);
@@ -496,6 +642,48 @@ function PayrollRunCard({
     },
   });
 
+  const approveMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/payroll-runs/${run.id}/approve`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      toast({ title: "Payroll run approved" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const submitAchMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/payroll-runs/${run.id}/submit-ach`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      toast({ title: "ACH batch submitted", description: "Direct deposits have been submitted to the ACH network." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const lockMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/payroll-runs/${run.id}/lock`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      toast({ title: "Payroll run locked", description: "All details are now read-only." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: async () => {
       await apiRequest("DELETE", `/api/payroll-runs/${run.id}`);
@@ -526,7 +714,6 @@ function PayrollRunCard({
 
   const [payDateInput, setPayDateInput] = useState(run.payDate || "");
 
-
   const payDateMutation = useMutation({
     mutationFn: async (date: string) => {
       const res = await apiRequest("PATCH", `/api/payroll-runs/${run.id}`, { payDate: date });
@@ -540,7 +727,6 @@ function PayrollRunCard({
       toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
-
 
   const downloadNacha = async () => {
     try {
@@ -560,7 +746,9 @@ function PayrollRunCard({
       a.download = fileName;
       a.click();
       URL.revokeObjectURL(url);
-      toast({ title: "ACH file downloaded", description: `${fileName} — upload to your bank to initiate direct deposits` });
+      toast({ title: "NACHA file downloaded", description: `${fileName} — upload to your bank to initiate direct deposits.` });
+      await apiRequest("PATCH", `/api/payroll-runs/${run.id}`, { achStatus: "file_ready" });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
     } catch {
       toast({ title: "Error", description: "Failed to download ACH file", variant: "destructive" });
     }
@@ -568,33 +756,72 @@ function PayrollRunCard({
 
   const statusVariant = run.status === "paid" ? "default" : run.status === "processed" ? "secondary" : "outline";
 
+  // Full guided workflow step indicators matching the required sequence:
+  // Select Company → Select Pay Date → Preview Items → Generate Summary → Approve → Submit ACH/Print Checks → Lock
+  const steps = [
+    { label: "Select Company", done: true, active: false },
+    { label: "Select Pay Date", done: !!run.payDate, active: !run.payDate },
+    { label: "Preview Items", done: run.status !== "draft", active: run.status === "draft" },
+    { label: "Generate Summary", done: run.status === "processed" || run.status === "paid", active: run.status === "draft" },
+    { label: "Approve", done: isApproved, active: run.status === "processed" && !isApproved },
+    { label: achStatus === "submitted" || achStatus === "settled" ? "ACH Submitted" : "Submit ACH / Print Checks", done: achStatus === "submitted" || achStatus === "settled", active: isApproved && !achStatus && !isLocked },
+    { label: "Locked", done: isLocked, active: isApproved && (achStatus === "submitted" || achStatus === "settled" || run.useDirectDeposit === false) && !isLocked },
+  ];
+
   return (
-    <Card data-testid={`card-payroll-run-${run.id}`}>
+    <Card data-testid={`card-payroll-run-${run.id}`} className={isLocked ? "border-slate-300 dark:border-slate-700" : ""}>
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
-        <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
           <CardTitle className="text-base">{companyName}</CardTitle>
-          <span className="text-sm text-muted-foreground">
-            {run.periodStart} — {run.periodEnd}
-          </span>
-          {run.payDate && (
-            <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-              <CalendarDays className="h-3.5 w-3.5" /> Payday: {new Date(run.payDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-xs text-muted-foreground">
+              Period: <span className="font-medium text-foreground">{run.periodStart}</span> – <span className="font-medium text-foreground">{run.periodEnd}</span>
             </span>
-          )}
+            {run.payDate && (
+              <span className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
+                <CalendarDays className="h-3 w-3" />Pay Date: {new Date(run.payDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+              </span>
+            )}
+          </div>
           <Badge variant={statusVariant} data-testid={`badge-status-${run.id}`}>{run.status}</Badge>
+          {isApproved && !isLocked && (
+            <Badge variant="outline" className="border-emerald-300 text-emerald-700 dark:text-emerald-400 text-xs flex items-center gap-1">
+              <ShieldCheck className="h-3 w-3" />Approved
+            </Badge>
+          )}
+          {isLocked && (
+            <Badge variant="outline" className="border-slate-400 text-slate-600 dark:text-slate-400 text-xs flex items-center gap-1" data-testid={`badge-locked-${run.id}`}>
+              <Lock className="h-3 w-3" />Locked
+            </Badge>
+          )}
+          {achStatus && (
+            <AchStatusBadge achStatus={achStatus} />
+          )}
+          {(run.status === "processed" || run.status === "paid") && (
+            <Button
+              variant="ghost" size="sm"
+              className="text-xs text-muted-foreground hover:text-foreground h-auto py-0.5 px-1.5"
+              data-testid={`link-payroll-summary-${run.id}`}
+              onClick={(e) => { e.stopPropagation(); onToggle(); }}
+            >
+              <BarChart3 className="h-3 w-3 mr-1" />Payroll Summary
+            </Button>
+          )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm text-muted-foreground">{run.workerCount} workers</span>
           <span className="text-sm font-medium">${Number(run.totalGross || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
           <span className="text-sm text-muted-foreground">{Number(run.totalHours || 0).toFixed(1)} hrs</span>
-          <Button
-            size="icon" variant="ghost"
-            className="text-destructive hover:text-destructive hover:bg-destructive/10"
-            data-testid={`button-delete-run-${run.id}`}
-            onClick={() => setConfirmDelete(true)}
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
+          {!isLocked && (
+            <Button
+              size="icon" variant="ghost"
+              className="text-destructive hover:text-destructive hover:bg-destructive/10"
+              data-testid={`button-delete-run-${run.id}`}
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
           <Button size="icon" variant="ghost" data-testid={`button-expand-${run.id}`} onClick={onToggle}>
             {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
           </Button>
@@ -699,162 +926,307 @@ function PayrollRunCard({
       </Dialog>
 
       {expanded && (
-        <CardContent>
+        <CardContent className="space-y-4">
+          {/* ── Workflow steps indicator ───────────────────────────────── */}
+          <div className="flex items-center gap-1 flex-wrap" data-testid={`workflow-steps-${run.id}`}>
+            {steps.map((step, idx) => (
+              <Fragment key={step.label}>
+                <div className={`flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium
+                  ${step.done ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-400" :
+                    step.active ? "bg-blue-100 text-blue-800 dark:bg-blue-950/30 dark:text-blue-400 ring-1 ring-blue-400" :
+                    "bg-muted text-muted-foreground"}`}
+                >
+                  {step.done ? <Check className="h-3 w-3" /> : step.active ? <CircleDot className="h-3 w-3" /> : <span className="h-3 w-3 rounded-full border border-current inline-flex" />}
+                  {step.label}
+                </div>
+                {idx < steps.length - 1 && <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />}
+              </Fragment>
+            ))}
+          </div>
+
           {isLoading ? (
             <Skeleton className="h-32 w-full" data-testid={`loading-items-${run.id}`} />
           ) : (
             <>
-              {/* Direct Deposit Controls */}
-              <div className="flex flex-wrap items-center gap-4 mb-3 p-3 rounded-lg border bg-muted/30">
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id={`dd-toggle-${run.id}`}
-                    checked={run.useDirectDeposit !== false}
-                    onCheckedChange={(val) => ddToggleMutation.mutate(val)}
-                    disabled={ddToggleMutation.isPending}
-                    data-testid={`switch-direct-deposit-${run.id}`}
-                  />
-                  <Label htmlFor={`dd-toggle-${run.id}`} className="text-sm font-medium cursor-pointer">
-                    Direct Deposit (ACH) this payroll
-                  </Label>
-                </div>
-                {run.useDirectDeposit !== false && (
-                  <div className="flex items-center gap-2">
-                    <Label className="text-sm text-muted-foreground whitespace-nowrap">Pay Date:</Label>
-                    <Input
-                      type="date"
-                      className="h-7 w-36 text-sm"
-                      value={payDateInput}
-                      onChange={(e) => setPayDateInput(e.target.value)}
-                      onBlur={(e) => e.target.value && payDateMutation.mutate(e.target.value)}
-                      data-testid={`input-pay-date-${run.id}`}
-                    />
+              {/* ── Preview Items step (shown for draft runs) ─────────────── */}
+              {run.status === "draft" && (
+                <div className="rounded-lg border bg-muted/10 p-4 space-y-2" data-testid={`preview-items-panel-${run.id}`}>
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-sm flex items-center gap-2">
+                      <Info className="h-4 w-4 text-blue-500" />
+                      Preview Items — Review Before Generating Summary
+                    </h3>
+                    <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-400">
+                      Draft
+                    </Badge>
                   </div>
-                )}
-                {run.useDirectDeposit !== false && (run.status === "processed" || run.status === "paid") && (
-                  <Button
-                    size="sm"
-                    variant="default"
-                    onClick={downloadNacha}
-                    data-testid={`button-download-ach-${run.id}`}
-                    className="bg-teal-600 hover:bg-teal-700 text-white"
-                  >
-                    <Download className="mr-2 h-4 w-4" />Download ACH File
-                  </Button>
-                )}
-                {run.useDirectDeposit === false && (
-                  <span className="text-sm text-muted-foreground italic">Direct deposit disabled — employees will receive checks</span>
-                )}
-              </div>
+                  <p className="text-xs text-muted-foreground">
+                    Review the period <span className="font-medium">{run.periodStart}</span> – <span className="font-medium">{run.periodEnd}</span> before generating the payroll summary.
+                    All time entries for active employees will be included. Click <strong>Generate Summary</strong> to process and produce the payroll summary.
+                  </p>
+                </div>
+              )}
 
-              <div className="flex gap-2 mb-4 flex-wrap">
-                {run.status === "draft" && (
-                  <Button
-                    size="sm"
-                    data-testid={`button-process-run-${run.id}`}
-                    disabled={processMutation.isPending}
-                    onClick={() => processMutation.mutate()}
-                  >
-                    <Zap className="mr-2 h-4 w-4" />
-                    {processMutation.isPending ? "Processing..." : "Process Payroll"}
-                  </Button>
-                )}
-                {(run.status === "processed" || run.status === "paid") && (
-                  <Button
-                    variant="outline" size="sm"
-                    data-testid={`button-reopen-run-${run.id}`}
-                    disabled={reopenMutation.isPending}
-                    onClick={() => reopenMutation.mutate()}
-                  >
-                    <Pencil className="mr-2 h-4 w-4" />
-                    {reopenMutation.isPending ? "Reopening..." : "Reopen for Editing"}
-                  </Button>
-                )}
-                {run.status === "processed" && (
-                  <Link href={`/app/print-check/${run.id}`}>
-                    <Button variant="outline" size="sm" data-testid={`button-print-checks-${run.id}`}>
-                      <Printer className="mr-2 h-4 w-4" />Print Checks
-                    </Button>
-                  </Link>
-                )}
-                <Button variant="outline" size="sm" data-testid={`button-export-csv-${run.id}`} onClick={() => onExportCSV(run, items)}>
-                  <Download className="mr-2 h-4 w-4" />Export CSV
-                </Button>
-              </div>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Worker</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Rate</TableHead>
-                      <TableHead>Reg Hrs</TableHead>
-                      <TableHead>OT Hrs</TableHead>
-                      <TableHead>Reg Pay</TableHead>
-                      <TableHead>OT Pay</TableHead>
-                      <TableHead>Gross</TableHead>
-                      <TableHead>Deductions</TableHead>
-                      <TableHead>Net Pay</TableHead>
-                      <TableHead>Check #</TableHead>
-                      <TableHead className="w-10"></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {displayItems.map(item => {
-                      const workerAmends = amendmentsByWorker[item.workerId] || [];
-                      const amendTotal = workerAmends.reduce((s, a) => s + Number(a.amount || 0), 0);
-                      const storedDeductions = Number(item.deductions || 0);
-                      const grossPay = Number(item.grossPay || 0);
-                      // If amendments add up to more than what's already stored, show the corrected figures
-                      const displayDeductions = storedDeductions >= amendTotal
-                        ? storedDeductions
-                        : storedDeductions + amendTotal;
-                      const displayNetPay = grossPay - displayDeductions;
-                      return (
-                        <Fragment key={item.id}>
-                          <TableRow data-testid={`row-payroll-item-${item.id}`}>
-                            <TableCell>{getWorkerName(item.workerId)}</TableCell>
-                            <TableCell>{item.payType || "hourly"}</TableCell>
-                            <TableCell>${Number(item.payRate || 0).toFixed(2)}</TableCell>
-                            <TableCell>{Number(item.regularHours || 0).toFixed(1)}</TableCell>
-                            <TableCell>{Number(item.overtimeHours || 0).toFixed(1)}</TableCell>
-                            <TableCell>${Number(item.regularPay || 0).toFixed(2)}</TableCell>
-                            <TableCell>${Number(item.overtimePay || 0).toFixed(2)}</TableCell>
-                            <TableCell className="font-medium">${grossPay.toFixed(2)}</TableCell>
-                            <TableCell>
-                              <div className={amendTotal > 0 && storedDeductions < amendTotal ? "font-medium text-red-700 dark:text-red-400" : ""}>
-                                ${displayDeductions.toFixed(2)}
-                              </div>
-                              {amendTotal > 0 && storedDeductions < amendTotal && (
-                                <div className="text-xs text-amber-600 mt-0.5">⚠ reprocess to save</div>
-                              )}
-                            </TableCell>
-                            <TableCell className="font-medium">${displayNetPay.toFixed(2)}</TableCell>
-                            <TableCell>{item.checkNumber || "—"}</TableCell>
-                            <TableCell>
-                              <Button size="icon" variant="ghost" onClick={() => openEdit(item)} data-testid={`button-edit-payroll-item-${item.id}`}>
-                                <Pencil className="h-3 w-3" />
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                          {workerAmends.map(a => (
-                            <TableRow key={`amend-${a.id}`} className="bg-red-50 dark:bg-red-950/20">
-                              <TableCell colSpan={8} className="text-xs text-red-700 dark:text-red-400 pl-6 py-1 italic">
-                                ↳ Deduction: {a.description || "Pay Stub Deduction"}
-                              </TableCell>
-                              <TableCell className="text-xs font-medium text-red-700 dark:text-red-400 py-1">–${Number(a.amount || 0).toFixed(2)}</TableCell>
-                              <TableCell colSpan={3} />
-                            </TableRow>
-                          ))}
-                        </Fragment>
-                      );
-                    })}
-                    {items.length === 0 && (
-                      <TableRow><TableCell colSpan={12} className="text-center text-muted-foreground">No items</TableCell></TableRow>
+              {/* ── Payroll Summary panel (shown when processed) ─────────── */}
+              {(run.status === "processed" || run.status === "paid") && items.length > 0 && (
+                <PayrollSummaryPanel run={run} items={items} />
+              )}
+
+              {/* ── Funding validation ────────────────────────────────────── */}
+              {noFundingAccount && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300 flex items-start gap-2" data-testid={`alert-no-funding-${run.id}`}>
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <div>
+                    <span className="font-medium">No funding account linked.</span>
+                    <span className="ml-1">Assign a funding account to this payroll run to enable funding validation.</span>
+                  </div>
+                </div>
+              )}
+              {isFundingShort && (
+                <div className="rounded-md border border-red-200 bg-red-50 dark:bg-red-950/20 p-3 text-sm text-red-800 dark:text-red-300 flex items-start gap-2" data-testid={`alert-underfunded-${run.id}`}>
+                  <XCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <div>
+                    <span className="font-medium">Underfunding warning.</span>
+                    <span className="ml-1">Total funding required (${totalFundingRequired.toLocaleString("en-US", { minimumFractionDigits: 2 })}) exceeds funding account balance (${(accountBalance as number).toLocaleString("en-US", { minimumFractionDigits: 2 })}).</span>
+                  </div>
+                </div>
+              )}
+
+              {/* ── ACH Status section ────────────────────────────────────── */}
+              {(run.status === "processed" || run.status === "paid") && run.useDirectDeposit !== false && (
+                <div className="rounded-lg border bg-muted/20 p-3 space-y-2" data-testid={`ach-section-${run.id}`}>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">ACH / Direct Deposit Status</p>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <AchStatusBadge achStatus={achStatus} />
+                    {achBatchId && (
+                      <span className="text-xs font-mono text-muted-foreground" data-testid={`ach-batch-id-${run.id}`}>Batch: {achBatchId}</span>
                     )}
-                  </TableBody>
-                </Table>
-              </div>
+                    {achSubmittedAt && (
+                      <span className="text-xs text-muted-foreground" data-testid={`ach-submitted-at-${run.id}`}>
+                        Submitted: {new Date(achSubmittedAt).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {achStatus === "submitted" || achStatus === "settled"
+                      ? "ACH batch has been submitted to the network. Processing takes 1–3 business days."
+                      : "Download the NACHA file to send to your bank, or use Submit ACH to mark it as electronically submitted."}
+                  </p>
+                </div>
+              )}
+
+              {/* ── Direct Deposit Controls ───────────────────────────────── */}
+              {!isLocked && (
+                <div className="flex flex-wrap items-center gap-4 p-3 rounded-lg border bg-muted/30">
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      id={`dd-toggle-${run.id}`}
+                      checked={run.useDirectDeposit !== false}
+                      onCheckedChange={(val) => ddToggleMutation.mutate(val)}
+                      disabled={ddToggleMutation.isPending || isLocked}
+                      data-testid={`switch-direct-deposit-${run.id}`}
+                    />
+                    <Label htmlFor={`dd-toggle-${run.id}`} className="text-sm font-medium cursor-pointer">
+                      Direct Deposit (ACH) this payroll
+                    </Label>
+                  </div>
+                  {run.useDirectDeposit !== false && (
+                    <div className="flex items-center gap-2">
+                      <Label className="text-sm text-muted-foreground whitespace-nowrap">Pay Date:</Label>
+                      <Input
+                        type="date"
+                        className="h-7 w-36 text-sm"
+                        value={payDateInput}
+                        onChange={(e) => setPayDateInput(e.target.value)}
+                        onBlur={(e) => e.target.value && payDateMutation.mutate(e.target.value)}
+                        disabled={isLocked}
+                        data-testid={`input-pay-date-${run.id}`}
+                      />
+                    </div>
+                  )}
+                  {run.useDirectDeposit === false && (
+                    <span className="text-sm text-muted-foreground italic">Direct deposit disabled — employees will receive checks</span>
+                  )}
+                </div>
+              )}
+
+              {/* ── Action buttons ───────────────────────────────────────── */}
+              {isLocked ? (
+                <div className="flex items-center gap-2 p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 text-sm text-slate-600 dark:text-slate-400" data-testid={`locked-notice-${run.id}`}>
+                  <Lock className="h-4 w-4 shrink-0" />
+                  <span>This payroll run is locked. All details are read-only. Locked on {run.lockedAt ? new Date(run.lockedAt).toLocaleDateString() : "—"}.</span>
+                </div>
+              ) : (
+                <div className="flex gap-2 flex-wrap">
+                  {run.status === "draft" && (
+                    <Button
+                      size="sm"
+                      data-testid={`button-process-run-${run.id}`}
+                      disabled={processMutation.isPending}
+                      onClick={() => processMutation.mutate()}
+                    >
+                      <Zap className="mr-2 h-4 w-4" />
+                      {processMutation.isPending ? "Processing..." : "Generate Summary"}
+                    </Button>
+                  )}
+                  {run.status === "processed" && !isApproved && (
+                    <Button
+                      size="sm"
+                      variant="default"
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                      data-testid={`button-approve-run-${run.id}`}
+                      disabled={approveMutation.isPending}
+                      onClick={() => approveMutation.mutate()}
+                    >
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                      {approveMutation.isPending ? "Approving..." : "Approve Payroll"}
+                    </Button>
+                  )}
+                  {(run.status === "processed" || run.status === "paid") && isApproved && run.useDirectDeposit !== false && achStatus !== "submitted" && achStatus !== "settled" && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="bg-teal-600 hover:bg-teal-700 text-white"
+                        onClick={downloadNacha}
+                        data-testid={`button-download-ach-${run.id}`}
+                      >
+                        <Download className="mr-2 h-4 w-4" />Download NACHA File
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-teal-400 text-teal-700 hover:bg-teal-50 dark:text-teal-400 dark:hover:bg-teal-950/20"
+                        data-testid={`button-submit-ach-${run.id}`}
+                        disabled={submitAchMutation.isPending}
+                        onClick={() => submitAchMutation.mutate()}
+                      >
+                        <Send className="mr-2 h-4 w-4" />
+                        {submitAchMutation.isPending ? "Submitting..." : "Submit ACH Batch"}
+                      </Button>
+                    </>
+                  )}
+                  {(run.status === "processed" || run.status === "paid") && isApproved && (
+                    run.useDirectDeposit === false || achStatus === "submitted" || achStatus === "settled"
+                      ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="border-slate-400 text-slate-700 hover:bg-slate-50 dark:text-slate-400"
+                          data-testid={`button-lock-run-${run.id}`}
+                          disabled={lockMutation.isPending}
+                          onClick={() => lockMutation.mutate()}
+                        >
+                          <Lock className="mr-2 h-4 w-4" />
+                          {lockMutation.isPending ? "Locking..." : "Lock Payroll Run"}
+                        </Button>
+                      ) : (
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground px-2 py-1 rounded border border-dashed" data-testid={`lock-pending-notice-${run.id}`}>
+                          <LockOpen className="h-3 w-3" />
+                          <span>Submit ACH or confirm checks printed to enable locking</span>
+                        </div>
+                      )
+                  )}
+                  {(run.status === "processed" || run.status === "paid") && (
+                    <Button
+                      variant="outline" size="sm"
+                      data-testid={`button-reopen-run-${run.id}`}
+                      disabled={reopenMutation.isPending}
+                      onClick={() => reopenMutation.mutate()}
+                    >
+                      <Pencil className="mr-2 h-4 w-4" />
+                      {reopenMutation.isPending ? "Reopening..." : "Reopen for Editing"}
+                    </Button>
+                  )}
+                  {(run.status === "processed" || run.status === "paid") && (
+                    <Link href={`/app/print-check/${run.id}`}>
+                      <Button variant="outline" size="sm" data-testid={`button-print-checks-${run.id}`}>
+                        <Printer className="mr-2 h-4 w-4" />Print Checks
+                      </Button>
+                    </Link>
+                  )}
+                  <Button variant="outline" size="sm" data-testid={`button-export-csv-${run.id}`} onClick={() => onExportCSV(run, items)}>
+                    <Download className="mr-2 h-4 w-4" />Export CSV
+                  </Button>
+                </div>
+              )}
+
+              {/* ── Items table (read-only for locked runs) ──────────────── */}
+              {(!isLocked || expanded) && (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Worker</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Rate</TableHead>
+                        <TableHead>Reg Hrs</TableHead>
+                        <TableHead>OT Hrs</TableHead>
+                        <TableHead>Reg Pay</TableHead>
+                        <TableHead>OT Pay</TableHead>
+                        <TableHead>Gross</TableHead>
+                        <TableHead>Deductions</TableHead>
+                        <TableHead>Net Pay</TableHead>
+                        <TableHead>Check #</TableHead>
+                        {!isLocked && <TableHead className="w-10"></TableHead>}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {displayItems.map(item => {
+                        const workerAmends = amendmentsByWorker[item.workerId] || [];
+                        const amendTotal = workerAmends.reduce((s, a) => s + Number(a.amount || 0), 0);
+                        const storedDeductions = Number(item.deductions || 0);
+                        const grossPay = Number(item.grossPay || 0);
+                        const displayDeductions = storedDeductions >= amendTotal ? storedDeductions : storedDeductions + amendTotal;
+                        const displayNetPay = grossPay - displayDeductions;
+                        return (
+                          <Fragment key={item.id}>
+                            <TableRow data-testid={`row-payroll-item-${item.id}`}>
+                              <TableCell>{getWorkerName(item.workerId)}</TableCell>
+                              <TableCell>{item.payType || "hourly"}</TableCell>
+                              <TableCell>${Number(item.payRate || 0).toFixed(2)}</TableCell>
+                              <TableCell>{Number(item.regularHours || 0).toFixed(1)}</TableCell>
+                              <TableCell>{Number(item.overtimeHours || 0).toFixed(1)}</TableCell>
+                              <TableCell>${Number(item.regularPay || 0).toFixed(2)}</TableCell>
+                              <TableCell>${Number(item.overtimePay || 0).toFixed(2)}</TableCell>
+                              <TableCell className="font-medium">${grossPay.toFixed(2)}</TableCell>
+                              <TableCell>
+                                <div className={amendTotal > 0 && storedDeductions < amendTotal ? "font-medium text-red-700 dark:text-red-400" : ""}>
+                                  ${displayDeductions.toFixed(2)}
+                                </div>
+                                {amendTotal > 0 && storedDeductions < amendTotal && (
+                                  <div className="text-xs text-amber-600 mt-0.5">⚠ reprocess to save</div>
+                                )}
+                              </TableCell>
+                              <TableCell className="font-medium">${displayNetPay.toFixed(2)}</TableCell>
+                              <TableCell>{item.checkNumber || "—"}</TableCell>
+                              {!isLocked && (
+                                <TableCell>
+                                  <Button size="icon" variant="ghost" onClick={() => openEdit(item)} data-testid={`button-edit-payroll-item-${item.id}`}>
+                                    <Pencil className="h-3 w-3" />
+                                  </Button>
+                                </TableCell>
+                              )}
+                            </TableRow>
+                            {workerAmends.map(a => (
+                              <TableRow key={`amend-${a.id}`} className="bg-red-50 dark:bg-red-950/20">
+                                <TableCell colSpan={8} className="text-xs text-red-700 dark:text-red-400 pl-6 py-1 italic">
+                                  ↳ Deduction: {a.description || "Pay Stub Deduction"}
+                                </TableCell>
+                                <TableCell className="text-xs font-medium text-red-700 dark:text-red-400 py-1">–${Number(a.amount || 0).toFixed(2)}</TableCell>
+                                <TableCell colSpan={isLocked ? 2 : 3} />
+                              </TableRow>
+                            ))}
+                          </Fragment>
+                        );
+                      })}
+                      {items.length === 0 && (
+                        <TableRow><TableCell colSpan={isLocked ? 11 : 12} className="text-center text-muted-foreground">No items — process payroll to generate them</TableCell></TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
             </>
           )}
         </CardContent>
@@ -1066,6 +1438,10 @@ function PayPeriodsTab() {
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">Manage pay periods for each company. Pay periods are used to determine which time entries are included in a payroll run.</p>
+        <PolicyDocLink />
+      </div>
       <div className="flex justify-end">
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
@@ -1231,6 +1607,10 @@ function TaxesDeductionsTab() {
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <p className="text-sm text-muted-foreground">Configure taxes, deductions, and benefits applied during payroll processing.</p>
+        <PolicyDocLink />
+      </div>
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <Select value={selectedCompany} onValueChange={setSelectedCompany}>

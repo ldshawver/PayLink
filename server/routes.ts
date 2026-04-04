@@ -1049,8 +1049,8 @@ export async function registerRoutes(
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
 
-      if ((run as any).isLocked) {
-        return res.status(409).json({ message: "Cannot reprocess a locked payroll run. Unlock it first." });
+      if (run.lockedAt || run.isLocked) {
+        return res.status(409).json({ message: "Cannot reprocess a locked payroll run." });
       }
 
       const company = await storage.getCompany(run.companyId);
@@ -1374,7 +1374,7 @@ export async function registerRoutes(
             netPay: ci.netPay || "0",
             payDate: run.payDate || null,
             status: "approved",
-            fundingAccountId: (run as any).fundingAccountId || null,
+            fundingAccountId: run.fundingAccountId || null,
             checkNumber: ci.checkNumber || null,
             achBatchId: null,
           });
@@ -1408,6 +1408,71 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Payroll processing error:", error);
       res.status(500).json({ message: "Failed to process payroll" });
+    }
+  });
+
+  // ── Approve Payroll Run ────────────────────────────────────────────────────
+  app.post("/api/payroll-runs/:id/approve", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      if (run.status !== "processed") return res.status(400).json({ message: "Payroll run must be processed before approving" });
+      if (run.lockedAt || run.isLocked) return res.status(400).json({ message: "Payroll run is locked and cannot be modified" });
+      const updated = await storage.updatePayrollRun(run.id, {
+        approvedAt: new Date(),
+        approvedBy: req.session.userId || null,
+      });
+      res.json(updated);
+    } catch (error) {
+      console.error("Approve payroll error:", error);
+      res.status(500).json({ message: "Failed to approve payroll run" });
+    }
+  });
+
+  // ── Submit ACH Batch ───────────────────────────────────────────────────────
+  app.post("/api/payroll-runs/:id/submit-ach", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      if (run.status !== "processed" && run.status !== "paid") return res.status(400).json({ message: "Payroll run must be processed before submitting ACH" });
+      if (!run.approvedAt) return res.status(400).json({ message: "Payroll run must be approved before submitting ACH" });
+      if (run.lockedAt || run.isLocked) return res.status(400).json({ message: "Payroll run is locked" });
+      const batchId = `ACH-${run.id.substring(0, 8).toUpperCase()}-${Date.now()}`;
+      const updated = await storage.updatePayrollRun(run.id, {
+        achStatus: "submitted",
+        achSubmittedAt: new Date(),
+        achBatchId: batchId,
+        status: "paid",
+      });
+      res.json(updated);
+    } catch (error) {
+      console.error("Submit ACH error:", error);
+      res.status(500).json({ message: "Failed to submit ACH batch" });
+    }
+  });
+
+  // ── Lock Payroll Run ───────────────────────────────────────────────────────
+  app.post("/api/payroll-runs/:id/lock", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      if (run.status === "draft") return res.status(400).json({ message: "Cannot lock a draft payroll run. Process it first." });
+      if (!run.approvedAt) return res.status(400).json({ message: "Payroll run must be approved before locking" });
+      if (run.lockedAt || run.isLocked) return res.status(400).json({ message: "Payroll run is already locked" });
+      if (run.useDirectDeposit !== false) {
+        const achSt = run.achStatus;
+        if (achSt !== "submitted" && achSt !== "settled") {
+          return res.status(400).json({ message: "Cannot lock: ACH batch must be submitted before locking. Submit the ACH batch or disable direct deposit." });
+        }
+      }
+      const updated = await storage.updatePayrollRun(run.id, {
+        lockedAt: new Date(),
+        lockedBy: req.session.userId || null,
+      });
+      res.json(updated);
+    } catch (error) {
+      console.error("Lock payroll error:", error);
+      res.status(500).json({ message: "Failed to lock payroll run" });
     }
   });
 
@@ -1602,24 +1667,6 @@ export async function registerRoutes(
     }
   });
 
-  // ── Lock a payroll run ────────────────────────────────────────────────────
-  app.post("/api/payroll-runs/:id/lock", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
-    try {
-      const run = await storage.getPayrollRun(req.params.id);
-      if (!run) return res.status(404).json({ message: "Payroll run not found" });
-      if (run.status !== "processed" && run.status !== "paid") {
-        return res.status(400).json({ message: "Payroll run must be processed before locking" });
-      }
-      if ((run as any).isLocked) {
-        return res.status(409).json({ message: "Payroll run is already locked" });
-      }
-      const updated = await storage.updatePayrollRun(run.id, { isLocked: true } as any);
-      res.json({ run: updated, message: "Payroll run locked successfully" });
-    } catch (error) {
-      console.error("Failed to lock payroll run:", error);
-      res.status(500).json({ message: "Failed to lock payroll run" });
-    }
-  });
 
   // ── Get payroll summary ───────────────────────────────────────────────────
   app.get("/api/payroll-runs/:id/summary", requireAuth, requireActiveSubscription, async (req, res) => {
@@ -1646,55 +1693,6 @@ export async function registerRoutes(
     }
   });
 
-  // ── Submit ACH batch ──────────────────────────────────────────────────────
-  app.post("/api/payroll-runs/:id/submit-ach", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
-    try {
-      const run = await storage.getPayrollRun(req.params.id);
-      if (!run) return res.status(404).json({ message: "Payroll run not found" });
-      if (run.status !== "processed" && run.status !== "paid") {
-        return res.status(400).json({ message: "Payroll run must be processed before submitting ACH" });
-      }
-
-      const { batchFile, fundingAccountId } = req.body;
-
-      const batch = await storage.createAchBatch({
-        payrollRunId: run.id,
-        companyId: run.companyId,
-        batchId: `ACH-${run.id.substring(0, 8)}-${Date.now()}`,
-        status: "submitted",
-        submittedAt: new Date(),
-        batchFile: batchFile || null,
-        entryCount: 0,
-        totalAmount: "0",
-      });
-
-      await storage.updatePayrollRun(run.id, { achBatchId: batch.id } as any);
-
-      const txnRuns = await storage.getPayrollTransactionRuns(run.id);
-      let entryCount = 0;
-      let totalAmount = 0;
-      for (const txn of txnRuns) {
-        const pm = (txn.paymentMethod || "").toLowerCase();
-        if (pm === "ach" || pm === "direct_deposit") {
-          await storage.updatePayrollTransactionRun(txn.id, { status: "submitted", achBatchId: batch.id });
-          entryCount++;
-          totalAmount += parseFloat(txn.netPay || "0");
-        }
-      }
-
-      await storage.updateAchBatch(batch.id, { entryCount, totalAmount: totalAmount.toFixed(2), status: "submitted" });
-
-      if (fundingAccountId) {
-        await storage.updatePayrollRun(run.id, { fundingAccountId } as any);
-      }
-
-      const updatedBatch = await storage.getAchBatchById(batch.id);
-      res.status(201).json({ batch: updatedBatch, message: "ACH batch submitted successfully" });
-    } catch (error) {
-      console.error("Failed to submit ACH batch:", error);
-      res.status(500).json({ message: "Failed to submit ACH batch" });
-    }
-  });
 
   // ── Get ACH batch status ──────────────────────────────────────────────────
   app.get("/api/payroll-runs/:id/ach-batch", requireAuth, requireActiveSubscription, async (req, res) => {
@@ -1713,7 +1711,7 @@ export async function registerRoutes(
     try {
       const run = await storage.getPayrollRun(req.params.id as string);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
-      if ((run as any).isLocked) {
+      if (run.lockedAt || run.isLocked) {
         return res.status(409).json({ message: "Cannot delete a locked payroll run" });
       }
       const items = await storage.getPayrollItems(run.id);
@@ -2608,10 +2606,18 @@ export async function registerRoutes(
 
   app.patch("/api/payroll-runs/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const run = await storage.updatePayrollRun(req.params.id as string, req.body);
-      if (!run) {
-        return res.status(404).json({ message: "Payroll run not found" });
+      const existing = await storage.getPayrollRun(req.params.id as string);
+      if (!existing) return res.status(404).json({ message: "Payroll run not found" });
+      const lockedCheck = existing.lockedAt || existing.isLocked;
+      if (lockedCheck) {
+        const allowed = ["achStatus", "achBatchId", "achSubmittedAt", "achSettledAt", "fundingAccountId"];
+        const attempted = Object.keys(req.body).filter(k => !allowed.includes(k));
+        if (attempted.length > 0) {
+          return res.status(409).json({ message: "Payroll run is locked and cannot be modified" });
+        }
       }
+      const run = await storage.updatePayrollRun(req.params.id as string, req.body);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
       res.json(run);
     } catch (error) {
       console.error(error);
@@ -4920,7 +4926,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const [existingItem] = await db.select().from(piTable).where(eq(piTable.id, req.params.id as string));
       if (existingItem) {
         const parentRun = await storage.getPayrollRun(existingItem.payrollRunId);
-        if (parentRun && (parentRun as any).isLocked) {
+        if (parentRun && (parentRun.lockedAt || parentRun.isLocked)) {
           return res.status(409).json({ message: "Cannot modify payroll items on a locked payroll run" });
         }
       }
@@ -5571,7 +5577,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const [pi] = await db.select().from(piTable).where(eq(piTable.id, req.body.payrollItemId));
         if (pi) {
           const parentRun = await storage.getPayrollRun(pi.payrollRunId);
-          if (parentRun && (parentRun as any).isLocked) {
+          if (parentRun && (parentRun.lockedAt || parentRun.isLocked)) {
             return res.status(409).json({ message: "Cannot add pay stub transactions on a locked payroll run" });
           }
         }
@@ -5592,7 +5598,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const [pi] = await db.select().from(piTable).where(eq(piTable.id, existing.payrollItemId));
         if (pi) {
           const parentRun = await storage.getPayrollRun(pi.payrollRunId);
-          if (parentRun && (parentRun as any).isLocked) {
+          if (parentRun && (parentRun.lockedAt || parentRun.isLocked)) {
             return res.status(409).json({ message: "Cannot modify pay stub transactions on a locked payroll run" });
           }
         }

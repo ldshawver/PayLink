@@ -359,6 +359,18 @@ app.use((req, res, next) => {
     await run("stations.requires_schedule", sql`ALTER TABLE stations ADD COLUMN IF NOT EXISTS requires_schedule BOOLEAN DEFAULT FALSE`);
     await run("payroll_runs.pay_date", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS pay_date DATE`);
     await run("payroll_runs.use_direct_deposit", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS use_direct_deposit BOOLEAN NOT NULL DEFAULT TRUE`);
+    await run("payroll_runs.approved_at", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP`);
+    await run("payroll_runs.approved_by", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS approved_by VARCHAR`);
+    await run("payroll_runs.ach_status", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS ach_status TEXT`);
+    await run("payroll_runs.ach_submitted_at", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS ach_submitted_at TIMESTAMP`);
+    await run("payroll_runs.ach_batch_id", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS ach_batch_id TEXT`);
+    await run("payroll_runs.ach_settled_at", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS ach_settled_at TIMESTAMP`);
+    await run("payroll_runs.locked_at", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS locked_at TIMESTAMP`);
+    await run("payroll_runs.locked_by", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS locked_by VARCHAR`);
+    await run("payroll_runs.funding_account_id", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS funding_account_id VARCHAR`);
+    await run("payroll_runs.total_deductions", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS total_deductions NUMERIC DEFAULT 0`);
+    await run("payroll_runs.total_employer_taxes", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS total_employer_taxes NUMERIC DEFAULT 0`);
+    await run("payroll_runs.total_reimbursements", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS total_reimbursements NUMERIC DEFAULT 0`);
     await run("receipts.payment_method", sql`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS payment_method TEXT`);
     await run("receipts.tax_amount", sql`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS tax_amount NUMERIC`);
     await run("receipts.subtotal", sql`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS subtotal NUMERIC`);

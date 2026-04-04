@@ -212,6 +212,16 @@ export const payrollRuns = pgTable("payroll_runs", {
   achBatchId: varchar("ach_batch_id"),
   payrollSummaryId: varchar("payroll_summary_id"),
   createdAt: timestamp("created_at").defaultNow(),
+  approvedAt: timestamp("approved_at"),
+  approvedBy: varchar("approved_by"),
+  achStatus: text("ach_status"),
+  achSubmittedAt: timestamp("ach_submitted_at"),
+  achSettledAt: timestamp("ach_settled_at"),
+  lockedAt: timestamp("locked_at"),
+  lockedBy: varchar("locked_by"),
+  totalDeductions: numeric("total_deductions").default("0"),
+  totalEmployerTaxes: numeric("total_employer_taxes").default("0"),
+  totalReimbursements: numeric("total_reimbursements").default("0"),
 });
 
 export const payrollItems = pgTable("payroll_items", {
