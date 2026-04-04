@@ -43,7 +43,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
         } catch (_) {}
         queryClient.clear();
-        window.location.href = "/clock-in";
+        const host = window.location.hostname;
+        const isLocal = host === "localhost" || host.includes(".repl.") || host.includes(".replit.") || host.includes(".replit.dev") || host.includes(".repl.co");
+        window.location.href = isLocal ? "/clock-in" : "https://mypaylink.app/";
       }, EMPLOYEE_INACTIVITY_MS);
     }
 
@@ -86,11 +88,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       queryClient.setQueryData(["/api/auth/me"], null);
       queryClient.clear();
       if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
-      if (user?.role === "employee") {
-        window.location.href = "/clock-in";
-      } else {
-        window.location.href = _data?.redirectUrl ?? "https://mypaylink.app";
-      }
+      const host = window.location.hostname;
+      const isLocal = host === "localhost" || host.includes(".repl.") || host.includes(".replit.") || host.includes(".replit.dev") || host.includes(".repl.co");
+      window.location.href = isLocal ? "/clock-in" : (_data?.redirectUrl ?? "https://mypaylink.app/");
     },
   });
 

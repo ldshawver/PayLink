@@ -34,10 +34,11 @@
   height: 100vh;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   flex-direction: column;
   z-index: 2;
-  padding-bottom: 48px;
+  padding-top: 68px;
+  padding-bottom: 20px;
 }
 
 .punch-sticky > .scroll-hint {
@@ -106,7 +107,7 @@
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   transition: none;
 }
 
@@ -646,4 +647,60 @@
   padding: 0;
   transition: color 0.15s;
 }
+
+/* Multi-step choice buttons */
+.punch-choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.punch-choice-btn {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.05);
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.punch-choice-btn:hover { transform: translateY(-1px); }
+.punch-choice-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.punch-choice-icon {
+  font-size: 1.4rem;
+  flex-shrink: 0;
+  width: 32px;
+  text-align: center;
+}
+.punch-choice-label { font-size: 0.95rem; font-weight: 700; margin-bottom: 2px; }
+.punch-choice-desc { font-size: 0.75rem; color: rgba(255,255,255,0.5); }
+
+.punch-choice-green  { border-color: rgba(16,185,129,0.4); background: rgba(16,185,129,0.1); }
+.punch-choice-green:hover  { background: rgba(16,185,129,0.2); border-color: rgba(16,185,129,0.6); }
+.punch-choice-blue   { border-color: rgba(59,130,246,0.4); background: rgba(59,130,246,0.1); }
+.punch-choice-blue:hover   { background: rgba(59,130,246,0.2); border-color: rgba(59,130,246,0.6); }
+.punch-choice-teal   { border-color: rgba(13,148,136,0.4); background: rgba(13,148,136,0.1); }
+.punch-choice-teal:hover   { background: rgba(13,148,136,0.2); border-color: rgba(13,148,136,0.6); }
+.punch-choice-amber  { border-color: rgba(245,158,11,0.4); background: rgba(245,158,11,0.1); }
+.punch-choice-amber:hover  { background: rgba(245,158,11,0.2); border-color: rgba(245,158,11,0.6); }
+.punch-choice-red    { border-color: rgba(220,38,38,0.4); background: rgba(220,38,38,0.1); }
+.punch-choice-red:hover    { background: rgba(220,38,38,0.2); border-color: rgba(220,38,38,0.6); }
+
+.punch-back-btn {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.35);
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 4px 0;
+  transition: color 0.15s;
+  width: 100%;
+  text-align: center;
+}
+.punch-back-btn:hover { color: rgba(255,255,255,0.7); }
 .punch-modal-toggle button:hover { color: #0d9488; }

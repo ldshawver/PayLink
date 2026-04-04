@@ -101,15 +101,20 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
 
   useEffect(() => {
     if (!successType) return;
-    const redirectTypes: SuccessType[] = ["break-out", "shift-end"];
-    const isRedirect = redirectTypes.includes(successType);
-    const seconds = isRedirect ? 5 : 8;
+    // sign-in → dashboard immediately
+    if (successType === "sign-in") {
+      setTimeout(() => { window.location.href = "/app/dashboard"; }, 1400);
+      return;
+    }
+    const marketingRedirectTypes: SuccessType[] = ["break-out", "shift-end"];
+    const isMarketingRedirect = marketingRedirectTypes.includes(successType);
+    const seconds = 5;
     setCountdown(seconds);
     const interval = setInterval(() => {
       setCountdown((c) => {
         if (c <= 1) {
           clearInterval(interval);
-          if (isRedirect) {
+          if (isMarketingRedirect) {
             window.location.href = getMarketingUrl();
           } else {
             onClose();
@@ -177,7 +182,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
         {/* ── SUCCESS ── */}
         {step === "success" && successType && (
           <div className="flex flex-col items-center gap-5 py-8" data-testid="div-success">
-            <CheckCircle className={`h-16 w-16 ${isRedirectSuccess ? "text-amber-400" : "text-emerald-400"}`} />
+            <CheckCircle className={`h-16 w-16 ${successType === "sign-in" ? "text-teal-400" : isRedirectSuccess ? "text-amber-400" : "text-emerald-400"}`} />
             <div className="text-center space-y-2">
               <p className="text-xl font-bold text-white">
                 {successType === "clock-in" && (successName ? `Welcome, ${successName}!` : "Clocked In!")}
@@ -191,9 +196,11 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
                 {successType === "break-in" && "You're back on the clock. Let's go!"}
                 {successType === "break-out" && "Take a well-deserved rest. You've earned it!"}
                 {successType === "shift-end" && "Your shift is complete. Have a wonderful rest of your day!"}
-                {successType === "sign-in" && "You're signed in to the kiosk."}
+                {successType === "sign-in" && "Redirecting to your dashboard…"}
               </p>
-              {isRedirectSuccess ? (
+              {successType === "sign-in" ? (
+                <p className="text-xs text-white/50 mt-2">Taking you there now…</p>
+              ) : isRedirectSuccess ? (
                 <p className="text-xs text-white/50 mt-2">
                   Redirecting in <span className="font-bold text-amber-300">{countdown}</span>s...
                 </p>
@@ -203,7 +210,15 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
                 </p>
               )}
             </div>
-            {isRedirectSuccess ? (
+            {successType === "sign-in" ? (
+              <Button
+                onClick={() => { window.location.href = "/app/dashboard"; }}
+                className="bg-teal-600 hover:bg-teal-700 text-white border-0"
+                data-testid="button-success-dashboard"
+              >
+                Go to Dashboard
+              </Button>
+            ) : isRedirectSuccess ? (
               <Button
                 onClick={() => { window.location.href = getMarketingUrl(); }}
                 className="bg-amber-600 hover:bg-amber-700 text-white border-0"
