@@ -3356,3 +3356,167 @@ export const taxFilingSnapshots = pgTable("tax_filing_snapshots", {
 export const insertTaxFilingSnapshotSchema = createInsertSchema(taxFilingSnapshots).omit({ id: true, createdAt: true, updatedAt: true });
 export type TaxFilingSnapshot = typeof taxFilingSnapshots.$inferSelect;
 export type InsertTaxFilingSnapshot = z.infer<typeof insertTaxFilingSnapshotSchema>;
+
+// ══════════════════════════════════════════════════════════════════════════════
+// UNIFIED BILLING DOCUMENTS MODULE (Invoices + Proposals)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Company Branding Profiles ─────────────────────────────────────────────────
+export const companyBranding = pgTable("company_branding", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  logoPath: text("logo_path"),
+  logoUrl: text("logo_url"),
+  legalName: text("legal_name"),
+  dbaName: text("dba_name"),
+  billingAddress: text("billing_address"),
+  billingCity: text("billing_city"),
+  billingState: text("billing_state"),
+  billingZip: text("billing_zip"),
+  billingCountry: text("billing_country").default("US"),
+  phone: text("phone"),
+  email: text("email"),
+  website: text("website"),
+  taxId: text("tax_id"),
+  accentColor: text("accent_color").default("#0d9488"),
+  footerText: text("footer_text"),
+  defaultPaymentInstructions: text("default_payment_instructions"),
+  defaultInvoiceTerms: text("default_invoice_terms").default("Payment due within 30 days."),
+  defaultProposalTerms: text("default_proposal_terms"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertCompanyBrandingSchema = createInsertSchema(companyBranding).omit({ id: true, createdAt: true, updatedAt: true });
+export type CompanyBranding = typeof companyBranding.$inferSelect;
+export type InsertCompanyBranding = z.infer<typeof insertCompanyBrandingSchema>;
+
+// ── Biz Document Templates ────────────────────────────────────────────────────
+export const bizDocumentTemplates = pgTable("biz_document_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id), // null = system template
+  documentType: text("document_type").notNull().default("invoice"), // invoice | proposal
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  description: text("description"),
+  isSystem: boolean("is_system").default(true),
+  isActive: boolean("is_active").default(true),
+  previewColor: text("preview_color").default("#0d9488"),
+  config: text("config"), // JSON
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertBizDocumentTemplateSchema = createInsertSchema(bizDocumentTemplates).omit({ id: true, createdAt: true });
+export type BizDocumentTemplate = typeof bizDocumentTemplates.$inferSelect;
+export type InsertBizDocumentTemplate = z.infer<typeof insertBizDocumentTemplateSchema>;
+
+// ── Biz Documents (unified invoices + proposals) ───────────────────────────────
+export const bizDocuments = pgTable("biz_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  documentType: text("document_type").notNull().default("invoice"), // invoice | proposal | estimate | quote | credit_memo
+  documentNumber: text("document_number"),
+  status: text("status").notNull().default("draft"),
+  // Ownership / authorship
+  createdByUserId: varchar("created_by_user_id").references(() => users.id),
+  ownerEntityType: text("owner_entity_type").default("company"), // company | contractor
+  ownerEntityId: varchar("owner_entity_id"), // workerId for contractor-owned docs
+  submittedByUserId: varchar("submitted_by_user_id").references(() => users.id),
+  // Assignment target
+  assignedToEntityType: text("assigned_to_entity_type"), // client | contractor | department
+  assignedToEntityId: varchar("assigned_to_entity_id"),
+  assignedToName: text("assigned_to_name"),
+  assignedToEmail: text("assigned_to_email"),
+  // Template + branding
+  templateId: varchar("template_id").references(() => bizDocumentTemplates.id),
+  templateSlug: text("template_slug").default("modern_clean"),
+  // Dates
+  issueDate: date("issue_date"),
+  dueDate: date("due_date"),
+  expirationDate: date("expiration_date"),
+  servicePeriodStart: date("service_period_start"),
+  servicePeriodEnd: date("service_period_end"),
+  // Financials
+  subtotal: numeric("subtotal").default("0"),
+  taxRate: numeric("tax_rate").default("0"),
+  taxTotal: numeric("tax_total").default("0"),
+  discountTotal: numeric("discount_total").default("0"),
+  total: numeric("total").default("0"),
+  currency: text("currency").default("USD"),
+  // References
+  poNumber: text("po_number"),
+  internalReference: text("internal_reference"),
+  title: text("title"),
+  notes: text("notes"),
+  terms: text("terms"),
+  paymentInstructions: text("payment_instructions"),
+  // Reviewer actions
+  reviewedByUserId: varchar("reviewed_by_user_id").references(() => users.id),
+  reviewedAt: timestamp("reviewed_at"),
+  rejectionReason: text("rejection_reason"),
+  revisionNotes: text("revision_notes"),
+  // Payment
+  paidAt: timestamp("paid_at"),
+  paidAmount: numeric("paid_amount"),
+  paymentReference: text("payment_reference"),
+  // Conversion (proposal → invoice)
+  convertedFromId: varchar("converted_from_id"),
+  convertedToId: varchar("converted_to_id"),
+  // Metadata
+  metadata: text("metadata"), // JSON
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertBizDocumentSchema = createInsertSchema(bizDocuments).omit({ id: true, createdAt: true, updatedAt: true });
+export type BizDocument = typeof bizDocuments.$inferSelect;
+export type InsertBizDocument = z.infer<typeof insertBizDocumentSchema>;
+
+// ── Biz Document Line Items ───────────────────────────────────────────────────
+export const bizDocumentItems = pgTable("biz_document_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  documentId: varchar("document_id").notNull().references(() => bizDocuments.id),
+  description: text("description").notNull(),
+  quantity: numeric("quantity").default("1"),
+  unitPrice: numeric("unit_price").default("0"),
+  amount: numeric("amount").default("0"),
+  taxable: boolean("taxable").default(true),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertBizDocumentItemSchema = createInsertSchema(bizDocumentItems).omit({ id: true, createdAt: true });
+export type BizDocumentItem = typeof bizDocumentItems.$inferSelect;
+export type InsertBizDocumentItem = z.infer<typeof insertBizDocumentItemSchema>;
+
+// ── Biz Document Attachments ──────────────────────────────────────────────────
+export const bizDocumentAttachments = pgTable("biz_document_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  documentId: varchar("document_id").notNull().references(() => bizDocuments.id),
+  filePath: text("file_path").notNull(),
+  fileName: text("file_name"),
+  fileType: text("file_type"),
+  fileSize: integer("file_size"),
+  uploadedByUserId: varchar("uploaded_by_user_id").references(() => users.id),
+  uploadedAt: timestamp("uploaded_at").defaultNow(),
+});
+
+export const insertBizDocumentAttachmentSchema = createInsertSchema(bizDocumentAttachments).omit({ id: true, uploadedAt: true });
+export type BizDocumentAttachment = typeof bizDocumentAttachments.$inferSelect;
+export type InsertBizDocumentAttachment = z.infer<typeof insertBizDocumentAttachmentSchema>;
+
+// ── Biz Document Status History ───────────────────────────────────────────────
+export const bizDocumentHistory = pgTable("biz_document_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  documentId: varchar("document_id").notNull().references(() => bizDocuments.id),
+  fromStatus: text("from_status"),
+  toStatus: text("to_status").notNull(),
+  changedByUserId: varchar("changed_by_user_id").references(() => users.id),
+  changedByName: text("changed_by_name"),
+  changedAt: timestamp("changed_at").defaultNow(),
+  note: text("note"),
+});
+
+export const insertBizDocumentHistorySchema = createInsertSchema(bizDocumentHistory).omit({ id: true, changedAt: true });
+export type BizDocumentHistory = typeof bizDocumentHistory.$inferSelect;
+export type InsertBizDocumentHistory = z.infer<typeof insertBizDocumentHistorySchema>;

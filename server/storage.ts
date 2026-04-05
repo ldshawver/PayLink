@@ -195,6 +195,13 @@ import {
   type OnboardingStep, type InsertOnboardingStep,
   type WorkerOnboardingDocument, type InsertWorkerOnboardingDocument,
   type OnboardingAuditLogEntry, type InsertOnboardingAuditLogEntry,
+  companyBranding, bizDocumentTemplates, bizDocuments, bizDocumentItems, bizDocumentAttachments, bizDocumentHistory,
+  type CompanyBranding, type InsertCompanyBranding,
+  type BizDocumentTemplate, type InsertBizDocumentTemplate,
+  type BizDocument, type InsertBizDocument,
+  type BizDocumentItem, type InsertBizDocumentItem,
+  type BizDocumentAttachment, type InsertBizDocumentAttachment,
+  type BizDocumentHistory, type InsertBizDocumentHistory,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -931,6 +938,38 @@ export interface IStorage {
   // Onboarding Audit Log
   getOnboardingAuditLog(onboardingId: string): Promise<OnboardingAuditLogEntry[]>;
   createOnboardingAuditLogEntry(data: InsertOnboardingAuditLogEntry): Promise<OnboardingAuditLogEntry>;
+
+  // Company Branding
+  getCompanyBranding(companyId: string): Promise<CompanyBranding | undefined>;
+  upsertCompanyBranding(companyId: string, data: Partial<InsertCompanyBranding>): Promise<CompanyBranding>;
+
+  // Biz Document Templates
+  getBizDocumentTemplates(companyId?: string): Promise<BizDocumentTemplate[]>;
+  getBizDocumentTemplate(id: string): Promise<BizDocumentTemplate | undefined>;
+  getBizDocumentTemplateBySlug(slug: string): Promise<BizDocumentTemplate | undefined>;
+
+  // Biz Documents
+  getBizDocuments(companyId: string, filters?: { documentType?: string; status?: string; ownerEntityId?: string }): Promise<BizDocument[]>;
+  getBizDocument(id: string): Promise<BizDocument | undefined>;
+  createBizDocument(data: InsertBizDocument): Promise<BizDocument>;
+  updateBizDocument(id: string, data: Partial<BizDocument>): Promise<BizDocument | undefined>;
+  deleteBizDocument(id: string): Promise<void>;
+
+  // Biz Document Items
+  getBizDocumentItems(documentId: string): Promise<BizDocumentItem[]>;
+  createBizDocumentItem(data: InsertBizDocumentItem): Promise<BizDocumentItem>;
+  updateBizDocumentItem(id: string, data: Partial<BizDocumentItem>): Promise<BizDocumentItem | undefined>;
+  deleteBizDocumentItem(id: string): Promise<void>;
+  replaceBizDocumentItems(documentId: string, items: Omit<InsertBizDocumentItem, 'documentId'>[]): Promise<BizDocumentItem[]>;
+
+  // Biz Document Attachments
+  getBizDocumentAttachments(documentId: string): Promise<BizDocumentAttachment[]>;
+  createBizDocumentAttachment(data: InsertBizDocumentAttachment): Promise<BizDocumentAttachment>;
+  deleteBizDocumentAttachment(id: string): Promise<void>;
+
+  // Biz Document History
+  getBizDocumentHistory(documentId: string): Promise<BizDocumentHistory[]>;
+  addBizDocumentHistory(data: InsertBizDocumentHistory): Promise<BizDocumentHistory>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -4125,6 +4164,107 @@ export class DatabaseStorage implements IStorage {
   async createOnboardingAuditLogEntry(data: InsertOnboardingAuditLogEntry): Promise<OnboardingAuditLogEntry> {
     const [e] = await db.insert(onboardingAuditLog).values(data).returning();
     return e;
+  }
+
+  // ── Company Branding ───────────────────────────────────────────────────────
+  async getCompanyBranding(companyId: string): Promise<CompanyBranding | undefined> {
+    const [b] = await db.select().from(companyBranding).where(eq(companyBranding.companyId, companyId));
+    return b;
+  }
+  async upsertCompanyBranding(companyId: string, data: Partial<InsertCompanyBranding>): Promise<CompanyBranding> {
+    const existing = await this.getCompanyBranding(companyId);
+    if (existing) {
+      const [b] = await db.update(companyBranding).set({ ...data, updatedAt: new Date() }).where(eq(companyBranding.companyId, companyId)).returning();
+      return b;
+    } else {
+      const [b] = await db.insert(companyBranding).values({ ...data, companyId }).returning();
+      return b;
+    }
+  }
+
+  // ── Biz Document Templates ─────────────────────────────────────────────────
+  async getBizDocumentTemplates(companyId?: string): Promise<BizDocumentTemplate[]> {
+    if (companyId) {
+      return db.select().from(bizDocumentTemplates).where(
+        or(eq(bizDocumentTemplates.isSystem, true), eq(bizDocumentTemplates.companyId, companyId))
+      ).orderBy(bizDocumentTemplates.name);
+    }
+    return db.select().from(bizDocumentTemplates).where(eq(bizDocumentTemplates.isSystem, true)).orderBy(bizDocumentTemplates.name);
+  }
+  async getBizDocumentTemplate(id: string): Promise<BizDocumentTemplate | undefined> {
+    const [t] = await db.select().from(bizDocumentTemplates).where(eq(bizDocumentTemplates.id, id));
+    return t;
+  }
+  async getBizDocumentTemplateBySlug(slug: string): Promise<BizDocumentTemplate | undefined> {
+    const [t] = await db.select().from(bizDocumentTemplates).where(eq(bizDocumentTemplates.slug, slug));
+    return t;
+  }
+
+  // ── Biz Documents ──────────────────────────────────────────────────────────
+  async getBizDocuments(companyId: string, filters?: { documentType?: string; status?: string; ownerEntityId?: string }): Promise<BizDocument[]> {
+    const conditions = [eq(bizDocuments.companyId, companyId)];
+    if (filters?.documentType) conditions.push(eq(bizDocuments.documentType, filters.documentType));
+    if (filters?.status) conditions.push(eq(bizDocuments.status, filters.status));
+    if (filters?.ownerEntityId) conditions.push(eq(bizDocuments.ownerEntityId, filters.ownerEntityId));
+    return db.select().from(bizDocuments).where(and(...conditions)).orderBy(desc(bizDocuments.createdAt));
+  }
+  async getBizDocument(id: string): Promise<BizDocument | undefined> {
+    const [d] = await db.select().from(bizDocuments).where(eq(bizDocuments.id, id));
+    return d;
+  }
+  async createBizDocument(data: InsertBizDocument): Promise<BizDocument> {
+    const [d] = await db.insert(bizDocuments).values(data).returning();
+    return d;
+  }
+  async updateBizDocument(id: string, data: Partial<BizDocument>): Promise<BizDocument | undefined> {
+    const [d] = await db.update(bizDocuments).set({ ...data, updatedAt: new Date() }).where(eq(bizDocuments.id, id)).returning();
+    return d;
+  }
+  async deleteBizDocument(id: string): Promise<void> {
+    await db.delete(bizDocuments).where(eq(bizDocuments.id, id));
+  }
+
+  // ── Biz Document Items ─────────────────────────────────────────────────────
+  async getBizDocumentItems(documentId: string): Promise<BizDocumentItem[]> {
+    return db.select().from(bizDocumentItems).where(eq(bizDocumentItems.documentId, documentId)).orderBy(bizDocumentItems.sortOrder);
+  }
+  async createBizDocumentItem(data: InsertBizDocumentItem): Promise<BizDocumentItem> {
+    const [i] = await db.insert(bizDocumentItems).values(data).returning();
+    return i;
+  }
+  async updateBizDocumentItem(id: string, data: Partial<BizDocumentItem>): Promise<BizDocumentItem | undefined> {
+    const [i] = await db.update(bizDocumentItems).set(data).where(eq(bizDocumentItems.id, id)).returning();
+    return i;
+  }
+  async deleteBizDocumentItem(id: string): Promise<void> {
+    await db.delete(bizDocumentItems).where(eq(bizDocumentItems.id, id));
+  }
+  async replaceBizDocumentItems(documentId: string, items: Omit<InsertBizDocumentItem, 'documentId'>[]): Promise<BizDocumentItem[]> {
+    await db.delete(bizDocumentItems).where(eq(bizDocumentItems.documentId, documentId));
+    if (!items.length) return [];
+    const rows = items.map((item, idx) => ({ ...item, documentId, sortOrder: idx }));
+    return db.insert(bizDocumentItems).values(rows).returning();
+  }
+
+  // ── Biz Document Attachments ───────────────────────────────────────────────
+  async getBizDocumentAttachments(documentId: string): Promise<BizDocumentAttachment[]> {
+    return db.select().from(bizDocumentAttachments).where(eq(bizDocumentAttachments.documentId, documentId)).orderBy(desc(bizDocumentAttachments.uploadedAt));
+  }
+  async createBizDocumentAttachment(data: InsertBizDocumentAttachment): Promise<BizDocumentAttachment> {
+    const [a] = await db.insert(bizDocumentAttachments).values(data).returning();
+    return a;
+  }
+  async deleteBizDocumentAttachment(id: string): Promise<void> {
+    await db.delete(bizDocumentAttachments).where(eq(bizDocumentAttachments.id, id));
+  }
+
+  // ── Biz Document History ───────────────────────────────────────────────────
+  async getBizDocumentHistory(documentId: string): Promise<BizDocumentHistory[]> {
+    return db.select().from(bizDocumentHistory).where(eq(bizDocumentHistory.documentId, documentId)).orderBy(desc(bizDocumentHistory.changedAt));
+  }
+  async addBizDocumentHistory(data: InsertBizDocumentHistory): Promise<BizDocumentHistory> {
+    const [h] = await db.insert(bizDocumentHistory).values(data).returning();
+    return h;
   }
 }
 

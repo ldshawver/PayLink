@@ -302,6 +302,16 @@ const navSections: NavSection[] = [
     ],
   },
   {
+    label: "Invoices & Proposals",
+    icon: FileText,
+    url: "/app/biz-docs",
+    items: [
+      { title: "All Documents", url: "/app/biz-docs", icon: FileText },
+      { title: "Invoices", url: "/app/biz-docs?tab=invoices", icon: Receipt },
+      { title: "Proposals", url: "/app/biz-docs?tab=proposals", icon: FilePlus2 },
+    ],
+  },
+  {
     label: "Trade Compensation",
     icon: ArrowLeftRight,
     url: "/app/trade-compensation",

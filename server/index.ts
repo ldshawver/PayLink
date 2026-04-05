@@ -1863,6 +1863,148 @@ app.use((req, res, next) => {
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    // ── Unified Billing Documents Module ──────────────────────────────────────
+    await run("company_branding table", sql`CREATE TABLE IF NOT EXISTS company_branding (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      logo_path TEXT,
+      logo_url TEXT,
+      legal_name TEXT,
+      dba_name TEXT,
+      billing_address TEXT,
+      billing_city TEXT,
+      billing_state TEXT,
+      billing_zip TEXT,
+      billing_country TEXT DEFAULT 'US',
+      phone TEXT,
+      email TEXT,
+      website TEXT,
+      tax_id TEXT,
+      accent_color TEXT DEFAULT '#0d9488',
+      footer_text TEXT,
+      default_payment_instructions TEXT,
+      default_invoice_terms TEXT DEFAULT 'Payment due within 30 days.',
+      default_proposal_terms TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("biz_document_templates table", sql`CREATE TABLE IF NOT EXISTS biz_document_templates (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id),
+      document_type TEXT NOT NULL DEFAULT 'invoice',
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      description TEXT,
+      is_system BOOLEAN DEFAULT TRUE,
+      is_active BOOLEAN DEFAULT TRUE,
+      preview_color TEXT DEFAULT '#0d9488',
+      config TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("biz_documents table", sql`CREATE TABLE IF NOT EXISTS biz_documents (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      document_type TEXT NOT NULL DEFAULT 'invoice',
+      document_number TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      created_by_user_id VARCHAR REFERENCES users(id),
+      owner_entity_type TEXT DEFAULT 'company',
+      owner_entity_id VARCHAR,
+      submitted_by_user_id VARCHAR REFERENCES users(id),
+      assigned_to_entity_type TEXT,
+      assigned_to_entity_id VARCHAR,
+      assigned_to_name TEXT,
+      assigned_to_email TEXT,
+      template_id VARCHAR REFERENCES biz_document_templates(id),
+      template_slug TEXT DEFAULT 'modern_clean',
+      issue_date DATE,
+      due_date DATE,
+      expiration_date DATE,
+      service_period_start DATE,
+      service_period_end DATE,
+      subtotal NUMERIC DEFAULT 0,
+      tax_rate NUMERIC DEFAULT 0,
+      tax_total NUMERIC DEFAULT 0,
+      discount_total NUMERIC DEFAULT 0,
+      total NUMERIC DEFAULT 0,
+      currency TEXT DEFAULT 'USD',
+      po_number TEXT,
+      internal_reference TEXT,
+      title TEXT,
+      notes TEXT,
+      terms TEXT,
+      payment_instructions TEXT,
+      reviewed_by_user_id VARCHAR REFERENCES users(id),
+      reviewed_at TIMESTAMP,
+      rejection_reason TEXT,
+      revision_notes TEXT,
+      paid_at TIMESTAMP,
+      paid_amount NUMERIC,
+      payment_reference TEXT,
+      converted_from_id VARCHAR,
+      converted_to_id VARCHAR,
+      metadata TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("biz_document_items table", sql`CREATE TABLE IF NOT EXISTS biz_document_items (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id VARCHAR NOT NULL REFERENCES biz_documents(id) ON DELETE CASCADE,
+      description TEXT NOT NULL,
+      quantity NUMERIC DEFAULT 1,
+      unit_price NUMERIC DEFAULT 0,
+      amount NUMERIC DEFAULT 0,
+      taxable BOOLEAN DEFAULT TRUE,
+      sort_order INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("biz_document_attachments table", sql`CREATE TABLE IF NOT EXISTS biz_document_attachments (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id VARCHAR NOT NULL REFERENCES biz_documents(id) ON DELETE CASCADE,
+      file_path TEXT NOT NULL,
+      file_name TEXT,
+      file_type TEXT,
+      file_size INTEGER,
+      uploaded_by_user_id VARCHAR REFERENCES users(id),
+      uploaded_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("biz_document_history table", sql`CREATE TABLE IF NOT EXISTS biz_document_history (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id VARCHAR NOT NULL REFERENCES biz_documents(id) ON DELETE CASCADE,
+      from_status TEXT,
+      to_status TEXT NOT NULL,
+      changed_by_user_id VARCHAR REFERENCES users(id),
+      changed_by_name TEXT,
+      changed_at TIMESTAMP DEFAULT NOW(),
+      note TEXT
+    )`);
+
+    // Seed 6 system document templates (3 invoice, 3 proposal)
+    try {
+      const templateCount = await db.execute(sql`SELECT COUNT(*) as c FROM biz_document_templates WHERE is_system = TRUE`);
+      const count = Number((templateCount.rows[0] as any)?.c ?? 0);
+      if (count === 0) {
+        await db.execute(sql`INSERT INTO biz_document_templates (id, document_type, name, slug, description, is_system, is_active, preview_color) VALUES
+          (gen_random_uuid(), 'invoice', 'Modern Clean', 'modern_clean', 'Clean, minimal layout with teal accent', TRUE, TRUE, '#0d9488'),
+          (gen_random_uuid(), 'invoice', 'Classic Business', 'classic_business', 'Traditional professional invoice layout', TRUE, TRUE, '#1e40af'),
+          (gen_random_uuid(), 'invoice', 'Compact Summary', 'compact_summary', 'Dense, compact layout for service summaries', TRUE, TRUE, '#7c3aed'),
+          (gen_random_uuid(), 'proposal', 'Proposal Pro', 'proposal_pro', 'Professional proposal with cover section', TRUE, TRUE, '#0d9488'),
+          (gen_random_uuid(), 'proposal', 'Statement of Work', 'statement_of_work', 'Detailed SOW-style proposal layout', TRUE, TRUE, '#059669'),
+          (gen_random_uuid(), 'proposal', 'Quick Quote', 'quick_quote', 'Brief quote / estimate format', TRUE, TRUE, '#d97706')
+        `);
+        console.log("Auto-migration OK: biz_document_templates seed (6 system templates)");
+      } else {
+        console.log("Auto-migration OK: biz_document_templates seed (already exists)");
+      }
+    } catch (e: any) {
+      console.log("Auto-migration skipped (biz_document_templates seed):", e.message);
+    }
   }
 
   const { seedDatabase } = await import("./seed");

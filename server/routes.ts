@@ -14045,5 +14045,539 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to sign agreement" }); }
   });
 
+  // ════════════════════════════════════════════════════════════════════════════
+  // UNIFIED BILLING DOCUMENTS MODULE (Invoices + Proposals)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // ── Company Branding ───────────────────────────────────────────────────────
+  app.get("/api/company-branding", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const companyId = user.companyId;
+      if (!companyId) return res.status(400).json({ message: "No company" });
+      const branding = await storage.getCompanyBranding(companyId);
+      res.json(branding || {});
+    } catch (e) { res.status(500).json({ message: "Failed to fetch branding" }); }
+  });
+
+  app.put("/api/company-branding", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const companyId = user.companyId;
+      if (!companyId) return res.status(400).json({ message: "No company" });
+      const branding = await storage.upsertCompanyBranding(companyId, { ...req.body, companyId });
+      res.json(branding);
+    } catch (e) { res.status(500).json({ message: "Failed to update branding" }); }
+  });
+
+  // Logo upload for branding
+  app.post("/api/company-branding/logo", requireAuth, requireRole("admin", "manager"), upload.single("file"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const companyId = user.companyId;
+      if (!companyId) return res.status(400).json({ message: "No company" });
+      if (!req.file) return res.status(400).json({ message: "No file" });
+      const logoPath = `/uploads/${req.file.filename}`;
+      const branding = await storage.upsertCompanyBranding(companyId, { logoPath });
+      res.json({ logoPath, branding });
+    } catch (e) { res.status(500).json({ message: "Failed to upload logo" }); }
+  });
+
+  // ── Biz Document Templates ─────────────────────────────────────────────────
+  app.get("/api/biz-document-templates", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const templates = await storage.getBizDocumentTemplates(user.companyId);
+      res.json(templates);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch templates" }); }
+  });
+
+  // ── Helper: generate document number ──────────────────────────────────────
+  async function generateDocNumber(companyId: string, type: string): Promise<string> {
+    const prefix = type === "proposal" ? "PROP" : type === "estimate" ? "EST" : type === "quote" ? "QT" : type === "credit_memo" ? "CM" : "INV";
+    const year = new Date().getFullYear();
+    const docs = await storage.getBizDocuments(companyId, { documentType: type });
+    const num = (docs.length + 1).toString().padStart(4, "0");
+    return `${prefix}-${year}-${num}`;
+  }
+
+  // ── Helper: record history and update status ───────────────────────────────
+  async function transitionDocStatus(docId: string, newStatus: string, userId: string, userName: string, note?: string) {
+    const doc = await storage.getBizDocument(docId);
+    if (!doc) return;
+    await storage.addBizDocumentHistory({
+      documentId: docId,
+      fromStatus: doc.status,
+      toStatus: newStatus,
+      changedByUserId: userId,
+      changedByName: userName,
+      note: note || null,
+    });
+    return storage.updateBizDocument(docId, { status: newStatus });
+  }
+
+  // ── Biz Documents CRUD ─────────────────────────────────────────────────────
+  app.get("/api/biz-documents", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const companyId = user.companyId;
+      if (!companyId) return res.status(400).json({ message: "No company" });
+      const { documentType, status } = req.query;
+      let filters: any = {};
+      if (documentType) filters.documentType = documentType as string;
+      if (status) filters.status = status as string;
+      // Contractor isolation: employees can only see their own documents
+      if (user.role === "employee") {
+        if (user.workerId) filters.ownerEntityId = user.workerId;
+        else return res.json([]);
+      }
+      const docs = await storage.getBizDocuments(companyId, filters);
+      res.json(docs);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch documents" }); }
+  });
+
+  app.post("/api/biz-documents", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const companyId = user.companyId;
+      if (!companyId) return res.status(400).json({ message: "No company" });
+      const documentType = req.body.documentType || "invoice";
+      const docNumber = req.body.documentNumber || await generateDocNumber(companyId, documentType);
+      let ownerEntityId = req.body.ownerEntityId;
+      let ownerEntityType = req.body.ownerEntityType || "company";
+      if (user.role === "employee" && !ownerEntityId && user.workerId) {
+        ownerEntityId = user.workerId;
+        ownerEntityType = "contractor";
+      }
+      const doc = await storage.createBizDocument({
+        ...req.body,
+        companyId,
+        documentNumber: docNumber,
+        ownerEntityId,
+        ownerEntityType,
+        createdByUserId: user.id,
+        status: "draft",
+      });
+      await storage.addBizDocumentHistory({
+        documentId: doc.id,
+        fromStatus: null,
+        toStatus: "draft",
+        changedByUserId: user.id,
+        changedByName: user.name || user.username || "User",
+        note: "Document created",
+      });
+      res.json(doc);
+    } catch (e) { res.status(500).json({ message: "Failed to create document" }); }
+  });
+
+  app.get("/api/biz-documents/:id", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      if (doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      // Contractor isolation
+      if (user.role === "employee") {
+        if (!user.workerId || doc.ownerEntityId !== user.workerId) return res.status(403).json({ message: "Forbidden" });
+      }
+      const [items, attachments, history] = await Promise.all([
+        storage.getBizDocumentItems(doc.id),
+        storage.getBizDocumentAttachments(doc.id),
+        storage.getBizDocumentHistory(doc.id),
+      ]);
+      res.json({ ...doc, items, attachments, history });
+    } catch (e) { res.status(500).json({ message: "Failed to fetch document" }); }
+  });
+
+  app.patch("/api/biz-documents/:id", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      if (doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!["draft", "revision_requested"].includes(doc.status) && user.role === "employee") {
+        return res.status(400).json({ message: "Cannot edit a submitted document" });
+      }
+      // Recalculate totals if items provided inline
+      const updateData = { ...req.body };
+      delete updateData.items;
+      const updated = await storage.updateBizDocument(req.params.id, updateData);
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to update document" }); }
+  });
+
+  app.delete("/api/biz-documents/:id", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      if (doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!["draft", "revision_requested"].includes(doc.status)) {
+        return res.status(400).json({ message: "Only draft documents can be deleted" });
+      }
+      await storage.deleteBizDocument(req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: "Failed to delete document" }); }
+  });
+
+  // ── Workflow Actions ───────────────────────────────────────────────────────
+  app.post("/api/biz-documents/:id/submit", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      if (doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!["draft", "revision_requested"].includes(doc.status)) {
+        return res.status(400).json({ message: "Document cannot be submitted from current status" });
+      }
+      const updated = await transitionDocStatus(doc.id, "submitted", user.id, user.name || user.username, req.body.note);
+      await storage.updateBizDocument(doc.id, { submittedByUserId: user.id });
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to submit document" }); }
+  });
+
+  app.post("/api/biz-documents/:id/approve", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      if (doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (doc.status !== "submitted") return res.status(400).json({ message: "Document must be submitted before approval" });
+      const updated = await transitionDocStatus(doc.id, "approved", user.id, user.name || user.username, req.body.note);
+      await storage.updateBizDocument(doc.id, { reviewedByUserId: user.id, reviewedAt: new Date() });
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to approve document" }); }
+  });
+
+  app.post("/api/biz-documents/:id/reject", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      if (doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!["submitted", "approved"].includes(doc.status)) return res.status(400).json({ message: "Invalid status for rejection" });
+      const { rejectionReason } = req.body;
+      await storage.updateBizDocument(doc.id, { rejectionReason, reviewedByUserId: user.id, reviewedAt: new Date() });
+      const updated = await transitionDocStatus(doc.id, "rejected", user.id, user.name || user.username, rejectionReason);
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to reject document" }); }
+  });
+
+  app.post("/api/biz-documents/:id/request-revision", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      if (doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (doc.status !== "submitted") return res.status(400).json({ message: "Document must be submitted to request revision" });
+      const { revisionNotes } = req.body;
+      await storage.updateBizDocument(doc.id, { revisionNotes, reviewedByUserId: user.id, reviewedAt: new Date() });
+      const updated = await transitionDocStatus(doc.id, "revision_requested", user.id, user.name || user.username, revisionNotes);
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to request revision" }); }
+  });
+
+  app.post("/api/biz-documents/:id/mark-paid", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      if (doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!["approved", "sent"].includes(doc.status)) return res.status(400).json({ message: "Document must be approved/sent to mark paid" });
+      const { paidAmount, paymentReference } = req.body;
+      await storage.updateBizDocument(doc.id, { paidAt: new Date(), paidAmount, paymentReference });
+      const updated = await transitionDocStatus(doc.id, "paid", user.id, user.name || user.username, `Paid: ${paidAmount}`);
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to mark paid" }); }
+  });
+
+  app.post("/api/biz-documents/:id/void", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      if (doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (doc.status === "paid") return res.status(400).json({ message: "Cannot void a paid document" });
+      const updated = await transitionDocStatus(doc.id, "voided", user.id, user.name || user.username, req.body.note);
+      res.json(updated);
+    } catch (e) { res.status(500).json({ message: "Failed to void document" }); }
+  });
+
+  // Convert proposal to invoice
+  app.post("/api/biz-documents/:id/convert-to-invoice", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc) return res.status(404).json({ message: "Not found" });
+      if (doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (doc.documentType !== "proposal") return res.status(400).json({ message: "Only proposals can be converted" });
+      const items = await storage.getBizDocumentItems(doc.id);
+      const invNumber = await generateDocNumber(user.companyId, "invoice");
+      const inv = await storage.createBizDocument({
+        ...doc,
+        id: undefined as any,
+        documentType: "invoice",
+        documentNumber: invNumber,
+        status: "draft",
+        convertedFromId: doc.id,
+        createdByUserId: user.id,
+        createdAt: undefined as any,
+        updatedAt: undefined as any,
+      });
+      if (items.length) {
+        await storage.replaceBizDocumentItems(inv.id, items.map(i => ({
+          description: i.description,
+          quantity: i.quantity,
+          unitPrice: i.unitPrice,
+          amount: i.amount,
+          taxable: i.taxable,
+          sortOrder: i.sortOrder,
+        })));
+      }
+      await storage.updateBizDocument(doc.id, { convertedToId: inv.id });
+      await storage.addBizDocumentHistory({
+        documentId: inv.id, fromStatus: null, toStatus: "draft",
+        changedByUserId: user.id, changedByName: user.name || user.username,
+        note: `Converted from proposal ${doc.documentNumber}`,
+      });
+      res.json(inv);
+    } catch (e) { res.status(500).json({ message: "Failed to convert to invoice" }); }
+  });
+
+  // ── Line Items ─────────────────────────────────────────────────────────────
+  app.get("/api/biz-documents/:id/items", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc || doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      const items = await storage.getBizDocumentItems(req.params.id);
+      res.json(items);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch items" }); }
+  });
+
+  // Replace all items and recalculate totals
+  app.post("/api/biz-documents/:id/items/replace", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc || doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      const { items, taxRate } = req.body as { items: any[]; taxRate?: number };
+      const processedItems = (items || []).map((item: any, idx: number) => ({
+        description: item.description || "",
+        quantity: String(item.quantity ?? 1),
+        unitPrice: String(item.unitPrice ?? 0),
+        amount: String(Number(item.quantity ?? 1) * Number(item.unitPrice ?? 0)),
+        taxable: item.taxable !== false,
+        sortOrder: idx,
+      }));
+      const newItems = await storage.replaceBizDocumentItems(doc.id, processedItems);
+      // Recalculate totals
+      const subtotal = processedItems.reduce((s, i) => s + Number(i.amount), 0);
+      const effectiveTaxRate = taxRate !== undefined ? taxRate : Number(doc.taxRate ?? 0);
+      const taxable = processedItems.filter(i => i.taxable).reduce((s, i) => s + Number(i.amount), 0);
+      const taxTotal = taxable * (effectiveTaxRate / 100);
+      const total = subtotal + taxTotal - Number(doc.discountTotal ?? 0);
+      await storage.updateBizDocument(doc.id, {
+        subtotal: String(subtotal),
+        taxRate: String(effectiveTaxRate),
+        taxTotal: String(taxTotal),
+        total: String(total),
+      });
+      res.json({ items: newItems, subtotal, taxTotal, total });
+    } catch (e) { res.status(500).json({ message: "Failed to replace items" }); }
+  });
+
+  app.post("/api/biz-documents/:id/items", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc || doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      const item = await storage.createBizDocumentItem({ ...req.body, documentId: req.params.id });
+      res.json(item);
+    } catch (e) { res.status(500).json({ message: "Failed to add item" }); }
+  });
+
+  app.patch("/api/biz-document-items/:id", requireAuth, async (req, res) => {
+    try {
+      const item = await storage.updateBizDocumentItem(req.params.id, req.body);
+      res.json(item);
+    } catch (e) { res.status(500).json({ message: "Failed to update item" }); }
+  });
+
+  app.delete("/api/biz-document-items/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteBizDocumentItem(req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: "Failed to delete item" }); }
+  });
+
+  // ── Attachments ────────────────────────────────────────────────────────────
+  app.get("/api/biz-documents/:id/attachments", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc || doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      const attachments = await storage.getBizDocumentAttachments(req.params.id);
+      res.json(attachments);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch attachments" }); }
+  });
+
+  app.post("/api/biz-documents/:id/attachments", requireAuth, upload.single("file"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc || doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!req.file) return res.status(400).json({ message: "No file" });
+      const attachment = await storage.createBizDocumentAttachment({
+        documentId: req.params.id,
+        filePath: `/uploads/${req.file.filename}`,
+        fileName: req.file.originalname,
+        fileType: req.file.mimetype,
+        fileSize: req.file.size,
+        uploadedByUserId: user.id,
+      });
+      res.json(attachment);
+    } catch (e) { res.status(500).json({ message: "Failed to upload attachment" }); }
+  });
+
+  app.delete("/api/biz-document-attachments/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteBizDocumentAttachment(req.params.id);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: "Failed to delete attachment" }); }
+  });
+
+  // ── Status History ─────────────────────────────────────────────────────────
+  app.get("/api/biz-documents/:id/history", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc || doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      const history = await storage.getBizDocumentHistory(req.params.id);
+      res.json(history);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch history" }); }
+  });
+
+  // ── Print/PDF endpoint (returns HTML for printing) ─────────────────────────
+  app.get("/api/biz-documents/:id/print", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc || doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      const [items, branding] = await Promise.all([
+        storage.getBizDocumentItems(doc.id),
+        storage.getCompanyBranding(doc.companyId),
+      ]);
+      const company = await storage.getCompany(doc.companyId);
+      const accentColor = branding?.accentColor || "#0d9488";
+      const subtotal = Number(doc.subtotal || 0);
+      const taxTotal = Number(doc.taxTotal || 0);
+      const total = Number(doc.total || 0);
+      const isProposal = doc.documentType === "proposal";
+
+      const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${doc.documentNumber} - ${isProposal ? "Proposal" : "Invoice"}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; color: #1a1a1a; background: white; }
+    .page { max-width: 800px; margin: 0 auto; padding: 48px 40px; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; }
+    .logo-area h1 { font-size: 22px; font-weight: 700; color: ${accentColor}; }
+    .logo-area p { color: #666; font-size: 12px; margin-top: 2px; }
+    .logo-img { max-height: 60px; max-width: 180px; object-fit: contain; }
+    .doc-meta { text-align: right; }
+    .doc-type { font-size: 28px; font-weight: 700; color: ${accentColor}; text-transform: uppercase; letter-spacing: 2px; }
+    .doc-number { font-size: 14px; color: #555; margin-top: 4px; }
+    .status-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; background: #f0fdf4; color: #16a34a; margin-top: 6px; }
+    .divider { border: none; border-top: 2px solid ${accentColor}; margin: 24px 0; }
+    .parties { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 32px; }
+    .party-block h3 { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; margin-bottom: 8px; }
+    .party-block p { line-height: 1.6; }
+    .party-block .name { font-weight: 600; font-size: 14px; }
+    .dates-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; background: #f9fafb; border-radius: 8px; padding: 16px 20px; margin-bottom: 32px; }
+    .date-item label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; display: block; margin-bottom: 4px; }
+    .date-item span { font-weight: 600; }
+    .items-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+    .items-table th { background: ${accentColor}; color: white; padding: 10px 12px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .items-table th:last-child, .items-table td:last-child { text-align: right; }
+    .items-table td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; }
+    .items-table tr:nth-child(even) td { background: #fafafa; }
+    .totals { margin-left: auto; width: 280px; }
+    .totals-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+    .totals-row.total { font-weight: 700; font-size: 15px; border-top: 2px solid ${accentColor}; border-bottom: none; padding-top: 10px; color: ${accentColor}; }
+    .notes-section { margin-top: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    .notes-block h4 { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #999; margin-bottom: 8px; }
+    .notes-block p { color: #555; line-height: 1.6; font-size: 12px; }
+    .footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid #e5e7eb; text-align: center; color: #999; font-size: 11px; }
+    @media print { body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
+  </style>
+</head>
+<body>
+<div class="page">
+  <div class="header">
+    <div class="logo-area">
+      ${branding?.logoPath ? `<img src="${branding.logoPath}" alt="Logo" class="logo-img">` : `<h1>${branding?.legalName || company?.name || "Company"}</h1>`}
+      ${branding?.legalName && branding?.logoPath ? `<p>${branding.legalName}</p>` : ""}
+      ${branding?.billingAddress ? `<p>${branding.billingAddress}${branding.billingCity ? ", " + branding.billingCity : ""}${branding.billingState ? " " + branding.billingState : ""} ${branding.billingZip || ""}</p>` : ""}
+      ${branding?.phone ? `<p>${branding.phone}</p>` : ""}
+      ${branding?.email ? `<p>${branding.email}</p>` : ""}
+    </div>
+    <div class="doc-meta">
+      <div class="doc-type">${doc.documentType.replace("_", " ")}</div>
+      <div class="doc-number">${doc.documentNumber || ""}</div>
+      <div class="status-badge">${doc.status}</div>
+    </div>
+  </div>
+  <hr class="divider">
+  <div class="parties">
+    <div class="party-block">
+      <h3>From</h3>
+      <p class="name">${branding?.legalName || branding?.dbaName || company?.name || ""}</p>
+      ${branding?.taxId ? `<p>Tax ID: ${branding.taxId}</p>` : ""}
+    </div>
+    <div class="party-block">
+      <h3>${isProposal ? "Prepared For" : "Bill To"}</h3>
+      <p class="name">${doc.assignedToName || ""}</p>
+      ${doc.assignedToEmail ? `<p>${doc.assignedToEmail}</p>` : ""}
+    </div>
+  </div>
+  ${doc.title ? `<h2 style="font-size:16px;margin-bottom:16px;color:#333;">${doc.title}</h2>` : ""}
+  <div class="dates-row">
+    <div class="date-item"><label>Issue Date</label><span>${doc.issueDate || "—"}</span></div>
+    ${!isProposal ? `<div class="date-item"><label>Due Date</label><span>${doc.dueDate || "—"}</span></div>` : `<div class="date-item"><label>Expiration</label><span>${doc.expirationDate || "—"}</span></div>`}
+    ${doc.poNumber ? `<div class="date-item"><label>PO Number</label><span>${doc.poNumber}</span></div>` : `<div class="date-item"><label>Currency</label><span>${doc.currency || "USD"}</span></div>`}
+  </div>
+  ${items.length > 0 ? `
+  <table class="items-table">
+    <thead><tr><th style="width:45%">Description</th><th style="width:15%">Qty</th><th style="width:20%">Unit Price</th><th style="width:20%">Amount</th></tr></thead>
+    <tbody>
+      ${items.map(i => `<tr><td>${i.description}</td><td>${Number(i.quantity)}</td><td>$${Number(i.unitPrice).toFixed(2)}</td><td>$${Number(i.amount).toFixed(2)}</td></tr>`).join("")}
+    </tbody>
+  </table>
+  <div class="totals">
+    <div class="totals-row"><span>Subtotal</span><span>$${subtotal.toFixed(2)}</span></div>
+    ${taxTotal > 0 ? `<div class="totals-row"><span>Tax (${doc.taxRate}%)</span><span>$${taxTotal.toFixed(2)}</span></div>` : ""}
+    ${Number(doc.discountTotal) > 0 ? `<div class="totals-row"><span>Discount</span><span>-$${Number(doc.discountTotal).toFixed(2)}</span></div>` : ""}
+    <div class="totals-row total"><span>Total</span><span>$${total.toFixed(2)}</span></div>
+  </div>` : ""}
+  <div class="notes-section">
+    ${doc.notes ? `<div class="notes-block"><h4>Notes</h4><p>${doc.notes}</p></div>` : ""}
+    ${doc.terms || branding?.defaultInvoiceTerms ? `<div class="notes-block"><h4>Terms</h4><p>${doc.terms || (isProposal ? branding?.defaultProposalTerms : branding?.defaultInvoiceTerms) || ""}</p></div>` : ""}
+    ${doc.paymentInstructions || branding?.defaultPaymentInstructions ? `<div class="notes-block"><h4>Payment Instructions</h4><p>${doc.paymentInstructions || branding?.defaultPaymentInstructions || ""}</p></div>` : ""}
+  </div>
+  <div class="footer">${branding?.footerText || `Thank you for your business — ${branding?.legalName || company?.name || ""}`}</div>
+</div>
+<script>window.onload = function() { window.print(); }</script>
+</body>
+</html>`;
+      res.setHeader("Content-Type", "text/html");
+      res.send(html);
+    } catch (e) { res.status(500).json({ message: "Failed to generate print view" }); }
+  });
+
   return httpServer;
 }
