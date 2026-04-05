@@ -36,13 +36,32 @@ document.addEventListener('DOMContentLoaded', function() {
   var heroVideo = document.querySelector('.hero-video-bg');
   if (heroVideo) {
     heroVideo.muted = true;
-    var playPromise = heroVideo.play();
-    if (playPromise !== undefined) {
-      playPromise.catch(function() {
-        heroVideo.setAttribute('playsinline', '');
-        heroVideo.play().catch(function() {});
-      });
+    heroVideo.volume = 0;
+    heroVideo.setAttribute('playsinline', '');
+    heroVideo.setAttribute('muted', '');
+
+    function tryPlay() {
+      if (heroVideo.paused) {
+        var p = heroVideo.play();
+        if (p && p.catch) p.catch(function() {});
+      }
     }
+
+    tryPlay();
+    heroVideo.addEventListener('canplay', tryPlay);
+    heroVideo.addEventListener('loadedmetadata', tryPlay);
+    heroVideo.addEventListener('loadeddata', tryPlay);
+    setTimeout(tryPlay, 300);
+    setTimeout(tryPlay, 1000);
+
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden) tryPlay();
+    });
+
+    document.addEventListener('click', function onFirstClick() {
+      tryPlay();
+      document.removeEventListener('click', onFirstClick);
+    }, { once: true });
   }
 
   /* ── Modal element references ──────────────────────────────────────────── */
