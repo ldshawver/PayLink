@@ -242,6 +242,7 @@ function PreferencesTab({ worker }: { worker: Worker | null }) {
   const [language, setLanguage] = useState<string>(prefs.language || "en");
   const [timezone, setTimezone] = useState<string>(prefs.timezone || "America/Los_Angeles");
   const [dateFormat, setDateFormat] = useState<string>(prefs.dateFormat || "MM/DD/YYYY");
+  const [timeFormat, setTimeFormat] = useState<string>(prefs.timeFormat || "12");
 
   const mutation = useMutation({
     mutationFn: async (data: Record<string, unknown>) => {
@@ -260,7 +261,7 @@ function PreferencesTab({ worker }: { worker: Worker | null }) {
   });
 
   const save = () => {
-    mutation.mutate({ notifyScheduleEmail, notifyScheduleSms, notifyPaydayEmail, notifyPaydaySms, messagingChannel, language, timezone, dateFormat });
+    mutation.mutate({ notifyScheduleEmail, notifyScheduleSms, notifyPaydayEmail, notifyPaydaySms, messagingChannel, language, timezone, dateFormat, timeFormat });
   };
 
   return (
@@ -309,6 +310,18 @@ function PreferencesTab({ worker }: { worker: Worker | null }) {
                 <SelectItem value="MM/DD/YYYY">MM/DD/YYYY</SelectItem>
                 <SelectItem value="DD/MM/YYYY">DD/MM/YYYY</SelectItem>
                 <SelectItem value="YYYY-MM-DD">YYYY-MM-DD</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Time Format</Label>
+            <Select value={timeFormat} onValueChange={setTimeFormat} data-testid="select-time-format">
+              <SelectTrigger data-testid="select-time-format-trigger">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="12">12-hour (1:30 PM)</SelectItem>
+                <SelectItem value="24">24-hour (13:30)</SelectItem>
               </SelectContent>
             </Select>
           </div>

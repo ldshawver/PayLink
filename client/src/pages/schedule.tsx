@@ -4,6 +4,7 @@ import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import { useTimeFormat, formatShiftTime, formatShiftRange } from "@/hooks/use-time-format";
 import type { Schedule, Worker, Company, RecurringSchedule, ShiftOffer, Department } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -334,7 +335,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                     </CardHeader>
                     <CardContent className="space-y-2">
                       <div className="text-sm">
-                        <span className="font-medium">{sched ? `${sched.startTime} – ${sched.endTime}` : "—"}</span>
+                        <span className="font-medium">{sched ? formatShiftRange(sched.startTime, sched.endTime, timeFormat) : "—"}</span>
                         <span className="text-muted-foreground ml-2">({sched ? parseTimeToHours(sched.startTime, sched.endTime) : 0}h)</span>
                       </div>
                       <div className="text-xs text-muted-foreground space-y-0.5">
@@ -373,7 +374,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                   return (
                     <TableRow key={listing.id} data-testid={`row-my-listing-${listing.id}`}>
                       <TableCell>{sched?.date || "—"}</TableCell>
-                      <TableCell>{sched ? `${sched.startTime} – ${sched.endTime}` : "—"}</TableCell>
+                      <TableCell>{sched ? formatShiftRange(sched.startTime, sched.endTime, timeFormat) : "—"}</TableCell>
                       <TableCell><Badge variant={listing.status === "open" ? "outline" : listing.status === "filled" ? "default" : "secondary"}>{listing.status}</Badge></TableCell>
                       <TableCell>{urgencyBadge(listing.urgency)}</TableCell>
                       <TableCell>{reqCount} request(s)</TableCell>
@@ -405,7 +406,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                   const sched = listing ? schedules.find((s: any) => s.id === listing.scheduleId) : null;
                   return (
                     <TableRow key={req.id} data-testid={`row-my-request-${req.id}`}>
-                      <TableCell>{sched ? `${sched.date} ${sched.startTime}–${sched.endTime}` : req.listingId}</TableCell>
+                      <TableCell>{sched ? `${sched.date} ${formatShiftRange(sched.startTime, sched.endTime, timeFormat)}` : req.listingId}</TableCell>
                       <TableCell><Badge variant={req.status === "pending" ? "outline" : req.status === "approved" ? "default" : "destructive"}>{req.status}</Badge></TableCell>
                       <TableCell className="text-sm text-muted-foreground">{req.note || "—"}</TableCell>
                       <TableCell className="text-sm">{req.reviewNote || "—"}</TableCell>
@@ -439,7 +440,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                           <div>
                             <p className="font-medium">{requester ? `${requester.firstName} ${requester.lastName}` : "Unknown"} wants to pick up shift</p>
                             <p className="text-sm text-muted-foreground">
-                              {sched ? `${sched.date} ${sched.startTime}–${sched.endTime}` : "—"} — originally assigned to {original ? `${original.firstName} ${original.lastName}` : "—"}
+                              {sched ? `${sched.date} ${formatShiftRange(sched.startTime, sched.endTime, timeFormat)}` : "—"} — originally assigned to {original ? `${original.firstName} ${original.lastName}` : "—"}
                             </p>
                             {req.note && <p className="text-sm mt-1">Note: {req.note}</p>}
                             {eligibility && (
@@ -488,7 +489,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                           <TableRow key={offer.id} data-testid={`row-legacy-${offer.id}`}>
                             <TableCell>{getWorkerName(workers, offer.offeredByWorkerId)}</TableCell>
                             <TableCell>{sched?.date || "—"}</TableCell>
-                            <TableCell>{sched ? `${sched.startTime}–${sched.endTime}` : "—"}</TableCell>
+                            <TableCell>{sched ? formatShiftRange(sched.startTime, sched.endTime, timeFormat) : "—"}</TableCell>
                             <TableCell><Badge variant={offer.status === "open" ? "outline" : offer.status === "approved" ? "default" : "secondary"}>{offer.status}</Badge></TableCell>
                             <TableCell>{offer.claimedByWorkerId ? getWorkerName(workers, offer.claimedByWorkerId) : "—"}</TableCell>
                             <TableCell>
@@ -559,7 +560,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
                 <SelectTrigger data-testid="select-post-shift"><SelectValue placeholder="Choose a shift" /></SelectTrigger>
                 <SelectContent>
                   {myWorkerSchedules.map((s: any) => (
-                    <SelectItem key={s.id} value={s.id}>{s.date} {s.startTime}–{s.endTime}</SelectItem>
+                    <SelectItem key={s.id} value={s.id}>{s.date} {formatShiftRange(s.startTime, s.endTime, timeFormat)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -648,6 +649,7 @@ function MarketplaceSection({ workers, schedules, companies, departments, curren
 export default function SchedulePage() {
   const { toast } = useToast();
   const { user } = useAuth();
+  const timeFormat = useTimeFormat();
   const isAdminOrManager = user?.role === "admin" || user?.role === "manager";
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useTabParam("schedules");
@@ -1212,7 +1214,7 @@ export default function SchedulePage() {
               <div className="space-y-3">
                 <div className="rounded-lg border p-3 bg-muted/50">
                   <p className="font-medium">{getWorkerName(workers, offeringSchedule.workerId)}</p>
-                  <p className="text-sm text-muted-foreground">{offeringSchedule.date} · {offeringSchedule.startTime} – {offeringSchedule.endTime}</p>
+                  <p className="text-sm text-muted-foreground">{offeringSchedule.date} · {formatShiftRange(offeringSchedule.startTime, offeringSchedule.endTime, timeFormat)}</p>
                 </div>
                 <div className="grid gap-1">
                   <Label>Notes (optional)</Label>
@@ -1649,7 +1651,7 @@ export default function SchedulePage() {
                                           style={{ cursor: isAdminOrManager ? "pointer" : "default" }}
                                         >
                                           <div className="font-medium pr-5 flex items-center gap-1">
-                                            {s.startTime} - {s.endTime}
+                                            {formatShiftRange(s.startTime, s.endTime, timeFormat)}
                                             {s.status === "draft" && (
                                               <span className="text-[9px] font-bold text-amber-600 dark:text-amber-400 uppercase leading-none">draft</span>
                                             )}
@@ -1969,7 +1971,7 @@ export default function SchedulePage() {
                                 const companyMismatch = r.companyId !== generateForm.companyId;
                                 return (
                                   <div key={i} className="text-sm text-foreground flex items-center gap-1">
-                                    • {worker?.firstName} {worker?.lastName} — {dayNames[r.dayOfWeek]} {r.startTime}–{r.endTime}
+                                    • {worker?.firstName} {worker?.lastName} — {dayNames[r.dayOfWeek]} {formatShiftRange(r.startTime, r.endTime, timeFormat)}
                                     {companyMismatch && (
                                       <span className="text-xs text-amber-600 dark:text-amber-400">(matched via worker)</span>
                                     )}
@@ -2148,8 +2150,8 @@ export default function SchedulePage() {
                             {getWorkerName(workers, rs.workerId)}
                           </TableCell>
                           <TableCell>{DAY_NAMES[rs.dayOfWeek] || rs.dayOfWeek}</TableCell>
-                          <TableCell>{rs.startTime}</TableCell>
-                          <TableCell>{rs.endTime}</TableCell>
+                          <TableCell>{formatShiftTime(rs.startTime, timeFormat)}</TableCell>
+                          <TableCell>{formatShiftTime(rs.endTime, timeFormat)}</TableCell>
                           <TableCell>{parseTimeToHours(rs.startTime, rs.endTime)}h</TableCell>
                           <TableCell>{rs.effectiveFrom || "-"}</TableCell>
                           <TableCell>{rs.effectiveTo || "-"}</TableCell>
@@ -2213,9 +2215,27 @@ export default function SchedulePage() {
                             <p className="text-xs text-muted-foreground text-center">—</p>
                           ) : (
                             dayTemplates.map(rs => (
-                              <div key={rs.id} className="rounded bg-primary/10 p-1 text-xs">
-                                <div className="font-medium truncate">{getWorkerName(workers, rs.workerId)}</div>
-                                <div className="text-muted-foreground">{rs.startTime}–{rs.endTime}</div>
+                              <div key={rs.id} className="rounded bg-primary/10 p-1.5 text-xs group relative">
+                                <div className="font-medium truncate pr-10">{getWorkerName(workers, rs.workerId)}</div>
+                                <div className="text-muted-foreground">{formatShiftRange(rs.startTime, rs.endTime, timeFormat)}</div>
+                                <div className="absolute top-0.5 right-0.5 hidden group-hover:flex items-center gap-0.5">
+                                  <button
+                                    className="p-0.5 rounded hover:bg-primary/20 text-foreground/60 hover:text-foreground"
+                                    onClick={() => openEditRecurring(rs)}
+                                    title="Edit"
+                                    data-testid={`button-weekly-edit-recurring-${rs.id}`}
+                                  >
+                                    <Pencil className="h-2.5 w-2.5" />
+                                  </button>
+                                  <button
+                                    className="p-0.5 rounded hover:bg-destructive/20 text-foreground/60 hover:text-destructive"
+                                    onClick={() => deleteRecurringMutation.mutate(rs.id)}
+                                    title="Delete"
+                                    data-testid={`button-weekly-delete-recurring-${rs.id}`}
+                                  >
+                                    <Trash2 className="h-2.5 w-2.5" />
+                                  </button>
+                                </div>
                               </div>
                             ))
                           )}
