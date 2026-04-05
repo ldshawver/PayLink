@@ -24,7 +24,7 @@ import {
   ChevronLeft, ChevronRight, Check, AlertCircle, ArrowRight, Pencil, Trash2,
   Layout, Eye, EyeOff, Image, Save, Copy, ExternalLink, RefreshCw,
   Banknote, Wallet, BadgeCheck, CircleDot, ToggleLeft, ToggleRight, BarChart3,
-  Lock, LockOpen, Send, ShieldCheck, Info, CheckCircle2, XCircle
+  Lock, LockOpen, Send, ShieldCheck, Info, CheckCircle2, XCircle, Brain, Sparkles
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
@@ -628,6 +628,31 @@ function PayrollRunCard({
     });
   };
 
+  const [aiReviewOpen, setAiReviewOpen] = useState(false);
+  const [aiReviewResult, setAiReviewResult] = useState<{
+    overallRisk: "low" | "medium" | "high";
+    summary: string;
+    flags: { severity: "error" | "warning" | "info"; category: string; title: string; detail: string }[];
+  } | null>(null);
+
+  const aiReviewMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/payroll-runs/${run.id}/ai-review`, {});
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || "AI review failed");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setAiReviewResult(data);
+      setAiReviewOpen(true);
+    },
+    onError: (err: Error) => {
+      toast({ title: "AI Review Error", description: err.message, variant: "destructive" });
+    },
+  });
+
   const processMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/payroll-runs/${run.id}/process`, {});
@@ -1059,6 +1084,20 @@ function PayrollRunCard({
                 </div>
               ) : (
                 <div className="flex gap-2 flex-wrap">
+                  {/* AI Pre-Flight Review — available for draft and processed runs */}
+                  {(run.status === "draft" || run.status === "processed") && !isLocked && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      data-testid={`button-ai-review-${run.id}`}
+                      disabled={aiReviewMutation.isPending}
+                      onClick={() => aiReviewMutation.mutate()}
+                      className="border-violet-400/50 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-950/30"
+                    >
+                      <Brain className="mr-2 h-4 w-4" />
+                      {aiReviewMutation.isPending ? "Analyzing..." : "AI Pre-Flight Review"}
+                    </Button>
+                  )}
                   {run.status === "draft" && (
                     <Button
                       size="sm"
@@ -1158,6 +1197,90 @@ function PayrollRunCard({
                   </Button>
                 </div>
               )}
+
+              {/* ── AI Pre-Flight Review Dialog ──────────────────────────── */}
+              <Dialog open={aiReviewOpen} onOpenChange={setAiReviewOpen}>
+                <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto" data-testid="dialog-ai-review">
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                      <Brain className="h-5 w-5 text-violet-500" />
+                      AI Payroll Pre-Flight Review
+                    </DialogTitle>
+                  </DialogHeader>
+                  {aiReviewResult && (
+                    <div className="space-y-4">
+                      {/* Risk level banner */}
+                      <div className={`flex items-center gap-3 p-3 rounded-lg border ${
+                        aiReviewResult.overallRisk === "high"
+                          ? "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800"
+                          : aiReviewResult.overallRisk === "medium"
+                          ? "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800"
+                          : "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800"
+                      }`}>
+                        {aiReviewResult.overallRisk === "high" ? (
+                          <XCircle className="h-5 w-5 text-red-500 shrink-0" />
+                        ) : aiReviewResult.overallRisk === "medium" ? (
+                          <AlertCircle className="h-5 w-5 text-amber-500 shrink-0" />
+                        ) : (
+                          <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />
+                        )}
+                        <div>
+                          <div className={`font-semibold text-sm capitalize ${
+                            aiReviewResult.overallRisk === "high" ? "text-red-700 dark:text-red-300"
+                            : aiReviewResult.overallRisk === "medium" ? "text-amber-700 dark:text-amber-300"
+                            : "text-emerald-700 dark:text-emerald-300"
+                          }`}>
+                            {aiReviewResult.overallRisk === "high" ? "High Risk" : aiReviewResult.overallRisk === "medium" ? "Review Recommended" : "Looks Good"} — {aiReviewResult.overallRisk.charAt(0).toUpperCase() + aiReviewResult.overallRisk.slice(1)} Risk
+                          </div>
+                          <div className="text-sm text-muted-foreground">{aiReviewResult.summary}</div>
+                        </div>
+                      </div>
+
+                      {/* Flags */}
+                      {aiReviewResult.flags.length === 0 ? (
+                        <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground bg-muted/40 rounded-lg">
+                          <Sparkles className="h-4 w-4 text-emerald-500" />
+                          No issues found. Payroll data looks clean and ready to process.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <p className="text-sm font-medium text-muted-foreground">{aiReviewResult.flags.length} item{aiReviewResult.flags.length !== 1 ? "s" : ""} flagged for review:</p>
+                          {aiReviewResult.flags.map((flag, i) => (
+                            <div key={i} className={`p-3 rounded-lg border-l-4 ${
+                              flag.severity === "error"
+                                ? "border-l-red-500 bg-red-50 dark:bg-red-950/20"
+                                : flag.severity === "warning"
+                                ? "border-l-amber-500 bg-amber-50 dark:bg-amber-950/20"
+                                : "border-l-blue-500 bg-blue-50 dark:bg-blue-950/20"
+                            }`}>
+                              <div className="flex items-start gap-2">
+                                {flag.severity === "error" ? (
+                                  <XCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+                                ) : flag.severity === "warning" ? (
+                                  <AlertCircle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+                                ) : (
+                                  <Info className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+                                )}
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm font-semibold">{flag.title}</span>
+                                    <Badge variant="outline" className="text-xs capitalize">{flag.category}</Badge>
+                                  </div>
+                                  <p className="text-sm text-muted-foreground mt-1">{flag.detail}</p>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <p className="text-xs text-muted-foreground border-t pt-3">
+                        AI review is advisory only. Always verify payroll data before final processing. Powered by GPT-4o.
+                      </p>
+                    </div>
+                  )}
+                </DialogContent>
+              </Dialog>
 
               {/* ── Items table (read-only for locked runs) ──────────────── */}
               {(!isLocked || expanded) && (

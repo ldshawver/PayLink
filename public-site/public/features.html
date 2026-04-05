@@ -3,11 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Features - PayLink | Complete Workforce Operations Platform</title>
-  <meta name="description" content="Explore PayLink's full feature set: payroll processing, time tracking, scheduling, contractor management, expense tracking, and comprehensive HR.">
+  <title>Features - PayLink | AI-Powered Payroll, HR & Workforce Platform</title>
+  <meta name="description" content="PayLink features: AI receipt scanning, payroll pre-flight review, time clock, scheduling, shift marketplace, e-signatures, multi-company HR, contractor invoicing, mobile app, and more — all in one platform.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="icon" href="/assets/logo.png" type="image/png">
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -22,7 +23,8 @@
         <li><a href="/features">Features</a></li>
         <li><a href="/pricing">Pricing</a></li>
         <li><a href="/security">Security</a></li>
-        <li><a href="https://mypaylink.app/login" class="nav-cta">Login →</a></li>
+        <li><a href="/demo" class="nav-cta-outline">View Demo</a></li>
+        <li><a href="/signup" class="nav-cta">Start Free Trial</a></li>
       </ul>
       <button class="mobile-toggle" aria-label="Menu">&#9776;</button>
     </div>
@@ -30,84 +32,395 @@
       <a href="/features">Features</a>
       <a href="/pricing">Pricing</a>
       <a href="/security">Security</a>
-      <a href="/vendor-portal">Vendor Portal</a>
-      <a href="/clock-in">Quick Clock In</a>
-      <a href="/contact">Book a Demo</a>
+      <a href="/demo">View Demo</a>
+      <a href="/signup">Start Free Trial</a>
       <a href="https://mypaylink.app/login">Login →</a>
     </div>
   </nav>
 
   <section class="page-hero">
     <div class="container">
-      <span class="section-label fade-up">Features</span>
-      <h1 class="fade-up stagger-1">Everything Your Workforce Needs</h1>
-      <p class="fade-up stagger-2">From the time clock to the paycheck — every module works together in one integrated platform.</p>
+      <span class="section-label fade-up">Full Feature List</span>
+      <h1 class="fade-up stagger-1">Everything Included. Nothing Extra to Buy.</h1>
+      <p class="fade-up stagger-2">Every feature on this page is included in a single PayLink subscription — no add-ons, no upgrades, no per-module pricing.</p>
     </div>
   </section>
 
+  <!-- AI FEATURES -->
+  <section style="background: var(--dark-card);">
+    <div class="container section-center">
+      <div class="ai-section-label fade-up">✦ Powered by AI</div>
+      <h2 class="section-title fade-up stagger-1">AI Features That Actually Save Time</h2>
+      <p class="section-desc fade-up stagger-2">Not AI for marketing's sake — AI integrated into the workflows your team runs every day.</p>
+      <div class="ai-grid">
+        <div class="ai-card fade-up stagger-1">
+          <span class="ai-card-icon">🧾</span>
+          <h3>AI Receipt Scanning</h3>
+          <p>Photograph any receipt. GPT-4o Vision extracts the vendor name, line items, subtotal, tax amount, tip, payment method, and date — automatically. Zero manual entry. Supports any receipt format from any vendor.</p>
+          <span class="ai-badge">GPT-4o Vision</span>
+        </div>
+        <div class="ai-card fade-up stagger-2">
+          <span class="ai-card-icon">🔍</span>
+          <h3>AI Payroll Pre-Flight Review</h3>
+          <p>Before you run payroll, an AI review scans the entire dataset for anomalies: employees with unusually high hours, duplicate punch records, workers missing tax setup, rate changes without documentation, and classification mismatches. Catch errors before they become problems.</p>
+          <span class="ai-badge">Anomaly Detection</span>
+        </div>
+        <div class="ai-card fade-up stagger-3">
+          <span class="ai-card-icon">⚠️</span>
+          <h3>Payroll Audit Engine</h3>
+          <p>A separate rule-based audit scans for missing EINs, missing SSNs, contractor deduction errors, volunteer time entries in paid positions, and incomplete tax setups — all before payroll processing begins.</p>
+          <span class="ai-badge">Pre-Processing Audit</span>
+        </div>
+        <div class="ai-card fade-up stagger-4">
+          <span class="ai-card-icon">⏰</span>
+          <h3>Labor Compliance Monitoring</h3>
+          <p>Automatic detection of California daily overtime (over 8h), double time (over 12h), meal break violations, and rest period requirements. Alerts fire before violations cost you money.</p>
+          <span class="ai-badge">CA Labor Law</span>
+        </div>
+        <div class="ai-card fade-up stagger-5">
+          <span class="ai-card-icon">📄</span>
+          <h3>AI Document Extraction</h3>
+          <p>Upload onboarding documents, completed forms, and policy acknowledgments — AI extracts key fields and auto-populates the employee record, cutting onboarding data entry time significantly.</p>
+          <span class="ai-badge">Document Intelligence</span>
+        </div>
+        <div class="ai-card fade-up stagger-6">
+          <span class="ai-card-icon">💬</span>
+          <h3>Smart HR Policy Assistant</h3>
+          <p>Ask HR questions in plain English and get answers grounded in your company's actual policy documents. Reduces repetitive HR inquiries and gives employees reliable, instant responses.</p>
+          <span class="ai-badge">Policy Q&A</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PAYROLL -->
   <section>
-    <div class="container">
+    <div class="container section-center">
+      <span class="section-label fade-up">Payroll</span>
+      <h2 class="section-title fade-up stagger-1">Payroll That Handles the Hard Stuff</h2>
+      <p class="section-desc fade-up stagger-2">Full payroll processing from hours worked to ACH deposit — with California compliance built in.</p>
       <div class="features-grid">
         <div class="feature-card fade-up stagger-1">
           <div class="feature-icon">💰</div>
-          <h3>Payroll Processing</h3>
-          <p>Multi-step tax wizard with federal and state calculations. Generate pay stubs, process direct deposit via NACHA ACH files, and handle complex tax scenarios including California-specific requirements.</p>
+          <h3>Multi-Step Payroll Wizard</h3>
+          <p>Guided payroll run wizard: review time entries, apply deductions and reimbursements, calculate taxes, generate pay stubs, and produce ACH or check output. Step-by-step with validation at every stage.</p>
         </div>
         <div class="feature-card fade-up stagger-2">
-          <div class="feature-icon">⏱</div>
-          <h3>Time & Attendance</h3>
-          <p>Kiosk-mode time clock with PIN login, station enforcement, GPS tracking, and automatic overtime calculations. Supports daily, weekly, and double overtime with configurable policies.</p>
+          <div class="feature-icon">🏦</div>
+          <h3>NACHA ACH Direct Deposit</h3>
+          <p>Generate industry-standard NACHA ACH files for each payroll run. Upload to your bank and all direct deposits process automatically. Workers without bank info default to check with auto-numbering.</p>
         </div>
         <div class="feature-card fade-up stagger-3">
-          <div class="feature-icon">📅</div>
-          <h3>Smart Scheduling</h3>
-          <p>Visual schedule builder with drag-and-drop, recurring templates, shift publishing with email/SMS notifications, and automatic conflict detection with time-off requests.</p>
+          <div class="feature-icon">📊</div>
+          <h3>Tax Wizard & Federal/State Calculations</h3>
+          <p>Federal withholding (W-4 aware), Social Security, Medicare, FUTA, SUTA, California SDI, California PIT — all calculated automatically. Handles supplemental wage rates and multiple-jobs scenarios.</p>
         </div>
         <div class="feature-card fade-up stagger-4">
-          <div class="feature-icon">🔄</div>
-          <h3>Shift Marketplace</h3>
-          <p>HotSchedules-style shift swapping. Employees post shifts for pickup, others request them, and managers approve — with automatic eligibility checks for conflicts, hours, and rest periods.</p>
+          <div class="feature-icon">📄</div>
+          <h3>Tax Form Generation</h3>
+          <p>Generate W-2, 1099-NEC, 1096, Form 941 (quarterly), Form 940 (annual), California DE 9, and DE 9C forms — populated from your payroll data. Export-ready for filing.</p>
         </div>
         <div class="feature-card fade-up stagger-5">
-          <div class="feature-icon">👥</div>
-          <h3>Employee Management</h3>
-          <p>Complete HR profiles: contacts, wages, pay methods, documents, skills, certifications, education, languages, and memberships. Self-service portal for employees to manage their own data.</p>
+          <div class="feature-icon">🔄</div>
+          <h3>Multiple Payroll Frequencies</h3>
+          <p>Weekly, bi-weekly, semi-monthly, or monthly payroll periods. Each company can have its own pay frequency. Payroll periods are independently configurable per company.</p>
         </div>
         <div class="feature-card fade-up stagger-6">
-          <div class="feature-icon">🏢</div>
-          <h3>Multi-Company</h3>
-          <p>True enterprise architecture. Manage unlimited companies, divisions, cost centers, departments, and positions under one login. Share universal entities or keep them company-specific.</p>
+          <div class="feature-icon">📋</div>
+          <h3>Pay Stub Amendments</h3>
+          <p>Add one-time or recurring pay stub amendments — bonuses, deductions, garnishments, advances — that apply to specific payroll runs. Full override and adjustment history maintained.</p>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TIME & ATTENDANCE -->
+  <section style="background: var(--dark-card);">
+    <div class="container section-center">
+      <span class="section-label fade-up">Time & Attendance</span>
+      <h2 class="section-title fade-up stagger-1">Time Tracking That Starts at the Door</h2>
+      <p class="section-desc fade-up stagger-2">A real kiosk time clock with PIN and biometric login, not just a web form.</p>
+      <div class="features-grid">
         <div class="feature-card fade-up stagger-1">
+          <div class="feature-icon">⏱</div>
+          <h3>Kiosk Time Clock</h3>
+          <p>Deploy on any tablet or shared device. Employees clock in/out via PIN or biometric. Kiosk mode is separate from the HR login — employees never see each other's data.</p>
+        </div>
+        <div class="feature-card fade-up stagger-2">
+          <div class="feature-icon">📍</div>
+          <h3>Station Enforcement</h3>
+          <p>Require employees to clock in from specific stations. Mismatches are flagged. Supports multi-station environments where different roles must use designated terminals.</p>
+        </div>
+        <div class="feature-card fade-up stagger-3">
+          <div class="feature-icon">⚡</div>
+          <h3>Automatic Overtime Calculation</h3>
+          <p>Daily overtime (over 8h/day), weekly overtime (over 40h/week), double time (over 12h/day or 7th consecutive day), and California-specific thresholds — all calculated and flagged automatically.</p>
+        </div>
+        <div class="feature-card fade-up stagger-4">
+          <div class="feature-icon">✅</div>
+          <h3>Manager Approval Workflow</h3>
+          <p>Time punches require manager review before flowing into payroll. Flag disputes, add notes, adjust punches, and approve timesheets with a full audit trail of every change.</p>
+        </div>
+        <div class="feature-card fade-up stagger-5">
           <div class="feature-icon">📊</div>
-          <h3>Tax Form Generation</h3>
-          <p>Generate W-2, 1099-NEC, 941, 940, DE 9, DE 9C, and 1096 forms. Comprehensive reporting with employee, timesheet, payroll, expense, and job cost reports — all exportable to CSV.</p>
+          <h3>Timesheet Reporting</h3>
+          <p>Daily, weekly, and period-based timesheet reports by employee, department, job code, or cost center. Export to CSV for payroll or accounting integrations.</p>
+        </div>
+        <div class="feature-card fade-up stagger-6">
+          <div class="feature-icon">📱</div>
+          <h3>Mobile Clock In/Out</h3>
+          <p>Employees can clock in/out from the PayLink mobile app with manager-configurable GPS verification. Biometric authentication available on supported devices.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCHEDULING -->
+  <section>
+    <div class="container section-center">
+      <span class="section-label fade-up">Scheduling</span>
+      <h2 class="section-title fade-up stagger-1">Scheduling Built for Real Shift Work</h2>
+      <p class="section-desc fade-up stagger-2">Recurring templates, a live shift marketplace, and automatic conflict detection — not just a calendar.</p>
+      <div class="features-grid">
+        <div class="feature-card fade-up stagger-1">
+          <div class="feature-icon">📅</div>
+          <h3>Weekly Schedule Builder</h3>
+          <p>Visual weekly schedule grid with drag-and-drop shift management. See total hours, labor cost, and coverage at a glance. Filter by employee, company, or department.</p>
+        </div>
+        <div class="feature-card fade-up stagger-2">
+          <div class="feature-icon">🔁</div>
+          <h3>Recurring Schedule Templates</h3>
+          <p>Set up recurring shifts by day of week and generate an entire week's schedule from templates in one click. Edit recurring templates directly from the weekly view.</p>
+        </div>
+        <div class="feature-card fade-up stagger-3">
+          <div class="feature-icon">🔄</div>
+          <h3>Shift Marketplace</h3>
+          <p>Employees post shifts they can't work. Others request to pick them up. Managers approve with automatic eligibility checks for hours limits, schedule conflicts, and rest periods. Full notification chain.</p>
+        </div>
+        <div class="feature-card fade-up stagger-4">
+          <div class="feature-icon">📬</div>
+          <h3>Publish & Notify</h3>
+          <p>Publish schedules to employees with email and SMS notifications. Employees see their schedules in the app the moment they're published. Time-off requests automatically block conflicting shifts.</p>
+        </div>
+        <div class="feature-card fade-up stagger-5">
+          <div class="feature-icon">🏖️</div>
+          <h3>Time-Off Integration</h3>
+          <p>Time-off requests flow directly into the schedule view. Approved PTO blocks are visible when building next week's schedule, preventing accidental double-booking.</p>
+        </div>
+        <div class="feature-card fade-up stagger-6">
+          <div class="feature-icon">💵</div>
+          <h3>Labor Cost Visibility</h3>
+          <p>See real-time labor cost for every shift and the full week as you build the schedule. Know your projected payroll before it runs. Compare cost by employee type, department, or job.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HR & EMPLOYEE MANAGEMENT -->
+  <section style="background: var(--dark-card);">
+    <div class="container section-center">
+      <span class="section-label fade-up">HR & Employee Management</span>
+      <h2 class="section-title fade-up stagger-1">Complete HR — Not Just an Employee List</h2>
+      <p class="section-desc fade-up stagger-2">Full employee and contractor records with self-service, onboarding, documents, and benefits tracking.</p>
+      <div class="features-grid">
+        <div class="feature-card fade-up stagger-1">
+          <div class="feature-icon">👥</div>
+          <h3>Complete Employee Profiles</h3>
+          <p>Contact info, wage history, pay methods, certifications, skills, education, languages, memberships, performance reviews, and emergency contacts — all in one profile. Supports 7 worker types.</p>
+        </div>
+        <div class="feature-card fade-up stagger-2">
+          <div class="feature-icon">🧑‍💼</div>
+          <h3>Employee Onboarding Packets</h3>
+          <p>Step-by-step onboarding with assigned tasks, document signing, I-9 verification, W-4 collection, direct deposit setup, and policy acknowledgments. Track completion status for every new hire.</p>
+        </div>
+        <div class="feature-card fade-up stagger-3">
+          <div class="feature-icon">🖊️</div>
+          <h3>Document Management & E-Signatures</h3>
+          <p>Upload, organize, and version HR documents with folder-level access controls. Send documents for electronic signature with a complete signer audit trail. Retention policies and legal hold for compliance.</p>
+        </div>
+        <div class="feature-card fade-up stagger-4">
+          <div class="feature-icon">📱</div>
+          <h3>Employee Self-Service Portal</h3>
+          <p>Employees update their own contact info, address, emergency contacts, and notification preferences. View schedules, pay stubs, time-off balances, and documents without manager involvement.</p>
+        </div>
+        <div class="feature-card fade-up stagger-5">
+          <div class="feature-icon">⚙️</div>
+          <h3>Policy Engine</h3>
+          <p>Configure overtime policies, accrual rules, break requirements, time-off types, and seniority-based benefit progression. California-compliant defaults included with full customization.</p>
+        </div>
+        <div class="feature-card fade-up stagger-6">
+          <div class="feature-icon">📈</div>
+          <h3>Accruals & Time-Off Tracking</h3>
+          <p>Automatic PTO, sick leave, and vacation accrual based on your policy rules. Real-time balance tracking, approval workflows, and integration with scheduling and payroll.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONTRACTOR & INVOICING -->
+  <section>
+    <div class="container section-center">
+      <span class="section-label fade-up">Contractors</span>
+      <h2 class="section-title fade-up stagger-1">Real Contractor Management — Not an Afterthought</h2>
+      <p class="section-desc fade-up stagger-2">Contractors get their own portal, invoice workflow, 1099 generation, and onboarding agreement system.</p>
+      <div class="features-grid">
+        <div class="feature-card fade-up stagger-1">
+          <div class="feature-icon">📄</div>
+          <h3>Contractor Portal</h3>
+          <p>Contractors log in to their own portal to submit invoices, track payment status, view 1099 forms, and manage their profile — without access to employee HR data.</p>
         </div>
         <div class="feature-card fade-up stagger-2">
           <div class="feature-icon">🧾</div>
-          <h3>Expense Management</h3>
-          <p>Receipt tracking with AI-powered scanning (OCR extracts vendor, items, costs, tax, and payment method). Approval workflows, job cost allocation, and check printing.</p>
+          <h3>Invoice Processing</h3>
+          <p>Contractors submit invoices by job. Managers review and approve. Payments process alongside regular payroll. Full payment history and outstanding invoice tracking.</p>
         </div>
         <div class="feature-card fade-up stagger-3">
-          <div class="feature-icon">📄</div>
-          <h3>Contractor Invoicing</h3>
-          <p>Contractors submit invoices through their portal. Track by job, approve, and process payments alongside regular payroll. 1099-NEC generation at year end.</p>
+          <div class="feature-icon">📊</div>
+          <h3>1099-NEC Generation</h3>
+          <p>Year-end 1099-NEC and 1096 forms generated from your contractor payment history. Track non-cash compensation (trade/barter) separately for IRS reporting.</p>
         </div>
         <div class="feature-card fade-up stagger-4">
-          <div class="feature-icon">🏦</div>
-          <h3>ACH Direct Deposit</h3>
-          <p>Generate NACHA-formatted ACH files for each payroll run. Upload to your bank to initiate all direct deposits. Workers without bank info automatically default to check.</p>
+          <div class="feature-icon">📝</div>
+          <h3>Contractor Onboarding & Agreements</h3>
+          <p>Send contractor agreements for electronic signature before work begins. Track agreement status, document version history, and maintain a full audit trail for every contractor relationship.</p>
         </div>
         <div class="feature-card fade-up stagger-5">
-          <div class="feature-icon">📜</div>
-          <h3>Policy Engine</h3>
-          <p>Comprehensive policy management covering overtime, accruals, breaks, time-off, and more. Quick setup for California-compliant defaults with full customization.</p>
+          <div class="feature-icon">💼</div>
+          <h3>Trade & Non-Cash Compensation</h3>
+          <p>Track barter, trade, and non-cash compensation transactions with full documentation. Required for accurate 1099 reporting when contractors receive non-monetary payment.</p>
         </div>
         <div class="feature-card fade-up stagger-6">
-          <div class="feature-icon">🔍</div>
-          <h3>Payroll Audit</h3>
-          <p>Automated audit engine scans for missing EINs, SSNs, classification mismatches, contractor deduction errors, missing tax setup, and volunteer time entries before you process.</p>
+          <div class="feature-icon">🔗</div>
+          <h3>Customer Invoicing</h3>
+          <p>Bill your clients directly from PayLink. Create invoices from templates, track payment status, set up recurring billing, and accept payments. Connects to your contractor cost data.</p>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ENTERPRISE & SECURITY -->
+  <section style="background: var(--dark-card);">
+    <div class="container section-center">
+      <span class="section-label fade-up">Enterprise & Security</span>
+      <h2 class="section-title fade-up stagger-1">Enterprise Architecture. SMB Pricing.</h2>
+      <p class="section-desc fade-up stagger-2">Features typically reserved for enterprise software — multi-company, RBAC, audit logs, automation, webhooks — at a fraction of the cost.</p>
+      <div class="features-grid">
+        <div class="feature-card fade-up stagger-1">
+          <div class="feature-icon">🏢</div>
+          <h3>True Multi-Company</h3>
+          <p>Unlimited companies under one login. Each company has isolated payroll, HR, and scheduling. Share universal entities (departments, job codes, positions) across companies or keep them separate.</p>
+        </div>
+        <div class="feature-card fade-up stagger-2">
+          <div class="feature-icon">🔐</div>
+          <h3>Role-Based Access Control</h3>
+          <p>Admin, Manager, and Employee roles enforced at every API endpoint. Managers only see their company's data. Employees only see their own records. Zero trust — never rely on frontend filters alone.</p>
+        </div>
+        <div class="feature-card fade-up stagger-3">
+          <div class="feature-icon">📋</div>
+          <h3>Authorization Audit Log</h3>
+          <p>Every sensitive action — payroll approval, document access, configuration change, permission modification — written to an immutable audit log with user, timestamp, and action detail.</p>
+        </div>
+        <div class="feature-card fade-up stagger-4">
+          <div class="feature-icon">⚙️</div>
+          <h3>Automation Rules Engine</h3>
+          <p>Define triggers and actions — "when an employee approaches 40 hours, notify their manager." "When an expense is submitted over $500, require VP approval." Build your HR workflows without code.</p>
+        </div>
+        <div class="feature-card fade-up stagger-5">
+          <div class="feature-icon">🔌</div>
+          <h3>Webhook Integration Event Bus</h3>
+          <p>Subscribe to payroll, schedule, time, and HR events via webhooks. Build integrations with your existing accounting, ERP, or custom systems. Full event log and retry handling.</p>
+        </div>
+        <div class="feature-card fade-up stagger-6">
+          <div class="feature-icon">🖥️</div>
+          <h3>Self-Hostable</h3>
+          <p>Deploy PayLink on your own servers for complete data sovereignty. Your payroll and HR data never leaves your network. Runs on standard Node.js and PostgreSQL — no vendor lock-in.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MOBILE & ACCESSIBILITY -->
+  <section>
+    <div class="container section-center">
+      <span class="section-label fade-up">Mobile</span>
+      <h2 class="section-title fade-up stagger-1">A Real Mobile App. Not a Shrunk Website.</h2>
+      <p class="section-desc fade-up stagger-2">Installable on iOS and Android with native features — push notifications, biometrics, camera integration, and offline support.</p>
+      <div class="features-grid">
+        <div class="feature-card fade-up stagger-1">
+          <div class="feature-icon">📲</div>
+          <h3>Installable PWA + Native App</h3>
+          <p>Install PayLink from the browser as a progressive web app or download the native iOS/Android app. Full functionality on any device — no degraded mobile experience.</p>
+        </div>
+        <div class="feature-card fade-up stagger-2">
+          <div class="feature-icon">🔔</div>
+          <h3>Push Notifications</h3>
+          <p>Employees receive push notifications for schedule changes, shift approvals, payroll processing, and manager messages. Notification preferences configurable per employee.</p>
+        </div>
+        <div class="feature-card fade-up stagger-3">
+          <div class="feature-icon">🪪</div>
+          <h3>Biometric Authentication</h3>
+          <p>Face ID and fingerprint login on supported devices. Employees who re-authenticate with biometrics can clock in, approve timesheets, and sign documents without a password.</p>
+        </div>
+        <div class="feature-card fade-up stagger-4">
+          <div class="feature-icon">📷</div>
+          <h3>Native Camera Integration</h3>
+          <p>Capture expense receipts, ID documents, and profile photos directly from the device camera. AI receipt scanning works from the native camera — no upload step needed.</p>
+        </div>
+        <div class="feature-card fade-up stagger-5">
+          <div class="feature-icon">📡</div>
+          <h3>Offline Support</h3>
+          <p>Core data cached for offline access. Clock-in attempts queue and submit when connectivity restores. Managers can review previously loaded timesheets without a network connection.</p>
+        </div>
+        <div class="feature-card fade-up stagger-6">
+          <div class="feature-icon">🌐</div>
+          <h3>Multi-Language Support</h3>
+          <p>Interface language preferences per employee. Currently supports English, Spanish, French, Chinese, and Tagalog with more in development. Each employee sets their own preference.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SECURITY DEEP DIVE -->
+  <section style="background: var(--dark-card);">
+    <div class="container section-center">
+      <span class="section-label fade-up">Security</span>
+      <h2 class="section-title fade-up stagger-1">Enterprise-Grade Security at Every Layer</h2>
+      <p class="section-desc fade-up stagger-2">PayLink handles SSNs, bank routing numbers, wage data, and medical information. We take that responsibility seriously at every level of the stack.</p>
+      <div class="security-stat-row fade-up stagger-2">
+        <div class="security-stat"><span class="stat-val">bcrypt</span><span class="stat-label">Password Hashing</span></div>
+        <div class="security-stat"><span class="stat-val">TLS 1.3</span><span class="stat-label">Encrypted in Transit</span></div>
+        <div class="security-stat"><span class="stat-val">RBAC</span><span class="stat-label">Role-Based Access</span></div>
+        <div class="security-stat"><span class="stat-val">httpOnly</span><span class="stat-label">Secure Cookies</span></div>
+        <div class="security-stat"><span class="stat-val">Multi-tenant</span><span class="stat-label">Data Isolation</span></div>
+      </div>
+      <div class="security-deep-grid" style="margin-top: 40px;">
+        <div class="security-deep-card fade-up stagger-1">
+          <h4>Zero-Trust API Authentication</h4>
+          <p>Every API endpoint independently enforces authentication and role checks server-side. The frontend never controls data access — a logged-out user cannot reach any data endpoint regardless of URL manipulation.</p>
+        </div>
+        <div class="security-deep-card fade-up stagger-2">
+          <h4>Multi-Tenant Data Isolation</h4>
+          <p>Every database record is scoped to a company ID enforced server-side on every query. A cross-company data leak is architecturally impossible — not just a UI safeguard.</p>
+        </div>
+        <div class="security-deep-card fade-up stagger-3">
+          <h4>Banking Data Protection</h4>
+          <p>Direct deposit routing and account numbers are only accessible to authenticated users through employee-scoped endpoints. ACH files are generated and handled server-side with no exposure to client storage.</p>
+        </div>
+        <div class="security-deep-card fade-up stagger-4">
+          <h4>Document Audit Trails & Legal Hold</h4>
+          <p>Every document view, download, edit, and signature is logged with user identity and timestamp. Legal hold prevents deletion regardless of user role — required for litigation protection and compliance audits.</p>
+        </div>
+        <div class="security-deep-card fade-up stagger-5">
+          <h4>Session & Password Security</h4>
+          <p>Sessions stored server-side in PostgreSQL, never in client cookies. Cookies are httpOnly, Secure, and SameSite-protected. Passwords hashed with bcrypt (cost factor 10). Automatic session expiry enforced.</p>
+        </div>
+        <div class="security-deep-card fade-up stagger-6">
+          <h4>Field-Level Access Whitelist</h4>
+          <p>Employees updating their own records can only modify whitelisted fields (contact info, address, emergency contacts). Pay rates, roles, and wage history cannot be self-modified — even with a direct API call.</p>
+        </div>
+      </div>
+      <div style="margin-top: 32px; text-align: center;">
+        <a href="/security" class="btn-secondary">View Full Security Details →</a>
       </div>
     </div>
   </section>
@@ -115,10 +428,11 @@
   <section>
     <div class="container">
       <div class="cta-banner fade-up">
-        <h2>See PayLink in Action</h2>
-        <p>Book a personalized demo and see how PayLink handles your specific workflows.</p>
+        <h2>Ready to See It All in Action?</h2>
+        <p>Launch the live demo or start your free 30-day trial — no credit card required.</p>
         <div class="hero-buttons" style="justify-content: center;">
-          <a href="/contact" class="btn-primary">Book a Demo →</a>
+          <a href="/signup" class="btn-primary">Start Free Trial →</a>
+          <a href="/demo" class="btn-secondary">View Live Demo →</a>
         </div>
       </div>
     </div>
@@ -129,7 +443,7 @@
       <div class="footer-grid">
         <div class="footer-brand">
           <a href="/" class="nav-logo"><img src="/assets/logo.png" alt="PayLink" style="height: 32px;"><span>PayLink</span></a>
-          <p>A secure workforce operations platform by Alavont Holdings.</p>
+          <p>AI-powered payroll, scheduling, time tracking, and HR — unified in one secure platform. By Alavont Holdings.</p>
         </div>
         <div>
           <h4>Product</h4>
@@ -137,15 +451,16 @@
             <li><a href="/features">Features</a></li>
             <li><a href="/pricing">Pricing</a></li>
             <li><a href="/security">Security</a></li>
-            <li><a href="/contact">Book a Demo</a></li>
+            <li><a href="/demo">View Demo</a></li>
           </ul>
         </div>
         <div>
           <h4>Access</h4>
           <ul class="footer-links">
             <li><a href="https://mypaylink.app/login">Login</a></li>
-            <li><a href="/vendor-portal">Vendor Portal</a></li>
+            <li><a href="/signup">Start Free Trial</a></li>
             <li><a href="/clock-in">Quick Clock In</a></li>
+            <li><a href="/vendor-portal">Vendor Portal</a></li>
           </ul>
         </div>
         <div>

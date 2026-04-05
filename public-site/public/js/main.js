@@ -82,4 +82,44 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
+
+  // ── Dashboard Preview Carousel ──────────────────────────────────────────
+  const cycler = document.getElementById('dashCycler');
+  if (cycler) {
+    const dots = cycler.querySelectorAll('.dash-dot');
+    const slides = cycler.querySelectorAll('.dash-slide');
+    let current = 0;
+    let autoTimer = null;
+
+    function goTo(idx) {
+      slides[current].classList.remove('active');
+      slides[current].classList.add('exit-left');
+      dots[current].classList.remove('active');
+      setTimeout(() => slides[current < slides.length ? current : 0].classList.remove('exit-left'), 400);
+      current = idx;
+      slides[current].classList.add('active');
+      dots[current].classList.add('active');
+    }
+
+    function startAuto() {
+      stopAuto();
+      autoTimer = setInterval(() => {
+        goTo((current + 1) % slides.length);
+      }, 3500);
+    }
+
+    function stopAuto() {
+      if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+    }
+
+    dots.forEach((dot, i) => {
+      dot.addEventListener('click', () => {
+        goTo(i);
+        stopAuto();
+        startAuto();
+      });
+    });
+
+    startAuto();
+  }
 });

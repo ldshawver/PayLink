@@ -1095,6 +1095,114 @@ export async function registerRoutes(
     }
   });
 
+  // ── AI Payroll Pre-Flight Review ─────────────────────────────────────────
+  app.post("/api/payroll-runs/:id/ai-review", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) return res.status(503).json({ message: "AI review requires OpenAI to be configured. Please add your OPENAI_API_KEY." });
+
+      const workers = await storage.getWorkers(run.companyId);
+      const entries = await storage.getTimeEntriesByDateRange(run.companyId, run.periodStart, run.periodEnd);
+      const existingItems = await storage.getPayrollItems(run.id);
+
+      // Build a compact summary of payroll data for the AI
+      const workerMap = Object.fromEntries(workers.map(w => [w.id, w]));
+
+      // Hours per worker
+      const hoursMap: Record<string, { reg: number; ot: number; dt: number; name: string; type: string; hourlyRate: number }> = {};
+      for (const e of entries) {
+        const w = workerMap[e.workerId];
+        if (!w) continue;
+        if (!hoursMap[e.workerId]) {
+          hoursMap[e.workerId] = {
+            reg: 0, ot: 0, dt: 0,
+            name: `${w.firstName} ${w.lastName}`,
+            type: w.employmentType || "hourly",
+            hourlyRate: parseFloat(w.hourlyRate?.toString() || "0"),
+          };
+        }
+        hoursMap[e.workerId].reg += parseFloat(e.regularHours?.toString() || "0");
+        hoursMap[e.workerId].ot += parseFloat(e.overtimeHours?.toString() || "0");
+        hoursMap[e.workerId].dt += parseFloat(e.doubleTimeHours?.toString() || "0");
+      }
+
+      // Item summaries (if already processed)
+      const itemSummaries = existingItems.map(i => {
+        const w = workerMap[i.workerId];
+        return {
+          name: w ? `${w.firstName} ${w.lastName}` : i.workerId,
+          gross: parseFloat(i.grossPay?.toString() || "0"),
+          net: parseFloat(i.netPay?.toString() || "0"),
+          deductions: parseFloat(i.deductions?.toString() || "0"),
+          hours: parseFloat(i.regularHours?.toString() || "0"),
+          ot: parseFloat(i.overtimeHours?.toString() || "0"),
+          payMethod: i.paymentMethod || "unknown",
+          taxSetup: (i.federalIncomeTax !== null && i.federalIncomeTax !== undefined),
+        };
+      });
+
+      // Workers missing tax/banking info
+      const missingSetup = workers.filter(w => w.isActive && !w.ssn && w.employmentType !== "contractor");
+      const zeroRateWorkers = workers.filter(w => w.isActive && !parseFloat(w.hourlyRate?.toString() || "0") && !parseFloat(w.salary?.toString() || "0"));
+
+      const prompt = `You are a payroll compliance expert reviewing payroll data before it's processed and paid. Your job is to identify anomalies, missing information, and potential errors that a payroll manager should review. Be concise and direct.
+
+PAYROLL RUN: ${run.periodStart} to ${run.periodEnd}
+COMPANY: ${run.companyId.slice(0,8)}
+STATUS: ${run.status}
+
+TIME ENTRIES SUMMARY (${Object.keys(hoursMap).length} workers with punches):
+${Object.values(hoursMap).map(h => `- ${h.name} (${h.type}, $${h.hourlyRate}/hr): ${h.reg.toFixed(1)}h reg, ${h.ot.toFixed(1)}h OT, ${h.dt.toFixed(1)}h DT`).join('\n')}
+
+${itemSummaries.length > 0 ? `PROCESSED ITEMS (${itemSummaries.length} employees):
+${itemSummaries.slice(0, 20).map(i => `- ${i.name}: $${i.gross.toFixed(2)} gross, $${i.net.toFixed(2)} net, ${i.hours}h, pay method: ${i.payMethod}, tax setup: ${i.taxSetup ? 'yes' : 'MISSING'}`).join('\n')}` : 'No processed items yet (run is in draft).'}
+
+SETUP ISSUES:
+- Active employees missing SSN: ${missingSetup.map(w => `${w.firstName} ${w.lastName}`).join(', ') || 'None'}
+- Active workers with $0 pay rate: ${zeroRateWorkers.map(w => `${w.firstName} ${w.lastName}`).join(', ') || 'None'}
+- Total active workers: ${workers.filter(w => w.isActive).length}
+- Workers with time entries: ${Object.keys(hoursMap).length}
+
+Return a JSON response with this exact structure:
+{
+  "overallRisk": "low" | "medium" | "high",
+  "summary": "one sentence summary",
+  "flags": [
+    {
+      "severity": "error" | "warning" | "info",
+      "category": "hours" | "pay" | "tax" | "setup" | "compliance",
+      "title": "short title",
+      "detail": "specific detail explaining the issue and what to do"
+    }
+  ]
+}
+
+Flag anything that looks unusual: very high hours (>60/week), employees with no time entries, significant pay disparities, missing tax setup, zero pay rates, potential overtime violations, or classification issues. If everything looks good, return low risk with an empty flags array.`;
+
+      const OpenAI = (await import("openai")).default;
+      const openai = new OpenAI({ apiKey });
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{ role: "user", content: prompt }],
+        response_format: { type: "json_object" },
+        max_tokens: 1200,
+        temperature: 0.2,
+      });
+
+      const text = response.choices[0]?.message?.content || '{"overallRisk":"low","summary":"Review complete.","flags":[]}';
+      let result;
+      try { result = JSON.parse(text); } catch { result = { overallRisk: "low", summary: "AI review completed.", flags: [] }; }
+
+      res.json(result);
+    } catch (error: any) {
+      console.error("[AI Payroll Review]", error);
+      res.status(500).json({ message: "AI review failed: " + (error.message || "Unknown error") });
+    }
+  });
+
   app.post("/api/payroll-runs/:id/process", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
