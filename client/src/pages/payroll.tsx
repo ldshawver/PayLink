@@ -754,6 +754,20 @@ function PayrollRunCard({
     },
   });
 
+  const fundingAccountMutation = useMutation({
+    mutationFn: async (fundingAccountId: string | null) => {
+      const res = await apiRequest("PATCH", `/api/payroll-runs/${run.id}`, { fundingAccountId: fundingAccountId || null });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      toast({ title: "Funding account linked" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
   const downloadNacha = async () => {
     try {
       const res = await fetch(`/api/payroll-runs/${run.id}/nacha`, { credentials: "include" });
@@ -998,13 +1012,40 @@ function PayrollRunCard({
                 <PayrollSummaryPanel run={run} items={items} />
               )}
 
+              {/* ── Funding account selector ──────────────────────────────── */}
+              {expanded && (
+                <div className="flex flex-wrap items-center gap-3 p-3 rounded-lg border bg-muted/30" data-testid={`funding-account-row-${run.id}`}>
+                  <span className="text-sm font-medium whitespace-nowrap">Funding Account:</span>
+                  <Select
+                    value={run.fundingAccountId || "none"}
+                    onValueChange={(v) => fundingAccountMutation.mutate(v === "none" ? null : v)}
+                    disabled={fundingAccountMutation.isPending}
+                  >
+                    <SelectTrigger className="h-7 w-56 text-sm" data-testid={`select-funding-account-${run.id}`}>
+                      <SelectValue placeholder="— None —" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">— None —</SelectItem>
+                      {fundingAccts.filter(a => (a as any).allowForPayroll !== false && (a as any).active !== false).map(a => (
+                        <SelectItem key={a.id} value={a.id}>{a.accountName}{(a as any).maskedIdentifier ? ` (${(a as any).maskedIdentifier})` : ""}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {linkedAccount && (
+                    <span className="text-xs text-muted-foreground">
+                      Balance: <span className="font-medium">${Number(linkedAccount.currentBalance ?? linkedAccount.openingBalance ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
+                    </span>
+                  )}
+                </div>
+              )}
+
               {/* ── Funding validation ────────────────────────────────────── */}
               {noFundingAccount && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300 flex items-start gap-2" data-testid={`alert-no-funding-${run.id}`}>
                   <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
                   <div>
                     <span className="font-medium">No funding account linked.</span>
-                    <span className="ml-1">Assign a funding account to this payroll run to enable funding validation.</span>
+                    <span className="ml-1">Select a funding account above to link it and enable balance validation.</span>
                   </div>
                 </div>
               )}
@@ -5413,8 +5454,9 @@ function FundingAccountsTab() {
                     <Input placeholder="e.g. Chase Bank" value={formData.institutionName} onChange={e => setFormData(p => ({ ...p, institutionName: e.target.value }))} />
                   </div>
                   <div className="space-y-2">
-                    <Label>Masked Identifier</Label>
-                    <Input placeholder="e.g. ••••4321" value={formData.maskedIdentifier} onChange={e => setFormData(p => ({ ...p, maskedIdentifier: e.target.value }))} />
+                    <Label>Last 4 of Account # <span className="text-muted-foreground font-normal">(for display only)</span></Label>
+                    <Input placeholder="e.g. 4321" maxLength={10} value={formData.maskedIdentifier} onChange={e => setFormData(p => ({ ...p, maskedIdentifier: e.target.value }))} />
+                    <p className="text-xs text-muted-foreground">Enter the last 4 digits of the bank account number. This is only used for identification — your actual account number is never stored here.</p>
                   </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
