@@ -15817,6 +15817,226 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to generate print view" }); }
   });
 
+  // ── Download biz-document as PDF ───────────────────────────────────────────
+  app.get("/api/biz-documents/:id/pdf", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc || doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      const [items, branding] = await Promise.all([
+        storage.getBizDocumentItems(doc.id),
+        storage.getCompanyBranding(doc.companyId),
+      ]);
+      const company = await storage.getCompany(doc.companyId);
+      const { jsPDF } = await import("jspdf");
+      const autoTable = (await import("jspdf-autotable")).default;
+
+      const accentHex = branding?.accentColor || "#0d9488";
+      const hexToRgb = (h: string): [number, number, number] => {
+        const hex = h.replace(/^#/, "");
+        const n = parseInt(hex.length === 3 ? hex.split("").map(c => c + c).join("") : hex, 16);
+        return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+      };
+      const [ar, ag, ab] = hexToRgb(accentHex);
+
+      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+      const pw = pdf.internal.pageSize.getWidth();
+      const ph = pdf.internal.pageSize.getHeight();
+      const margin = 15;
+
+      const isProposal = doc.documentType === "proposal";
+      const docTypeLabel = doc.documentType.replace("_", " ").toUpperCase();
+      const subtotal = Number(doc.subtotal || 0);
+      const taxTotal = Number(doc.taxTotal || 0);
+      const discountTotal = Number(doc.discountTotal || 0);
+      const total = Number(doc.total || 0);
+      const companyName = branding?.legalName || branding?.dbaName || company?.name || "Company";
+      const generated = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+
+      // ── Header band ──
+      pdf.setFillColor(ar, ag, ab);
+      pdf.rect(0, 0, pw, 38, "F");
+
+      // Document type label (right side)
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(20);
+      pdf.setFont("helvetica", "bold");
+      pdf.text(docTypeLabel, pw - margin, 16, { align: "right" });
+      pdf.setFontSize(9);
+      pdf.setFont("helvetica", "normal");
+      pdf.text(doc.documentNumber || "", pw - margin, 23, { align: "right" });
+      pdf.text(`Status: ${doc.status}`, pw - margin, 29, { align: "right" });
+
+      // Company name (left side)
+      pdf.setFontSize(14);
+      pdf.setFont("helvetica", "bold");
+      pdf.text(companyName, margin, 15);
+      pdf.setFontSize(8);
+      pdf.setFont("helvetica", "normal");
+      const addrParts = [
+        branding?.billingAddress,
+        [branding?.billingCity, branding?.billingState].filter(Boolean).join(", ") + " " + (branding?.billingZip || ""),
+        branding?.phone,
+        branding?.email,
+      ].filter(Boolean) as string[];
+      let addrY = 21;
+      for (const part of addrParts.slice(0, 3)) {
+        pdf.text(part.trim(), margin, addrY);
+        addrY += 5;
+      }
+
+      // ── Title ──
+      let y = 48;
+      if (doc.title) {
+        pdf.setTextColor(30, 30, 30);
+        pdf.setFontSize(13);
+        pdf.setFont("helvetica", "bold");
+        pdf.text(doc.title, margin, y);
+        y += 8;
+      }
+
+      // ── Parties row ──
+      pdf.setFontSize(8);
+      pdf.setTextColor(153, 153, 153);
+      pdf.setFont("helvetica", "bold");
+      pdf.text("FROM", margin, y);
+      pdf.text(isProposal ? "PREPARED FOR" : "BILL TO", pw / 2, y);
+      y += 5;
+      pdf.setTextColor(30, 30, 30);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(10);
+      pdf.text(companyName, margin, y);
+      pdf.text(doc.assignedToName || "—", pw / 2, y);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(8);
+      if (branding?.taxId) { y += 4; pdf.setTextColor(90, 90, 90); pdf.text(`Tax ID: ${branding.taxId}`, margin, y); }
+      if (doc.assignedToEmail) { pdf.text(doc.assignedToEmail, pw / 2, y + (branding?.taxId ? 0 : 4)); }
+      y += 14;
+
+      // ── Dates row ──
+      pdf.setFillColor(249, 250, 251);
+      pdf.rect(margin, y - 3, pw - margin * 2, 16, "F");
+      pdf.setTextColor(153, 153, 153);
+      pdf.setFontSize(7.5);
+      pdf.setFont("helvetica", "bold");
+      const col1 = margin + 4, col2 = pw * 0.38, col3 = pw * 0.65;
+      pdf.text("ISSUE DATE", col1, y + 2);
+      pdf.text(isProposal ? "EXPIRATION" : "DUE DATE", col2, y + 2);
+      pdf.text(doc.poNumber ? "PO NUMBER" : "CURRENCY", col3, y + 2);
+      pdf.setTextColor(30, 30, 30);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(9);
+      pdf.text(doc.issueDate || "—", col1, y + 8);
+      pdf.text(isProposal ? (doc.expirationDate || "—") : (doc.dueDate || "—"), col2, y + 8);
+      pdf.text(doc.poNumber || doc.currency || "USD", col3, y + 8);
+      y += 22;
+
+      // ── Line items table ──
+      if (items.length > 0) {
+        (autoTable as any)(pdf, {
+          startY: y,
+          head: [["Description", "Qty", "Unit Price", "Amount"]],
+          body: items.map(i => [
+            i.description,
+            String(Number(i.quantity)),
+            `$${Number(i.unitPrice).toFixed(2)}`,
+            `$${Number(i.amount).toFixed(2)}`,
+          ]),
+          styles: { fontSize: 8.5, cellPadding: 3 },
+          headStyles: { fillColor: [ar, ag, ab], textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8 },
+          alternateRowStyles: { fillColor: [250, 250, 250] },
+          columnStyles: {
+            0: { cellWidth: "auto" },
+            1: { halign: "right" as const, cellWidth: 18 },
+            2: { halign: "right" as const, cellWidth: 28 },
+            3: { halign: "right" as const, cellWidth: 28 },
+          },
+          margin: { left: margin, right: margin },
+          tableWidth: pw - margin * 2,
+          didDrawPage: (data: any) => {
+            pdf.setFontSize(7);
+            pdf.setTextColor(200, 200, 200);
+            pdf.text(`Generated by PayLink — ${generated}`, margin, ph - 8);
+            pdf.text(`Page ${pdf.getCurrentPageInfo().pageNumber}`, pw - margin, ph - 8, { align: "right" });
+          },
+        });
+        y = (pdf as any).lastAutoTable.finalY + 6;
+
+        // ── Totals block (right-aligned) ──
+        const tblRight = pw - margin;
+        const tblLeft = pw - margin - 65;
+        const drawTotalRow = (label: string, value: string, isFinal = false) => {
+          if (isFinal) {
+            pdf.setFillColor(ar, ag, ab);
+            pdf.rect(tblLeft - 2, y - 4, 67, 10, "F");
+            pdf.setTextColor(255, 255, 255);
+            pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(10);
+          } else {
+            pdf.setTextColor(80, 80, 80);
+            pdf.setFont("helvetica", "normal");
+            pdf.setFontSize(8.5);
+            pdf.setDrawColor(230, 230, 230);
+            pdf.line(tblLeft, y + 2, tblRight, y + 2);
+          }
+          pdf.text(label, tblLeft, y + (isFinal ? 2 : 0));
+          pdf.text(value, tblRight, y + (isFinal ? 2 : 0), { align: "right" });
+          y += isFinal ? 12 : 7;
+        };
+
+        drawTotalRow("Subtotal", `$${subtotal.toFixed(2)}`);
+        if (taxTotal > 0) drawTotalRow(`Tax (${doc.taxRate}%)`, `$${taxTotal.toFixed(2)}`);
+        if (discountTotal > 0) drawTotalRow("Discount", `-$${discountTotal.toFixed(2)}`);
+        drawTotalRow("TOTAL", `$${total.toFixed(2)}`, true);
+
+        pdf.setTextColor(30, 30, 30);
+        pdf.setFont("helvetica", "normal");
+        y += 6;
+      }
+
+      // ── Notes / Terms / Payment Instructions ──
+      const noteBlocks = [
+        { label: "Notes", text: doc.notes },
+        { label: "Terms & Conditions", text: doc.terms || (isProposal ? branding?.defaultProposalTerms : branding?.defaultInvoiceTerms) },
+        { label: "Payment Instructions", text: doc.paymentInstructions || branding?.defaultPaymentInstructions },
+      ].filter(b => b.text);
+
+      if (noteBlocks.length > 0) {
+        // check if we need a new page
+        if (y > ph - 60) { pdf.addPage(); y = 20; }
+        for (const block of noteBlocks) {
+          pdf.setFontSize(7.5);
+          pdf.setFont("helvetica", "bold");
+          pdf.setTextColor(ar, ag, ab);
+          pdf.text(block.label!.toUpperCase(), margin, y);
+          y += 5;
+          pdf.setFont("helvetica", "normal");
+          pdf.setTextColor(80, 80, 80);
+          pdf.setFontSize(8);
+          const lines = pdf.splitTextToSize(block.text!, pw - margin * 2);
+          pdf.text(lines, margin, y);
+          y += lines.length * 4.5 + 8;
+        }
+      }
+
+      // ── Footer ──
+      const footerText = branding?.footerText || `Thank you for your business — ${companyName}`;
+      pdf.setFontSize(7);
+      pdf.setTextColor(180, 180, 180);
+      pdf.setFont("helvetica", "normal");
+      pdf.text(footerText, pw / 2, ph - 8, { align: "center" });
+
+      const safeNumber = (doc.documentNumber || doc.id || "document").replace(/[^a-zA-Z0-9-_]/g, "-");
+      const pdfBuffer = Buffer.from(pdf.output("arraybuffer"));
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeNumber}.pdf"`);
+      res.send(pdfBuffer);
+    } catch (e: any) {
+      console.error("[biz-docs/pdf] error:", e);
+      res.status(500).json({ message: "Failed to generate PDF", error: e?.message });
+    }
+  });
+
   // ── Send biz-document by email to customer ─────────────────────────────────
   app.post("/api/biz-documents/:id/send-email", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {

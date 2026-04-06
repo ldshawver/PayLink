@@ -19,7 +19,7 @@ import {
   RotateCcw, DollarSign, Printer, Upload, Loader2, ChevronRight,
   ChevronDown, History, Clock, Paperclip, Palette, LayoutTemplate,
   Package, FileCheck, AlertTriangle, Info, Building2, X, ArrowRight,
-  RefreshCw, Lock, Briefcase, ArrowUpRight, Users, Mail,
+  RefreshCw, Lock, Briefcase, ArrowUpRight, Users, Mail, Download,
 } from "lucide-react";
 
 type DocType = "invoice" | "proposal" | "estimate" | "quote" | "credit_memo";
@@ -736,6 +736,19 @@ function DocumentDetailPanel({ doc, onClose, onRefresh, userRole }: { doc: BizDo
               <Mail className="h-4 w-4 mr-1" /> Email
             </Button>
           )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const a = document.createElement("a");
+              a.href = `/api/biz-documents/${doc.id}/pdf`;
+              a.download = `${doc.documentNumber || doc.id}.pdf`;
+              a.click();
+            }}
+            data-testid="btn-download-pdf"
+          >
+            <Download className="h-4 w-4 mr-1" /> PDF
+          </Button>
           <Button
             variant="outline"
             size="sm"
