@@ -4,9 +4,8 @@
 
 @font-face {
   font-family: 'MICRNumeric';
-  src: url('/fonts/MICR-Plain.ttf') format('truetype'),
-       url('/fonts/MICR-Regular.otf') format('opentype'),
-       url('/fonts/MICR-Medium.otf') format('opentype');
+  src: url('/fonts/micr-e13b.ttf') format('truetype'),
+       url('/fonts/micr-numeric.ttf') format('truetype');
   font-weight: normal;
   font-style: normal;
   font-display: block;
