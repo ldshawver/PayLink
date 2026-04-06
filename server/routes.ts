@@ -13296,35 +13296,35 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (scope === "one") {
         if (!recipientWorkerId) return res.status(400).json({ message: "Recipient required for individual messages" });
         const rw = await db.execute(sql`
-          SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
-          FROM workers w LEFT JOIN users u ON u.worker_id = w.id
-          WHERE w.id = ${recipientWorkerId}
+          SELECT id, first_name, last_name, email, mobile_phone, phone, preferences
+          FROM workers
+          WHERE id = ${recipientWorkerId}
         `);
         recipientWorkers = rw.rows ?? (rw as any);
       } else if (scope === "company") {
         const targetCompanyId = effectiveCompanyId;
         const rw = senderId
           ? await db.execute(sql`
-              SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
-              FROM workers w LEFT JOIN users u ON u.worker_id = w.id
-              WHERE w.company_id = ${targetCompanyId} AND w.id != ${senderId}
+              SELECT id, first_name, last_name, email, mobile_phone, phone, preferences
+              FROM workers
+              WHERE company_id = ${targetCompanyId} AND id != ${senderId}
             `)
           : await db.execute(sql`
-              SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
-              FROM workers w LEFT JOIN users u ON u.worker_id = w.id
-              WHERE w.company_id = ${targetCompanyId}
+              SELECT id, first_name, last_name, email, mobile_phone, phone, preferences
+              FROM workers
+              WHERE company_id = ${targetCompanyId}
             `);
         recipientWorkers = rw.rows ?? (rw as any);
       } else if (scope === "sitewide") {
         const rw = senderId
           ? await db.execute(sql`
-              SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
-              FROM workers w LEFT JOIN users u ON u.worker_id = w.id
-              WHERE w.id != ${senderId}
+              SELECT id, first_name, last_name, email, mobile_phone, phone, preferences
+              FROM workers
+              WHERE id != ${senderId}
             `)
           : await db.execute(sql`
-              SELECT w.id, w.first_name, w.last_name, u.email, w.mobile_phone, w.phone, w.preferences
-              FROM workers w LEFT JOIN users u ON u.worker_id = w.id
+              SELECT id, first_name, last_name, email, mobile_phone, phone, preferences
+              FROM workers
             `);
         recipientWorkers = rw.rows ?? (rw as any);
       }
