@@ -8,11 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Separator } from "@/components/ui/separator";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Building2, CheckCircle2, AlertCircle, Loader2, RefreshCw,
   DollarSign, ArrowUpRight, ArrowDownLeft, Clock, XCircle,
-  Landmark, Zap, ShieldCheck,
+  Landmark, Zap, ShieldCheck, Send,
 } from "lucide-react";
 
 interface TreasuryBalance {
@@ -84,12 +84,26 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge variant="outline" className={`text-xs ${s.className}`}>{s.label}</Badge>;
 }
 
+interface PayrollRun {
+  id: string;
+  periodStart: string;
+  periodEnd: string;
+  status: string;
+  totalGross: string | null;
+  totalNet: string | null;
+  approvedAt: string | null;
+  achStatus: string | null;
+}
+
 export default function TreasuryPage() {
   const { toast } = useToast();
   const [syncing, setSyncing] = useState(false);
+  const [selectedRunId, setSelectedRunId] = useState<string>("");
+  const [disburseResult, setDisburseResult] = useState<any>(null);
 
   const statusQuery = useQuery<TreasuryStatus>({ queryKey: ["/api/treasury/status"] });
   const txQuery = useQuery<TreasuryTransaction[]>({ queryKey: ["/api/treasury/transactions"] });
+  const runsQuery = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"] });
 
   const setupMutation = useMutation({
     mutationFn: async () => {
@@ -101,6 +115,26 @@ export default function TreasuryPage() {
     },
     onError: (err: Error) => {
       toast({ title: "Setup failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const disburseMutation = useMutation({
+    mutationFn: async (runId: string) => {
+      return apiRequest("POST", `/api/payroll-runs/${runId}/disburse-stripe`).then(r => r.json());
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/treasury/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/treasury/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      setDisburseResult(data);
+      if (data.success) {
+        toast({ title: "Payroll disbursed successfully", description: data.message });
+      } else {
+        toast({ title: "Partial disbursement", description: data.message, variant: "destructive" });
+      }
+    },
+    onError: (err: Error) => {
+      toast({ title: "Disbursement failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -235,6 +269,88 @@ export default function TreasuryPage() {
               </CardContent>
             </Card>
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Send className="h-4 w-4" />
+                Disburse Payroll via Stripe Treasury
+              </CardTitle>
+              <CardDescription>Select an approved payroll run to send ACH direct deposits to all eligible employees</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {fa?.features["outbound_payments.ach"] !== "active" && (
+                <Alert className="mb-3">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription className="text-xs">
+                    Outbound Payments ACH feature is not yet active. It may take a few minutes after setup for features to become active.
+                  </AlertDescription>
+                </Alert>
+              )}
+              <div className="flex gap-3 flex-wrap items-end">
+                <div className="flex-1 min-w-[240px] space-y-1.5">
+                  <label className="text-sm font-medium">Payroll Run</label>
+                  <Select value={selectedRunId} onValueChange={v => { setSelectedRunId(v); setDisburseResult(null); }}>
+                    <SelectTrigger data-testid="select-payroll-run-disburse">
+                      <SelectValue placeholder="Select approved payroll run…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(runsQuery.data || [])
+                        .filter(r => r.approvedAt && (r.status === "processed" || r.status === "approved"))
+                        .map(r => (
+                          <SelectItem key={r.id} value={r.id}>
+                            {r.periodStart} – {r.periodEnd}
+                            {r.totalNet && ` · Net: $${parseFloat(r.totalNet).toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
+                            {r.achStatus === "submitted" && " (ACH submitted)"}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  data-testid="button-disburse-treasury"
+                  disabled={!selectedRunId || disburseMutation.isPending || fa?.features["outbound_payments.ach"] !== "active"}
+                  onClick={() => selectedRunId && disburseMutation.mutate(selectedRunId)}
+                >
+                  {disburseMutation.isPending
+                    ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Disbursing…</>
+                    : <><Send className="mr-2 h-4 w-4" />Disburse via Stripe</>}
+                </Button>
+              </div>
+
+              {disburseResult && (
+                <div className="mt-4 space-y-2">
+                  <Alert variant={disburseResult.success ? "default" : "destructive"}>
+                    <AlertDescription className="text-xs">{disburseResult.message}</AlertDescription>
+                  </Alert>
+                  {disburseResult.results && disburseResult.results.length > 0 && (
+                    <div className="rounded-md border overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="text-xs">Employee</TableHead>
+                            <TableHead className="text-xs">Amount</TableHead>
+                            <TableHead className="text-xs">Status</TableHead>
+                            <TableHead className="text-xs">Error</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {disburseResult.results.map((r: any, i: number) => (
+                            <TableRow key={i}>
+                              <TableCell className="text-xs">{r.workerName}</TableCell>
+                              <TableCell className="text-xs font-mono">${r.amount?.toFixed(2)}</TableCell>
+                              <TableCell><StatusBadge status={r.status === "processing" || r.status === "pending" ? "pending" : r.status} /></TableCell>
+                              <TableCell className="text-xs text-red-500">{r.error || "—"}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader>

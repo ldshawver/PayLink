@@ -223,6 +223,7 @@ const navSections: NavSection[] = [
       { title: "Remittance Sources", url: "/app/payroll?tab=remittance-sources", icon: Globe },
       { title: "Expenses & Invoices", url: "/app/expenses", icon: Receipt },
       { title: "Payroll Audit", url: "/app/payroll-audit", icon: ShieldCheck },
+      { title: "Stripe Treasury", url: "/app/treasury", icon: Landmark },
     ],
   },
   {
