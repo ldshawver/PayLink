@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import {
   Bell,
@@ -22,6 +23,8 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
+  Send,
+  Settings2,
 } from "lucide-react";
 import { ResponsivePageHeader } from "@/components/responsive-page-header";
 
@@ -83,10 +86,41 @@ export default function NotificationSettingsPage() {
     registerToken,
   } = usePushNotifications();
   const [pushPermissionGranted, setPushPermissionGranted] = useState(false);
+  const [testPhone, setTestPhone] = useState("");
+  const [testSending, setTestSending] = useState(false);
+
+  const { data: me } = useQuery<{ role: string }>({ queryKey: ["/api/auth/me"] });
+  const isAdmin = me?.role === "admin";
+
+  const { data: notifStatus } = useQuery<{
+    sms: { configured: boolean; fromNumber: string | null };
+    email: { configured: boolean; from: string | null };
+  }>({
+    queryKey: ["/api/admin/notification-status"],
+    enabled: isAdmin,
+  });
 
   const { data: preferences = [], isLoading } = useQuery<NotificationPref[]>({
     queryKey: ["/api/notification-preferences"],
   });
+
+  const handleTestSms = async () => {
+    if (!testPhone.trim()) return;
+    setTestSending(true);
+    try {
+      const res = await apiRequest("POST", "/api/admin/test-sms", { phone: testPhone.trim() });
+      const data = await res.json();
+      if (data.sent) {
+        toast({ title: "Test SMS sent!", description: `Message delivered to ${data.to}` });
+      } else {
+        toast({ title: "SMS failed", description: data.error || "Unknown error", variant: "destructive" });
+      }
+    } catch (e: any) {
+      toast({ title: "SMS failed", description: e.message, variant: "destructive" });
+    } finally {
+      setTestSending(false);
+    }
+  };
 
   useEffect(() => {
     setPushPermissionGranted(permissionState === "granted");
@@ -202,6 +236,84 @@ export default function NotificationSettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {isAdmin && (
+        <Card data-testid="card-admin-notification-config">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Settings2 className="h-5 w-5 text-teal-500" />
+              Notification Config (Admin)
+            </CardTitle>
+            <CardDescription>Integration status and test tools for SMS and email</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap gap-3">
+              <div className="flex items-center gap-2 text-sm">
+                <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                <span>SMS (Twilio):</span>
+                {notifStatus ? (
+                  notifStatus.sms.configured ? (
+                    <Badge variant="outline" className="gap-1 text-green-600 border-green-300">
+                      <CheckCircle2 className="h-3 w-3" /> Configured
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="gap-1 text-red-500 border-red-300">
+                      <XCircle className="h-3 w-3" /> Not configured
+                    </Badge>
+                  )
+                ) : (
+                  <Badge variant="outline" className="text-muted-foreground">Checking…</Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <Mail className="h-4 w-4 text-muted-foreground" />
+                <span>Email (SMTP):</span>
+                {notifStatus ? (
+                  notifStatus.email.configured ? (
+                    <Badge variant="outline" className="gap-1 text-green-600 border-green-300">
+                      <CheckCircle2 className="h-3 w-3" /> Configured
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="gap-1 text-red-500 border-red-300">
+                      <XCircle className="h-3 w-3" /> Not configured
+                    </Badge>
+                  )
+                ) : (
+                  <Badge variant="outline" className="text-muted-foreground">Checking…</Badge>
+                )}
+              </div>
+            </div>
+            <Separator />
+            <div>
+              <p className="text-sm font-medium mb-2">Send a test SMS</p>
+              <p className="text-xs text-muted-foreground mb-3">
+                Enter a phone number to verify SMS delivery is working end-to-end.
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  value={testPhone}
+                  onChange={e => setTestPhone(e.target.value)}
+                  placeholder="+1 (555) 000-0000"
+                  className="max-w-xs"
+                  data-testid="input-test-sms-phone"
+                />
+                <Button
+                  onClick={handleTestSms}
+                  disabled={testSending || !testPhone.trim()}
+                  size="sm"
+                  data-testid="button-send-test-sms"
+                >
+                  {testSending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Send className="h-4 w-4 mr-2" />}
+                  Send Test
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                Note: Workers must have a phone number on their profile to receive SMS alerts. SMS alerts are sent when you publish a schedule or send a message with the SMS channel.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card data-testid="card-notification-categories">
         <CardHeader>

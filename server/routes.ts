@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import bcrypt from "bcrypt";
 import multer from "multer";
-import { sendScheduleEmailNotification, sendScheduleSmsNotification } from "./notifications";
+import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePhone } from "./notifications";
 import path from "path";
 import { db } from "./db";
 import { sql, eq } from "drizzle-orm";
@@ -12595,6 +12595,49 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  // Admin — test SMS (send a one-off test message to verify Twilio credentials)
+  app.post("/api/admin/test-sms", requireRole("admin"), async (req, res) => {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ message: "phone is required" });
+
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+
+    if (!accountSid || !authToken || !fromNumber) {
+      return res.status(503).json({ message: "Twilio not configured", configured: false });
+    }
+
+    try {
+      const twilio = (await import("twilio")).default;
+      const client = twilio(accountSid, authToken);
+      await client.messages.create({
+        body: "PayLink test message — SMS notifications are working correctly!",
+        from: normalizePhone(fromNumber),
+        to: normalizePhone(phone),
+      });
+      console.log(`[SMS] Test message sent to ${phone}`);
+      res.json({ sent: true, to: normalizePhone(phone) });
+    } catch (err: any) {
+      console.error("[SMS] Test message failed:", err.message);
+      res.status(500).json({ sent: false, error: err.message });
+    }
+  });
+
+  // Admin — SMS/notification config status
+  app.get("/api/admin/notification-status", requireRole("admin"), async (_req, res) => {
+    res.json({
+      sms: {
+        configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER),
+        fromNumber: process.env.TWILIO_PHONE_NUMBER ? "configured" : null,
+      },
+      email: {
+        configured: !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS),
+        from: process.env.SMTP_FROM || null,
+      },
+    });
+  });
+
   // Admin — view all requests
   app.get("/api/admin/license-requests", requireRole("admin"), async (req, res) => {
     try {
@@ -12934,7 +12977,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const workerChannel = prefs.messagingChannel || "app";
 
         const shouldEmail = (channel === "email" || channel === "both") && (workerChannel === "email" || workerChannel === "both");
-        const shouldSms = (channel === "sms" || channel === "both") && (workerChannel === "sms" || workerChannel === "both");
+        // SMS: if the sender explicitly picked sms/both, deliver to anyone with a phone number.
+        // Worker's own channel preference only gates app-to-SMS preference, not admin-sent messages.
+        const shouldSms = (channel === "sms" || channel === "both");
 
         if (shouldEmail && rw.email) {
           const { getTransporter } = await import("./notifications");
@@ -12976,9 +13021,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               const client = twilio(accountSid, authToken);
               await client.messages.create({
                 body: `PayLink message from ${senderName}: ${subject.trim()}\n\n${body.trim().substring(0, 200)}`,
-                from: fromNumber,
-                to: smsPhone,
+                from: normalizePhone(fromNumber),
+                to: normalizePhone(smsPhone),
               });
+              console.log(`[SMS] Message delivered to ${smsPhone}`);
+            } else {
+              console.warn("[SMS] Twilio not configured — skipping SMS for message");
             }
           } catch (smsErr: any) {
             console.error("[Messaging] SMS delivery failed:", smsErr.message);

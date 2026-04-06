@@ -6,7 +6,7 @@ import nodemailer from "nodemailer";
  * it assumes a US number and prepends +1.  If it's 11 digits starting
  * with 1 it prepends +.  Already-formatted +1XXXXXXXXXX passes through.
  */
-function normalizePhone(raw: string): string {
+export function normalizePhone(raw: string): string {
   const digits = raw.replace(/[^\d+]/g, "");
   if (digits.startsWith("+")) return digits;
   if (digits.length === 10) return `+1${digits}`;
