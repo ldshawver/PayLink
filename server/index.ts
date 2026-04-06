@@ -1984,6 +1984,32 @@ app.use((req, res, next) => {
       changed_at TIMESTAMP DEFAULT NOW(),
       note TEXT
     )`);
+    await run("contractor_proposals table", sql`CREATE TABLE IF NOT EXISTS contractor_proposals (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id),
+      contractor_id VARCHAR NOT NULL REFERENCES workers(id),
+      proposal_number TEXT,
+      title TEXT,
+      description TEXT,
+      issue_date TEXT NOT NULL,
+      expiration_date TEXT,
+      amount NUMERIC,
+      tax_amount NUMERIC,
+      line_items TEXT,
+      notes TEXT,
+      terms TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      submitted_at TIMESTAMP,
+      reviewed_by_user_id VARCHAR,
+      reviewed_at TIMESTAMP,
+      rejection_reason TEXT,
+      converted_to_invoice_id VARCHAR,
+      job_id VARCHAR,
+      cost_center_id VARCHAR,
+      currency TEXT DEFAULT 'USD',
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
 
     // Seed 6 system document templates (3 invoice, 3 proposal)
     try {

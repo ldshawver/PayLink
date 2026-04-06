@@ -19,7 +19,7 @@ import {
   RotateCcw, DollarSign, Printer, Upload, Loader2, ChevronRight,
   ChevronDown, History, Clock, Paperclip, Palette, LayoutTemplate,
   Package, FileCheck, AlertTriangle, Info, Building2, X, ArrowRight,
-  RefreshCw, Lock,
+  RefreshCw, Lock, Briefcase, ArrowUpRight, Users,
 } from "lucide-react";
 
 type DocType = "invoice" | "proposal" | "estimate" | "quote" | "credit_memo";
@@ -972,6 +972,609 @@ function DocumentRow({ doc, onView, onEdit, onDelete, canEdit }: {
   );
 }
 
+// ── Contractor Hub ─────────────────────────────────────────────────────────
+
+interface ContractorProposal {
+  id: string;
+  company_id?: string;
+  contractor_id: string;
+  proposal_number?: string;
+  title?: string;
+  description?: string;
+  issue_date: string;
+  expiration_date?: string;
+  amount?: string;
+  tax_amount?: string;
+  line_items?: string;
+  notes?: string;
+  terms?: string;
+  status: string;
+  rejection_reason?: string;
+  converted_to_invoice_id?: string;
+  currency?: string;
+  first_name?: string;
+  last_name?: string;
+  contractor_email?: string;
+  created_at?: string;
+}
+
+interface ContractorInvoice {
+  id: string;
+  company_id?: string;
+  contractor_id: string;
+  invoice_number?: string;
+  invoice_date: string;
+  due_date?: string;
+  amount: string;
+  description?: string;
+  status: string;
+  rejection_reason?: string;
+  paid_at?: string;
+  proposal_reference?: string;
+}
+
+const PROPOSAL_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+  draft: { label: "Draft", color: "text-gray-700", bg: "bg-gray-100" },
+  submitted: { label: "Submitted", color: "text-blue-700", bg: "bg-blue-100" },
+  approved: { label: "Accepted", color: "text-green-700", bg: "bg-green-100" },
+  rejected: { label: "Rejected", color: "text-red-700", bg: "bg-red-100" },
+  revision_requested: { label: "Needs Revision", color: "text-amber-700", bg: "bg-amber-100" },
+};
+
+const INV_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+  draft: { label: "Draft", color: "text-gray-700", bg: "bg-gray-100" },
+  submitted: { label: "Submitted", color: "text-blue-700", bg: "bg-blue-100" },
+  approved: { label: "Approved", color: "text-green-700", bg: "bg-green-100" },
+  rejected: { label: "Rejected", color: "text-red-700", bg: "bg-red-100" },
+  paid: { label: "Paid", color: "text-emerald-700", bg: "bg-emerald-100" },
+};
+
+function ProposalStatusBadge({ status }: { status: string }) {
+  const cfg = PROPOSAL_STATUS_CONFIG[status] || { label: status, color: "text-gray-700", bg: "bg-gray-100" };
+  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${cfg.bg} ${cfg.color}`}>{cfg.label}</span>;
+}
+
+function InvoiceStatusBadge({ status }: { status: string }) {
+  const cfg = INV_STATUS_CONFIG[status] || { label: status, color: "text-gray-700", bg: "bg-gray-100" };
+  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${cfg.bg} ${cfg.color}`}>{cfg.label}</span>;
+}
+
+function ProposalFormModal({
+  open, onClose, editProposal, isAdmin
+}: {
+  open: boolean;
+  onClose: () => void;
+  editProposal?: ContractorProposal | null;
+  isAdmin: boolean;
+}) {
+  const { toast } = useToast();
+  const isEdit = !!editProposal;
+  const [form, setForm] = useState({
+    companyId: editProposal?.company_id || "",
+    title: editProposal?.title || "",
+    description: editProposal?.description || "",
+    issueDate: editProposal?.issue_date || new Date().toISOString().split("T")[0],
+    expirationDate: editProposal?.expiration_date || "",
+    notes: editProposal?.notes || "",
+    terms: editProposal?.terms || "",
+    currency: editProposal?.currency || "USD",
+  });
+  const [items, setItems] = useState<LineItem[]>(() => {
+    if (!editProposal?.line_items) return [];
+    try { return JSON.parse(editProposal.line_items); } catch { return []; }
+  });
+  const [taxRate, setTaxRate] = useState(0);
+
+  const { data: companies = [] } = useQuery<any[]>({ queryKey: ["/api/contractor-proposals/companies"] });
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const subtotal = items.reduce((s, i) => s + Number(i.amount || 0), 0);
+      const taxAmt = subtotal * (taxRate / 100);
+      const body = {
+        ...form,
+        lineItems: items,
+        amount: (subtotal + taxAmt).toFixed(2),
+        taxAmount: taxAmt.toFixed(2),
+      };
+      if (isEdit) {
+        return apiRequest("PATCH", `/api/contractor-proposals/${editProposal!.id}`, body);
+      } else {
+        return apiRequest("POST", "/api/contractor-proposals", body);
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
+      toast({ title: isEdit ? "Proposal updated" : "Proposal created" });
+      onClose();
+    },
+    onError: (e: any) => toast({ title: e?.message || "Error saving proposal", variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={v => !v && onClose()}>
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{isEdit ? "Edit Proposal" : "New Contractor Proposal"}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <Label>Send To (Company)</Label>
+              <Select value={form.companyId} onValueChange={v => setForm(p => ({ ...p, companyId: v }))}>
+                <SelectTrigger data-testid="select-proposal-company"><SelectValue placeholder="Select company..." /></SelectTrigger>
+                <SelectContent>
+                  {companies.map((c: any) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name || c.legal_name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>Title / Project Name</Label>
+              <Input value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} placeholder="Web redesign project..." data-testid="input-proposal-title" />
+            </div>
+            <div className="space-y-1">
+              <Label>Issue Date</Label>
+              <Input type="date" value={form.issueDate} onChange={e => setForm(p => ({ ...p, issueDate: e.target.value }))} data-testid="input-proposal-issue-date" />
+            </div>
+            <div className="space-y-1">
+              <Label>Expiration Date</Label>
+              <Input type="date" value={form.expirationDate} onChange={e => setForm(p => ({ ...p, expirationDate: e.target.value }))} data-testid="input-proposal-exp-date" />
+            </div>
+            <div className="space-y-1">
+              <Label>Currency</Label>
+              <Select value={form.currency} onValueChange={v => setForm(p => ({ ...p, currency: v }))}>
+                <SelectTrigger data-testid="select-proposal-currency"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="USD">USD</SelectItem>
+                  <SelectItem value="CAD">CAD</SelectItem>
+                  <SelectItem value="EUR">EUR</SelectItem>
+                  <SelectItem value="GBP">GBP</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label>Description / Scope of Work</Label>
+            <Textarea value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} rows={3} placeholder="Describe the work or services..." data-testid="textarea-proposal-description" />
+          </div>
+          <Separator />
+          <div>
+            <p className="text-sm font-semibold mb-2">Line Items</p>
+            <LineItemsEditor items={items} onChange={setItems} taxRate={taxRate} onTaxRateChange={setTaxRate} />
+          </div>
+          <div className="space-y-1">
+            <Label>Notes</Label>
+            <Textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={2} data-testid="textarea-proposal-notes" />
+          </div>
+          <div className="space-y-1">
+            <Label>Terms & Conditions</Label>
+            <Textarea value={form.terms} onChange={e => setForm(p => ({ ...p, terms: e.target.value }))} rows={2} data-testid="textarea-proposal-terms" />
+          </div>
+        </div>
+        <DialogFooter className="mt-4">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="btn-save-proposal">
+            {saveMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+            {isEdit ? "Save Changes" : "Create Proposal"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ContractorHubTab({ isAdmin }: { isAdmin: boolean }) {
+  const { toast } = useToast();
+  const [activeSubTab, setActiveSubTab] = useState("proposals");
+  const [createProposalOpen, setCreateProposalOpen] = useState(false);
+  const [editProposal, setEditProposal] = useState<ContractorProposal | null>(null);
+  const [viewProposal, setViewProposal] = useState<ContractorProposal | null>(null);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+  const [revisionNotes, setRevisionNotes] = useState("");
+  const [revisionTarget, setRevisionTarget] = useState<string | null>(null);
+  const [payAmount, setPayAmount] = useState("");
+  const [payRef, setPayRef] = useState("");
+  const [payTarget, setPayTarget] = useState<string | null>(null);
+
+  const { data: proposals = [], isLoading: proposalsLoading, refetch: refetchProposals } = useQuery<ContractorProposal[]>({
+    queryKey: ["/api/contractor-proposals"],
+  });
+
+  const { data: invoices = [], isLoading: invoicesLoading, refetch: refetchInvoices } = useQuery<ContractorInvoice[]>({
+    queryKey: ["/api/contractor-invoices"],
+  });
+
+  const proposalMutation = useMutation({
+    mutationFn: ({ id, action, body }: { id: string; action: string; body?: any }) =>
+      apiRequest("POST", `/api/contractor-proposals/${id}/${action}`, body || {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+      setRejectTarget(null);
+      setRevisionTarget(null);
+      setViewProposal(null);
+      toast({ title: "Done" });
+    },
+    onError: (e: any) => toast({ title: e?.message || "Action failed", variant: "destructive" }),
+  });
+
+  const deleteProposalMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/contractor-proposals/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
+      toast({ title: "Proposal deleted" });
+    },
+    onError: () => toast({ title: "Cannot delete this proposal", variant: "destructive" }),
+  });
+
+  const invoiceMutation = useMutation({
+    mutationFn: ({ id, action, body }: { id: string; action: string; body?: any }) =>
+      apiRequest("POST", `/api/contractor-invoices/${id}/${action}`, body || {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+      setPayTarget(null);
+      toast({ title: "Done" });
+    },
+    onError: (e: any) => toast({ title: e?.message || "Action failed", variant: "destructive" }),
+  });
+
+  const pendingProposals = proposals.filter(p => p.status === "submitted");
+  const pendingInvoices = invoices.filter(i => i.status === "submitted");
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold flex items-center gap-2">
+            <Briefcase className="h-4 w-4 text-primary" />
+            {isAdmin ? "Contractor Proposals & Invoices" : "My Proposals & Invoices"}
+          </h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {isAdmin
+              ? "Review inbound proposals from contractors; accept and convert to payable invoices"
+              : "Send proposals to companies; track acceptance and invoice payments"}
+          </p>
+        </div>
+        {!isAdmin && (
+          <Button size="sm" onClick={() => setCreateProposalOpen(true)} data-testid="btn-new-proposal">
+            <Plus className="h-4 w-4 mr-1" /> New Proposal
+          </Button>
+        )}
+      </div>
+
+      {isAdmin && (pendingProposals.length > 0 || pendingInvoices.length > 0) && (
+        <div className="grid grid-cols-2 gap-3">
+          {pendingProposals.length > 0 && (
+            <Card className="border-blue-200 bg-blue-50 dark:bg-blue-950/20">
+              <CardContent className="p-3 flex items-center gap-3">
+                <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center">
+                  <FileText className="h-4 w-4 text-blue-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-blue-700">{pendingProposals.length} Proposal{pendingProposals.length !== 1 ? "s" : ""} Awaiting Review</p>
+                  <p className="text-xs text-blue-600">Click Proposals tab to review</p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+          {pendingInvoices.length > 0 && (
+            <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20">
+              <CardContent className="p-3 flex items-center gap-3">
+                <div className="h-8 w-8 rounded-full bg-amber-100 flex items-center justify-center">
+                  <DollarSign className="h-4 w-4 text-amber-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-amber-700">{pendingInvoices.length} Invoice{pendingInvoices.length !== 1 ? "s" : ""} Awaiting Payment</p>
+                  <p className="text-xs text-amber-600">Click Invoices tab to pay</p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      <Tabs value={activeSubTab} onValueChange={setActiveSubTab}>
+        <TabsList>
+          <TabsTrigger value="proposals" data-testid="subtab-contractor-proposals">
+            Proposals
+            {isAdmin && pendingProposals.length > 0 && (
+              <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-blue-500 text-white text-xs font-bold">{pendingProposals.length}</span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="invoices" data-testid="subtab-contractor-invoices">
+            Invoices
+            {isAdmin && pendingInvoices.length > 0 && (
+              <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500 text-white text-xs font-bold">{pendingInvoices.length}</span>
+            )}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="proposals" className="mt-4">
+          {proposalsLoading ? (
+            <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : proposals.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <FileText className="h-12 w-12 text-muted-foreground/40 mb-3" />
+              <p className="font-medium text-muted-foreground">{isAdmin ? "No contractor proposals yet" : "No proposals yet"}</p>
+              {!isAdmin && (
+                <Button className="mt-4" size="sm" onClick={() => setCreateProposalOpen(true)} data-testid="btn-create-first-proposal">
+                  <Plus className="h-4 w-4 mr-1" /> Create Your First Proposal
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="border rounded-lg overflow-hidden">
+              {proposals.map(p => (
+                <div key={p.id} className="flex items-center justify-between p-3 hover:bg-muted/30 border-b last:border-b-0" data-testid={`row-proposal-${p.id}`}>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                      <FileText className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-sm">{p.proposal_number || "—"}</span>
+                        <ProposalStatusBadge status={p.status} />
+                        {p.converted_to_invoice_id && (
+                          <Badge variant="outline" className="text-xs text-green-600 border-green-300">Converted to Invoice</Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground truncate">
+                        {isAdmin ? `${p.first_name || ""} ${p.last_name || ""}`.trim() || "Unknown Contractor" : p.title || "—"}
+                        {p.title && isAdmin ? ` — ${p.title}` : ""}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 flex-shrink-0 ml-4">
+                    <div className="text-right hidden sm:block">
+                      <p className="font-semibold text-sm">${Number(p.amount || 0).toFixed(2)}</p>
+                      <p className="text-xs text-muted-foreground">{p.issue_date}</p>
+                    </div>
+                    <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                      <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => setViewProposal(p)} data-testid={`btn-view-proposal-${p.id}`}>
+                        <Eye className="h-3.5 w-3.5 mr-1" /> View
+                      </Button>
+                      {!isAdmin && ["draft", "revision_requested"].includes(p.status) && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditProposal(p)} data-testid={`btn-edit-proposal-${p.id}`}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      {!isAdmin && ["draft", "rejected"].includes(p.status) && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => {
+                          if (window.confirm("Delete this proposal?")) deleteProposalMutation.mutate(p.id);
+                        }} data-testid={`btn-delete-proposal-${p.id}`}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      {!isAdmin && ["draft", "revision_requested"].includes(p.status) && p.company_id && (
+                        <Button size="sm" className="h-8 px-2 text-xs" onClick={() => proposalMutation.mutate({ id: p.id, action: "submit" })} disabled={proposalMutation.isPending} data-testid={`btn-submit-proposal-${p.id}`}>
+                          <Send className="h-3.5 w-3.5 mr-1" /> Submit
+                        </Button>
+                      )}
+                      {isAdmin && p.status === "submitted" && (
+                        <>
+                          <Button size="sm" className="h-8 px-2 text-xs bg-green-600 hover:bg-green-700 text-white" onClick={() => proposalMutation.mutate({ id: p.id, action: "convert-to-invoice" })} disabled={proposalMutation.isPending} data-testid={`btn-accept-proposal-${p.id}`}>
+                            <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Accept & Invoice
+                          </Button>
+                          <Button size="sm" variant="outline" className="h-8 px-2 text-xs" onClick={() => { setRevisionTarget(p.id); setRevisionNotes(""); }} data-testid={`btn-revision-proposal-${p.id}`}>
+                            <RotateCcw className="h-3.5 w-3.5 mr-1" /> Revise
+                          </Button>
+                          <Button size="sm" variant="destructive" className="h-8 px-2 text-xs" onClick={() => { setRejectTarget(p.id); setRejectionReason(""); }} data-testid={`btn-reject-proposal-${p.id}`}>
+                            <XCircle className="h-3.5 w-3.5 mr-1" /> Reject
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="invoices" className="mt-4">
+          {invoicesLoading ? (
+            <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : invoices.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <DollarSign className="h-12 w-12 text-muted-foreground/40 mb-3" />
+              <p className="font-medium text-muted-foreground">{isAdmin ? "No contractor invoices yet" : "No invoices yet"}</p>
+              {!isAdmin && <p className="text-sm text-muted-foreground mt-1">Invoices are created when a company accepts your proposal.</p>}
+            </div>
+          ) : (
+            <div className="border rounded-lg overflow-hidden">
+              {invoices.map(inv => (
+                <div key={inv.id} className="flex items-center justify-between p-3 hover:bg-muted/30 border-b last:border-b-0" data-testid={`row-contractor-invoice-${inv.id}`}>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+                      <DollarSign className="h-4 w-4 text-amber-600" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-sm">{inv.invoice_number || "—"}</span>
+                        <InvoiceStatusBadge status={inv.status} />
+                        {inv.proposal_reference && (
+                          <Badge variant="outline" className="text-xs">{inv.proposal_reference}</Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">{inv.description || "—"} · {inv.invoice_date}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 flex-shrink-0 ml-4">
+                    <div className="text-right hidden sm:block">
+                      <p className="font-semibold text-sm">${Number(inv.amount || 0).toFixed(2)}</p>
+                      {inv.due_date && <p className="text-xs text-muted-foreground">Due {inv.due_date}</p>}
+                    </div>
+                    <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                      {isAdmin && inv.status === "submitted" && (
+                        <Button size="sm" onClick={() => { setPayTarget(inv.id); setPayAmount(inv.amount); setPayRef(""); }} className="h-8 px-2 text-xs" data-testid={`btn-pay-invoice-${inv.id}`}>
+                          <DollarSign className="h-3.5 w-3.5 mr-1" /> Mark Paid
+                        </Button>
+                      )}
+                      {isAdmin && inv.status === "submitted" && (
+                        <Button size="sm" variant="outline" onClick={() => invoiceMutation.mutate({ id: inv.id, action: "approve" })} className="h-8 px-2 text-xs" data-testid={`btn-approve-invoice-${inv.id}`}>
+                          <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Approve
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
+
+      {/* Reject Proposal Dialog */}
+      <Dialog open={!!rejectTarget} onOpenChange={v => !v && setRejectTarget(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Reject Proposal</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">Provide a reason for rejecting this proposal (optional).</p>
+            <Textarea value={rejectionReason} onChange={e => setRejectionReason(e.target.value)} placeholder="e.g. Budget constraints, different scope needed..." rows={3} data-testid="textarea-reject-reason" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => rejectTarget && proposalMutation.mutate({ id: rejectTarget, action: "reject", body: { rejectionReason } })} disabled={proposalMutation.isPending} data-testid="btn-confirm-reject">
+              Reject Proposal
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Request Revision Dialog */}
+      <Dialog open={!!revisionTarget} onOpenChange={v => !v && setRevisionTarget(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Request Revision</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">Describe what changes are needed.</p>
+            <Textarea value={revisionNotes} onChange={e => setRevisionNotes(e.target.value)} placeholder="e.g. Please break down the pricing by task..." rows={3} data-testid="textarea-revision-notes" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRevisionTarget(null)}>Cancel</Button>
+            <Button onClick={() => revisionTarget && proposalMutation.mutate({ id: revisionTarget, action: "request-revision", body: { revisionNotes } })} disabled={proposalMutation.isPending} data-testid="btn-confirm-revision">
+              Send Back for Revision
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Mark Paid Dialog */}
+      <Dialog open={!!payTarget} onOpenChange={v => !v && setPayTarget(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Mark Invoice Paid</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label>Amount Paid</Label>
+              <Input type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)} data-testid="input-pay-amount" />
+            </div>
+            <div className="space-y-1">
+              <Label>Payment Reference (check #, transfer ID, etc.)</Label>
+              <Input value={payRef} onChange={e => setPayRef(e.target.value)} placeholder="e.g. Check #1042" data-testid="input-pay-ref" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPayTarget(null)}>Cancel</Button>
+            <Button onClick={() => payTarget && invoiceMutation.mutate({ id: payTarget, action: "mark-paid", body: { paidAmount: payAmount, paymentReference: payRef } })} disabled={invoiceMutation.isPending} data-testid="btn-confirm-payment">
+              <DollarSign className="h-4 w-4 mr-1" /> Confirm Payment
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Proposal Detail Dialog */}
+      <Dialog open={!!viewProposal} onOpenChange={v => !v && setViewProposal(null)}>
+        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              {viewProposal?.proposal_number || "Proposal"}
+            </DialogTitle>
+          </DialogHeader>
+          {viewProposal && (
+            <div className="space-y-4 text-sm">
+              <div className="flex items-center gap-2">
+                <ProposalStatusBadge status={viewProposal.status} />
+                <span className="text-muted-foreground">{viewProposal.issue_date}</span>
+              </div>
+              {viewProposal.title && <div><p className="text-xs text-muted-foreground">Title</p><p className="font-medium">{viewProposal.title}</p></div>}
+              {viewProposal.description && <div><p className="text-xs text-muted-foreground">Description</p><p className="whitespace-pre-line">{viewProposal.description}</p></div>}
+              <div className="grid grid-cols-2 gap-3">
+                <div><p className="text-xs text-muted-foreground">Amount</p><p className="font-semibold text-base">${Number(viewProposal.amount || 0).toFixed(2)} {viewProposal.currency || "USD"}</p></div>
+                {viewProposal.expiration_date && <div><p className="text-xs text-muted-foreground">Expires</p><p>{viewProposal.expiration_date}</p></div>}
+              </div>
+              {viewProposal.line_items && (() => {
+                try {
+                  const items: LineItem[] = JSON.parse(viewProposal.line_items);
+                  if (items.length === 0) return null;
+                  return (
+                    <div>
+                      <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wide mb-2">Line Items</p>
+                      <div className="border rounded-lg overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead className="bg-muted/30">
+                            <tr>
+                              <th className="text-left p-2 text-xs font-medium">Description</th>
+                              <th className="text-right p-2 text-xs font-medium">Qty</th>
+                              <th className="text-right p-2 text-xs font-medium">Price</th>
+                              <th className="text-right p-2 text-xs font-medium">Amount</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {items.map((item, i) => (
+                              <tr key={i} className="border-t">
+                                <td className="p-2">{item.description}</td>
+                                <td className="p-2 text-right">{Number(item.quantity)}</td>
+                                <td className="p-2 text-right">${Number(item.unitPrice).toFixed(2)}</td>
+                                <td className="p-2 text-right">${Number(item.amount).toFixed(2)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                } catch { return null; }
+              })()}
+              {viewProposal.notes && <div><p className="text-xs text-muted-foreground">Notes</p><p className="whitespace-pre-line">{viewProposal.notes}</p></div>}
+              {viewProposal.terms && <div><p className="text-xs text-muted-foreground">Terms</p><p className="whitespace-pre-line text-xs">{viewProposal.terms}</p></div>}
+              {viewProposal.rejection_reason && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                  <p className="text-xs font-semibold text-red-700 mb-1">
+                    {viewProposal.status === "revision_requested" ? "Revision Requested" : "Rejection Reason"}
+                  </p>
+                  <p className="text-red-800">{viewProposal.rejection_reason}</p>
+                </div>
+              )}
+              {viewProposal.converted_to_invoice_id && (
+                <div className="p-3 bg-green-50 border border-green-200 rounded-lg flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <p className="text-green-800 text-sm font-medium">Accepted — Invoice has been created</p>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewProposal(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create/Edit Proposal Modal */}
+      {(createProposalOpen || editProposal) && (
+        <ProposalFormModal
+          open={true}
+          onClose={() => { setCreateProposalOpen(false); setEditProposal(null); }}
+          editProposal={editProposal}
+          isAdmin={isAdmin}
+        />
+      )}
+    </div>
+  );
+}
+
 function TemplatesTab() {
   const { data: templates, isLoading } = useQuery<Template[]>({ queryKey: ["/api/biz-document-templates"] });
 
@@ -1089,9 +1692,11 @@ export default function BizDocsPage() {
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">Create, submit, and track invoices and proposals</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)} data-testid="btn-create-doc">
-          <Plus className="h-4 w-4 mr-1" /> New Document
-        </Button>
+        {activeTab !== "contractor-hub" && (
+          <Button onClick={() => setCreateOpen(true)} data-testid="btn-create-doc">
+            <Plus className="h-4 w-4 mr-1" /> New Document
+          </Button>
+        )}
       </div>
 
       <div className="flex-1 overflow-hidden flex flex-col">
@@ -1109,6 +1714,9 @@ export default function BizDocsPage() {
                   </span>
                 )}
               </TabsTrigger>
+              <TabsTrigger value="contractor-hub" data-testid="tab-contractor-hub">
+                <Briefcase className="h-4 w-4 mr-1" /> Contractor Hub
+              </TabsTrigger>
               <TabsTrigger value="templates" data-testid="tab-templates">
                 <LayoutTemplate className="h-4 w-4 mr-1" /> Templates
               </TabsTrigger>
@@ -1119,7 +1727,9 @@ export default function BizDocsPage() {
           </div>
 
           <div className="flex-1 overflow-y-auto">
-            {activeTab === "templates" ? (
+            {activeTab === "contractor-hub" ? (
+              <ContractorHubTab isAdmin={isAdmin} />
+            ) : activeTab === "templates" ? (
               isAdmin ? (
                 <div className="p-4"><TemplatesTab /></div>
               ) : (

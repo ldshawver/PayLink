@@ -1736,6 +1736,38 @@ export const insertContractorInvoiceAttachmentSchema = createInsertSchema(contra
 export type ContractorInvoiceAttachment = typeof contractorInvoiceAttachments.$inferSelect;
 export type InsertContractorInvoiceAttachment = z.infer<typeof insertContractorInvoiceAttachmentSchema>;
 
+// ── Contractor Proposals ──────────────────────────────────────────────────
+export const contractorProposals = pgTable("contractor_proposals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  contractorId: varchar("contractor_id").notNull().references(() => workers.id),
+  proposalNumber: text("proposal_number"),
+  title: text("title"),
+  description: text("description"),
+  issueDate: text("issue_date").notNull(),
+  expirationDate: text("expiration_date"),
+  amount: numeric("amount"),
+  taxAmount: numeric("tax_amount"),
+  lineItems: text("line_items"),
+  notes: text("notes"),
+  terms: text("terms"),
+  status: text("status").notNull().default("draft"),
+  submittedAt: timestamp("submitted_at"),
+  reviewedByUserId: varchar("reviewed_by_user_id"),
+  reviewedAt: timestamp("reviewed_at"),
+  rejectionReason: text("rejection_reason"),
+  convertedToInvoiceId: varchar("converted_to_invoice_id"),
+  jobId: varchar("job_id"),
+  costCenterId: varchar("cost_center_id"),
+  currency: text("currency").default("USD"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertContractorProposalSchema = createInsertSchema(contractorProposals).omit({ id: true, createdAt: true, updatedAt: true });
+export type ContractorProposal = typeof contractorProposals.$inferSelect;
+export type InsertContractorProposal = z.infer<typeof insertContractorProposalSchema>;
+
 // ── Recurring Expense Templates ──────────────────────────────────────────
 export const recurringExpenseTemplates = pgTable("recurring_expense_templates", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

@@ -5129,6 +5129,262 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to export" }); }
   });
 
+  // ── CONTRACTOR PROPOSALS ──────────────────────────────────────────────────
+
+  // GET /api/contractor-proposals — contractors see own; admins/managers see company inbound
+  app.get("/api/contractor-proposals", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const userRole = user?.role || "employee";
+      const companyId = user?.companyId;
+      if (!companyId) return res.status(400).json({ message: "No company" });
+
+      let rows: any[];
+      if (["admin", "manager", "supervisor"].includes(userRole)) {
+        // Admins see all proposals targeted at their company
+        const result = await db.execute(sql`
+          SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email
+          FROM contractor_proposals cp
+          LEFT JOIN workers w ON w.id = cp.contractor_id
+          WHERE cp.company_id = ${companyId}
+          ORDER BY cp.created_at DESC
+        `);
+        rows = result.rows ?? (result as any);
+      } else {
+        // Contractors see their own proposals
+        const workerId = user?.workerId;
+        if (!workerId) return res.json([]);
+        const result = await db.execute(sql`
+          SELECT cp.*, w.first_name, w.last_name, w.worker_type
+          FROM contractor_proposals cp
+          LEFT JOIN workers w ON w.id = cp.contractor_id
+          WHERE cp.contractor_id = ${workerId}
+          ORDER BY cp.created_at DESC
+        `);
+        rows = result.rows ?? (result as any);
+      }
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch proposals" }); }
+  });
+
+  // POST /api/contractor-proposals — contractor creates a proposal
+  app.post("/api/contractor-proposals", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const workerId = user?.workerId;
+      if (!workerId) return res.status(403).json({ message: "Must be linked to a worker account" });
+      const worker = await storage.getWorker(workerId);
+      if (!worker || worker.workerType !== "contractor") {
+        return res.status(403).json({ message: "Only contractors can create proposals" });
+      }
+      const { companyId, title, description, issueDate, expirationDate, amount, taxAmount, lineItems, notes, terms, jobId, costCenterId, currency } = req.body;
+      if (!issueDate) return res.status(400).json({ message: "Issue date required" });
+
+      // Generate proposal number
+      const countResult = await db.execute(sql`SELECT COUNT(*) as c FROM contractor_proposals WHERE contractor_id = ${workerId}`);
+      const count = Number((countResult.rows[0] as any)?.c ?? 0);
+      const proposalNumber = `CP-${workerId.slice(-4).toUpperCase()}-${String(count + 1).padStart(4, "0")}`;
+
+      const result = await db.execute(sql`
+        INSERT INTO contractor_proposals (company_id, contractor_id, proposal_number, title, description, issue_date, expiration_date, amount, tax_amount, line_items, notes, terms, job_id, cost_center_id, currency, status)
+        VALUES (${companyId || null}, ${workerId}, ${proposalNumber}, ${title || null}, ${description || null}, ${issueDate}, ${expirationDate || null}, ${amount || null}, ${taxAmount || null}, ${lineItems ? JSON.stringify(lineItems) : null}, ${notes || null}, ${terms || null}, ${jobId || null}, ${costCenterId || null}, ${currency || "USD"}, 'draft')
+        RETURNING *
+      `);
+      const proposal = (result.rows ?? (result as any))[0];
+      res.status(201).json(proposal);
+    } catch (e) { console.error("[ContractorProposals] POST error:", e); res.status(500).json({ message: "Failed to create proposal" }); }
+  });
+
+  // PATCH /api/contractor-proposals/:id
+  app.patch("/api/contractor-proposals/:id", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const proposal = (result.rows ?? (result as any))[0];
+      if (!proposal) return res.status(404).json({ message: "Not found" });
+      const isOwner = user?.workerId === proposal.contractor_id;
+      const isManager = ["admin", "manager", "supervisor"].includes(user?.role || "");
+      if (!isOwner && !isManager) return res.status(403).json({ message: "Forbidden" });
+      if (!isOwner && isOwner === false && !["submitted", "approved", "rejected"].includes(proposal.status)) {
+        // Only manager can act on proposals they didn't create (unless it's a status-only override)
+      }
+      if (isOwner && !["draft", "revision_requested"].includes(proposal.status)) {
+        return res.status(400).json({ message: "Cannot edit a submitted proposal" });
+      }
+      const { title, description, issueDate, expirationDate, amount, taxAmount, lineItems, notes, terms, currency } = req.body;
+      await db.execute(sql`
+        UPDATE contractor_proposals SET
+          title = COALESCE(${title ?? null}, title),
+          description = COALESCE(${description ?? null}, description),
+          issue_date = COALESCE(${issueDate ?? null}, issue_date),
+          expiration_date = ${expirationDate ?? null},
+          amount = COALESCE(${amount ?? null}, amount),
+          tax_amount = ${taxAmount ?? null},
+          line_items = ${lineItems ? JSON.stringify(lineItems) : proposal.line_items},
+          notes = ${notes ?? null},
+          terms = ${terms ?? null},
+          currency = COALESCE(${currency ?? null}, currency),
+          updated_at = NOW()
+        WHERE id = ${req.params.id}
+      `);
+      const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      res.json((updated.rows ?? (updated as any))[0]);
+    } catch (e) { res.status(500).json({ message: "Failed to update proposal" }); }
+  });
+
+  // DELETE /api/contractor-proposals/:id — only draft proposals, owner only
+  app.delete("/api/contractor-proposals/:id", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const proposal = (result.rows ?? (result as any))[0];
+      if (!proposal) return res.status(404).json({ message: "Not found" });
+      const isOwner = user?.workerId === proposal.contractor_id;
+      const isManager = ["admin", "manager"].includes(user?.role || "");
+      if (!isOwner && !isManager) return res.status(403).json({ message: "Forbidden" });
+      if (!["draft", "rejected"].includes(proposal.status)) {
+        return res.status(400).json({ message: "Only draft or rejected proposals can be deleted" });
+      }
+      await db.execute(sql`DELETE FROM contractor_proposals WHERE id = ${req.params.id}`);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: "Failed to delete proposal" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/submit — contractor submits to company
+  app.post("/api/contractor-proposals/:id/submit", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const proposal = (result.rows ?? (result as any))[0];
+      if (!proposal) return res.status(404).json({ message: "Not found" });
+      if (user?.workerId !== proposal.contractor_id) return res.status(403).json({ message: "Not your proposal" });
+      if (!["draft", "revision_requested"].includes(proposal.status)) {
+        return res.status(400).json({ message: "Proposal cannot be submitted from current status" });
+      }
+      if (!proposal.company_id) return res.status(400).json({ message: "Proposal must be addressed to a company before submitting" });
+      await db.execute(sql`
+        UPDATE contractor_proposals SET status = 'submitted', submitted_at = NOW(), updated_at = NOW()
+        WHERE id = ${req.params.id}
+      `);
+      const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      res.json((updated.rows ?? (updated as any))[0]);
+    } catch (e) { res.status(500).json({ message: "Failed to submit proposal" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/accept — admin/manager accepts the proposal
+  app.post("/api/contractor-proposals/:id/accept", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const proposal = (result.rows ?? (result as any))[0];
+      if (!proposal) return res.status(404).json({ message: "Not found" });
+      if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (proposal.status !== "submitted") return res.status(400).json({ message: "Proposal must be submitted before accepting" });
+      await db.execute(sql`
+        UPDATE contractor_proposals SET status = 'approved', reviewed_by_user_id = ${userId}, reviewed_at = NOW(), updated_at = NOW()
+        WHERE id = ${req.params.id}
+      `);
+      const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      res.json((updated.rows ?? (updated as any))[0]);
+    } catch (e) { res.status(500).json({ message: "Failed to accept proposal" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/reject
+  app.post("/api/contractor-proposals/:id/reject", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const proposal = (result.rows ?? (result as any))[0];
+      if (!proposal) return res.status(404).json({ message: "Not found" });
+      if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!["submitted", "approved"].includes(proposal.status)) return res.status(400).json({ message: "Invalid status for rejection" });
+      const { rejectionReason } = req.body;
+      await db.execute(sql`
+        UPDATE contractor_proposals SET status = 'rejected', rejection_reason = ${rejectionReason || null}, reviewed_by_user_id = ${userId}, reviewed_at = NOW(), updated_at = NOW()
+        WHERE id = ${req.params.id}
+      `);
+      const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      res.json((updated.rows ?? (updated as any))[0]);
+    } catch (e) { res.status(500).json({ message: "Failed to reject proposal" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/request-revision
+  app.post("/api/contractor-proposals/:id/request-revision", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const proposal = (result.rows ?? (result as any))[0];
+      if (!proposal) return res.status(404).json({ message: "Not found" });
+      if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (proposal.status !== "submitted") return res.status(400).json({ message: "Proposal must be submitted to request revision" });
+      const { revisionNotes } = req.body;
+      await db.execute(sql`
+        UPDATE contractor_proposals SET status = 'revision_requested', rejection_reason = ${revisionNotes || null}, reviewed_by_user_id = ${userId}, reviewed_at = NOW(), updated_at = NOW()
+        WHERE id = ${req.params.id}
+      `);
+      const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      res.json((updated.rows ?? (updated as any))[0]);
+    } catch (e) { res.status(500).json({ message: "Failed to request revision" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/convert-to-invoice — admin accepts and creates contractor invoice
+  app.post("/api/contractor-proposals/:id/convert-to-invoice", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const proposal = (result.rows ?? (result as any))[0];
+      if (!proposal) return res.status(404).json({ message: "Not found" });
+      if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (!["submitted", "approved"].includes(proposal.status)) {
+        return res.status(400).json({ message: "Only submitted or approved proposals can be converted to invoices" });
+      }
+
+      // Generate invoice number
+      const countResult = await db.execute(sql`SELECT COUNT(*) as c FROM contractor_invoices WHERE contractor_id = ${proposal.contractor_id}`);
+      const count = Number((countResult.rows[0] as any)?.c ?? 0);
+      const invoiceNumber = `INV-${proposal.contractor_id.slice(-4).toUpperCase()}-${String(count + 1).padStart(4, "0")}`;
+      const today = new Date().toISOString().split("T")[0];
+
+      // Create the contractor invoice from the proposal
+      const invResult = await db.execute(sql`
+        INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id)
+        VALUES (${proposal.company_id}, ${proposal.contractor_id}, ${invoiceNumber}, ${today}, ${proposal.expiration_date || null}, ${proposal.amount || 0}, ${proposal.description || proposal.title || null}, ${proposal.id}, ${proposal.proposal_number}, ${proposal.line_items}, ${proposal.notes || null}, 'submitted', TRUE, ${proposal.job_id || null}, ${proposal.cost_center_id || null})
+        RETURNING *
+      `);
+      const invoice = (invResult.rows ?? (invResult as any))[0];
+
+      // Mark the proposal as converted
+      await db.execute(sql`
+        UPDATE contractor_proposals SET status = 'approved', converted_to_invoice_id = ${invoice.id}, reviewed_by_user_id = ${userId}, reviewed_at = NOW(), updated_at = NOW()
+        WHERE id = ${req.params.id}
+      `);
+
+      res.json({ proposal: { ...proposal, status: "approved", converted_to_invoice_id: invoice.id }, invoice });
+    } catch (e) { console.error("[ContractorProposals] convert-to-invoice error:", e); res.status(500).json({ message: "Failed to convert proposal to invoice" }); }
+  });
+
+  // GET /api/contractor-proposals/companies — list companies a contractor can send proposals to
+  app.get("/api/contractor-proposals/companies", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const workerId = user?.workerId;
+      if (!workerId) return res.json([]);
+      // Return all active companies
+      const result = await db.execute(sql`SELECT id, name, legal_name FROM companies WHERE subscription_status NOT IN ('suspended') ORDER BY name`);
+      res.json(result.rows ?? (result as any));
+    } catch (e) { res.status(500).json({ message: "Failed to fetch companies" }); }
+  });
+
   app.get("/api/shift-offers", requireAuth, async (req, res) => {
     try {
       const { companyId } = req.query as Record<string, string>;
