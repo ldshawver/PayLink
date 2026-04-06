@@ -238,7 +238,10 @@ function PreferencesTab({ worker }: { worker: Worker | null }) {
   const [notifyScheduleSms, setNotifyScheduleSms] = useState<boolean>(!!prefs.notifyScheduleSms);
   const [notifyPaydayEmail, setNotifyPaydayEmail] = useState<boolean>(prefs.notifyPaydayEmail !== false);
   const [notifyPaydaySms, setNotifyPaydaySms] = useState<boolean>(!!prefs.notifyPaydaySms);
-  const [messagingChannel, setMessagingChannel] = useState<string>(prefs.messagingChannel || "app");
+  // "app" (in-app only) is no longer a valid option — employees must have at least email or text
+  const [messagingChannel, setMessagingChannel] = useState<string>(
+    (!prefs.messagingChannel || prefs.messagingChannel === "app") ? "email" : prefs.messagingChannel
+  );
   const [language, setLanguage] = useState<string>(prefs.language || "en");
   const [timezone, setTimezone] = useState<string>(prefs.timezone || "America/Los_Angeles");
   const [dateFormat, setDateFormat] = useState<string>(prefs.dateFormat || "MM/DD/YYYY");
@@ -331,13 +334,12 @@ function PreferencesTab({ worker }: { worker: Worker | null }) {
       <Card>
         <CardHeader><CardTitle className="text-base">Messaging Preferences</CardTitle></CardHeader>
         <CardContent className="space-y-2">
-          <p className="text-sm text-muted-foreground">How would you like to receive staff messages from managers?</p>
+          <p className="text-sm text-muted-foreground">How would you like to receive staff messages from managers? You must have at least one channel enabled.</p>
           <Select value={messagingChannel} onValueChange={setMessagingChannel}>
             <SelectTrigger data-testid="select-messaging-channel">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="app">In-app only</SelectItem>
               <SelectItem value="email">Email</SelectItem>
               <SelectItem value="sms">Text (SMS)</SelectItem>
               <SelectItem value="both">Email &amp; Text (SMS)</SelectItem>

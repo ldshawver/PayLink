@@ -230,7 +230,7 @@ function ComposeDialog({ onClose, onSent }: { onClose: () => void; onSent: () =>
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              Recipients only receive via channels they have enabled in their preferences.
+              Each recipient receives the message via whichever of their preferred channels (email and/or text) matches your selection. All messages also appear in-app.
             </p>
           </div>
         )}

@@ -12974,12 +12974,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         // Check worker's messaging preference
         let prefs: any = {};
         try { prefs = JSON.parse(rw.preferences || "{}"); } catch {}
-        const workerChannel = prefs.messagingChannel || "app";
+        // Workers without a set preference default to "email" (no longer "app only")
+        const workerChannel = (!prefs.messagingChannel || prefs.messagingChannel === "app") ? "email" : prefs.messagingChannel;
 
         const shouldEmail = (channel === "email" || channel === "both") && (workerChannel === "email" || workerChannel === "both");
-        // SMS: if the sender explicitly picked sms/both, deliver to anyone with a phone number.
-        // Worker's own channel preference only gates app-to-SMS preference, not admin-sent messages.
-        const shouldSms = (channel === "sms" || channel === "both");
+        // SMS: respects worker's own channel preference. Workers can no longer choose "app only"
+        // so they will always have at least email or sms in their preference.
+        const shouldSms = (channel === "sms" || channel === "both") && (workerChannel === "sms" || workerChannel === "both");
 
         if (shouldEmail && rw.email) {
           const { getTransporter } = await import("./notifications");
