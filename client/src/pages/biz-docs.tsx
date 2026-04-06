@@ -19,7 +19,7 @@ import {
   RotateCcw, DollarSign, Printer, Upload, Loader2, ChevronRight,
   ChevronDown, History, Clock, Paperclip, Palette, LayoutTemplate,
   Package, FileCheck, AlertTriangle, Info, Building2, X, ArrowRight,
-  RefreshCw, Lock, Briefcase, ArrowUpRight, Users,
+  RefreshCw, Lock, Briefcase, ArrowUpRight, Users, Mail,
 } from "lucide-react";
 
 type DocType = "invoice" | "proposal" | "estimate" | "quote" | "credit_memo";
@@ -654,6 +654,8 @@ function DocumentDetailPanel({ doc, onClose, onRefresh, userRole }: { doc: BizDo
   const [showAttachments, setShowAttachments] = useState(false);
   const [paidAmount, setPaidAmount] = useState("");
   const [paymentRef, setPaymentRef] = useState("");
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  const [emailOverride, setEmailOverride] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const isAdmin = userRole === "admin" || userRole === "manager";
@@ -701,6 +703,18 @@ function DocumentDetailPanel({ doc, onClose, onRefresh, userRole }: { doc: BizDo
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/biz-documents"] }); onClose(); toast({ title: "Converted to invoice" }); },
   });
 
+  const emailMutation = useMutation({
+    mutationFn: (email: string) => apiRequest("POST", `/api/biz-documents/${doc.id}/send-email`, { email }),
+    onSuccess: (_r, email) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/biz-documents"] });
+      refetch();
+      onRefresh();
+      setEmailDialogOpen(false);
+      toast({ title: "Email sent", description: `Sent to ${email}` });
+    },
+    onError: (e: any) => toast({ title: "Failed to send", description: e?.message || "Email could not be sent", variant: "destructive" }),
+  });
+
   return (
     <div className="fixed inset-y-0 right-0 w-[480px] bg-background border-l shadow-2xl z-50 flex flex-col overflow-hidden">
       <div className="flex items-center justify-between p-4 border-b bg-muted/30">
@@ -712,6 +726,16 @@ function DocumentDetailPanel({ doc, onClose, onRefresh, userRole }: { doc: BizDo
           <p className="text-xs text-muted-foreground mt-0.5">{docTypeLabel(d.documentType)}{d.title ? ` — ${d.title}` : ""}</p>
         </div>
         <div className="flex items-center gap-2">
+          {isAdmin && d.status !== "voided" && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { setEmailOverride(d.assignedToEmail || ""); setEmailDialogOpen(true); }}
+              data-testid="btn-email-doc"
+            >
+              <Mail className="h-4 w-4 mr-1" /> Email
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -919,6 +943,45 @@ function DocumentDetailPanel({ doc, onClose, onRefresh, userRole }: { doc: BizDo
           {showHistory && detail?.history && <HistoryTimeline history={detail.history} />}
         </div>
       </div>
+
+      {/* Email Dialog */}
+      <Dialog open={emailDialogOpen} onOpenChange={v => !v && setEmailDialogOpen(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail className="h-4 w-4" />
+              Send {docTypeLabel(d.documentType)} by Email
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              The {docTypeLabel(d.documentType).toLowerCase()} will be sent as a formatted HTML email. The status will be updated to <strong>Sent</strong>.
+            </p>
+            <div className="space-y-1">
+              <Label htmlFor="email-recipient">Recipient Email</Label>
+              <Input
+                id="email-recipient"
+                type="email"
+                value={emailOverride}
+                onChange={e => setEmailOverride(e.target.value)}
+                placeholder="customer@example.com"
+                data-testid="input-email-recipient"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEmailDialogOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => emailOverride && emailMutation.mutate(emailOverride)}
+              disabled={!emailOverride || emailMutation.isPending}
+              data-testid="btn-confirm-send-email"
+            >
+              {emailMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Mail className="h-4 w-4 mr-1" />}
+              Send Email
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1165,10 +1228,115 @@ function ProposalFormModal({
   );
 }
 
+function ContractorInvoiceFormModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const [form, setForm] = useState({
+    companyId: "",
+    description: "",
+    amount: "",
+    invoiceDate: new Date().toISOString().split("T")[0],
+    dueDate: "",
+    notes: "",
+  });
+  const [items, setItems] = useState<LineItem[]>([]);
+  const [taxRate, setTaxRate] = useState(0);
+
+  const { data: companies = [] } = useQuery<any[]>({ queryKey: ["/api/contractor-proposals/companies"] });
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const subtotal = items.length > 0 ? items.reduce((s, i) => s + Number(i.amount || 0), 0) : Number(form.amount || 0);
+      const taxAmt = subtotal * (taxRate / 100);
+      const total = subtotal + taxAmt;
+      const body: any = {
+        companyId: form.companyId || undefined,
+        description: form.description,
+        invoiceDate: form.invoiceDate,
+        dueDate: form.dueDate || undefined,
+        notes: form.notes || undefined,
+        amount: total.toFixed(2),
+        status: "draft",
+      };
+      if (items.length > 0) body.lineItems = JSON.stringify(items);
+      return apiRequest("POST", "/api/contractor-invoices", body);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+      toast({ title: "Invoice created", description: "Submit it when ready." });
+      onClose();
+    },
+    onError: (e: any) => toast({ title: e?.message || "Error creating invoice", variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={v => !v && onClose()}>
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>New Contractor Invoice</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <Label>Invoice To (Company)</Label>
+              <Select value={form.companyId} onValueChange={v => setForm(p => ({ ...p, companyId: v === "__none__" ? "" : v }))}>
+                <SelectTrigger data-testid="select-invoice-company"><SelectValue placeholder="Select company (optional)" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None / Self-employed</SelectItem>
+                  {companies.map((c: any) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name || c.legal_name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>Invoice Date *</Label>
+              <Input type="date" value={form.invoiceDate} onChange={e => setForm(p => ({ ...p, invoiceDate: e.target.value }))} data-testid="input-invoice-date" />
+            </div>
+            <div className="space-y-1">
+              <Label>Due Date</Label>
+              <Input type="date" value={form.dueDate} onChange={e => setForm(p => ({ ...p, dueDate: e.target.value }))} data-testid="input-invoice-due-date" />
+            </div>
+            <div className="space-y-1">
+              <Label>Quick Amount (if no line items)</Label>
+              <Input type="number" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} placeholder="0.00" min="0" step="0.01" disabled={items.length > 0} data-testid="input-invoice-amount" />
+              {items.length > 0 && <p className="text-xs text-muted-foreground">Calculated from line items</p>}
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label>Description</Label>
+            <Textarea value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} rows={2} placeholder="Services rendered for..." data-testid="textarea-invoice-description" />
+          </div>
+          <Separator />
+          <div>
+            <p className="text-sm font-semibold mb-2">Line Items (optional)</p>
+            <LineItemsEditor items={items} onChange={setItems} taxRate={taxRate} onTaxRateChange={setTaxRate} />
+          </div>
+          <div className="space-y-1">
+            <Label>Notes</Label>
+            <Textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={2} data-testid="textarea-invoice-notes" />
+          </div>
+        </div>
+        <DialogFooter className="mt-4">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => saveMutation.mutate()}
+            disabled={saveMutation.isPending || (!form.amount && items.length === 0) || !form.invoiceDate}
+            data-testid="btn-save-contractor-invoice"
+          >
+            {saveMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+            Create Invoice (Draft)
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ContractorHubTab({ isAdmin }: { isAdmin: boolean }) {
   const { toast } = useToast();
   const [activeSubTab, setActiveSubTab] = useState("proposals");
   const [createProposalOpen, setCreateProposalOpen] = useState(false);
+  const [createInvoiceOpen, setCreateInvoiceOpen] = useState(false);
   const [editProposal, setEditProposal] = useState<ContractorProposal | null>(null);
   const [viewProposal, setViewProposal] = useState<ContractorProposal | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
@@ -1239,9 +1407,14 @@ function ContractorHubTab({ isAdmin }: { isAdmin: boolean }) {
           </p>
         </div>
         {!isAdmin && (
-          <Button size="sm" onClick={() => setCreateProposalOpen(true)} data-testid="btn-new-proposal">
-            <Plus className="h-4 w-4 mr-1" /> New Proposal
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => setCreateProposalOpen(true)} data-testid="btn-new-proposal">
+              <Plus className="h-4 w-4 mr-1" /> New Proposal
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setCreateInvoiceOpen(true)} data-testid="btn-new-contractor-invoice">
+              <Plus className="h-4 w-4 mr-1" /> New Invoice
+            </Button>
+          </div>
         )}
       </div>
 
@@ -1381,7 +1554,11 @@ function ContractorHubTab({ isAdmin }: { isAdmin: boolean }) {
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <DollarSign className="h-12 w-12 text-muted-foreground/40 mb-3" />
               <p className="font-medium text-muted-foreground">{isAdmin ? "No contractor invoices yet" : "No invoices yet"}</p>
-              {!isAdmin && <p className="text-sm text-muted-foreground mt-1">Invoices are created when a company accepts your proposal.</p>}
+              {!isAdmin && (
+                <Button className="mt-4" size="sm" onClick={() => setCreateInvoiceOpen(true)} data-testid="btn-create-first-invoice">
+                  <Plus className="h-4 w-4 mr-1" /> Create Your First Invoice
+                </Button>
+              )}
             </div>
           ) : (
             <div className="border rounded-lg overflow-hidden">
@@ -1408,6 +1585,11 @@ function ContractorHubTab({ isAdmin }: { isAdmin: boolean }) {
                       {inv.due_date && <p className="text-xs text-muted-foreground">Due {inv.due_date}</p>}
                     </div>
                     <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                      {!isAdmin && inv.status === "draft" && (
+                        <Button size="sm" className="h-8 px-2 text-xs" onClick={() => invoiceMutation.mutate({ id: inv.id, action: "submit" })} disabled={invoiceMutation.isPending} data-testid={`btn-submit-invoice-${inv.id}`}>
+                          <Send className="h-3.5 w-3.5 mr-1" /> Submit
+                        </Button>
+                      )}
                       {isAdmin && inv.status === "submitted" && (
                         <Button size="sm" onClick={() => { setPayTarget(inv.id); setPayAmount(inv.amount); setPayRef(""); }} className="h-8 px-2 text-xs" data-testid={`btn-pay-invoice-${inv.id}`}>
                           <DollarSign className="h-3.5 w-3.5 mr-1" /> Mark Paid
@@ -1569,6 +1751,14 @@ function ContractorHubTab({ isAdmin }: { isAdmin: boolean }) {
           onClose={() => { setCreateProposalOpen(false); setEditProposal(null); }}
           editProposal={editProposal}
           isAdmin={isAdmin}
+        />
+      )}
+
+      {/* Create Contractor Invoice Modal */}
+      {createInvoiceOpen && (
+        <ContractorInvoiceFormModal
+          open={true}
+          onClose={() => setCreateInvoiceOpen(false)}
         />
       )}
     </div>

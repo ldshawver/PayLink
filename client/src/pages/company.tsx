@@ -23,8 +23,19 @@ import {
   DollarSign, Network, Shield, Monitor, Import, Rocket, CheckCircle2,
   Globe, Briefcase, Target, CircleDot, FolderKanban, ChevronRight, Scale,
   UserPlus, Users, Lock, Eye, FilePlus, Edit3, Trash, Save, Upload, Image, X,
-  FileUp, AlertCircle, ArrowRight, Check, Download
+  FileUp, AlertCircle, ArrowRight, Check, Download, Clock, AlertTriangle
 } from "lucide-react";
+
+const US_TIMEZONES = [
+  { value: "America/New_York",    label: "Eastern (ET) — New York, Miami, Atlanta" },
+  { value: "America/Chicago",     label: "Central (CT) — Chicago, Dallas, Houston" },
+  { value: "America/Denver",      label: "Mountain (MT) — Denver, Phoenix, Salt Lake City" },
+  { value: "America/Los_Angeles", label: "Pacific (PT) — Los Angeles, Seattle, Las Vegas" },
+  { value: "America/Anchorage",   label: "Alaska (AKT) — Anchorage, Fairbanks" },
+  { value: "Pacific/Honolulu",    label: "Hawaii (HT) — Honolulu, Maui" },
+  { value: "America/Puerto_Rico", label: "Atlantic (AT) — Puerto Rico, US Virgin Islands" },
+  { value: "UTC",                 label: "UTC — Coordinated Universal Time" },
+];
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
   const search = useSearch();
@@ -223,6 +234,26 @@ function CompanyFormFields({
           <Input id="next-check-number" data-testid="input-next-check-number" type="number" value={form.nextCheckNumber} onChange={set("nextCheckNumber")} placeholder="e.g. 100" />
         </div>
       </div>
+      <div className="grid gap-2">
+        <Label>
+          Company Timezone <span className="text-destructive">*</span>
+        </Label>
+        <Select value={form.timezone} onValueChange={(v) => setForm({ ...form, timezone: v })}>
+          <SelectTrigger data-testid="select-company-timezone">
+            <SelectValue placeholder="Select timezone (required)" />
+          </SelectTrigger>
+          <SelectContent>
+            {US_TIMEZONES.map((tz) => (
+              <SelectItem key={tz.value} value={tz.value}>{tz.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {!form.timezone && (
+          <p className="text-xs text-destructive flex items-center gap-1">
+            <AlertTriangle className="h-3 w-3" /> Timezone is required for accurate payroll calculations
+          </p>
+        )}
+      </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <FileUploadField
           label="Company Logo"
@@ -247,6 +278,7 @@ const emptyCompanyForm = (): Record<string, string> => ({
   enterpriseId: "", legalEntityId: "", name: "", legalName: "", ein: "", entityType: "llc",
   address: "", city: "", state: "", zip: "", phone: "", payFrequency: "biweekly",
   logoUrl: "", iconUrl: "", nextCheckNumber: "",
+  timezone: "", // intentionally empty so user must select — no silent default
 });
 
 function CompanyInfoTab() {
@@ -255,6 +287,7 @@ function CompanyInfoTab() {
   const [editOpen, setEditOpen] = useState(false);
   const [form, setForm] = useState(emptyCompanyForm());
   const [editId, setEditId] = useState<string | null>(null);
+  const [originalTimezone, setOriginalTimezone] = useState<string>("");
 
   const { data: companies, isLoading } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -295,6 +328,8 @@ function CompanyInfoTab() {
 
   const handleEdit = (company: Company) => {
     setEditId(company.id);
+    const tz = (company as any).timezone || "";
+    setOriginalTimezone(tz);
     setForm({
       enterpriseId: company.enterpriseId || "",
       legalEntityId: company.legalEntityId || "",
@@ -311,6 +346,7 @@ function CompanyInfoTab() {
       logoUrl: company.logoUrl || "",
       iconUrl: company.iconUrl || "",
       nextCheckNumber: String(company.nextCheckNumber || ""),
+      timezone: tz,
     });
     setEditOpen(true);
   };
@@ -343,7 +379,7 @@ function CompanyInfoTab() {
               data-testid="button-submit-company"
               className="w-full mt-2"
               disabled={!form.name || addMutation.isPending}
-              onClick={() => addMutation.mutate(form)}
+              onClick={() => addMutation.mutate({ ...form, ...(form.timezone ? { timezoneConfirmed: "true" } : {}) })}
             >
               {addMutation.isPending ? "Adding..." : "Add Company"}
             </Button>
@@ -355,11 +391,20 @@ function CompanyInfoTab() {
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Company</DialogTitle></DialogHeader>
           <CompanyFormFields form={form} setForm={setForm} enterprises={enterprises} legalEntities={legalEntities} />
+          {originalTimezone && form.timezone && form.timezone !== originalTimezone && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300 mt-2" data-testid="timezone-change-warning">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>Changing the timezone from <strong>{originalTimezone}</strong> to <strong>{form.timezone}</strong> will affect how future punches and payroll are recorded. All future time entries will use the new timezone.</span>
+            </div>
+          )}
           <Button
             data-testid="button-save-company"
             className="w-full mt-2"
             disabled={!form.name || editMutation.isPending}
-            onClick={() => editId && editMutation.mutate({ id: editId, data: form })}
+            onClick={() => editId && editMutation.mutate({
+              id: editId,
+              data: { ...form, ...(form.timezone ? { timezoneConfirmed: "true" } : {}) },
+            })}
           >
             {editMutation.isPending ? "Saving..." : "Save Changes"}
           </Button>

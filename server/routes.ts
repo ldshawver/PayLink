@@ -452,6 +452,17 @@ export async function registerRoutes(
     requireAuth(req, res, next);
   });
 
+  // Populate req.user from session for all authenticated API routes
+  app.use("/api", async (req, res, next) => {
+    if (req.session?.userId && !req.user) {
+      try {
+        const u = await storage.getUser(req.session.userId);
+        if (u) (req as any).user = u;
+      } catch {}
+    }
+    next();
+  });
+
   app.get("/api/payroll-summary", async (req, res) => {
     try {
       const { year, quarter, companyId } = req.query;
@@ -622,6 +633,8 @@ export async function registerRoutes(
       const data = { ...req.body };
       if (data.enterpriseId === "") data.enterpriseId = null;
       if (data.legalEntityId === "") data.legalEntityId = null;
+      if (data.nextCheckNumber !== undefined) data.nextCheckNumber = parseInt(data.nextCheckNumber) || null;
+      if (data.timezoneConfirmed !== undefined) data.timezoneConfirmed = data.timezoneConfirmed === true || data.timezoneConfirmed === "true";
       const company = await storage.createCompany(data);
       try {
         const seedData = getDefaultRetentionPolicySeedData(company.id);
@@ -644,6 +657,7 @@ export async function registerRoutes(
       if (data.enterpriseId === "") data.enterpriseId = null;
       if (data.legalEntityId === "") data.legalEntityId = null;
       if (data.nextCheckNumber !== undefined) data.nextCheckNumber = parseInt(data.nextCheckNumber) || null;
+      if (data.timezoneConfirmed !== undefined) data.timezoneConfirmed = data.timezoneConfirmed === true || data.timezoneConfirmed === "true";
       // Audit timezone changes — these affect punch dates, OT, and payroll grouping
       if (data.timezone) {
         const existing = await storage.getCompany(req.params.id as string);
@@ -15132,9 +15146,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         ownerEntityId = user.workerId;
         ownerEntityType = "contractor";
       }
+      // Sanitize empty strings to null for date/numeric fields
+      const DATE_FIELDS = ["issueDate","dueDate","expirationDate","servicePeriodStart","servicePeriodEnd","paidAt","reviewedAt"];
+      const NUM_FIELDS = ["subtotal","taxRate","taxTotal","discountTotal","total","paidAmount"];
+      const body = { ...req.body };
+      for (const f of DATE_FIELDS) { if (body[f] === "" || body[f] === undefined) body[f] = null; }
+      for (const f of NUM_FIELDS) { if (body[f] === "" || body[f] === undefined) body[f] = null; }
       const doc = await storage.createBizDocument({
-        ...req.body,
+        ...body,
         companyId,
+        documentType,
         documentNumber: docNumber,
         ownerEntityId,
         ownerEntityType,
@@ -15150,7 +15171,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         note: "Document created",
       });
       res.json(doc);
-    } catch (e) { res.status(500).json({ message: "Failed to create document" }); }
+    } catch (e) { console.error("[biz-doc create]", e); res.status(500).json({ message: safeErrorMessage(e, "Failed to create document") }); }
   });
 
   app.get("/api/biz-documents/:id", requireAuth, async (req, res) => {
@@ -15181,9 +15202,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!["draft", "revision_requested"].includes(doc.status) && user.role === "employee") {
         return res.status(400).json({ message: "Cannot edit a submitted document" });
       }
-      // Recalculate totals if items provided inline
+      // Sanitize empty strings to null for date/numeric fields
+      const DATE_FIELDS = ["issueDate","dueDate","expirationDate","servicePeriodStart","servicePeriodEnd","paidAt","reviewedAt"];
+      const NUM_FIELDS = ["subtotal","taxRate","taxTotal","discountTotal","total","paidAmount"];
       const updateData = { ...req.body };
       delete updateData.items;
+      for (const f of DATE_FIELDS) { if (updateData[f] === "") updateData[f] = null; }
+      for (const f of NUM_FIELDS) { if (updateData[f] === "") updateData[f] = null; }
       const updated = await storage.updateBizDocument(req.params.id, updateData);
       res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to update document" }); }
@@ -15560,6 +15585,131 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.setHeader("Content-Type", "text/html");
       res.send(html);
     } catch (e) { res.status(500).json({ message: "Failed to generate print view" }); }
+  });
+
+  // ── Send biz-document by email to customer ─────────────────────────────────
+  app.post("/api/biz-documents/:id/send-email", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const doc = await storage.getBizDocument(req.params.id);
+      if (!doc || doc.companyId !== user.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (doc.status === "voided") return res.status(400).json({ message: "Cannot send a voided document" });
+      const toEmail = req.body.email || doc.assignedToEmail;
+      if (!toEmail) return res.status(400).json({ message: "No recipient email — set one on the document first" });
+
+      const { getTransporter } = await import("./notifications.js");
+      const smtp = getTransporter();
+      if (!smtp) return res.status(503).json({ message: "Email is not configured on this server. Ask your admin to configure SMTP." });
+
+      const [items, branding] = await Promise.all([
+        storage.getBizDocumentItems(doc.id),
+        storage.getCompanyBranding(doc.companyId),
+      ]);
+      const company = await storage.getCompany(doc.companyId);
+      const accentColor = branding?.accentColor || "#0d9488";
+      const subtotal = Number(doc.subtotal || 0);
+      const taxTotal = Number(doc.taxTotal || 0);
+      const total = Number(doc.total || 0);
+      const isProposal = doc.documentType === "proposal";
+      const docTypeLabel = isProposal ? "Proposal" : doc.documentType === "estimate" ? "Estimate" : doc.documentType === "quote" ? "Quote" : doc.documentType === "credit_memo" ? "Credit Memo" : "Invoice";
+      const companyName = branding?.legalName || branding?.dbaName || company?.name || "Your Service Provider";
+
+      const bodyHtml = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${doc.documentNumber}</title>
+<style>
+  * { margin:0;padding:0;box-sizing:border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;color:#1a1a1a;background:#f9fafb; }
+  .outer { max-width:680px;margin:0 auto;padding:32px 16px; }
+  .card { background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.08); }
+  .header { background:${accentColor};color:#fff;padding:28px 32px;display:flex;justify-content:space-between;align-items:center; }
+  .header h1 { font-size:22px;font-weight:700;letter-spacing:2px;text-transform:uppercase; }
+  .header .num { font-size:13px;opacity:0.85;margin-top:4px; }
+  .body { padding:28px 32px; }
+  .section { margin-bottom:24px; }
+  .section h3 { font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#999;margin-bottom:8px; }
+  .party { font-size:14px;font-weight:600;color:#111; }
+  .party-sub { font-size:12px;color:#666;margin-top:2px; }
+  .dates { display:flex;gap:32px;background:#f9fafb;border-radius:8px;padding:14px 18px;margin-bottom:24px; }
+  .date-item label { font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#999;display:block;margin-bottom:3px; }
+  .date-item span { font-weight:600;font-size:13px; }
+  table { width:100%;border-collapse:collapse;margin-bottom:20px; }
+  thead th { background:${accentColor};color:#fff;padding:10px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.5px; }
+  thead th:last-child { text-align:right; }
+  tbody td { padding:9px 12px;border-bottom:1px solid #f0f0f0;font-size:12px; }
+  tbody td:last-child { text-align:right; }
+  tbody tr:nth-child(even) td { background:#fafafa; }
+  .totals { margin-left:auto;width:260px; }
+  .totals-row { display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f0f0f0;font-size:12px; }
+  .totals-row.grand { font-weight:700;font-size:15px;border-top:2px solid ${accentColor};border-bottom:none;padding-top:10px;color:${accentColor}; }
+  .notes { font-size:12px;color:#555;line-height:1.6; }
+  .footer { padding:20px 32px;border-top:1px solid #f0f0f0;text-align:center;font-size:11px;color:#999; }
+</style></head><body>
+<div class="outer">
+<div class="card">
+  <div class="header">
+    <div><div style="font-size:13px;opacity:0.8;margin-bottom:4px;">${companyName}</div><h1>${docTypeLabel}</h1><div class="num">${doc.documentNumber || ""}</div></div>
+    ${doc.total ? `<div style="font-size:28px;font-weight:700;">\$${total.toFixed(2)}</div>` : ""}
+  </div>
+  <div class="body">
+    <div class="section">
+      <h3>${isProposal ? "Prepared for" : "Bill to"}</h3>
+      <div class="party">${doc.assignedToName || toEmail}</div>
+      ${doc.assignedToEmail ? `<div class="party-sub">${doc.assignedToEmail}</div>` : ""}
+    </div>
+    ${doc.title ? `<div class="section"><p style="font-size:15px;font-weight:600;color:#333;">${doc.title}</p></div>` : ""}
+    <div class="dates">
+      <div class="date-item"><label>Issue Date</label><span>${doc.issueDate || "—"}</span></div>
+      ${!isProposal && doc.dueDate ? `<div class="date-item"><label>Due Date</label><span>${doc.dueDate}</span></div>` : ""}
+      ${isProposal && doc.expirationDate ? `<div class="date-item"><label>Expires</label><span>${doc.expirationDate}</span></div>` : ""}
+      ${doc.poNumber ? `<div class="date-item"><label>PO Number</label><span>${doc.poNumber}</span></div>` : ""}
+    </div>
+    ${items.length > 0 ? `
+    <table>
+      <thead><tr><th style="width:45%">Description</th><th style="width:15%">Qty</th><th style="width:20%">Unit Price</th><th style="width:20%">Amount</th></tr></thead>
+      <tbody>${items.map(i => `<tr><td>${i.description}</td><td>${Number(i.quantity)}</td><td>\$${Number(i.unitPrice).toFixed(2)}</td><td>\$${Number(i.amount).toFixed(2)}</td></tr>`).join("")}</tbody>
+    </table>
+    <div class="totals">
+      <div class="totals-row"><span>Subtotal</span><span>\$${subtotal.toFixed(2)}</span></div>
+      ${taxTotal > 0 ? `<div class="totals-row"><span>Tax (${doc.taxRate}%)</span><span>\$${taxTotal.toFixed(2)}</span></div>` : ""}
+      <div class="totals-row grand"><span>Total</span><span>\$${total.toFixed(2)}</span></div>
+    </div>` : ""}
+    ${doc.notes ? `<div class="section"><h3>Notes</h3><div class="notes">${doc.notes}</div></div>` : ""}
+    ${doc.terms ? `<div class="section"><h3>Terms &amp; Conditions</h3><div class="notes">${doc.terms}</div></div>` : ""}
+    ${doc.paymentInstructions ? `<div class="section"><h3>Payment Instructions</h3><div class="notes">${doc.paymentInstructions}</div></div>` : ""}
+  </div>
+  <div class="footer">${branding?.footerText || `Thank you for your business — ${companyName}`}</div>
+</div>
+</div>
+</body></html>`;
+
+      const subject = `${docTypeLabel} ${doc.documentNumber || ""}${doc.title ? ` — ${doc.title}` : ""} from ${companyName}`;
+      const bodyText = `${docTypeLabel} ${doc.documentNumber || ""} from ${companyName}\n\nAmount: $${total.toFixed(2)}\nIssue Date: ${doc.issueDate || "—"}\n${!isProposal && doc.dueDate ? `Due Date: ${doc.dueDate}\n` : ""}${doc.notes ? `\nNotes: ${doc.notes}` : ""}`;
+
+      await smtp.transporter.sendMail({
+        from: smtp.fromAddress,
+        to: toEmail,
+        subject,
+        text: bodyText,
+        html: bodyHtml,
+      });
+
+      // Mark as "sent" if still in draft/approved state
+      if (["draft", "approved"].includes(doc.status)) {
+        await storage.updateBizDocument(doc.id, { status: "sent" });
+        await storage.addBizDocumentHistory({
+          documentId: doc.id,
+          fromStatus: doc.status,
+          toStatus: "sent",
+          changedByUserId: user.id,
+          changedByName: user.name || user.username || "Admin",
+          note: `Emailed to ${toEmail}`,
+        });
+      }
+
+      res.json({ success: true, sentTo: toEmail });
+    } catch (e: any) {
+      console.error("[biz-docs/send-email] error:", e);
+      res.status(500).json({ message: e?.message || "Failed to send email" });
+    }
   });
 
   return httpServer;
