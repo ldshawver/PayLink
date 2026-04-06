@@ -632,7 +632,7 @@ function PayrollRunCard({
   const [aiReviewResult, setAiReviewResult] = useState<{
     overallRisk: "low" | "medium" | "high";
     summary: string;
-    flags: { severity: "error" | "warning" | "info"; category: string; title: string; detail: string }[];
+    flags: { severity: "error" | "warning" | "info"; category: string; title: string; detail: string; worker?: string; fixPath?: string; fixLabel?: string }[];
   } | null>(null);
 
   const aiReviewMutation = useMutation({
@@ -1302,12 +1302,24 @@ function PayrollRunCard({
                                 ) : (
                                   <Info className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
                                 )}
-                                <div>
-                                  <div className="flex items-center gap-2">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
                                     <span className="text-sm font-semibold">{flag.title}</span>
-                                    <Badge variant="outline" className="text-xs capitalize">{flag.category}</Badge>
+                                    <Badge variant="outline" className={`text-xs capitalize shrink-0 ${
+                                      flag.severity === "error" ? "border-red-300 text-red-700 dark:text-red-400"
+                                      : flag.severity === "warning" ? "border-amber-300 text-amber-700 dark:text-amber-400"
+                                      : "border-blue-300 text-blue-700 dark:text-blue-400"
+                                    }`}>{flag.severity === "error" ? "Blocking" : flag.severity === "warning" ? "Warning" : "Info"} · {flag.category}</Badge>
                                   </div>
                                   <p className="text-sm text-muted-foreground mt-1">{flag.detail}</p>
+                                  {flag.fixPath && flag.fixLabel && (
+                                    <a
+                                      href={`/app/${flag.fixPath.replace(/^\//, "")}`}
+                                      className="inline-flex items-center gap-1 mt-2 text-xs font-medium text-primary hover:underline"
+                                    >
+                                      {flag.fixLabel} →
+                                    </a>
+                                  )}
                                 </div>
                               </div>
                             </div>

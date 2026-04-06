@@ -1233,134 +1233,266 @@ export async function registerRoutes(
     }
   });
 
-  // ── AI Payroll Pre-Flight Review ─────────────────────────────────────────
+  // ── Payroll Pre-Flight Review (Structured Rule Engine + optional AI summary) ──
   app.post("/api/payroll-runs/:id/ai-review", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
 
-      const apiKey = process.env.OPENAI_API_KEY;
-      if (!apiKey) return res.status(503).json({ message: "AI review requires OpenAI to be configured. Please add your OPENAI_API_KEY." });
-
       const workers = await storage.getWorkers(run.companyId);
       const entries = await storage.getTimeEntriesByDateRange(run.companyId, run.periodStart, run.periodEnd);
       const existingItems = await storage.getPayrollItems(run.id);
+      const allAmendments = await storage.getPayStubAmendments(run.companyId);
 
-      // Build a compact summary of payroll data for the AI
+      // ── Deterministic rule engine ──────────────────────────────────────────
+      type PreflightFlag = {
+        severity: "blocking" | "warning" | "info";
+        category: "compensation" | "time" | "tax" | "earnings" | "compliance";
+        title: string;
+        detail: string;
+        worker?: string;
+        fixPath?: string;
+        fixLabel?: string;
+      };
+
+      const flags: PreflightFlag[] = [];
       const workerMap = Object.fromEntries(workers.map(w => [w.id, w]));
 
-      // Hours per worker
-      const hoursMap: Record<string, { reg: number; ot: number; dt: number; name: string; payType: string; payRate: number }> = {};
+      // Build time entry hours per worker
+      const hoursPerWorker: Record<string, { reg: number; ot: number; dt: number }> = {};
       for (const e of entries) {
-        const w = workerMap[e.workerId];
-        if (!w) continue;
-        if (!hoursMap[e.workerId]) {
-          hoursMap[e.workerId] = {
-            reg: 0, ot: 0, dt: 0,
-            name: `${w.firstName} ${w.lastName}`,
-            payType: (w as any).payType || w.employmentType || "hourly",
-            payRate: parseFloat((w as any).payRate?.toString() || "0"),
-          };
-        }
-        hoursMap[e.workerId].reg += parseFloat(e.regularHours?.toString() || "0");
-        hoursMap[e.workerId].ot += parseFloat(e.overtimeHours?.toString() || "0");
-        hoursMap[e.workerId].dt += parseFloat(e.doubleTimeHours?.toString() || "0");
+        if (!hoursPerWorker[e.workerId]) hoursPerWorker[e.workerId] = { reg: 0, ot: 0, dt: 0 };
+        hoursPerWorker[e.workerId].reg += parseFloat(e.regularHours?.toString() || "0");
+        hoursPerWorker[e.workerId].ot += parseFloat(e.overtimeHours?.toString() || "0");
+        hoursPerWorker[e.workerId].dt += parseFloat(e.doubleTimeHours?.toString() || "0");
       }
 
-      // Salary workers without time entries (expected — they are paid from salary, not hours)
-      const salaryWorkers = workers.filter(w => w.isActive && (w as any).payType === "salary");
+      // Amendments applied to this run (by workerId)
+      const amendmentsByWorker: Record<string, typeof allAmendments[0][]> = {};
+      for (const a of allAmendments) {
+        if (a.appliedPayrollRunId === run.id) {
+          if (!amendmentsByWorker[a.workerId]) amendmentsByWorker[a.workerId] = [];
+          amendmentsByWorker[a.workerId].push(a);
+        }
+      }
 
-      // Item summaries (if already processed)
-      const itemSummaries = existingItems.map(i => {
-        const w = workerMap[i.workerId];
-        const isSalary = w && (w as any).payType === "salary";
-        return {
-          name: w ? `${w.firstName} ${w.lastName}` : i.workerId,
-          payType: isSalary ? "salary" : "hourly",
-          gross: parseFloat(i.grossPay?.toString() || "0"),
-          net: parseFloat(i.netPay?.toString() || "0"),
-          deductions: parseFloat(i.deductions?.toString() || "0"),
-          hours: parseFloat(i.regularHours?.toString() || "0"),
-          ot: parseFloat(i.overtimeHours?.toString() || "0"),
-          payMethod: i.paymentMethod || "unknown",
-          taxSetup: (i.federalIncomeTax !== null && i.federalIncomeTax !== undefined),
-        };
-      });
+      // ── Per-item rules (runs on processed items; on draft, runs on active workers) ──
+      const itemsToCheck = existingItems.length > 0 ? existingItems : [];
 
-      // Workers missing SSN (exclude contractors and salary workers paid via payroll summary)
-      const missingSetup = workers.filter(w => w.isActive && !w.ssn && w.employmentType !== "contractor");
-      // Zero pay rate: only flag hourly workers with $0 payRate (salary workers have annual payRate, not hourlyRate)
-      const zeroRateWorkers = workers.filter(w =>
-        w.isActive &&
-        (w as any).payType !== "salary" &&
-        !parseFloat((w as any).payRate?.toString() || "0") &&
-        !parseFloat((w as any).hourlyRate?.toString() || "0") &&
-        !parseFloat((w as any).salary?.toString() || "0")
-      );
+      for (const item of itemsToCheck) {
+        const worker = workerMap[item.workerId];
+        const workerName = worker ? `${worker.firstName} ${worker.lastName}` : `Worker ${item.workerId.slice(0, 8)}`;
+        const isContractor = worker?.workerType === "contractor" || worker?.employmentType === "contractor";
+        const payType = (item.payType || (worker as any)?.payType || "hourly") as string;
+        const isSalary = payType === "salary";
+        const payRate = parseFloat(item.payRate?.toString() || "0");
+        const grossPay = parseFloat(item.grossPay?.toString() || "0");
+        const regularHours = parseFloat(item.regularHours?.toString() || "0");
+        const otHours = parseFloat(item.overtimeHours?.toString() || "0");
+        const totalHours = regularHours + otHours;
+        const deductions = parseFloat(item.deductions?.toString() || "0");
+        const workerAmendments = amendmentsByWorker[item.workerId] || [];
+        const hasAmendments = workerAmendments.length > 0;
+        const timeEntryHours = hoursPerWorker[item.workerId];
+        const hasTimeEntries = timeEntryHours && (timeEntryHours.reg + timeEntryHours.ot + timeEntryHours.dt) > 0;
 
-      const salaryWorkerSummary = salaryWorkers.length > 0
-        ? `\nSALARY WORKERS (${salaryWorkers.length} — paid from annual salary, NOT from time entries; no time entries is NORMAL for them):\n${salaryWorkers.map(w => `- ${w.firstName} ${w.lastName}: annual salary $${parseFloat((w as any).payRate?.toString() || "0").toFixed(2)}`).join('\n')}`
-        : "";
+        // ── 1. Compensation: pay rate check ─────────────────────────────────
+        if (isSalary) {
+          if (payRate === 0) {
+            flags.push({
+              severity: "blocking",
+              category: "compensation",
+              title: `${workerName} — Zero annual salary`,
+              detail: `This salaried employee has a $0.00 annual pay rate. Their gross pay of $${grossPay.toFixed(2)} could not be correctly calculated. Update their compensation record before processing.`,
+              worker: workerName,
+              fixPath: "/payroll?tab=process",
+              fixLabel: "Open Employee Profile",
+            });
+          }
+        } else {
+          if (payRate === 0 && !isContractor) {
+            flags.push({
+              severity: "blocking",
+              category: "compensation",
+              title: `${workerName} — Zero hourly pay rate`,
+              detail: `This hourly employee has a $0.00/hr pay rate. Their gross pay of $${grossPay.toFixed(2)} is likely incorrect. Update their hourly rate before finalizing payroll.`,
+              worker: workerName,
+              fixPath: "/payroll?tab=process",
+              fixLabel: "Open Employee Profile",
+            });
+          }
+        }
 
-      const prompt = `You are a payroll compliance expert reviewing payroll data before it's processed and paid. Your job is to identify anomalies, missing information, and potential errors that a payroll manager should review. Be concise and direct.
+        // ── 2. Time entries check ────────────────────────────────────────────
+        if (!isSalary && !isContractor) {
+          if (totalHours === 0 && grossPay > 0) {
+            if (hasAmendments) {
+              // Gross pay from adjustments — expected
+              const adjDesc = workerAmendments.map(a => a.description || a.amendmentType || "adjustment").join(", ");
+              flags.push({
+                severity: "info",
+                category: "earnings",
+                title: `${workerName} — Gross pay from manual adjustments`,
+                detail: `No time entries found, but gross pay of $${grossPay.toFixed(2)} is sourced from pay adjustments: ${adjDesc}. Verify this is intentional.`,
+                worker: workerName,
+                fixPath: "/payroll?tab=amendments",
+                fixLabel: "Review Adjustments",
+              });
+            } else {
+              flags.push({
+                severity: "warning",
+                category: "time",
+                title: `${workerName} — Gross pay with no recorded hours`,
+                detail: `This hourly employee has $${grossPay.toFixed(2)} gross pay but no time entries for this period. Verify whether hours were recorded, a manual adjustment exists, or this is an error.`,
+                worker: workerName,
+                fixPath: "/time-clock",
+                fixLabel: "Open Time Clock",
+              });
+            }
+          } else if (totalHours === 0 && grossPay === 0) {
+            // No hours, no pay — skip (not included in payroll)
+          } else if (totalHours > 60) {
+            flags.push({
+              severity: "warning",
+              category: "compliance",
+              title: `${workerName} — High hours this period`,
+              detail: `${workerName} has ${totalHours.toFixed(1)} total hours this pay period, which exceeds 60 hours/week. Verify overtime calculation and ensure compliance with labor laws.`,
+              worker: workerName,
+              fixPath: "/time-clock",
+              fixLabel: "Review Time Entries",
+            });
+          }
+        } else if (isSalary && grossPay === 0) {
+          flags.push({
+            severity: "blocking",
+            category: "earnings",
+            title: `${workerName} — Salary worker with $0 gross pay`,
+            detail: `This salaried employee shows $0.00 gross pay. Check their annual salary rate and pay period schedule to ensure correct proration.`,
+            worker: workerName,
+            fixPath: "/payroll?tab=process",
+            fixLabel: "Open Payroll Settings",
+          });
+        }
 
-IMPORTANT RULES FOR THIS REVIEW:
-- Salary workers are paid based on their annual salary divided by pay periods. They do NOT need time entries. Do NOT flag salary workers for "no time entries" or "$0 hourly rate". This is expected and correct.
-- Only flag hourly/wage workers who are missing time entries or have $0 pay rates.
-- If a salary worker's processed gross pay is roughly annual_salary / pay_periods_per_year, that is correct — do not flag it.
+        // ── 3. Tax / deductions check ────────────────────────────────────────
+        if (!isContractor && worker) {
+          const missingItems: string[] = [];
+          if (!worker.ssn) missingItems.push("Social Security Number (SSN) — required for W-2 filing");
+          if (deductions === 0 && grossPay > 100) {
+            missingItems.push("Tax deductions are $0 for a non-exempt employee with positive gross pay — verify withholding elections");
+          }
+          if (missingItems.length > 0) {
+            flags.push({
+              severity: missingItems.some(m => m.includes("SSN")) ? "warning" : "warning",
+              category: "tax",
+              title: `${workerName} — Incomplete tax setup`,
+              detail: `Missing: ${missingItems.join("; ")}.`,
+              worker: workerName,
+              fixPath: "/payroll?tab=tax-wizard",
+              fixLabel: "Open Tax Setup",
+            });
+          }
+        }
 
-PAYROLL RUN: ${run.periodStart} to ${run.periodEnd}
-COMPANY: ${run.companyId.slice(0,8)}
-STATUS: ${run.status}
-${salaryWorkerSummary}
+        // ── 4. Earnings source summary (info) for salaried workers ──────────
+        if (isSalary && grossPay > 0) {
+          const sources: string[] = ["Salary allocation"];
+          if (hasAmendments) sources.push(`${workerAmendments.length} manual adjustment(s)`);
+          flags.push({
+            severity: "info",
+            category: "earnings",
+            title: `${workerName} — Salary earnings breakdown`,
+            detail: `Gross pay of $${grossPay.toFixed(2)} sources: ${sources.join(", ")}. No time entries required for salaried employees.`,
+            worker: workerName,
+          });
+        }
+      }
 
-TIME ENTRIES SUMMARY (${Object.keys(hoursMap).length} hourly workers with punches):
-${Object.values(hoursMap).map(h => `- ${h.name} (${h.payType}, $${h.payRate}${h.payType === "salary" ? "/yr" : "/hr"}): ${h.reg.toFixed(1)}h reg, ${h.ot.toFixed(1)}h OT, ${h.dt.toFixed(1)}h DT`).join('\n') || 'None'}
+      // ── 5. Draft-mode: check active workers with $0 rate not in any item ──
+      if (existingItems.length === 0) {
+        const zeroRateHourly = workers.filter(w =>
+          w.isActive &&
+          (w as any).payType !== "salary" &&
+          w.workerType !== "contractor" &&
+          !parseFloat((w as any).payRate?.toString() || "0")
+        );
+        for (const w of zeroRateHourly) {
+          flags.push({
+            severity: "blocking",
+            category: "compensation",
+            title: `${w.firstName} ${w.lastName} — Zero pay rate`,
+            detail: `This hourly employee has a $0.00/hr pay rate and will be excluded from payroll. Update their compensation before running payroll.`,
+            worker: `${w.firstName} ${w.lastName}`,
+            fixPath: "/payroll?tab=process",
+            fixLabel: "Open Employee Profile",
+          });
+        }
+        const missingSetup = workers.filter(w => w.isActive && !w.ssn && w.workerType !== "contractor");
+        for (const w of missingSetup) {
+          flags.push({
+            severity: "warning",
+            category: "tax",
+            title: `${w.firstName} ${w.lastName} — Missing SSN`,
+            detail: `SSN is required for W-2 filing. Add this employee's SSN before year-end reporting.`,
+            worker: `${w.firstName} ${w.lastName}`,
+            fixPath: "/payroll?tab=tax-wizard",
+            fixLabel: "Open Tax Setup",
+          });
+        }
+      }
 
-${itemSummaries.length > 0 ? `PROCESSED ITEMS (${itemSummaries.length} employees):
-${itemSummaries.slice(0, 20).map(i => `- ${i.name} [${i.payType}]: $${i.gross.toFixed(2)} gross, $${i.net.toFixed(2)} net, ${i.hours}h regular${i.payType === "salary" ? " (salary — hours field not applicable)" : ""}, pay method: ${i.payMethod}, tax setup: ${i.taxSetup ? 'yes' : 'MISSING'}`).join('\n')}` : 'No processed items yet (run is in draft).'}
+      // ── 6. Derive overall risk ────────────────────────────────────────────
+      let overallRisk: "low" | "medium" | "high" = "low";
+      if (flags.some(f => f.severity === "blocking")) overallRisk = "high";
+      else if (flags.some(f => f.severity === "warning")) overallRisk = "medium";
 
-SETUP ISSUES:
-- Active non-contractor employees missing SSN: ${missingSetup.map(w => `${w.firstName} ${w.lastName}`).join(', ') || 'None'}
-- Active hourly workers with $0 pay rate: ${zeroRateWorkers.map(w => `${w.firstName} ${w.lastName}`).join(', ') || 'None'}
-- Total active workers: ${workers.filter(w => w.isActive).length}
-- Salary workers (no time clock): ${salaryWorkers.length}
-- Hourly workers with time entries: ${Object.keys(hoursMap).length}
+      // ── 7. AI summary (optional — summarizes rule results, does not invent) ─
+      const apiKey = process.env.OPENAI_API_KEY;
+      let summary = "";
 
-Return a JSON response with this exact structure:
-{
-  "overallRisk": "low" | "medium" | "high",
-  "summary": "one sentence summary",
-  "flags": [
-    {
-      "severity": "error" | "warning" | "info",
-      "category": "hours" | "pay" | "tax" | "setup" | "compliance",
-      "title": "short title",
-      "detail": "specific detail explaining the issue and what to do"
-    }
-  ]
-}
+      if (apiKey && flags.length > 0) {
+        try {
+          const OpenAI = (await import("openai")).default;
+          const openai = new OpenAI({ apiKey });
+          const ruleOutput = flags.map(f => `[${f.severity.toUpperCase()}] ${f.title}: ${f.detail}`).join("\n");
+          const aiPrompt = `You are summarizing the results of a structured payroll preflight check. The rule engine found these issues:\n\n${ruleOutput}\n\nWrite a 1-2 sentence plain-English summary of what was found and what the payroll manager should do. Do not invent new issues. Do not repeat every flag — just give the overall picture.`;
+          const response = await openai.chat.completions.create({
+            model: "gpt-4o",
+            messages: [{ role: "user", content: aiPrompt }],
+            max_tokens: 200,
+            temperature: 0.2,
+          });
+          summary = response.choices[0]?.message?.content?.trim() || "";
+        } catch {
+          // AI summary failure is non-fatal
+        }
+      }
 
-Flag anything that looks unusual: very high hours (>60/week), hourly employees with no time entries, significant pay disparities, missing tax setup for non-contractors, zero pay rates on hourly workers, potential overtime violations, or worker classification issues. Do NOT flag salary workers for missing hours or $0 hourly rate — they are paid from salary. If everything looks good, return low risk with an empty flags array.`;
+      if (!summary) {
+        const blocking = flags.filter(f => f.severity === "blocking").length;
+        const warnings = flags.filter(f => f.severity === "warning").length;
+        const infos = flags.filter(f => f.severity === "info").length;
+        if (flags.length === 0) summary = "No issues detected. This payroll run looks ready to process.";
+        else if (blocking > 0) summary = `${blocking} blocking issue${blocking !== 1 ? "s" : ""} must be resolved before processing. ${warnings > 0 ? `${warnings} additional warning${warnings !== 1 ? "s" : ""} also require review.` : ""}`.trim();
+        else if (warnings > 0) summary = `${warnings} item${warnings !== 1 ? "s" : ""} flagged for review. No blocking issues — payroll can proceed but review recommended.`;
+        else summary = `${infos} informational item${infos !== 1 ? "s" : ""} for awareness. Payroll looks ready to process.`;
+      }
 
-      const OpenAI = (await import("openai")).default;
-      const openai = new OpenAI({ apiKey });
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [{ role: "user", content: prompt }],
-        response_format: { type: "json_object" },
-        max_tokens: 1200,
-        temperature: 0.2,
-      });
+      // ── 8. Map to legacy flag shape for frontend compatibility ────────────
+      const legacyFlags = flags.map(f => ({
+        severity: f.severity === "blocking" ? "error" : f.severity === "warning" ? "warning" : "info",
+        category: f.category,
+        title: f.title,
+        detail: f.detail,
+        worker: f.worker,
+        fixPath: f.fixPath,
+        fixLabel: f.fixLabel,
+      }));
 
-      const text = response.choices[0]?.message?.content || '{"overallRisk":"low","summary":"Review complete.","flags":[]}';
-      let result;
-      try { result = JSON.parse(text); } catch { result = { overallRisk: "low", summary: "AI review completed.", flags: [] }; }
-
-      res.json(result);
+      res.json({ overallRisk, summary, flags: legacyFlags });
     } catch (error: any) {
-      console.error("[AI Payroll Review]", error);
-      res.status(500).json({ message: "AI review failed: " + (error.message || "Unknown error") });
+      console.error("[Payroll Preflight]", error);
+      res.status(500).json({ message: "Preflight review failed: " + (error.message || "Unknown error") });
     }
   });
 
