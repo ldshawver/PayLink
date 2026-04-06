@@ -13037,6 +13037,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       res.json(newMsg);
     } catch (err) {
+      console.error("[Messages] POST /api/messages failed:", err);
       res.status(500).json({ message: safeErrorMessage(err, "Failed to send message") });
     }
   });
