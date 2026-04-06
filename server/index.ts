@@ -2117,6 +2117,23 @@ Thank you,
       console.log("Auto-migration skipped (notification_templates seed):", e.message);
     }
 
+    await run("clock_in_requests table", sql`CREATE TABLE IF NOT EXISTS clock_in_requests (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      worker_id VARCHAR NOT NULL REFERENCES workers(id),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      request_type TEXT NOT NULL,
+      requested_at TIMESTAMP DEFAULT NOW(),
+      minutes_diff INTEGER,
+      schedule_id VARCHAR,
+      scheduled_start TIMESTAMP,
+      scheduled_end TIMESTAMP,
+      status TEXT NOT NULL DEFAULT 'pending',
+      approved_by VARCHAR,
+      approved_at TIMESTAMP,
+      denial_reason TEXT,
+      time_punch_id VARCHAR
+    )`);
+
     // Seed 6 system document templates (3 invoice, 3 proposal)
     try {
       const templateCount = await db.execute(sql`SELECT COUNT(*) as c FROM biz_document_templates WHERE is_system = TRUE`);

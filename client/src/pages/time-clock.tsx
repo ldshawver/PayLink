@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Play, Square, LogIn, X, Hash, Lock, CheckCircle, Coffee, ArrowRight, Sun, RefreshCcw } from "lucide-react";
+import { Play, Square, LogIn, X, Hash, Lock, CheckCircle, Coffee, ArrowRight, Sun, RefreshCcw, Clock, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -59,7 +59,7 @@ function LiveClock() {
 }
 
 type ModalMode = "clock-in" | "clock-out" | null;
-type ModalStep = "credentials" | "clock-in-choice" | "break-or-start" | "clock-out-choice" | "success";
+type ModalStep = "credentials" | "clock-in-choice" | "break-or-start" | "clock-out-choice" | "success" | "pending-approval" | "denied";
 type SuccessType = "clock-in" | "break-in" | "break-out" | "shift-end" | "sign-in";
 
 interface ClockModalProps {
@@ -84,6 +84,9 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
   const [successType, setSuccessType] = useState<SuccessType | null>(null);
   const [successName, setSuccessName] = useState("");
   const [countdown, setCountdown] = useState(5);
+  const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
+  const [pendingMessage, setPendingMessage] = useState("");
+  const [denialReason, setDenialReason] = useState("");
   const empRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -144,7 +147,25 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
     setLoading(true);
     setError("");
     try {
-      const data = await callApi(endpoint, { employeeNumber, pin });
+      const res = await fetch(`/api/time-clock/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ employeeNumber, pin }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Request failed");
+
+      // Handle pending approval (202 from clock-in-session)
+      if (data.status === "pending_approval") {
+        const name = data.worker ? `${data.worker.firstName} ${data.worker.lastName}` : "";
+        setSuccessName(name);
+        setPendingRequestId(data.requestId);
+        setPendingMessage(data.message || "Manager approval required.");
+        setStep("pending-approval");
+        return;
+      }
+
       const name = data.worker ? `${data.worker.firstName} ${data.worker.lastName}` : "";
       setSuccessName(name);
       setSuccessType(type);
@@ -155,6 +176,30 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
       setLoading(false);
     }
   }
+
+  // Poll for approval status every 5 seconds when in pending-approval step
+  useEffect(() => {
+    if (step !== "pending-approval" || !pendingRequestId) return;
+    const poll = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/clock-in-requests/${pendingRequestId}/status`, { credentials: "include" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.status === "approved") {
+          clearInterval(poll);
+          setSuccessType("clock-in");
+          setStep("success");
+        } else if (data.status === "denied") {
+          clearInterval(poll);
+          setDenialReason(data.denial_reason || "Your clock-in request was not approved.");
+          setStep("denied");
+        }
+      } catch {
+        // silently retry
+      }
+    }, 5000);
+    return () => clearInterval(poll);
+  }, [step, pendingRequestId]);
 
   function handleCredentialsContinue() {
     if (!employeeNumber || !pin) { setError("Please enter your employee number and PIN."); return; }
@@ -500,6 +545,63 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
               </Button>
             </div>
           </>
+        )}
+
+        {/* ── PENDING APPROVAL ── */}
+        {step === "pending-approval" && (
+          <div className="flex flex-col items-center gap-5 py-8" data-testid="div-pending-approval">
+            <div className="relative">
+              <Clock className="h-16 w-16 text-amber-400 animate-pulse" />
+            </div>
+            <div className="text-center space-y-2">
+              <p className="text-xl font-bold text-white">
+                Awaiting Manager Approval
+              </p>
+              {successName && (
+                <p className="text-base text-teal-300 font-medium">{successName}</p>
+              )}
+              <p className="text-sm text-white/70 max-w-xs">{pendingMessage}</p>
+              <p className="text-xs text-white/40 mt-3">
+                Your manager has been notified. This screen will update automatically when they respond.
+              </p>
+              <div className="flex items-center justify-center gap-1.5 mt-4">
+                <div className="h-2 w-2 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "0ms" }} />
+                <div className="h-2 w-2 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "150ms" }} />
+                <div className="h-2 w-2 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              onClick={onClose}
+              className="text-white/40 hover:text-white hover:bg-white/10 text-sm"
+              data-testid="button-pending-cancel"
+            >
+              <X className="h-4 w-4 mr-2" />
+              Cancel Request
+            </Button>
+          </div>
+        )}
+
+        {/* ── DENIED ── */}
+        {step === "denied" && (
+          <div className="flex flex-col items-center gap-5 py-8" data-testid="div-denied">
+            <AlertTriangle className="h-16 w-16 text-red-400" />
+            <div className="text-center space-y-2">
+              <p className="text-xl font-bold text-white">Clock-In Denied</p>
+              {successName && (
+                <p className="text-base text-red-300 font-medium">{successName}</p>
+              )}
+              <p className="text-sm text-white/70">{denialReason}</p>
+              <p className="text-xs text-white/40 mt-2">Please see your manager for assistance.</p>
+            </div>
+            <Button
+              onClick={onClose}
+              className="bg-red-600 hover:bg-red-700 text-white border-0"
+              data-testid="button-denied-close"
+            >
+              Close
+            </Button>
+          </div>
         )}
 
       </DialogContent>

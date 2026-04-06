@@ -980,10 +980,104 @@ export async function registerRoutes(
       if (lastPunch && (lastPunch.punchType === "clock_in" || lastPunch.punchType === "break_end")) {
         return res.status(409).json({ message: "You are already clocked in. Please clock out first." });
       }
-      // Create punch
-      const punch = await storage.createTimePunch({ workerId: worker.id, companyId: worker.companyId, punchType: "clock_in", punchTime: new Date(), approvalStatus: "approved", stationId: null });
-      // Close any stale open entries from previous days
+
+      // ── Schedule check: 10-minute grace period ──
       const today = new Date().toISOString().split("T")[0];
+      const now = new Date();
+      const GRACE_MINUTES = 10;
+      let requestType: string | null = null;
+      let minutesDiff = 0;
+      let matchingSchedule: any = null;
+      let scheduledStart: Date | undefined;
+      let scheduledEnd: Date | undefined;
+
+      if (worker.companyId) {
+        const todaySchedules = await storage.getSchedulesByDateRange(worker.companyId, today, today);
+        const workerSchedule = todaySchedules.find(s => s.workerId === worker.id);
+        if (!workerSchedule) {
+          requestType = "unscheduled";
+          minutesDiff = 0;
+        } else {
+          matchingSchedule = workerSchedule;
+          const [sh, sm] = workerSchedule.startTime.split(":").map(Number);
+          const [eh, em] = workerSchedule.endTime.split(":").map(Number);
+          scheduledStart = new Date(today + "T00:00:00");
+          scheduledStart.setHours(sh, sm, 0, 0);
+          scheduledEnd = new Date(today + "T00:00:00");
+          scheduledEnd.setHours(eh, em, 0, 0);
+          const diffMs = now.getTime() - scheduledStart.getTime();
+          minutesDiff = Math.round(diffMs / 60000);
+          if (minutesDiff < -GRACE_MINUTES) {
+            requestType = "early_clockin";
+          } else if (minutesDiff > GRACE_MINUTES) {
+            requestType = "late_clockin";
+          }
+        }
+      }
+
+      // If outside grace period → create pending approval request
+      if (requestType) {
+        const requestRow = await db.execute(sql`
+          INSERT INTO clock_in_requests
+            (worker_id, company_id, request_type, minutes_diff, schedule_id, scheduled_start, scheduled_end)
+          VALUES
+            (${worker.id}, ${worker.companyId}, ${requestType}, ${minutesDiff},
+             ${matchingSchedule?.id ?? null},
+             ${scheduledStart ? scheduledStart.toISOString() : null},
+             ${scheduledEnd ? scheduledEnd.toISOString() : null})
+          RETURNING id
+        `);
+        const requestId = (requestRow.rows[0] as any).id;
+
+        // Notify managers asynchronously
+        (async () => {
+          try {
+            const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
+            const allUsers = await storage.getUsers();
+            const managers = allUsers.filter(u =>
+              (u.role === "admin" || u.role === "manager") &&
+              u.isActive &&
+              (!u.companyId || u.companyId === worker.companyId)
+            );
+            const workerName = `${worker.firstName} ${worker.lastName}`;
+            const appUrl = getAppBaseUrl(req);
+            const reasonLabel = requestType === "early_clockin"
+              ? `Early clock-in (${Math.abs(minutesDiff)} min early)`
+              : requestType === "late_clockin"
+              ? `Late clock-in (${minutesDiff} min late)`
+              : "Unscheduled clock-in";
+            const subject = `Clock-In Approval Required — ${workerName}`;
+            const bodyText = `${workerName} is requesting to clock in but is outside their scheduled time.\n\nReason: ${reasonLabel}\n${scheduledStart ? `Scheduled start: ${scheduledStart.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}\n` : ""}Current time: ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}\n\nPlease log in to approve or deny this request:\n${appUrl}/app/attendance?tab=clock-in-approvals`;
+            for (const mgr of managers) {
+              const mgrWorker = mgr.workerId ? await storage.getWorker(mgr.workerId) : null;
+              const mgrEmail = mgrWorker?.workEmail || mgrWorker?.homeEmail || mgrWorker?.email || null;
+              const mgrPhone = mgrWorker?.mobilePhone || mgrWorker?.homePhone || null;
+              const mgrName = mgrWorker ? `${mgrWorker.firstName} ${mgrWorker.lastName}` : mgr.username;
+              await Promise.all([
+                sendShiftMarketplaceEmail({ recipientName: mgrName, email: mgrEmail, subject, bodyText }),
+                sendShiftMarketplaceSms({ recipientName: mgrName, phone: mgrPhone, subject, bodyText: `PayLink: ${workerName} needs clock-in approval (${reasonLabel}). Approve at ${appUrl}/app/attendance?tab=clock-in-approvals` }),
+              ]);
+            }
+          } catch (e) { console.warn("Clock-in approval notification failed:", e); }
+        })();
+
+        return res.status(202).json({
+          status: "pending_approval",
+          requestId,
+          requestType,
+          minutesDiff,
+          worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName },
+          message: requestType === "early_clockin"
+            ? `You are ${Math.abs(minutesDiff)} minutes early. Manager approval required.`
+            : requestType === "late_clockin"
+            ? `You are ${minutesDiff} minutes late. Manager approval required.`
+            : "You are not scheduled today. Manager approval required.",
+        });
+      }
+
+      // Within grace period — create punch and time entry directly
+      const punch = await storage.createTimePunch({ workerId: worker.id, companyId: worker.companyId, punchType: "clock_in", punchTime: new Date(), approvalStatus: "approved", stationId: null, scheduleId: matchingSchedule?.id || null });
+      // Close any stale open entries from previous days
       const allEntries = await storage.getTimeEntries();
       const staleOpenEntries = allEntries.filter(e => e.workerId === worker.id && e.clockIn && !e.clockOut && e.date !== today);
       for (const stale of staleOpenEntries) {
@@ -993,11 +1087,14 @@ export async function registerRoutes(
         const staleClockOut = new Date(staleClockIn.getTime() + parseFloat(cappedHours) * 60 * 60 * 1000);
         await storage.updateTimeEntry(stale.id, { clockOut: staleClockOut, totalHours: cappedHours, overtimeHours: "0.00", doubleTimeHours: "0.00" });
       }
-      // Create time entry
-      const now = new Date();
-      await storage.createTimeEntry({ workerId: worker.id, companyId: worker.companyId, date: today, clockIn: now, status: "pending", source: "punches" });
-      // Return result without creating a session — this is a shared kiosk endpoint.
-      // Sessions are only created via /api/auth/login or /api/time-clock/sign-in.
+      const lateMinutes = scheduledStart ? Math.max(0, Math.round((now.getTime() - scheduledStart.getTime()) / 60000)) : 0;
+      await storage.createTimeEntry({
+        workerId: worker.id, companyId: worker.companyId, date: today, clockIn: now, status: "pending", source: "punches",
+        scheduleId: matchingSchedule?.id || undefined,
+        scheduledStart: scheduledStart || undefined,
+        scheduledEnd: scheduledEnd || undefined,
+        lateMinutes,
+      });
       res.status(201).json({ punch, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName } });
     } catch (error) {
       console.error(error);
@@ -1023,11 +1120,12 @@ export async function registerRoutes(
       // Create punch
       const punch = await storage.createTimePunch({ workerId: worker.id, companyId: worker.companyId, punchType: "clock_out", punchTime: new Date(), approvalStatus: "approved", stationId: null });
       // Close open time entry
+      const now = new Date();
       const allEntries = await storage.getTimeEntries();
       const openEntry = allEntries.find(e => e.workerId === worker.id && e.clockIn && !e.clockOut);
       if (openEntry) {
         const clockIn = new Date(openEntry.clockIn!);
-        const clockOut = new Date();
+        const clockOut = now;
         const totalMs = clockOut.getTime() - clockIn.getTime();
         const breakMs = (openEntry.breakMinutes || 0) * 60 * 1000;
         const workedHours = Math.max(0, (totalMs - breakMs) / (1000 * 60 * 60));
@@ -1035,6 +1133,46 @@ export async function registerRoutes(
         const dtHours = Math.max(0, workedHours - 12);
         await storage.updateTimeEntry(openEntry.id, { clockOut, totalHours: workedHours.toFixed(2), overtimeHours: otHours.toFixed(2), doubleTimeHours: dtHours.toFixed(2) });
       }
+
+      // ── Late clock-out notification (notify managers but don't block) ──
+      if (worker.companyId) {
+        const today = now.toISOString().split("T")[0];
+        const todaySchedules = await storage.getSchedulesByDateRange(worker.companyId, today, today);
+        const workerSchedule = todaySchedules.find(s => s.workerId === worker.id);
+        if (workerSchedule) {
+          const [eh, em] = workerSchedule.endTime.split(":").map(Number);
+          const scheduledEnd = new Date(today + "T00:00:00");
+          scheduledEnd.setHours(eh, em, 0, 0);
+          const lateClockOutMin = Math.round((now.getTime() - scheduledEnd.getTime()) / 60000);
+          if (lateClockOutMin > 10) {
+            (async () => {
+              try {
+                const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
+                const allUsers = await storage.getUsers();
+                const managers = allUsers.filter(u =>
+                  (u.role === "admin" || u.role === "manager") && u.isActive &&
+                  (!u.companyId || u.companyId === worker.companyId)
+                );
+                const workerName = `${worker.firstName} ${worker.lastName}`;
+                const appUrl = getAppBaseUrl(req);
+                const subject = `Late Clock-Out — ${workerName}`;
+                const bodyText = `${workerName} clocked out ${lateClockOutMin} minutes after their scheduled end time.\n\nScheduled end: ${workerSchedule.endTime}\nActual clock-out: ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}\n\nView timesheet: ${appUrl}/app/attendance`;
+                for (const mgr of managers) {
+                  const mgrWorker = mgr.workerId ? await storage.getWorker(mgr.workerId) : null;
+                  const mgrEmail = mgrWorker?.workEmail || mgrWorker?.homeEmail || mgrWorker?.email || null;
+                  const mgrPhone = mgrWorker?.mobilePhone || mgrWorker?.homePhone || null;
+                  const mgrName = mgrWorker ? `${mgrWorker.firstName} ${mgrWorker.lastName}` : mgr.username;
+                  await Promise.all([
+                    sendShiftMarketplaceEmail({ recipientName: mgrName, email: mgrEmail, subject, bodyText }),
+                    sendShiftMarketplaceSms({ recipientName: mgrName, phone: mgrPhone, subject, bodyText: `PayLink: ${workerName} clocked out ${lateClockOutMin} min late. View timesheet: ${appUrl}/app/attendance` }),
+                  ]);
+                }
+              } catch (e) { console.warn("Late clock-out notification failed:", e); }
+            })();
+          }
+        }
+      }
+
       res.status(201).json({ punch, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName } });
     } catch (error) {
       console.error(error);
@@ -2256,6 +2394,155 @@ Flag anything that looks unusual: very high hours (>60/week), employees with no 
       res.status(500).json({ message: "Failed to update punch approval" });
     }
   });
+
+  // ── Clock-In Approval Requests ──────────────────────────────────────────────
+
+  // GET pending/all requests — managers/admins view
+  app.get("/api/clock-in-requests", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const { companyId, status } = req.query;
+      const scopedCompany = user?.role === "manager" && user.companyId ? user.companyId : (companyId as string | undefined);
+      let rows: any[];
+      if (scopedCompany && status) {
+        const r = await db.execute(sql`
+          SELECT r.*, w.first_name, w.last_name, w.employee_number, c.name AS company_name
+          FROM clock_in_requests r
+          JOIN workers w ON w.id = r.worker_id
+          JOIN companies c ON c.id = r.company_id
+          WHERE r.company_id = ${scopedCompany} AND r.status = ${status as string}
+          ORDER BY r.requested_at DESC LIMIT 200
+        `);
+        rows = r.rows as any[];
+      } else if (scopedCompany) {
+        const r = await db.execute(sql`
+          SELECT r.*, w.first_name, w.last_name, w.employee_number, c.name AS company_name
+          FROM clock_in_requests r
+          JOIN workers w ON w.id = r.worker_id
+          JOIN companies c ON c.id = r.company_id
+          WHERE r.company_id = ${scopedCompany}
+          ORDER BY r.requested_at DESC LIMIT 200
+        `);
+        rows = r.rows as any[];
+      } else if (status) {
+        const r = await db.execute(sql`
+          SELECT r.*, w.first_name, w.last_name, w.employee_number, c.name AS company_name
+          FROM clock_in_requests r
+          JOIN workers w ON w.id = r.worker_id
+          JOIN companies c ON c.id = r.company_id
+          WHERE r.status = ${status as string}
+          ORDER BY r.requested_at DESC LIMIT 200
+        `);
+        rows = r.rows as any[];
+      } else {
+        const r = await db.execute(sql`
+          SELECT r.*, w.first_name, w.last_name, w.employee_number, c.name AS company_name
+          FROM clock_in_requests r
+          JOIN workers w ON w.id = r.worker_id
+          JOIN companies c ON c.id = r.company_id
+          ORDER BY r.requested_at DESC LIMIT 200
+        `);
+        rows = r.rows as any[];
+      }
+      res.json(rows);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch clock-in requests" });
+    }
+  });
+
+  // GET single request status — used by kiosk to poll
+  app.get("/api/clock-in-requests/:id/status", async (req, res) => {
+    try {
+      const result = await db.execute(sql`
+        SELECT r.id, r.status, r.denial_reason, r.approved_at, r.time_punch_id,
+               w.first_name, w.last_name
+        FROM clock_in_requests r
+        JOIN workers w ON w.id = r.worker_id
+        WHERE r.id = ${req.params.id}
+      `);
+      if (result.rows.length === 0) return res.status(404).json({ message: "Request not found" });
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch request status" });
+    }
+  });
+
+  // PATCH approve — creates the actual punch
+  app.patch("/api/clock-in-requests/:id/approve", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const requestResult = await db.execute(sql`SELECT * FROM clock_in_requests WHERE id = ${req.params.id}`);
+      if (requestResult.rows.length === 0) return res.status(404).json({ message: "Request not found" });
+      const request = requestResult.rows[0] as any;
+      if (request.status !== "pending") return res.status(409).json({ message: "Request is no longer pending" });
+
+      // Create the actual punch
+      const punch = await storage.createTimePunch({
+        workerId: request.worker_id,
+        companyId: request.company_id,
+        punchType: "clock_in",
+        punchTime: new Date(),
+        approvalStatus: "approved",
+        stationId: null,
+        scheduleId: request.schedule_id || null,
+      });
+
+      // Create time entry
+      const today = new Date().toISOString().split("T")[0];
+      const now = new Date();
+      await storage.createTimeEntry({
+        workerId: request.worker_id,
+        companyId: request.company_id,
+        date: today,
+        clockIn: now,
+        status: "pending",
+        source: "punches",
+        scheduleId: request.schedule_id || undefined,
+        scheduledStart: request.scheduled_start ? new Date(request.scheduled_start) : undefined,
+        scheduledEnd: request.scheduled_end ? new Date(request.scheduled_end) : undefined,
+        isUnscheduled: request.request_type === "unscheduled",
+        note: `Manager approved ${request.request_type.replace("_", " ")} clock-in`,
+      });
+
+      // Mark request as approved
+      await db.execute(sql`
+        UPDATE clock_in_requests
+        SET status = 'approved', approved_by = ${req.session.userId!}, approved_at = NOW(), time_punch_id = ${punch.id}
+        WHERE id = ${req.params.id}
+      `);
+
+      res.json({ message: "Clock-in approved", punch });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to approve clock-in request" });
+    }
+  });
+
+  // PATCH deny
+  app.patch("/api/clock-in-requests/:id/deny", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { reason } = req.body;
+      const requestResult = await db.execute(sql`SELECT * FROM clock_in_requests WHERE id = ${req.params.id}`);
+      if (requestResult.rows.length === 0) return res.status(404).json({ message: "Request not found" });
+      const request = requestResult.rows[0] as any;
+      if (request.status !== "pending") return res.status(409).json({ message: "Request is no longer pending" });
+
+      await db.execute(sql`
+        UPDATE clock_in_requests
+        SET status = 'denied', approved_by = ${req.session.userId!}, approved_at = NOW(),
+            denial_reason = ${reason || "Not approved by manager"}
+        WHERE id = ${req.params.id}
+      `);
+
+      res.json({ message: "Clock-in denied" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to deny clock-in request" });
+    }
+  });
+
+  // ── End Clock-In Approval Requests ───────────────────────────────────────────
 
   app.post("/api/time-entries/convert-from-punches", requireAuth, async (req, res) => {
     try {

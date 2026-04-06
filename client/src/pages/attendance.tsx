@@ -2200,6 +2200,215 @@ function SchedulePreferencesTab() {
   );
 }
 
+type ClockInRequest = {
+  id: string;
+  worker_id: string;
+  company_id: string;
+  request_type: string;
+  requested_at: string;
+  minutes_diff: number;
+  scheduled_start: string | null;
+  scheduled_end: string | null;
+  status: string;
+  denial_reason: string | null;
+  first_name: string;
+  last_name: string;
+  employee_number: string | null;
+  company_name: string;
+};
+
+function ClockInApprovalsTab() {
+  const { toast } = useToast();
+  const [denyId, setDenyId] = useState<string | null>(null);
+  const [denyReason, setDenyReason] = useState("");
+  const [statusFilter, setStatusFilter] = useState("pending");
+
+  const { data: requests = [], isLoading, refetch } = useQuery<ClockInRequest[]>({
+    queryKey: ["/api/clock-in-requests", statusFilter],
+    queryFn: async () => {
+      const res = await fetch(`/api/clock-in-requests?status=${statusFilter}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    refetchInterval: 15000,
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/clock-in-requests/${id}/approve`, {
+        method: "PATCH", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.message); }
+    },
+    onSuccess: () => { toast({ title: "Clock-in approved" }); refetch(); },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const denyMutation = useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      const res = await fetch(`/api/clock-in-requests/${id}/deny`, {
+        method: "PATCH", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.message); }
+    },
+    onSuccess: () => { toast({ title: "Clock-in denied" }); setDenyId(null); setDenyReason(""); refetch(); },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  function requestLabel(type: string) {
+    if (type === "early_clockin") return "Early Clock-In";
+    if (type === "late_clockin") return "Late Clock-In";
+    if (type === "unscheduled") return "Unscheduled";
+    return type.replace(/_/g, " ");
+  }
+
+  function requestBadgeClass(type: string) {
+    if (type === "early_clockin") return "bg-blue-500 hover:bg-blue-600";
+    if (type === "late_clockin") return "bg-amber-500 hover:bg-amber-600";
+    if (type === "unscheduled") return "bg-red-500 hover:bg-red-600";
+    return "";
+  }
+
+  return (
+    <div className="space-y-4 p-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <p className="text-sm text-muted-foreground">Show:</p>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-36" data-testid="select-request-status">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="approved">Approved</SelectItem>
+              <SelectItem value="denied">Denied</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => refetch()} data-testid="button-refresh-requests">
+          <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Refresh
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <LoadingSkeleton />
+      ) : requests.length === 0 ? (
+        <div className="py-12 text-center text-muted-foreground text-sm" data-testid="text-no-requests">
+          No {statusFilter} clock-in requests.
+        </div>
+      ) : (
+        <Table data-testid="table-clock-in-requests">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Employee</TableHead>
+              <TableHead>Company</TableHead>
+              <TableHead>Reason</TableHead>
+              <TableHead>Requested At</TableHead>
+              <TableHead>Scheduled Start</TableHead>
+              <TableHead>Status</TableHead>
+              {statusFilter === "pending" && <TableHead className="text-right">Actions</TableHead>}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {requests.map(r => (
+              <TableRow key={r.id} data-testid={`row-request-${r.id}`}>
+                <TableCell className="font-medium">
+                  {r.first_name} {r.last_name}
+                  {r.employee_number && <span className="text-xs text-muted-foreground ml-1">#{r.employee_number}</span>}
+                </TableCell>
+                <TableCell>{r.company_name}</TableCell>
+                <TableCell>
+                  <div className="flex flex-col gap-1">
+                    <Badge className={`text-xs text-white w-fit ${requestBadgeClass(r.request_type)}`}>
+                      {requestLabel(r.request_type)}
+                    </Badge>
+                    {r.request_type !== "unscheduled" && r.minutes_diff !== null && (
+                      <span className="text-xs text-muted-foreground">
+                        {Math.abs(r.minutes_diff)} min {r.minutes_diff < 0 ? "early" : "late"}
+                      </span>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell className="text-sm">{formatTimestamp(r.requested_at)}</TableCell>
+                <TableCell className="text-sm">
+                  {r.scheduled_start ? fmtTimeOnly(r.scheduled_start) : <span className="text-muted-foreground">—</span>}
+                </TableCell>
+                <TableCell>
+                  {r.status === "pending" && <Badge variant="secondary"><Clock className="h-3 w-3 mr-1" />Pending</Badge>}
+                  {r.status === "approved" && <Badge className="bg-emerald-600 hover:bg-emerald-700 text-white"><Check className="h-3 w-3 mr-1" />Approved</Badge>}
+                  {r.status === "denied" && (
+                    <div className="flex flex-col gap-0.5">
+                      <Badge variant="destructive"><X className="h-3 w-3 mr-1" />Denied</Badge>
+                      {r.denial_reason && <span className="text-xs text-muted-foreground">{r.denial_reason}</span>}
+                    </div>
+                  )}
+                </TableCell>
+                {statusFilter === "pending" && (
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        size="sm"
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white h-7 px-2"
+                        onClick={() => approveMutation.mutate(r.id)}
+                        disabled={approveMutation.isPending}
+                        data-testid={`button-approve-${r.id}`}
+                      >
+                        <Check className="h-3.5 w-3.5 mr-1" /> Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        className="h-7 px-2"
+                        onClick={() => { setDenyId(r.id); setDenyReason(""); }}
+                        data-testid={`button-deny-${r.id}`}
+                      >
+                        <X className="h-3.5 w-3.5 mr-1" /> Deny
+                      </Button>
+                    </div>
+                  </TableCell>
+                )}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      <Dialog open={!!denyId} onOpenChange={open => !open && setDenyId(null)}>
+        <DialogContent data-testid="dialog-deny-request">
+          <DialogHeader>
+            <DialogTitle>Deny Clock-In Request</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <Label htmlFor="deny-reason">Reason (optional)</Label>
+            <Textarea
+              id="deny-reason"
+              value={denyReason}
+              onChange={e => setDenyReason(e.target.value)}
+              placeholder="E.g., Not approved — contact your manager before clocking in outside your schedule."
+              rows={3}
+              data-testid="input-deny-reason"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDenyId(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => denyId && denyMutation.mutate({ id: denyId, reason: denyReason })}
+              disabled={denyMutation.isPending}
+              data-testid="button-confirm-deny"
+            >
+              {denyMutation.isPending ? "Denying..." : "Deny Clock-In"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 export default function AttendancePage() {
   const currentTab = useTabParam("timesheet");
 
@@ -2262,6 +2471,14 @@ export default function AttendancePage() {
               <span className="flex items-center gap-1.5">
                 <CalendarOff className="h-4 w-4" />
                 Time Off
+              </span>
+            </TabsTrigger>
+          </Link>
+          <Link href="/app/attendance?tab=clock-in-approvals">
+            <TabsTrigger value="clock-in-approvals" data-testid="tab-clock-in-approvals" asChild>
+              <span className="flex items-center gap-1.5">
+                <Clock className="h-4 w-4" />
+                Clock-In Approvals
               </span>
             </TabsTrigger>
           </Link>
@@ -2350,6 +2567,23 @@ export default function AttendancePage() {
                 Submitting a time-off request does not guarantee approval. All requests are subject to manager review based on business needs and staffing requirements.
               </div>
               <TimeOffRequestsTab />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="clock-in-approvals">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Clock className="h-5 w-5 text-amber-500" />
+                Clock-In Approval Requests
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Employees outside their scheduled time require manager approval before clocking in. Review and act on pending requests here.
+              </p>
+            </CardHeader>
+            <CardContent className="p-0">
+              <ClockInApprovalsTab />
             </CardContent>
           </Card>
         </TabsContent>
