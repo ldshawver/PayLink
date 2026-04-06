@@ -1616,6 +1616,7 @@ app.use((req, res, next) => {
     await run("companies.grace_period_days", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS grace_period_days INTEGER DEFAULT 14`);
     await run("companies.stripe_customer_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`);
     await run("companies.stripe_subscription_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT`);
+    await run("companies.timezone", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'America/New_York'`);
 
     await run("authorization_audit_log table", sql`
       CREATE TABLE IF NOT EXISTS authorization_audit_log (

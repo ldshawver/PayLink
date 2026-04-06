@@ -43,6 +43,17 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Company } from "@shared/schema";
 
+const US_TIMEZONES = [
+  { value: "America/New_York",    label: "Eastern (ET) — New York, Miami, Atlanta" },
+  { value: "America/Chicago",     label: "Central (CT) — Chicago, Dallas, Houston" },
+  { value: "America/Denver",      label: "Mountain (MT) — Denver, Phoenix, Salt Lake City" },
+  { value: "America/Los_Angeles", label: "Pacific (PT) — Los Angeles, Seattle, Las Vegas" },
+  { value: "America/Anchorage",   label: "Alaska (AKT) — Anchorage, Fairbanks" },
+  { value: "Pacific/Honolulu",    label: "Hawaii (HT) — Honolulu, Maui" },
+  { value: "America/Puerto_Rico", label: "Atlantic (AT) — Puerto Rico, US Virgin Islands" },
+  { value: "UTC",                 label: "UTC — Coordinated Universal Time" },
+];
+
 const policyFormSchema = z.object({
   overtimeThreshold: z.number().min(0).max(168),
   overtimeMultiplier: z.string(),
@@ -50,6 +61,7 @@ const policyFormSchema = z.object({
   breakAfterHours: z.number().min(0).max(24),
   timeRoundingMinutes: z.number(),
   payFrequency: z.enum(["weekly", "biweekly", "semimonthly", "monthly"]),
+  timezone: z.string().min(1),
 });
 
 type PolicyFormValues = z.infer<typeof policyFormSchema>;
@@ -66,6 +78,7 @@ function CompanyPolicyEditor({ company }: { company: Company }) {
       breakAfterHours: company.breakAfterHours ?? 6,
       timeRoundingMinutes: company.timeRoundingMinutes ?? 15,
       payFrequency: (company.payFrequency as any) || "biweekly",
+      timezone: (company as any).timezone || "America/New_York",
     },
   });
 
@@ -215,6 +228,31 @@ function CompanyPolicyEditor({ company }: { company: Company }) {
                       </SelectContent>
                     </Select>
                     <FormDescription className="text-xs">7-minute rule applied</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="timezone"
+                render={({ field }) => (
+                  <FormItem className="sm:col-span-2 lg:col-span-2">
+                    <FormLabel>Company Timezone</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger data-testid={`select-timezone-${company.id}`}>
+                          <SelectValue placeholder="Select timezone" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {US_TIMEZONES.map(tz => (
+                          <SelectItem key={tz.value} value={tz.value}>{tz.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormDescription className="text-xs">
+                      Controls which local date is assigned to punches and timecards. Critical for overnight shifts.
+                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}

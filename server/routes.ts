@@ -13,6 +13,7 @@ import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type Compan
 import fs from "fs";
 import { computeDispositionDate, getDefaultRetentionPolicySeedData } from "./retentionCalculator";
 import { emitIntegrationEvent } from "./integrationEvents";
+import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -982,8 +983,12 @@ export async function registerRoutes(
       }
 
       // ── Schedule check: 10-minute grace period ──
-      const today = new Date().toISOString().split("T")[0];
+      // Load company timezone so late-night punches get the correct LOCAL date.
+      // Without this, an 11 PM Eastern punch stores as the next day in UTC.
+      const companyObj = worker.companyId ? await storage.getCompany(worker.companyId) : null;
+      const companyTz = companyObj?.timezone || "America/New_York";
       const now = new Date();
+      const today = getLocalDateStr(now, companyTz); // correct local date in company TZ
       const GRACE_MINUTES = 10;
       let requestType: string | null = null;
       let minutesDiff = 0;
@@ -999,12 +1004,10 @@ export async function registerRoutes(
           minutesDiff = 0;
         } else {
           matchingSchedule = workerSchedule;
-          const [sh, sm] = workerSchedule.startTime.split(":").map(Number);
-          const [eh, em] = workerSchedule.endTime.split(":").map(Number);
-          scheduledStart = new Date(today + "T00:00:00");
-          scheduledStart.setHours(sh, sm, 0, 0);
-          scheduledEnd = new Date(today + "T00:00:00");
-          scheduledEnd.setHours(eh, em, 0, 0);
+          // Convert "HH:MM" schedule times to UTC using the company timezone so
+          // the diff calculation is correct regardless of server OS timezone.
+          scheduledStart = localTimeToUTC(today, workerSchedule.startTime, companyTz);
+          scheduledEnd   = localTimeToUTC(today, workerSchedule.endTime,   companyTz);
           const diffMs = now.getTime() - scheduledStart.getTime();
           minutesDiff = Math.round(diffMs / 60000);
           if (minutesDiff < -GRACE_MINUTES) {
@@ -1136,13 +1139,14 @@ export async function registerRoutes(
 
       // ── Late clock-out notification (notify managers but don't block) ──
       if (worker.companyId) {
-        const today = now.toISOString().split("T")[0];
+        // Use company timezone so late-night clock-outs resolve to the correct local date
+        const coObj = worker.companyId ? await storage.getCompany(worker.companyId) : null;
+        const coTz = coObj?.timezone || "America/New_York";
+        const today = getLocalDateStr(now, coTz);
         const todaySchedules = await storage.getSchedulesByDateRange(worker.companyId, today, today);
         const workerSchedule = todaySchedules.find(s => s.workerId === worker.id);
         if (workerSchedule) {
-          const [eh, em] = workerSchedule.endTime.split(":").map(Number);
-          const scheduledEnd = new Date(today + "T00:00:00");
-          scheduledEnd.setHours(eh, em, 0, 0);
+          const scheduledEnd = localTimeToUTC(today, workerSchedule.endTime, coTz);
           const lateClockOutMin = Math.round((now.getTime() - scheduledEnd.getTime()) / 60000);
           if (lateClockOutMin > 10) {
             (async () => {
@@ -1531,6 +1535,64 @@ export async function registerRoutes(
       const activeWorkers = allWorkers.filter(w => w.isActive);
 
       const companyDeductions = await storage.getTaxesDeductions(run.companyId);
+
+      // ── Payroll Pipeline Integrity Gate ──────────────────────────────────────
+      // Hard-block processing if fundamental requirements are not met.
+      // Prevents producing incorrect or incomplete paychecks.
+      {
+        const gateErrors: Array<{ code: string; message: string; fixPath: string }> = [];
+
+        // 1. Funding source: must have a remittance source with routing + account
+        const { remittanceSources: rsTable } = await import("../shared/schema.js");
+        const allSources = await db.select().from(rsTable).where(eq(rsTable.companyId, run.companyId));
+        const validFundingSource = allSources.find(s => s.routingNumber && s.accountNumber);
+        if (!validFundingSource) {
+          gateErrors.push({
+            code: "no_funding_source",
+            message: "No remittance source with routing and account number is configured. Payroll cannot be processed without a funding account.",
+            fixPath: "/app/payroll?tab=remittance",
+          });
+        }
+
+        // 2. Worker compensation: every active worker must have payRate > 0
+        const workersWithoutPay = activeWorkers.filter(w => {
+          const rate = parseFloat(String(w.payRate || "0"));
+          return rate <= 0;
+        });
+        if (workersWithoutPay.length > 0) {
+          gateErrors.push({
+            code: "workers_missing_pay_rate",
+            message: `${workersWithoutPay.length} active worker(s) have no pay rate set: ${workersWithoutPay.map(w => `${w.firstName} ${w.lastName}`).join(", ")}.`,
+            fixPath: "/app/employees",
+          });
+        }
+
+        // 3. Hourly workers: must have at least some time entries in the period
+        const hourlyWorkers = activeWorkers.filter(w =>
+          w.payType === "hourly" || !w.payType
+        );
+        const hourlyWorkerIds = new Set(hourlyWorkers.map(w => w.id));
+        const workerIdsWithEntries = new Set(entries.map(e => e.workerId));
+        const hourlyWithNoEntries = hourlyWorkers.filter(w =>
+          hourlyWorkerIds.has(w.id) && !workerIdsWithEntries.has(w.id)
+        );
+        if (hourlyWithNoEntries.length > 0 && hourlyWorkers.length > 0 && hourlyWithNoEntries.length === hourlyWorkers.length) {
+          // Only block if ALL hourly workers have zero entries (likely forgot to approve/convert)
+          gateErrors.push({
+            code: "no_time_entries",
+            message: `No approved time entries found for this pay period (${run.periodStart} – ${run.periodEnd}). Hourly workers would receive $0. Approve timecards first.`,
+            fixPath: "/app/attendance?tab=timesheet",
+          });
+        }
+
+        if (gateErrors.length > 0) {
+          return res.status(422).json({
+            message: "Payroll cannot be processed — integrity requirements not met.",
+            errors: gateErrors,
+          });
+        }
+      }
+      // ── End Integrity Gate ───────────────────────────────────────────────────
 
       // Delete existing items so reprocessing always recalculates everything from scratch
       const existingItems = await storage.getPayrollItems(run.id);

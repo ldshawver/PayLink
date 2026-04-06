@@ -24,7 +24,8 @@ import {
   ChevronLeft, ChevronRight, Check, AlertCircle, ArrowRight, Pencil, Trash2,
   Layout, Eye, EyeOff, Image, Save, Copy, ExternalLink, RefreshCw,
   Banknote, Wallet, BadgeCheck, CircleDot, ToggleLeft, ToggleRight, BarChart3,
-  Lock, LockOpen, Send, ShieldCheck, Info, CheckCircle2, XCircle, Brain, Sparkles
+  Lock, LockOpen, Send, ShieldCheck, Info, CheckCircle2, XCircle, Brain, Sparkles,
+  AlertTriangle
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
@@ -628,6 +629,8 @@ function PayrollRunCard({
     });
   };
 
+  const [processGateErrors, setProcessGateErrors] = useState<Array<{ code: string; message: string; fixPath: string }>>([]);
+
   const [aiReviewOpen, setAiReviewOpen] = useState(false);
   const [aiReviewResult, setAiReviewResult] = useState<{
     overallRisk: "low" | "medium" | "high";
@@ -655,16 +658,32 @@ function PayrollRunCard({
 
   const processMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/payroll-runs/${run.id}/process`, {});
-      return res.json();
+      const res = await fetch(`/api/payroll-runs/${run.id}/process`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({}),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = new Error(body.message || "Processing failed") as any;
+        err.gateErrors = body.errors || null;
+        throw err;
+      }
+      return body;
     },
     onSuccess: () => {
+      setProcessGateErrors([]);
       queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
       queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs", run.id, "items"] });
       toast({ title: "Payroll processed successfully" });
     },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+    onError: (err: any) => {
+      if (err.gateErrors && Array.isArray(err.gateErrors)) {
+        setProcessGateErrors(err.gateErrors);
+      } else {
+        toast({ title: "Processing Error", description: err.message, variant: "destructive" });
+      }
     },
   });
 
@@ -1144,7 +1163,7 @@ function PayrollRunCard({
                       size="sm"
                       data-testid={`button-process-run-${run.id}`}
                       disabled={processMutation.isPending}
-                      onClick={() => processMutation.mutate()}
+                      onClick={() => { setProcessGateErrors([]); processMutation.mutate(); }}
                     >
                       <Zap className="mr-2 h-4 w-4" />
                       {processMutation.isPending ? "Processing..." : "Generate Summary"}
@@ -1236,6 +1255,33 @@ function PayrollRunCard({
                   <Button variant="outline" size="sm" data-testid={`button-export-csv-${run.id}`} onClick={() => onExportCSV(run, items)}>
                     <Download className="mr-2 h-4 w-4" />Export CSV
                   </Button>
+                </div>
+              )}
+
+              {/* ── Payroll Integrity Gate Errors ─────────────────────────── */}
+              {processGateErrors.length > 0 && (
+                <div className="mt-3 rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/30 p-4 space-y-3" data-testid={`gate-errors-${run.id}`}>
+                  <div className="flex items-center gap-2 text-red-700 dark:text-red-400 font-semibold text-sm">
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    Payroll cannot be processed — {processGateErrors.length} requirement{processGateErrors.length > 1 ? "s" : ""} not met
+                  </div>
+                  <div className="space-y-2">
+                    {processGateErrors.map((e, i) => (
+                      <div key={i} className="flex items-start gap-3 text-sm" data-testid={`gate-error-${e.code}`}>
+                        <div className="rounded-full bg-red-200 dark:bg-red-900 p-1 mt-0.5 shrink-0">
+                          <XCircle className="h-3 w-3 text-red-700 dark:text-red-300" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-red-800 dark:text-red-200">{e.message}</p>
+                          <Link href={e.fixPath}>
+                            <span className="text-xs text-red-600 dark:text-red-400 underline underline-offset-2 hover:text-red-800 dark:hover:text-red-200 cursor-pointer">
+                              Fix this →
+                            </span>
+                          </Link>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
