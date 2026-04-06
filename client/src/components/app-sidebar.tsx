@@ -384,6 +384,13 @@ const navSections: NavSection[] = [
     items: [],
   },
   {
+    label: "Alert Templates",
+    icon: Bell,
+    url: "/app/notification-templates",
+    roles: ["admin"],
+    items: [],
+  },
+  {
     label: "My Profile",
     icon: UserCircle,
     url: "/app/my-profile",

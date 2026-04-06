@@ -2011,6 +2011,112 @@ app.use((req, res, next) => {
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    await run("notification_templates table", sql`CREATE TABLE IF NOT EXISTS notification_templates (
+      id SERIAL PRIMARY KEY,
+      event_type VARCHAR(100) NOT NULL UNIQUE,
+      label VARCHAR(200) NOT NULL,
+      description TEXT,
+      email_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      sms_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      email_subject VARCHAR(300) NOT NULL,
+      email_body TEXT NOT NULL,
+      sms_body TEXT NOT NULL,
+      variables JSONB DEFAULT '[]',
+      updated_at TIMESTAMP DEFAULT NOW(),
+      updated_by VARCHAR(100)
+    )`);
+
+    // Seed default notification templates
+    try {
+      const tmplCount = await db.execute(sql`SELECT COUNT(*) as c FROM notification_templates`);
+      const c = Number((tmplCount.rows[0] as any)?.c ?? 0);
+      if (c === 0) {
+        await db.execute(sql`INSERT INTO notification_templates (event_type, label, description, email_subject, email_body, sms_body, variables) VALUES
+          ('schedule_published', 'Schedule Published', 'Sent when a manager publishes an employee schedule',
+           'Your schedule has been posted — {{company}}',
+           'Hi {{name}},
+
+Your schedule has been published by {{company}}.
+
+Your upcoming shifts:
+{{shifts}}
+
+View your full schedule online:
+{{url}}
+
+Thank you,
+{{company}}',
+           'Hi {{name}}, your schedule at {{company}} has been posted. Next shift: {{next_shift}}. View: {{url}}',
+           '["{{name}}", "{{company}}", "{{shifts}}", "{{next_shift}}", "{{url}}"]'),
+          ('approval_reminder', 'Approval Reminder', 'Sent to managers with pending items awaiting approval',
+           'Action Required: Items pending your approval — {{company}}',
+           'Hi {{name}},
+
+You have items pending your approval at {{company}}:
+
+{{items}}
+
+Please review and approve or reject these items before payroll is processed.
+
+View pending items: {{url}}
+
+Thank you,
+{{company}} via PayLink',
+           'PayLink Reminder: {{name}}, you have pending approvals at {{company}}: {{items}}. Please review before payroll runs. {{url}}',
+           '["{{name}}", "{{company}}", "{{items}}", "{{url}}"]'),
+          ('shift_offer_available', 'Shift Available (Marketplace)', 'Sent when a new shift is posted to the shift marketplace',
+           'New shift available — {{company}}',
+           'Hi {{name}},
+
+A new shift is available at {{company}}:
+
+{{content}}
+
+Log in to claim this shift before it is taken.
+
+{{url}}
+
+Thank you,
+{{company}}',
+           '{{name}}: New shift at {{company}} - {{content}}. Claim it: {{url}}',
+           '["{{name}}", "{{company}}", "{{content}}", "{{url}}"]'),
+          ('shift_offer_accepted', 'Shift Request Accepted', 'Sent when a shift swap/pickup request is approved',
+           'Your shift request has been approved — {{company}}',
+           'Hi {{name}},
+
+Great news! Your shift request at {{company}} has been approved.
+
+{{content}}
+
+{{url}}
+
+Thank you,
+{{company}}',
+           '{{name}}: Your shift request at {{company}} was APPROVED. {{content}}',
+           '["{{name}}", "{{company}}", "{{content}}", "{{url}}"]'),
+          ('shift_offer_rejected', 'Shift Request Rejected', 'Sent when a shift swap/pickup request is declined',
+           'Your shift request was not approved — {{company}}',
+           'Hi {{name}},
+
+Your shift request at {{company}} was not approved at this time.
+
+{{content}}
+
+If you have questions, please contact your manager.
+
+Thank you,
+{{company}}',
+           '{{name}}: Your shift request at {{company}} was not approved. {{content}}',
+           '["{{name}}", "{{company}}", "{{content}}", "{{url}}"]')
+        `);
+        console.log("Auto-migration OK: notification_templates seed (5 default templates)");
+      } else {
+        console.log("Auto-migration OK: notification_templates seed (already exists)");
+      }
+    } catch (e: any) {
+      console.log("Auto-migration skipped (notification_templates seed):", e.message);
+    }
+
     // Seed 6 system document templates (3 invoice, 3 proposal)
     try {
       const templateCount = await db.execute(sql`SELECT COUNT(*) as c FROM biz_document_templates WHERE is_system = TRUE`);

@@ -12897,6 +12897,96 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  // Admin — Notification Templates CRUD
+  app.get("/api/admin/notification-templates", requireRole("admin"), async (_req, res) => {
+    try {
+      const rows = await db.execute(sql`SELECT * FROM notification_templates ORDER BY id ASC`);
+      res.json(rows.rows ?? rows);
+    } catch (err) {
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to load templates") });
+    }
+  });
+
+  app.put("/api/admin/notification-templates/:eventType", requireRole("admin"), async (req, res) => {
+    try {
+      const { eventType } = req.params;
+      const { emailEnabled, smsEnabled, emailSubject, emailBody, smsBody } = req.body;
+      const user = (req as any).user;
+      await db.execute(sql`
+        UPDATE notification_templates SET
+          email_enabled = ${emailEnabled},
+          sms_enabled = ${smsEnabled},
+          email_subject = ${emailSubject},
+          email_body = ${emailBody},
+          sms_body = ${smsBody},
+          updated_at = NOW(),
+          updated_by = ${user?.username ?? "admin"}
+        WHERE event_type = ${eventType}
+      `);
+      const rows = await db.execute(sql`SELECT * FROM notification_templates WHERE event_type = ${eventType}`);
+      res.json((rows.rows ?? rows)[0]);
+    } catch (err) {
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to update template") });
+    }
+  });
+
+  app.post("/api/admin/test-notification", requireRole("admin"), async (req, res) => {
+    try {
+      const { eventType, channel, toEmail, toPhone } = req.body;
+      const rows = await db.execute(sql`SELECT * FROM notification_templates WHERE event_type = ${eventType}`);
+      const tmpl = (rows.rows ?? rows)[0] as any;
+      if (!tmpl) return res.status(404).json({ message: "Template not found" });
+
+      const sampleVars: Record<string, string> = {
+        "{{name}}": "Test User",
+        "{{company}}": "Acme Corp",
+        "{{shifts}}": "  • Monday, Apr 7: 9:00 AM – 5:00 PM",
+        "{{next_shift}}": "Mon Apr 7 9:00 AM-5:00 PM",
+        "{{items}}": "  • 3 time punches\n  • 2 timecards",
+        "{{content}}": "Thursday Apr 10: 8:00 AM – 4:00 PM — Warehouse",
+        "{{url}}": "https://mypaylink.app/app",
+      };
+
+      const fill = (tpl: string) => Object.entries(sampleVars).reduce((t, [k, v]) => t.replaceAll(k, v), tpl);
+
+      const { getTransporter } = await import("./notifications");
+      if (channel === "email") {
+        if (!toEmail) return res.status(400).json({ message: "toEmail required" });
+        const smtp = getTransporter();
+        if (!smtp) return res.status(400).json({ message: "SMTP not configured" });
+        const subject = fill(tmpl.email_subject);
+        const body = fill(tmpl.email_body);
+        const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:linear-gradient(135deg,#0d9488,#2563eb);padding:20px;border-radius:8px 8px 0 0;">
+            <h1 style="color:white;margin:0;font-size:20px;">${subject}</h1>
+            <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:13px;">TEST NOTIFICATION</p>
+          </div>
+          <div style="background:#f9fafb;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;">
+            <pre style="font-family:Arial,sans-serif;white-space:pre-wrap;color:#374151;font-size:14px;">${body}</pre>
+            <p style="color:#9ca3af;font-size:12px;margin-top:24px;border-top:1px solid #e5e7eb;padding-top:12px;">This is a TEST notification from PayLink admin panel.</p>
+          </div>
+        </div>`;
+        await smtp.transporter.sendMail({ from: smtp.fromAddress, to: toEmail, subject: `[TEST] ${subject}`, text: body, html });
+        return res.json({ sent: true, channel: "email", to: toEmail });
+      } else if (channel === "sms") {
+        if (!toPhone) return res.status(400).json({ message: "toPhone required" });
+        const accountSid = process.env.TWILIO_ACCOUNT_SID;
+        const authToken = process.env.TWILIO_AUTH_TOKEN;
+        const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+        if (!accountSid || !authToken || !fromNumber) return res.status(400).json({ message: "Twilio not configured" });
+        const { normalizePhone } = await import("./notifications");
+        const twilio = (await import("twilio")).default;
+        const client = twilio(accountSid, authToken);
+        const body = `[TEST] ${fill(tmpl.sms_body)}`;
+        await client.messages.create({ body, from: normalizePhone(fromNumber), to: normalizePhone(toPhone) });
+        return res.json({ sent: true, channel: "sms", to: toPhone });
+      }
+      return res.status(400).json({ message: "channel must be email or sms" });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message ?? "Failed to send test" });
+    }
+  });
+
   // Admin — SMS/notification config status
   app.get("/api/admin/notification-status", requireRole("admin"), async (_req, res) => {
     res.json({

@@ -40,6 +40,7 @@ import LicenseRequestsPage from "@/pages/license-requests";
 import PortalOnboardingPage from "@/pages/portal-onboarding";
 import LoginPage from "@/pages/login";
 import NotificationSettingsPage from "@/pages/notification-settings";
+import NotificationTemplatesPage from "@/pages/notification-templates";
 import MessagesPage from "@/pages/messages";
 import TradeCompensationPage from "@/pages/trade-compensation";
 import AgreementsPage from "@/pages/agreements";
@@ -101,6 +102,7 @@ function AuthenticatedRouter() {
       <Route path="/app/print-expense-check" component={PrintExpenseCheckPage} />
       <Route path="/app/my-profile" component={MyProfilePage} />
       <Route path="/app/notification-settings" component={NotificationSettingsPage} />
+      <Route path="/app/notification-templates" component={NotificationTemplatesPage} />
       <Route path="/app/messages" component={MessagesPage} />
       <Route path="/app/trade-compensation">{() => <RoleGuard roles={["admin", "manager"]}><TradeCompensationPage /></RoleGuard>}</Route>
       <Route path="/app/agreements">{() => <RoleGuard roles={["admin", "manager"]}><AgreementsPage /></RoleGuard>}</Route>

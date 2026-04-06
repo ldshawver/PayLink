@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, boolean, timestamp, numeric, date, pgEnum, serial } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, numeric, date, pgEnum, serial, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -3536,6 +3536,26 @@ export const bizDocumentAttachments = pgTable("biz_document_attachments", {
 export const insertBizDocumentAttachmentSchema = createInsertSchema(bizDocumentAttachments).omit({ id: true, uploadedAt: true });
 export type BizDocumentAttachment = typeof bizDocumentAttachments.$inferSelect;
 export type InsertBizDocumentAttachment = z.infer<typeof insertBizDocumentAttachmentSchema>;
+
+// ── Notification Templates (admin-editable) ───────────────────────────────────
+export const notificationTemplates = pgTable("notification_templates", {
+  id: serial("id").primaryKey(),
+  eventType: varchar("event_type", { length: 100 }).notNull().unique(),
+  label: varchar("label", { length: 200 }).notNull(),
+  description: text("description"),
+  emailEnabled: boolean("email_enabled").default(true).notNull(),
+  smsEnabled: boolean("sms_enabled").default(true).notNull(),
+  emailSubject: varchar("email_subject", { length: 300 }).notNull(),
+  emailBody: text("email_body").notNull(),
+  smsBody: text("sms_body").notNull(),
+  variables: jsonb("variables").$type<string[]>().default([]),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  updatedBy: varchar("updated_by", { length: 100 }),
+});
+
+export const insertNotificationTemplateSchema = createInsertSchema(notificationTemplates).omit({ id: true, updatedAt: true });
+export type NotificationTemplate = typeof notificationTemplates.$inferSelect;
+export type InsertNotificationTemplate = z.infer<typeof insertNotificationTemplateSchema>;
 
 // ── Biz Document Status History ───────────────────────────────────────────────
 export const bizDocumentHistory = pgTable("biz_document_history", {
