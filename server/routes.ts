@@ -2293,6 +2293,20 @@ Flag anything that looks unusual: very high hours (>60/week), employees with no 
       if (user && user.role === "employee" && user.workerId) {
         entries = entries.filter(e => e.workerId === user.workerId);
       }
+      // Optional query filters
+      const { startDate, endDate, companyId, workerId } = req.query;
+      if (startDate) {
+        entries = entries.filter(e => e.date >= String(startDate));
+      }
+      if (endDate) {
+        entries = entries.filter(e => e.date <= String(endDate));
+      }
+      if (companyId) {
+        entries = entries.filter(e => e.companyId === String(companyId));
+      }
+      if (workerId) {
+        entries = entries.filter(e => e.workerId === String(workerId));
+      }
       res.json(entries);
     } catch (error) {
       console.error(error);

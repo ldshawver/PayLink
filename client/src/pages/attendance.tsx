@@ -23,6 +23,11 @@ import {
   Moon,
   Sunrise,
   Coffee,
+  ChevronLeft,
+  ChevronRight,
+  Building2,
+  LayoutGrid,
+  List,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -200,16 +205,38 @@ function getWeekRange() {
   return { start: fmt(start), end: fmt(end) };
 }
 
+function getWeekDates(weekOffset: number): { start: string; end: string; days: Date[] } {
+  const now = new Date();
+  const day = now.getDay();
+  const startDate = new Date(now);
+  startDate.setDate(now.getDate() - day + weekOffset * 7);
+  startDate.setHours(0, 0, 0, 0);
+  const days: Date[] = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(startDate);
+    d.setDate(startDate.getDate() + i);
+    days.push(d);
+  }
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return { start: fmt(days[0]), end: fmt(days[6]), days };
+}
+
 function TimesheetTab() {
   const { toast } = useToast();
   const [editEntry, setEditEntry] = useState<TimeEntry | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [convertOpen, setConvertOpen] = useState(false);
-  const weekRange = getWeekRange();
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [companyFilter, setCompanyFilter] = useState<string>("all");
+  const [workerFilter, setWorkerFilter] = useState<string>("all");
+  const [viewMode, setViewMode] = useState<"weekly" | "list">("weekly");
+
+  const { start: weekStart, end: weekEnd, days: weekDays } = getWeekDates(weekOffset);
   const [convertCompany, setConvertCompany] = useState("");
-  const [convertStart, setConvertStart] = useState(weekRange.start);
-  const [convertEnd, setConvertEnd] = useState(weekRange.end);
+  const [convertStart, setConvertStart] = useState(weekStart);
+  const [convertEnd, setConvertEnd] = useState(weekEnd);
   const [editForm, setEditForm] = useState({
     clockIn: "",
     clockOut: "",
@@ -231,8 +258,22 @@ function TimesheetTab() {
     status: "approved",
   });
 
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  const fmtDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+  const entryQueryParams = new URLSearchParams();
+  entryQueryParams.set("startDate", weekStart);
+  entryQueryParams.set("endDate", weekEnd);
+  if (companyFilter !== "all") entryQueryParams.set("companyId", companyFilter);
+  if (workerFilter !== "all") entryQueryParams.set("workerId", workerFilter);
+
   const { data: entries, isLoading } = useQuery<TimeEntry[]>({
-    queryKey: ["/api/time-entries"],
+    queryKey: ["/api/time-entries", weekStart, weekEnd, companyFilter, workerFilter],
+    queryFn: async () => {
+      const res = await fetch(`/api/time-entries?${entryQueryParams.toString()}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load entries");
+      return res.json();
+    },
   });
 
   const { data: workers } = useQuery<Worker[]>({
@@ -244,6 +285,9 @@ function TimesheetTab() {
   });
 
   const workerMap = new Map(workers?.map((w) => [w.id, w]) || []);
+  const filteredWorkers = companyFilter !== "all"
+    ? (workers || []).filter(w => w.companyId === companyFilter)
+    : (workers || []);
 
   const updateEntry = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) => {
@@ -354,22 +398,86 @@ function TimesheetTab() {
     (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
   );
 
+  // Weekly grid data
+  const entryByWorkerDay = new Map<string, Map<string, TimeEntry[]>>();
+  for (const entry of (entries || [])) {
+    if (!entryByWorkerDay.has(entry.workerId)) entryByWorkerDay.set(entry.workerId, new Map());
+    const dayMap = entryByWorkerDay.get(entry.workerId)!;
+    if (!dayMap.has(entry.date)) dayMap.set(entry.date, []);
+    dayMap.get(entry.date)!.push(entry);
+  }
+  const workerIdsInWeek = Array.from(entryByWorkerDay.keys());
+
+  const dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const today = fmtDate(new Date());
+
+  const formatWeekRange = () => {
+    const s = weekDays[0];
+    const e = weekDays[6];
+    const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
+    const sStr = s.toLocaleDateString("en-US", opts);
+    const eStr = e.toLocaleDateString("en-US", { ...opts, year: "numeric" });
+    return `${sStr} – ${eStr}`;
+  };
+
+  const statusColor = (status: string | null | undefined) => {
+    if (status === "approved") return "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300";
+    if (status === "rejected") return "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300";
+    return "bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-300";
+  };
+
   if (isLoading) return <LoadingSkeleton />;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between px-4 pt-4 gap-2 flex-wrap">
-        <p className="text-sm text-muted-foreground">{sortedEntries.length} entries</p>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={() => setConvertOpen(true)} data-testid="button-convert-punches">
-            <RefreshCw className="h-4 w-4 mr-2" />Convert Punches
-          </Button>
-          <Dialog open={addOpen} onOpenChange={setAddOpen}>
-          <DialogTrigger asChild>
-            <Button size="sm" data-testid="button-add-time-entry">
-              <Plus className="h-4 w-4 mr-2" />Add Entry
+      {/* Toolbar */}
+      <div className="flex flex-col gap-3 px-4 pt-4">
+        {/* Row 1: Week nav + view toggle + actions */}
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-1">
+            <Button size="icon" variant="ghost" onClick={() => setWeekOffset(w => w - 1)} data-testid="button-prev-week">
+              <ChevronLeft className="h-4 w-4" />
             </Button>
-          </DialogTrigger>
+            <div className="text-sm font-medium min-w-[160px] text-center" data-testid="text-week-range">
+              {formatWeekRange()}
+            </div>
+            <Button size="icon" variant="ghost" onClick={() => setWeekOffset(w => w + 1)} data-testid="button-next-week">
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            {weekOffset !== 0 && (
+              <Button size="sm" variant="ghost" className="text-xs" onClick={() => setWeekOffset(0)} data-testid="button-today-week">
+                Today
+              </Button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center rounded-md border">
+              <Button
+                size="sm" variant={viewMode === "weekly" ? "default" : "ghost"}
+                className="rounded-r-none px-2.5"
+                onClick={() => setViewMode("weekly")}
+                data-testid="button-view-weekly"
+              >
+                <LayoutGrid className="h-4 w-4" />
+              </Button>
+              <Button
+                size="sm" variant={viewMode === "list" ? "default" : "ghost"}
+                className="rounded-l-none px-2.5"
+                onClick={() => setViewMode("list")}
+                data-testid="button-view-list"
+              >
+                <List className="h-4 w-4" />
+              </Button>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => setConvertOpen(true)} data-testid="button-convert-punches">
+              <RefreshCw className="h-4 w-4 mr-2" />Convert Punches
+            </Button>
+            <Dialog open={addOpen} onOpenChange={setAddOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm" data-testid="button-add-time-entry">
+                <Plus className="h-4 w-4 mr-2" />Add Entry
+              </Button>
+            </DialogTrigger>
           <DialogContent>
             <DialogHeader><DialogTitle>Add Time Entry</DialogTitle></DialogHeader>
             <div className="grid gap-3 mt-2">
@@ -478,127 +586,262 @@ function TimesheetTab() {
             </div>
           </DialogContent>
         </Dialog>
+          </div>
+        </div>
+
+        {/* Row 2: Filters */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
+          <Select value={companyFilter} onValueChange={v => { setCompanyFilter(v); setWorkerFilter("all"); }} data-testid="select-company-filter">
+            <SelectTrigger className="w-[160px] h-8 text-xs" data-testid="select-company-filter-trigger">
+              <SelectValue placeholder="All companies" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Companies</SelectItem>
+              {(companies || []).map(c => (
+                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={workerFilter} onValueChange={setWorkerFilter} data-testid="select-worker-filter">
+            <SelectTrigger className="w-[160px] h-8 text-xs" data-testid="select-worker-filter-trigger">
+              <SelectValue placeholder="All employees" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Employees</SelectItem>
+              {filteredWorkers.filter(w => w.isActive).map(w => (
+                <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span className="text-xs text-muted-foreground ml-auto" data-testid="text-entry-count">
+            {(entries || []).length} {(entries || []).length === 1 ? "entry" : "entries"}
+          </span>
         </div>
       </div>
 
-      {sortedEntries.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16">
-          <ClipboardList className="h-12 w-12 text-muted-foreground/30 mb-3" />
-          <p className="text-sm font-medium text-muted-foreground">No time entries found</p>
+      {/* Weekly grid view */}
+      {viewMode === "weekly" && (
+        <div className="px-4 overflow-x-auto">
+          {workerIdsInWeek.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16">
+              <ClipboardList className="h-12 w-12 text-muted-foreground/30 mb-3" />
+              <p className="text-sm font-medium text-muted-foreground">No time entries for this week</p>
+              <p className="text-xs text-muted-foreground mt-1">Use "Convert Punches" or "Add Entry" to create entries</p>
+            </div>
+          ) : (
+            <div className="rounded-lg border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-muted/50">
+                    <th className="text-left font-medium py-2 px-3 min-w-[140px] border-r">Employee</th>
+                    {weekDays.map((day, i) => {
+                      const dateStr = fmtDate(day);
+                      const isToday = dateStr === today;
+                      return (
+                        <th key={i} className={`text-center font-medium py-2 px-2 min-w-[80px] border-r last:border-r-0 ${isToday ? "bg-teal-50 dark:bg-teal-950/30" : ""}`}>
+                          <div className={`text-xs ${isToday ? "text-teal-700 dark:text-teal-300 font-semibold" : "text-muted-foreground"}`}>{dayLabels[i]}</div>
+                          <div className={`text-xs mt-0.5 ${isToday ? "text-teal-600 dark:text-teal-400 font-medium" : "text-muted-foreground/70"}`}>
+                            {day.toLocaleDateString("en-US", { month: "numeric", day: "numeric" })}
+                          </div>
+                        </th>
+                      );
+                    })}
+                    <th className="text-center font-medium py-2 px-3 min-w-[70px] bg-muted/70">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workerIdsInWeek.map(workerId => {
+                    const worker = workerMap.get(workerId);
+                    const dayMap = entryByWorkerDay.get(workerId)!;
+                    const weekTotal = Array.from(dayMap.values())
+                      .flat()
+                      .reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
+                    return (
+                      <tr key={workerId} className="border-t hover:bg-muted/20 transition-colors">
+                        <td className="py-2 px-3 border-r font-medium text-sm">
+                          {worker ? `${worker.firstName} ${worker.lastName}` : "Unknown"}
+                          {worker?.jobTitle && <div className="text-xs text-muted-foreground font-normal truncate max-w-[130px]">{worker.jobTitle}</div>}
+                        </td>
+                        {weekDays.map((day, i) => {
+                          const dateStr = fmtDate(day);
+                          const dayEntries = dayMap.get(dateStr) || [];
+                          const dayHours = dayEntries.reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
+                          const isToday = dateStr === today;
+                          const hasOt = dayEntries.some(e => Number(e.overtimeHours || 0) > 0);
+                          const firstEntry = dayEntries[0];
+                          return (
+                            <td key={i} className={`py-1.5 px-2 text-center border-r last:border-r-0 ${isToday ? "bg-teal-50/50 dark:bg-teal-950/20" : ""}`}>
+                              {dayEntries.length > 0 ? (
+                                <button
+                                  className={`w-full rounded px-1.5 py-1 text-xs font-medium transition-opacity hover:opacity-80 ${statusColor(firstEntry?.status)}`}
+                                  onClick={() => firstEntry && openEdit(firstEntry)}
+                                  data-testid={`cell-${workerId}-${dateStr}`}
+                                  title={`${dayHours.toFixed(1)}h — click to edit`}
+                                >
+                                  <div>{dayHours.toFixed(1)}h</div>
+                                  {hasOt && <div className="text-xs opacity-70">+OT</div>}
+                                </button>
+                              ) : (
+                                <span className="text-muted-foreground/30 text-xs">—</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                        <td className="py-2 px-3 text-center bg-muted/30 font-semibold text-sm">
+                          {weekTotal.toFixed(1)}h
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t bg-muted/50">
+                    <td className="py-2 px-3 text-xs font-medium text-muted-foreground border-r">Daily Total</td>
+                    {weekDays.map((day, i) => {
+                      const dateStr = fmtDate(day);
+                      const dayTotal = (entries || [])
+                        .filter(e => e.date === dateStr)
+                        .reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
+                      const isToday = dateStr === today;
+                      return (
+                        <td key={i} className={`py-2 px-2 text-center text-xs font-medium border-r last:border-r-0 ${isToday ? "bg-teal-50/50 dark:bg-teal-950/20" : ""}`}>
+                          {dayTotal > 0 ? `${dayTotal.toFixed(1)}h` : <span className="text-muted-foreground/40">—</span>}
+                        </td>
+                      );
+                    })}
+                    <td className="py-2 px-3 text-center text-xs font-semibold bg-muted/70">
+                      {(entries || []).reduce((sum, e) => sum + Number(e.totalHours || 0), 0).toFixed(1)}h
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
         </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Employee</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Scheduled</TableHead>
-                <TableHead>Clock In</TableHead>
-                <TableHead>Clock Out</TableHead>
-                <TableHead>Break</TableHead>
-                <TableHead>Total Hours</TableHead>
-                <TableHead>OT Hours</TableHead>
-                <TableHead>Exceptions</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {sortedEntries.map((entry) => {
-                const worker = workerMap.get(entry.workerId);
-                const e = entry as any;
-                return (
-                  <TableRow key={entry.id} data-testid={`row-timeentry-${entry.id}`}
-                    className={e.isUnscheduled ? "bg-destructive/5" : ""}>
-                    <TableCell className="font-medium">
-                      <div>
-                        <div>{worker ? `${worker.firstName} ${worker.lastName}` : "Unknown"}</div>
-                        {e.source === "punches" && (
-                          <div className="text-xs text-muted-foreground">From punches</div>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-sm">{entry.date}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {e.scheduledStart ? (
+      )}
+
+      {/* List view */}
+      {viewMode === "list" && (
+        sortedEntries.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16">
+            <ClipboardList className="h-12 w-12 text-muted-foreground/30 mb-3" />
+            <p className="text-sm font-medium text-muted-foreground">No time entries for this week</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto px-4">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Employee</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Scheduled</TableHead>
+                  <TableHead>Clock In</TableHead>
+                  <TableHead>Clock Out</TableHead>
+                  <TableHead>Break</TableHead>
+                  <TableHead>Total Hours</TableHead>
+                  <TableHead>OT Hours</TableHead>
+                  <TableHead>Exceptions</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sortedEntries.map((entry) => {
+                  const worker = workerMap.get(entry.workerId);
+                  const e = entry as any;
+                  return (
+                    <TableRow key={entry.id} data-testid={`row-timeentry-${entry.id}`}
+                      className={e.isUnscheduled ? "bg-destructive/5" : ""}>
+                      <TableCell className="font-medium">
                         <div>
-                          <div>{fmtTimeOnly(e.scheduledStart)}</div>
-                          <div>{fmtTimeOnly(e.scheduledEnd)}</div>
+                          <div>{worker ? `${worker.firstName} ${worker.lastName}` : "Unknown"}</div>
+                          {e.source === "punches" && (
+                            <div className="text-xs text-muted-foreground">From punches</div>
+                          )}
                         </div>
-                      ) : (
-                        <span className="text-muted-foreground/40">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {entry.clockIn ? formatTimestamp(entry.clockIn) : "-"}
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {entry.clockOut ? formatTimestamp(entry.clockOut) : "-"}
-                    </TableCell>
-                    <TableCell className="text-sm">{entry.breakMinutes || 0}m</TableCell>
-                    <TableCell className="text-sm font-medium">
-                      {Number(entry.totalHours || 0).toFixed(1)}
-                      {e.scheduledHours && (
-                        <div className="text-xs text-muted-foreground">/{Number(e.scheduledHours).toFixed(1)} sched</div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {Number(entry.overtimeHours || 0) > 0 ? (
-                        <span className="font-medium">{Number(entry.overtimeHours).toFixed(1)}</span>
-                      ) : (
-                        "-"
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <ExceptionBadges entry={entry} />
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={entry.status || "pending"} />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button size="icon" variant="ghost" data-testid={`button-entry-menu-${entry.id}`}>
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => openEdit(entry)} data-testid={`button-edit-entry-${entry.id}`}>
-                            <Pencil className="h-4 w-4 mr-2" />Edit
-                          </DropdownMenuItem>
-                          {entry.status === "pending" && (
-                            <DropdownMenuItem
-                              onClick={() => updateEntry.mutate({ id: entry.id, data: { status: "approved" } })}
-                              data-testid={`button-approve-${entry.id}`}
-                            >
-                              <Check className="h-4 w-4 mr-2" />Approve
+                      </TableCell>
+                      <TableCell className="text-sm">{entry.date}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {e.scheduledStart ? (
+                          <div>
+                            <div>{fmtTimeOnly(e.scheduledStart)}</div>
+                            <div>{fmtTimeOnly(e.scheduledEnd)}</div>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground/40">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {entry.clockIn ? formatTimestamp(entry.clockIn) : "-"}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {entry.clockOut ? formatTimestamp(entry.clockOut) : "-"}
+                      </TableCell>
+                      <TableCell className="text-sm">{entry.breakMinutes || 0}m</TableCell>
+                      <TableCell className="text-sm font-medium">
+                        {Number(entry.totalHours || 0).toFixed(1)}
+                        {e.scheduledHours && (
+                          <div className="text-xs text-muted-foreground">/{Number(e.scheduledHours).toFixed(1)} sched</div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {Number(entry.overtimeHours || 0) > 0 ? (
+                          <span className="font-medium">{Number(entry.overtimeHours).toFixed(1)}</span>
+                        ) : (
+                          "-"
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <ExceptionBadges entry={entry} />
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge status={entry.status || "pending"} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="icon" variant="ghost" data-testid={`button-entry-menu-${entry.id}`}>
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => openEdit(entry)} data-testid={`button-edit-entry-${entry.id}`}>
+                              <Pencil className="h-4 w-4 mr-2" />Edit
                             </DropdownMenuItem>
-                          )}
-                          {entry.status === "pending" && (
+                            {entry.status === "pending" && (
+                              <DropdownMenuItem
+                                onClick={() => updateEntry.mutate({ id: entry.id, data: { status: "approved" } })}
+                                data-testid={`button-approve-${entry.id}`}
+                              >
+                                <Check className="h-4 w-4 mr-2" />Approve
+                              </DropdownMenuItem>
+                            )}
+                            {entry.status === "pending" && (
+                              <DropdownMenuItem
+                                onClick={() => updateEntry.mutate({ id: entry.id, data: { status: "rejected" } })}
+                                data-testid={`button-reject-${entry.id}`}
+                              >
+                                <X className="h-4 w-4 mr-2" />Reject
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuItem
-                              onClick={() => updateEntry.mutate({ id: entry.id, data: { status: "rejected" } })}
-                              data-testid={`button-reject-${entry.id}`}
+                              className="text-destructive"
+                              onClick={() => setDeleteId(entry.id)}
+                              data-testid={`button-delete-entry-${entry.id}`}
                             >
-                              <X className="h-4 w-4 mr-2" />Reject
+                              <Trash2 className="h-4 w-4 mr-2" />Delete
                             </DropdownMenuItem>
-                          )}
-                          <DropdownMenuItem
-                            className="text-destructive"
-                            onClick={() => setDeleteId(entry.id)}
-                            data-testid={`button-delete-entry-${entry.id}`}
-                          >
-                            <Trash2 className="h-4 w-4 mr-2" />Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )
       )}
 
       {/* Convert Punches Dialog */}
