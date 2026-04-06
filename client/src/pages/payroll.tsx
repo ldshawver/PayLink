@@ -5377,6 +5377,12 @@ function FundingAccountsTab() {
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/funding-accounts"] }); toast({ title: "Deleted" }); },
   });
 
+  const setDefaultMutation = useMutation({
+    mutationFn: async (id: string) => { const res = await apiRequest("POST", `/api/funding-accounts/${id}/set-default`, {}); return res.json(); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/funding-accounts"] }); toast({ title: "Default funding account updated" }); },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const toggleMutation = useMutation({
     mutationFn: async ({ id, active }: { id: string; active: boolean }) => { await apiRequest("PATCH", `/api/funding-accounts/${id}`, { active }); },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/funding-accounts"] }),
@@ -5544,7 +5550,12 @@ function FundingAccountsTab() {
               {filteredAccounts.map(a => (
                 <TableRow key={a.id} data-testid={`row-fa-${a.id}`}>
                   <TableCell><span className="font-mono text-xs">{a.accountCode || "—"}</span></TableCell>
-                  <TableCell className="font-medium">{a.accountName}</TableCell>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      {a.accountName}
+                      {(a as any).isDefault && <Badge variant="secondary" className="text-xs shrink-0">Default</Badge>}
+                    </div>
+                  </TableCell>
                   <TableCell className="text-sm">{FA_TYPE_LABELS[a.accountType || ""] || a.accountType}</TableCell>
                   <TableCell className="text-sm">{a.institutionName || "—"}</TableCell>
                   <TableCell className="text-sm">{a.maskedIdentifier || "—"}</TableCell>
@@ -5558,6 +5569,11 @@ function FundingAccountsTab() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
+                      {!(a as any).isDefault && (
+                        <Button size="sm" variant="ghost" className="h-7 text-xs px-2" data-testid={`button-set-default-fa-${a.id}`} disabled={setDefaultMutation.isPending} onClick={() => setDefaultMutation.mutate(a.id)}>
+                          Set Default
+                        </Button>
+                      )}
                       <Button size="icon" variant="ghost" onClick={() => openEdit(a)} data-testid={`button-edit-fa-${a.id}`}><Pencil className="h-4 w-4" /></Button>
                       <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(a.id)} data-testid={`button-delete-fa-${a.id}`}><Trash2 className="h-4 w-4" /></Button>
                     </div>

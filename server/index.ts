@@ -1838,6 +1838,7 @@ app.use((req, res, next) => {
     await run("taxes_deductions.effective_date", sql`ALTER TABLE taxes_deductions ADD COLUMN IF NOT EXISTS effective_date DATE`);
     await run("taxes_deductions.expiry_date", sql`ALTER TABLE taxes_deductions ADD COLUMN IF NOT EXISTS expiry_date DATE`);
     await run("funding_accounts.remittance_source_id", sql`ALTER TABLE funding_accounts ADD COLUMN IF NOT EXISTS remittance_source_id VARCHAR`);
+    await run("funding_accounts.is_default", sql`ALTER TABLE funding_accounts ADD COLUMN IF NOT EXISTS is_default BOOLEAN DEFAULT FALSE`);
 
     // ── Phase 3: Tax Filing Snapshots ─────────────────────────────────────
     await run("tax_filing_snapshots table", sql`CREATE TABLE IF NOT EXISTS tax_filing_snapshots (

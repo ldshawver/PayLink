@@ -2969,6 +2969,26 @@ Flag anything that looks unusual: very high hours (>60/week), hourly employees w
     }
   });
 
+  app.post("/api/funding-accounts/:id/set-default", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const allAccounts = await storage.getFundingAccounts();
+      const account = allAccounts.find(a => a.id === id);
+      if (!account) return res.status(404).json({ message: "Funding account not found" });
+      // Clear any existing default for the same company scope
+      for (const a of allAccounts) {
+        if ((a as any).isDefault && a.id !== id && (a.companyId === account.companyId || (!a.companyId && !account.companyId))) {
+          await storage.updateFundingAccount(a.id, { isDefault: false } as any);
+        }
+      }
+      const updated = await storage.updateFundingAccount(id, { isDefault: true } as any);
+      res.json(updated);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to set default funding account" });
+    }
+  });
+
   app.post("/api/payroll-runs", requireRole("admin", "manager"), async (req, res) => {
     try {
       const { companyId } = req.body;
@@ -3186,6 +3206,12 @@ Flag anything that looks unusual: very high hours (>60/week), hourly employees w
         });
       }
 
+      // Auto-assign default funding account if available
+      const allFundingAccts = await storage.getFundingAccounts(companyId);
+      const defaultFundingAcct = allFundingAccts.find(a => (a as any).isDefault && a.active !== false && a.allowForPayroll !== false)
+        || allFundingAccts.find(a => a.active !== false && a.allowForPayroll !== false) // fallback: first payroll-eligible account
+        || null;
+
       const payrollRun = await storage.createPayrollRun({
         companyId,
         periodStart,
@@ -3198,7 +3224,8 @@ Flag anything that looks unusual: very high hours (>60/week), hourly employees w
         totalOvertimeHours: totalOT.toFixed(2),
         workerCount: items.length,
         processedAt: new Date(),
-      });
+        fundingAccountId: defaultFundingAcct?.id || null,
+      } as any);
 
       for (const item of items) {
         await storage.createPayrollItem({ payrollRunId: payrollRun.id, ...item });

@@ -1389,6 +1389,7 @@ export const fundingAccounts = pgTable("funding_accounts", {
   currency: text("currency").default("USD"),
   active: boolean("active").default(true),
   allowForPayroll: boolean("allow_for_payroll").default(true),
+  isDefault: boolean("is_default").default(false),
   reconciliationEnabled: boolean("reconciliation_enabled").default(false),
   openingBalance: numeric("opening_balance").default("0"),
   currentBalance: numeric("current_balance"),
