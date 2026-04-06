@@ -1623,32 +1623,211 @@ function WagesTab() {
   );
 }
 
+const BLANK_PAY_METHOD_FORM = {
+  workerId: "", methodType: "direct_deposit", bankName: "",
+  accountType: "checking", routingNumber: "", accountNumber: "", isPrimary: false,
+  remittanceSourceId: "", priority: "1", amountType: "remainder", amountValue: "",
+  platform: "", handle: "", isActive: true,
+};
+
+function PayMethodForm({ form, setForm, workers, remittanceSources, testPrefix = "" }: {
+  form: typeof BLANK_PAY_METHOD_FORM;
+  setForm: (fn: (f: typeof BLANK_PAY_METHOD_FORM) => typeof BLANK_PAY_METHOD_FORM) => void;
+  workers: Worker[];
+  remittanceSources: RemittanceSource[];
+  testPrefix?: string;
+}) {
+  return (
+    <div className="grid gap-4 py-4">
+      <div className="space-y-2">
+        <Label>Employee</Label>
+        <Select value={form.workerId} onValueChange={v => setForm(f => ({ ...f, workerId: v }))}>
+          <SelectTrigger data-testid={`${testPrefix}select-paymethod-workerId`}><SelectValue placeholder="Select employee" /></SelectTrigger>
+          <SelectContent>
+            {workers.map(w => (
+              <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>Method Type</Label>
+          <Select value={form.methodType} onValueChange={v => setForm(f => ({ ...f, methodType: v }))}>
+            <SelectTrigger data-testid={`${testPrefix}select-methodType`}><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="direct_deposit">Direct Deposit</SelectItem>
+              <SelectItem value="check">Check</SelectItem>
+              <SelectItem value="cash">Cash</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Bank Name</Label>
+          <Input data-testid={`${testPrefix}input-bankName`} value={form.bankName}
+            onChange={e => setForm(f => ({ ...f, bankName: e.target.value }))} />
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>Account Type</Label>
+          <Select value={form.accountType} onValueChange={v => setForm(f => ({ ...f, accountType: v }))}>
+            <SelectTrigger data-testid={`${testPrefix}select-accountType`}><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="checking">Checking</SelectItem>
+              <SelectItem value="savings">Savings</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Routing Number</Label>
+          <Input data-testid={`${testPrefix}input-routingNumber`} value={form.routingNumber}
+            onChange={e => setForm(f => ({ ...f, routingNumber: e.target.value }))} />
+        </div>
+      </div>
+      <div className="space-y-2">
+        <Label>Account Number</Label>
+        <Input data-testid={`${testPrefix}input-accountNumber`} value={form.accountNumber}
+          onChange={e => setForm(f => ({ ...f, accountNumber: e.target.value }))} />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>Digital Platform (Optional)</Label>
+          <Select value={form.platform || "none"} onValueChange={v => setForm(f => ({ ...f, platform: v === "none" ? "" : v }))}>
+            <SelectTrigger data-testid={`${testPrefix}select-platform`}><SelectValue placeholder="Select platform" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">None</SelectItem>
+              <SelectItem value="apple_pay">Apple Pay</SelectItem>
+              <SelectItem value="cash_app">Cash App</SelectItem>
+              <SelectItem value="paypal">PayPal</SelectItem>
+              <SelectItem value="venmo">Venmo</SelectItem>
+              <SelectItem value="zelle">Zelle</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        {form.platform && form.platform !== "" && (
+          <div className="space-y-2">
+            <Label>Account Handle / Email / Phone</Label>
+            <Input data-testid={`${testPrefix}input-handle`} value={form.handle} placeholder="@username or email"
+              onChange={e => setForm(f => ({ ...f, handle: e.target.value }))} />
+          </div>
+        )}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>Remittance Source</Label>
+          <Select value={form.remittanceSourceId || "none"} onValueChange={v => setForm(f => ({ ...f, remittanceSourceId: v === "none" ? "" : v }))}>
+            <SelectTrigger data-testid={`${testPrefix}select-remittanceSourceId`}><SelectValue placeholder="Select source" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">None</SelectItem>
+              {remittanceSources.map(rs => (
+                <SelectItem key={rs.id} value={rs.id}>{rs.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Priority</Label>
+          <Input data-testid={`${testPrefix}input-priority`} type="number" value={form.priority}
+            onChange={e => setForm(f => ({ ...f, priority: e.target.value }))} />
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>Amount Type</Label>
+          <Select value={form.amountType} onValueChange={v => setForm(f => ({ ...f, amountType: v }))}>
+            <SelectTrigger data-testid={`${testPrefix}select-amountType`}><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="remainder">Remainder</SelectItem>
+              <SelectItem value="percent_net">Percent of Net</SelectItem>
+              <SelectItem value="percent_gross">Percent of Gross</SelectItem>
+              <SelectItem value="fixed">Fixed Amount</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        {form.amountType !== "remainder" && (
+          <div className="space-y-2">
+            <Label>Amount Value</Label>
+            <Input data-testid={`${testPrefix}input-amountValue`} type="number" value={form.amountValue}
+              onChange={e => setForm(f => ({ ...f, amountValue: e.target.value }))} />
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2">
+          <Checkbox data-testid={`${testPrefix}checkbox-paymethod-isPrimary`} checked={form.isPrimary}
+            onCheckedChange={v => setForm(f => ({ ...f, isPrimary: !!v }))} />
+          <Label>Primary Method</Label>
+        </div>
+        <div className="flex items-center gap-2">
+          <Checkbox data-testid={`${testPrefix}checkbox-paymethod-isActive`} checked={form.isActive}
+            onCheckedChange={v => setForm(f => ({ ...f, isActive: !!v }))} />
+          <Label>Active</Label>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PayMethodsTab() {
   const { toast } = useToast();
   const [addOpen, setAddOpen] = useState(false);
-  const [form, setForm] = useState({
-    workerId: "", methodType: "direct_deposit", bankName: "",
-    accountType: "checking", routingNumber: "", accountNumber: "", isPrimary: false,
-    remittanceSourceId: "", priority: "1", amountType: "remainder", amountValue: "",
-    platform: "", handle: ""
-  });
+  const [editOpen, setEditOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [form, setForm] = useState<typeof BLANK_PAY_METHOD_FORM>({ ...BLANK_PAY_METHOD_FORM });
+  const [editForm, setEditForm] = useState<typeof BLANK_PAY_METHOD_FORM>({ ...BLANK_PAY_METHOD_FORM });
 
   const payMethodsQuery = useQuery<PayMethod[]>({ queryKey: ["/api/pay-methods"] });
   const workersQuery = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
   const remittanceSourcesQuery = useQuery<RemittanceSource[]>({ queryKey: ["/api/remittance-sources"] });
 
+  const cleanForm = (data: typeof BLANK_PAY_METHOD_FORM) => {
+    const d: Record<string, any> = { ...data, priority: parseInt(data.priority) || 1 };
+    if (!d.remittanceSourceId || d.remittanceSourceId === "none") d.remittanceSourceId = null;
+    if (!d.amountValue) d.amountValue = null;
+    if (!d.platform || d.platform === "none") d.platform = null;
+    if (!d.bankName) d.bankName = null;
+    if (!d.handle) d.handle = null;
+    return d;
+  };
+
   const createMutation = useMutation({
-    mutationFn: async (data: typeof form) => {
-      const cleanData: Record<string, any> = { ...data, priority: parseInt(data.priority) || 1 };
-      if (cleanData.remittanceSourceId === "") cleanData.remittanceSourceId = null;
-      if (cleanData.amountValue === "") cleanData.amountValue = null;
-      await apiRequest("POST", "/api/pay-methods", cleanData);
+    mutationFn: async (data: typeof BLANK_PAY_METHOD_FORM) => {
+      await apiRequest("POST", "/api/pay-methods", cleanForm(data));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/pay-methods"] });
       toast({ title: "Pay method added successfully" });
       setAddOpen(false);
-      setForm({ workerId: "", methodType: "direct_deposit", bankName: "", accountType: "checking", routingNumber: "", accountNumber: "", isPrimary: false, remittanceSourceId: "", priority: "1", amountType: "remainder", amountValue: "", platform: "", handle: "" });
+      setForm({ ...BLANK_PAY_METHOD_FORM });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    }
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: typeof BLANK_PAY_METHOD_FORM }) => {
+      await apiRequest("PATCH", `/api/pay-methods/${id}`, cleanForm(data));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-methods"] });
+      toast({ title: "Pay method updated" });
+      setEditOpen(false);
+      setEditId(null);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    }
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/pay-methods/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-methods"] });
+      toast({ title: "Pay method deleted" });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -1661,6 +1840,27 @@ function PayMethodsTab() {
   const workerMap = new Map(workers.map(w => [w.id, `${w.firstName} ${w.lastName}`]));
   const rsMap = new Map(remittanceSources.map(r => [r.id, r.name]));
 
+  const openEdit = (pm: PayMethod) => {
+    setEditId(pm.id);
+    setEditForm({
+      workerId: pm.workerId || "",
+      methodType: pm.methodType || "direct_deposit",
+      bankName: pm.bankName || "",
+      accountType: pm.accountType || "checking",
+      routingNumber: pm.routingNumber || "",
+      accountNumber: pm.accountNumber || "",
+      isPrimary: pm.isPrimary ?? false,
+      remittanceSourceId: pm.remittanceSourceId || "",
+      priority: String(pm.priority ?? 1),
+      amountType: pm.amountType || "remainder",
+      amountValue: pm.amountValue ? String(pm.amountValue) : "",
+      platform: pm.platform || "",
+      handle: pm.handle || "",
+      isActive: pm.isActive ?? true,
+    });
+    setEditOpen(true);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
@@ -1670,134 +1870,28 @@ function PayMethodsTab() {
           </DialogTrigger>
           <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader><DialogTitle>Add Pay Method</DialogTitle></DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="space-y-2">
-                <Label>Employee</Label>
-                <Select value={form.workerId} onValueChange={v => setForm(f => ({ ...f, workerId: v }))}>
-                  <SelectTrigger data-testid="select-paymethod-workerId"><SelectValue placeholder="Select employee" /></SelectTrigger>
-                  <SelectContent>
-                    {workers.map(w => (
-                      <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Method Type</Label>
-                  <Select value={form.methodType} onValueChange={v => setForm(f => ({ ...f, methodType: v }))}>
-                    <SelectTrigger data-testid="select-methodType"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="direct_deposit">Direct Deposit</SelectItem>
-                      <SelectItem value="check">Check</SelectItem>
-                      <SelectItem value="cash">Cash</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Bank Name</Label>
-                  <Input data-testid="input-bankName" value={form.bankName}
-                    onChange={e => setForm(f => ({ ...f, bankName: e.target.value }))} />
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Account Type</Label>
-                  <Select value={form.accountType} onValueChange={v => setForm(f => ({ ...f, accountType: v }))}>
-                    <SelectTrigger data-testid="select-accountType"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="checking">Checking</SelectItem>
-                      <SelectItem value="savings">Savings</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Routing Number</Label>
-                  <Input data-testid="input-routingNumber" value={form.routingNumber}
-                    onChange={e => setForm(f => ({ ...f, routingNumber: e.target.value }))} />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label>Account Number</Label>
-                <Input data-testid="input-accountNumber" value={form.accountNumber}
-                  onChange={e => setForm(f => ({ ...f, accountNumber: e.target.value }))} />
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Digital Platform (Optional)</Label>
-                  <Select value={form.platform} onValueChange={v => setForm(f => ({ ...f, platform: v === "none" ? "" : v }))}>
-                    <SelectTrigger data-testid="select-platform"><SelectValue placeholder="Select platform" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">None</SelectItem>
-                      <SelectItem value="apple_pay">Apple Pay</SelectItem>
-                      <SelectItem value="cash_app">Cash App</SelectItem>
-                      <SelectItem value="paypal">PayPal</SelectItem>
-                      <SelectItem value="venmo">Venmo</SelectItem>
-                      <SelectItem value="zelle">Zelle</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                {form.platform && form.platform !== "" && (
-                  <div className="space-y-2">
-                    <Label>Account Handle / Email / Phone</Label>
-                    <Input data-testid="input-handle" value={form.handle} placeholder="@username or email"
-                      onChange={e => setForm(f => ({ ...f, handle: e.target.value }))} />
-                  </div>
-                )}
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Remittance Source</Label>
-                  <Select value={form.remittanceSourceId} onValueChange={v => setForm(f => ({ ...f, remittanceSourceId: v }))}>
-                    <SelectTrigger data-testid="select-remittanceSourceId"><SelectValue placeholder="Select source" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">None</SelectItem>
-                      {remittanceSources.map(rs => (
-                        <SelectItem key={rs.id} value={rs.id}>{rs.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Priority</Label>
-                  <Input data-testid="input-priority" type="number" value={form.priority}
-                    onChange={e => setForm(f => ({ ...f, priority: e.target.value }))} />
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Amount Type</Label>
-                  <Select value={form.amountType} onValueChange={v => setForm(f => ({ ...f, amountType: v }))}>
-                    <SelectTrigger data-testid="select-amountType"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="remainder">Remainder</SelectItem>
-                      <SelectItem value="percent_net">Percent of Net</SelectItem>
-                      <SelectItem value="percent_gross">Percent of Gross</SelectItem>
-                      <SelectItem value="fixed">Fixed Amount</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                {form.amountType !== "remainder" && (
-                  <div className="space-y-2">
-                    <Label>Amount Value</Label>
-                    <Input data-testid="input-amountValue" type="number" value={form.amountValue}
-                      onChange={e => setForm(f => ({ ...f, amountValue: e.target.value }))} />
-                  </div>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <Checkbox data-testid="checkbox-paymethod-isPrimary" checked={form.isPrimary}
-                  onCheckedChange={v => setForm(f => ({ ...f, isPrimary: !!v }))} />
-                <Label>Primary Method</Label>
-              </div>
-              <Button data-testid="button-submit-pay-method" onClick={() => createMutation.mutate(form)}
-                disabled={createMutation.isPending}>
-                Add Pay Method
-              </Button>
-            </div>
+            <PayMethodForm form={form} setForm={setForm} workers={workers} remittanceSources={remittanceSources} testPrefix="add-" />
+            <Button data-testid="button-submit-pay-method" onClick={() => createMutation.mutate(form)}
+              disabled={createMutation.isPending}>
+              Add Pay Method
+            </Button>
           </DialogContent>
         </Dialog>
       </div>
+
+      <Dialog open={editOpen} onOpenChange={open => { setEditOpen(open); if (!open) setEditId(null); }}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Edit Pay Method</DialogTitle></DialogHeader>
+          <PayMethodForm form={editForm} setForm={setEditForm} workers={workers} remittanceSources={remittanceSources} testPrefix="edit-" />
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
+            <Button data-testid="button-save-pay-method" onClick={() => editId && updateMutation.mutate({ id: editId, data: editForm })}
+              disabled={updateMutation.isPending}>
+              Save Changes
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {payMethodsQuery.isLoading ? (
         <div className="space-y-2">
@@ -1813,6 +1907,8 @@ function PayMethodsTab() {
                   <TableHead>Method Type</TableHead>
                   <TableHead>Bank / Platform</TableHead>
                   <TableHead>Account Type</TableHead>
+                  <TableHead>Routing</TableHead>
+                  <TableHead>Account</TableHead>
                   <TableHead>Handle</TableHead>
                   <TableHead>Remittance Source</TableHead>
                   <TableHead>Priority</TableHead>
@@ -1820,12 +1916,13 @@ function PayMethodsTab() {
                   <TableHead>Amount Value</TableHead>
                   <TableHead>Primary</TableHead>
                   <TableHead>Active</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {payMethods.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={14} className="text-center text-muted-foreground py-8">
                       No pay methods found
                     </TableCell>
                   </TableRow>
@@ -1839,6 +1936,8 @@ function PayMethodsTab() {
                     </TableCell>
                     <TableCell>{pm.platform ? pm.platform.replace(/_/g, ' ') : (pm.bankName || "—")}</TableCell>
                     <TableCell>{pm.accountType || "—"}</TableCell>
+                    <TableCell className="font-mono text-xs">{pm.routingNumber || "—"}</TableCell>
+                    <TableCell className="font-mono text-xs">{pm.accountNumber || "—"}</TableCell>
                     <TableCell>{pm.handle || "—"}</TableCell>
                     <TableCell>{pm.remittanceSourceId ? (rsMap.get(pm.remittanceSourceId) || pm.remittanceSourceId) : "—"}</TableCell>
                     <TableCell>{pm.priority || 1}</TableCell>
@@ -1851,6 +1950,20 @@ function PayMethodsTab() {
                       <Badge variant={pm.isActive ? "default" : "secondary"} className="text-xs">
                         {pm.isActive ? "Active" : "Inactive"}
                       </Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Button variant="ghost" size="sm" data-testid={`button-edit-paymethod-${pm.id}`}
+                          onClick={() => openEdit(pm)}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button variant="ghost" size="sm" data-testid={`button-delete-paymethod-${pm.id}`}
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => { if (confirm("Delete this pay method?")) deleteMutation.mutate(pm.id); }}
+                          disabled={deleteMutation.isPending}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
