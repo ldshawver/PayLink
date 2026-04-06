@@ -12633,7 +12633,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.put("/api/notification-preferences", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (!user?.workerId) return res.status(400).json({ message: "No worker profile linked" });
+      if (!user?.workerId) {
+        // Admin/manager accounts with no linked worker profile — preferences don't apply
+        return res.json({ skipped: true, message: "Notification preferences apply to employee accounts linked to a worker profile." });
+      }
       const { eventType, emailEnabled, smsEnabled, inAppEnabled, pushEnabled } = req.body;
       if (!eventType) return res.status(400).json({ message: "eventType is required" });
       const pref = await storage.upsertNotificationPreference({

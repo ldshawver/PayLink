@@ -25,6 +25,7 @@ import {
   XCircle,
   Send,
   Settings2,
+  Info,
 } from "lucide-react";
 import { ResponsivePageHeader } from "@/components/responsive-page-header";
 
@@ -89,8 +90,9 @@ export default function NotificationSettingsPage() {
   const [testPhone, setTestPhone] = useState("");
   const [testSending, setTestSending] = useState(false);
 
-  const { data: me } = useQuery<{ role: string }>({ queryKey: ["/api/auth/me"] });
+  const { data: me } = useQuery<{ role: string; workerId: string | null }>({ queryKey: ["/api/auth/me"] });
   const isAdmin = me?.role === "admin";
+  const hasNoWorkerProfile = me !== undefined && !me.workerId;
 
   const { data: notifStatus } = useQuery<{
     sms: { configured: boolean; fromNumber: string | null };
@@ -137,8 +139,15 @@ export default function NotificationSettingsPage() {
       const res = await apiRequest("PUT", "/api/notification-preferences", data);
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/notification-preferences"] });
+    onSuccess: (data: any) => {
+      if (data?.skipped) {
+        toast({
+          title: "Notification preferences",
+          description: "These settings apply to employee accounts linked to a worker profile. Your admin account does not have a linked worker.",
+        });
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["/api/notification-preferences"] });
+      }
     },
     onError: () => {
       toast({ title: "Failed to update preference", variant: "destructive" });
@@ -194,6 +203,18 @@ export default function NotificationSettingsPage() {
         title="Notification Preferences"
         subtitle="Control how you receive notifications for different events"
       />
+
+      {hasNoWorkerProfile && (
+        <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 p-4">
+          <Info className="h-5 w-5 text-blue-500 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-blue-800 dark:text-blue-300">Admin account — notification preferences apply to employee accounts</p>
+            <p className="text-xs text-blue-600 dark:text-blue-400 mt-0.5">
+              These settings are saved to an employee worker profile. Your account is not linked to a worker record, so changes here won't be stored. To set preferences, use an employee account or link this account to a worker profile.
+            </p>
+          </div>
+        </div>
+      )}
 
       <Card data-testid="card-push-status">
         <CardHeader>
