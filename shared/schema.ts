@@ -61,6 +61,7 @@ export const companies = pgTable("companies", {
   nextCheckNumber: integer("next_check_number").default(1),
   stationEnforcementEnabled: boolean("station_enforcement_enabled").default(false),
   timezone: text("timezone").default("America/New_York"),
+  timezoneConfirmed: boolean("timezone_confirmed").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

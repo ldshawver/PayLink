@@ -644,6 +644,13 @@ export async function registerRoutes(
       if (data.enterpriseId === "") data.enterpriseId = null;
       if (data.legalEntityId === "") data.legalEntityId = null;
       if (data.nextCheckNumber !== undefined) data.nextCheckNumber = parseInt(data.nextCheckNumber) || null;
+      // Audit timezone changes — these affect punch dates, OT, and payroll grouping
+      if (data.timezone) {
+        const existing = await storage.getCompany(req.params.id as string);
+        if (existing && existing.timezone !== data.timezone) {
+          console.log(`[TIMEZONE CHANGE] Company ${req.params.id} (${existing.name}): "${existing.timezone}" → "${data.timezone}" by user ${req.session.userId}`);
+        }
+      }
       const company = await storage.updateCompany(req.params.id as string, data);
       if (!company) {
         return res.status(404).json({ message: "Company not found" });
@@ -817,10 +824,14 @@ export async function registerRoutes(
       if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in/out." });
       }
+      // Load company timezone + enforcement settings in one query
+      const companyMeta = await db.execute(sql`SELECT station_enforcement_enabled, timezone FROM companies WHERE id = ${worker.companyId}`);
+      const companyTzRow = companyMeta.rows[0] as any;
+      const punchCompanyTz = companyTzRow?.timezone || "America/New_York";
+
       let matchedStationId: string | undefined;
       if (punchType === "clock_in" && worker.companyId) {
-        const companyRows = await db.execute(sql`SELECT station_enforcement_enabled FROM companies WHERE id = ${worker.companyId}`);
-        const enforcementEnabled = companyRows.rows.length > 0 && (companyRows.rows[0] as any).station_enforcement_enabled === true;
+        const enforcementEnabled = companyTzRow?.station_enforcement_enabled === true;
         if (enforcementEnabled) {
           const allStations = await storage.getStations(worker.companyId);
           const activeStations = allStations.filter(s => s.status === "active");
@@ -846,7 +857,8 @@ export async function registerRoutes(
           }
         }
       }
-      const today = new Date().toISOString().split("T")[0];
+      const now = new Date();
+      const today = getLocalDateStr(now, punchCompanyTz); // company local date, not UTC
       // Check if worker has a schedule for today (for unscheduled punch detection)
       let isUnscheduled = false;
       let matchingSchedule: any = null;
@@ -860,13 +872,10 @@ export async function registerRoutes(
           isUnscheduled = true;
         } else {
           matchingSchedule = workerSchedule;
-          const now = new Date();
+          scheduledStart = localTimeToUTC(today, workerSchedule.startTime, punchCompanyTz);
+          scheduledEnd   = localTimeToUTC(today, workerSchedule.endTime,   punchCompanyTz);
           const [sh, sm] = workerSchedule.startTime.split(":").map(Number);
           const [eh, em] = workerSchedule.endTime.split(":").map(Number);
-          scheduledStart = new Date(today + "T00:00:00");
-          scheduledStart.setHours(sh, sm, 0, 0);
-          scheduledEnd = new Date(today + "T00:00:00");
-          scheduledEnd.setHours(eh, em, 0, 0);
           const hrs = ((eh * 60 + em) - (sh * 60 + sm)) / 60;
           scheduledHours = Math.max(0, hrs).toFixed(2);
           // Flag as unscheduled if clocking in more than 2 hours before or after scheduled start
@@ -897,7 +906,6 @@ export async function registerRoutes(
             clockOut: staleClockOut, totalHours: cappedHours, overtimeHours: "0.00", doubleTimeHours: "0.00",
           });
         }
-        const now = new Date();
         const lateMinutes = scheduledStart ? Math.max(0, Math.round((now.getTime() - scheduledStart.getTime()) / 60000)) : 0;
         await storage.createTimeEntry({
           workerId, companyId, date: today, clockIn: now, status: "pending",
@@ -2431,6 +2439,8 @@ export async function registerRoutes(
       if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in/out. They submit invoices instead." });
       }
+      const punchCompanyTzRow = await db.execute(sql`SELECT timezone FROM companies WHERE id = ${worker.companyId}`);
+      const punchCompanyTz2 = (punchCompanyTzRow.rows[0] as any)?.timezone || "America/New_York";
       let matchedStationId: string | undefined;
       if (req.body.punchType === "clock_in" && worker.companyId) {
         const companyRows = await db.execute(sql`SELECT station_enforcement_enabled FROM companies WHERE id = ${worker.companyId}`);
@@ -2471,15 +2481,15 @@ export async function registerRoutes(
       });
 
       if (punch.punchType === "clock_in") {
-        const today = new Date().toISOString().split("T")[0];
+        const now2 = new Date();
+        const today = getLocalDateStr(now2, punchCompanyTz2); // company local date, not UTC
         const allEntries = await storage.getTimeEntries();
         const staleOpenEntries = allEntries.filter(
           (e) => e.workerId === punch.workerId && e.clockIn && !e.clockOut && e.date !== today
         );
         for (const stale of staleOpenEntries) {
           const staleClockIn = new Date(stale.clockIn!);
-          const now = new Date();
-          const elapsed = (now.getTime() - staleClockIn.getTime()) / (1000 * 60 * 60);
+          const elapsed = (now2.getTime() - staleClockIn.getTime()) / (1000 * 60 * 60);
           const cappedHours = Math.min(elapsed, 8).toFixed(2);
           const staleClockOut = new Date(staleClockIn.getTime() + parseFloat(cappedHours) * 60 * 60 * 1000);
           await storage.updateTimeEntry(stale.id, {
@@ -2492,8 +2502,8 @@ export async function registerRoutes(
         const entryData: any = {
           workerId: punch.workerId,
           companyId: punch.companyId,
-          date: new Date().toISOString().split("T")[0],
-          clockIn: new Date(),
+          date: today,
+          clockIn: now2,
           status: "pending",
         };
         if (req.body.wageGroupId) {
@@ -2705,13 +2715,14 @@ export async function registerRoutes(
         scheduleId: request.schedule_id || null,
       });
 
-      // Create time entry
-      const today = new Date().toISOString().split("T")[0];
+      // Create time entry — use company local date (not UTC)
+      const approvalCompanyTzRow = await db.execute(sql`SELECT timezone FROM companies WHERE id = ${request.company_id}`);
+      const approvalCompanyTz = (approvalCompanyTzRow.rows[0] as any)?.timezone || "America/New_York";
       const now = new Date();
       await storage.createTimeEntry({
         workerId: request.worker_id,
         companyId: request.company_id,
-        date: today,
+        date: getLocalDateStr(now, approvalCompanyTz),
         clockIn: now,
         status: "pending",
         source: "punches",

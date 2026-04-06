@@ -1,5 +1,6 @@
 import { eq, and, desc, sql, gte, lte, isNull, or, inArray, ne } from "drizzle-orm";
 import { db } from "./db";
+import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
 import {
   companies, workers, timePunches, timeEntries, schedules, payrollRuns, payrollItems, users,
   departments, branches, accrualAccounts, accrualBalances, employeeContacts, payMethods,
@@ -1064,6 +1065,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async convertPunchesToTimeEntries(companyId: string, startDate: string, endDate: string): Promise<{ created: number; skipped: number; entries: TimeEntry[] }> {
+    // Load company timezone so punch-to-date grouping uses company local time, not UTC
+    const companyRows = await db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
+    const companyTz = companyRows[0]?.timezone || "America/New_York";
+
     const allPunches = await db.select().from(timePunches)
       .where(and(
         eq(timePunches.companyId, companyId),
@@ -1078,10 +1083,10 @@ export class DatabaseStorage implements IStorage {
     const existingEntries = await db.select().from(timeEntries)
       .where(and(eq(timeEntries.companyId, companyId), gte(timeEntries.date, startDate), lte(timeEntries.date, endDate)));
 
-    // Group punches by worker+date
+    // Group punches by worker+date using company local date (not UTC)
     const punchGroups: Record<string, typeof allPunches> = {};
     for (const p of allPunches) {
-      const dateKey = new Date(p.punchTime).toISOString().split("T")[0];
+      const dateKey = getLocalDateStr(new Date(p.punchTime), companyTz);
       const key = `${p.workerId}::${dateKey}`;
       if (!punchGroups[key]) punchGroups[key] = [];
       punchGroups[key].push(p);
@@ -1121,12 +1126,8 @@ export class DatabaseStorage implements IStorage {
       let isUnscheduled = !sched;
 
       if (sched) {
-        const [sh, sm] = sched.startTime.split(":").map(Number);
-        const [eh, em] = sched.endTime.split(":").map(Number);
-        scheduledStart = new Date(date + "T00:00:00");
-        scheduledStart.setHours(sh, sm, 0, 0);
-        scheduledEnd = new Date(date + "T00:00:00");
-        scheduledEnd.setHours(eh, em, 0, 0);
+        scheduledStart = localTimeToUTC(date, sched.startTime, companyTz);
+        scheduledEnd   = localTimeToUTC(date, sched.endTime,   companyTz);
         scheduledHours = (scheduledEnd.getTime() - scheduledStart.getTime()) / (1000 * 60 * 60);
         lateMinutes = Math.max(0, Math.round((clockIn.getTime() - scheduledStart.getTime()) / 60000));
         if (clockOut && scheduledEnd) {

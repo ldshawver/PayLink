@@ -1617,6 +1617,7 @@ app.use((req, res, next) => {
     await run("companies.stripe_customer_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`);
     await run("companies.stripe_subscription_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT`);
     await run("companies.timezone", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'America/New_York'`);
+    await run("companies.timezone_confirmed", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone_confirmed BOOLEAN NOT NULL DEFAULT FALSE`);
 
     await run("authorization_audit_log table", sql`
       CREATE TABLE IF NOT EXISTS authorization_audit_log (

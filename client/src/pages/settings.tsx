@@ -82,9 +82,23 @@ function CompanyPolicyEditor({ company }: { company: Company }) {
     },
   });
 
+  const timezoneConfirmed = (company as any).timezoneConfirmed ?? false;
+  const currentTimezone = (company as any).timezone || "America/New_York";
+  const tzLabel = US_TIMEZONES.find(t => t.value === currentTimezone)?.label || currentTimezone;
+
+  const confirmTimezoneMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PATCH", `/api/companies/${company.id}`, { timezoneConfirmed: true });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      toast({ title: "Timezone confirmed", description: `Company timezone set to ${tzLabel}.` });
+    },
+  });
+
   const updatePolicies = useMutation({
     mutationFn: async (data: PolicyFormValues) => {
-      await apiRequest("PATCH", `/api/companies/${company.id}`, data);
+      await apiRequest("PATCH", `/api/companies/${company.id}`, { ...data, timezoneConfirmed: true });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
@@ -96,6 +110,34 @@ function CompanyPolicyEditor({ company }: { company: Company }) {
   });
 
   return (
+    <>
+    {!timezoneConfirmed && (
+      <div
+        className="flex items-start gap-3 rounded-lg border border-amber-400 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 p-4 mb-4"
+        data-testid={`banner-tz-unconfirmed-${company.id}`}
+      >
+        <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+            Timezone needs confirmation — {company.name}
+          </p>
+          <p className="text-xs text-amber-800 dark:text-amber-300 mt-0.5">
+            Currently set to <strong>{tzLabel}</strong>. Confirm this is correct before processing schedules or payroll.
+            An incorrect timezone causes punches, timecards, and overtime to be assigned to the wrong workday.
+          </p>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          className="shrink-0 border-amber-500 text-amber-800 hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/40"
+          onClick={() => confirmTimezoneMutation.mutate()}
+          disabled={confirmTimezoneMutation.isPending}
+          data-testid={`button-confirm-tz-${company.id}`}
+        >
+          {confirmTimezoneMutation.isPending ? "Confirming…" : "Confirm timezone"}
+        </Button>
+      </div>
+    )}
     <Card data-testid={`card-policy-${company.id}`}>
       <CardHeader className="pb-3">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
@@ -273,6 +315,7 @@ function CompanyPolicyEditor({ company }: { company: Company }) {
         </Form>
       </CardContent>
     </Card>
+    </>
   );
 }
 
