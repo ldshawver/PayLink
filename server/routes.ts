@@ -1250,7 +1250,7 @@ export async function registerRoutes(
       const workerMap = Object.fromEntries(workers.map(w => [w.id, w]));
 
       // Hours per worker
-      const hoursMap: Record<string, { reg: number; ot: number; dt: number; name: string; type: string; hourlyRate: number }> = {};
+      const hoursMap: Record<string, { reg: number; ot: number; dt: number; name: string; payType: string; payRate: number }> = {};
       for (const e of entries) {
         const w = workerMap[e.workerId];
         if (!w) continue;
@@ -1258,8 +1258,8 @@ export async function registerRoutes(
           hoursMap[e.workerId] = {
             reg: 0, ot: 0, dt: 0,
             name: `${w.firstName} ${w.lastName}`,
-            type: w.employmentType || "hourly",
-            hourlyRate: parseFloat(w.hourlyRate?.toString() || "0"),
+            payType: (w as any).payType || w.employmentType || "hourly",
+            payRate: parseFloat((w as any).payRate?.toString() || "0"),
           };
         }
         hoursMap[e.workerId].reg += parseFloat(e.regularHours?.toString() || "0");
@@ -1267,11 +1267,16 @@ export async function registerRoutes(
         hoursMap[e.workerId].dt += parseFloat(e.doubleTimeHours?.toString() || "0");
       }
 
+      // Salary workers without time entries (expected — they are paid from salary, not hours)
+      const salaryWorkers = workers.filter(w => w.isActive && (w as any).payType === "salary");
+
       // Item summaries (if already processed)
       const itemSummaries = existingItems.map(i => {
         const w = workerMap[i.workerId];
+        const isSalary = w && (w as any).payType === "salary";
         return {
           name: w ? `${w.firstName} ${w.lastName}` : i.workerId,
+          payType: isSalary ? "salary" : "hourly",
           gross: parseFloat(i.grossPay?.toString() || "0"),
           net: parseFloat(i.netPay?.toString() || "0"),
           deductions: parseFloat(i.deductions?.toString() || "0"),
@@ -1282,27 +1287,45 @@ export async function registerRoutes(
         };
       });
 
-      // Workers missing tax/banking info
+      // Workers missing SSN (exclude contractors and salary workers paid via payroll summary)
       const missingSetup = workers.filter(w => w.isActive && !w.ssn && w.employmentType !== "contractor");
-      const zeroRateWorkers = workers.filter(w => w.isActive && !parseFloat(w.hourlyRate?.toString() || "0") && !parseFloat(w.salary?.toString() || "0"));
+      // Zero pay rate: only flag hourly workers with $0 payRate (salary workers have annual payRate, not hourlyRate)
+      const zeroRateWorkers = workers.filter(w =>
+        w.isActive &&
+        (w as any).payType !== "salary" &&
+        !parseFloat((w as any).payRate?.toString() || "0") &&
+        !parseFloat((w as any).hourlyRate?.toString() || "0") &&
+        !parseFloat((w as any).salary?.toString() || "0")
+      );
+
+      const salaryWorkerSummary = salaryWorkers.length > 0
+        ? `\nSALARY WORKERS (${salaryWorkers.length} — paid from annual salary, NOT from time entries; no time entries is NORMAL for them):\n${salaryWorkers.map(w => `- ${w.firstName} ${w.lastName}: annual salary $${parseFloat((w as any).payRate?.toString() || "0").toFixed(2)}`).join('\n')}`
+        : "";
 
       const prompt = `You are a payroll compliance expert reviewing payroll data before it's processed and paid. Your job is to identify anomalies, missing information, and potential errors that a payroll manager should review. Be concise and direct.
+
+IMPORTANT RULES FOR THIS REVIEW:
+- Salary workers are paid based on their annual salary divided by pay periods. They do NOT need time entries. Do NOT flag salary workers for "no time entries" or "$0 hourly rate". This is expected and correct.
+- Only flag hourly/wage workers who are missing time entries or have $0 pay rates.
+- If a salary worker's processed gross pay is roughly annual_salary / pay_periods_per_year, that is correct — do not flag it.
 
 PAYROLL RUN: ${run.periodStart} to ${run.periodEnd}
 COMPANY: ${run.companyId.slice(0,8)}
 STATUS: ${run.status}
+${salaryWorkerSummary}
 
-TIME ENTRIES SUMMARY (${Object.keys(hoursMap).length} workers with punches):
-${Object.values(hoursMap).map(h => `- ${h.name} (${h.type}, $${h.hourlyRate}/hr): ${h.reg.toFixed(1)}h reg, ${h.ot.toFixed(1)}h OT, ${h.dt.toFixed(1)}h DT`).join('\n')}
+TIME ENTRIES SUMMARY (${Object.keys(hoursMap).length} hourly workers with punches):
+${Object.values(hoursMap).map(h => `- ${h.name} (${h.payType}, $${h.payRate}${h.payType === "salary" ? "/yr" : "/hr"}): ${h.reg.toFixed(1)}h reg, ${h.ot.toFixed(1)}h OT, ${h.dt.toFixed(1)}h DT`).join('\n') || 'None'}
 
 ${itemSummaries.length > 0 ? `PROCESSED ITEMS (${itemSummaries.length} employees):
-${itemSummaries.slice(0, 20).map(i => `- ${i.name}: $${i.gross.toFixed(2)} gross, $${i.net.toFixed(2)} net, ${i.hours}h, pay method: ${i.payMethod}, tax setup: ${i.taxSetup ? 'yes' : 'MISSING'}`).join('\n')}` : 'No processed items yet (run is in draft).'}
+${itemSummaries.slice(0, 20).map(i => `- ${i.name} [${i.payType}]: $${i.gross.toFixed(2)} gross, $${i.net.toFixed(2)} net, ${i.hours}h regular${i.payType === "salary" ? " (salary — hours field not applicable)" : ""}, pay method: ${i.payMethod}, tax setup: ${i.taxSetup ? 'yes' : 'MISSING'}`).join('\n')}` : 'No processed items yet (run is in draft).'}
 
 SETUP ISSUES:
-- Active employees missing SSN: ${missingSetup.map(w => `${w.firstName} ${w.lastName}`).join(', ') || 'None'}
-- Active workers with $0 pay rate: ${zeroRateWorkers.map(w => `${w.firstName} ${w.lastName}`).join(', ') || 'None'}
+- Active non-contractor employees missing SSN: ${missingSetup.map(w => `${w.firstName} ${w.lastName}`).join(', ') || 'None'}
+- Active hourly workers with $0 pay rate: ${zeroRateWorkers.map(w => `${w.firstName} ${w.lastName}`).join(', ') || 'None'}
 - Total active workers: ${workers.filter(w => w.isActive).length}
-- Workers with time entries: ${Object.keys(hoursMap).length}
+- Salary workers (no time clock): ${salaryWorkers.length}
+- Hourly workers with time entries: ${Object.keys(hoursMap).length}
 
 Return a JSON response with this exact structure:
 {
@@ -1318,7 +1341,7 @@ Return a JSON response with this exact structure:
   ]
 }
 
-Flag anything that looks unusual: very high hours (>60/week), employees with no time entries, significant pay disparities, missing tax setup, zero pay rates, potential overtime violations, or classification issues. If everything looks good, return low risk with an empty flags array.`;
+Flag anything that looks unusual: very high hours (>60/week), hourly employees with no time entries, significant pay disparities, missing tax setup for non-contractors, zero pay rates on hourly workers, potential overtime violations, or worker classification issues. Do NOT flag salary workers for missing hours or $0 hourly rate — they are paid from salary. If everything looks good, return low risk with an empty flags array.`;
 
       const OpenAI = (await import("openai")).default;
       const openai = new OpenAI({ apiKey });
