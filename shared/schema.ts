@@ -62,6 +62,7 @@ export const companies = pgTable("companies", {
   stationEnforcementEnabled: boolean("station_enforcement_enabled").default(false),
   timezone: text("timezone").default("America/New_York"),
   timezoneConfirmed: boolean("timezone_confirmed").default(false),
+  stripeFinancialAccountId: text("stripe_financial_account_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -386,6 +387,7 @@ export const payMethods = pgTable("pay_methods", {
   amountValue: numeric("amount_value"),
   platform: text("platform"),
   handle: text("handle"),
+  stripeBankAccountId: text("stripe_bank_account_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -3596,3 +3598,28 @@ export const checkPrintAuditLogs = pgTable("check_print_audit_logs", {
 export const insertCheckPrintAuditLogSchema = createInsertSchema(checkPrintAuditLogs).omit({ id: true, createdAt: true });
 export type CheckPrintAuditLog = typeof checkPrintAuditLogs.$inferSelect;
 export type InsertCheckPrintAuditLog = z.infer<typeof insertCheckPrintAuditLogSchema>;
+
+// ── Stripe Treasury Outbound Payments ─────────────────────────────────────────
+export const treasuryOutboundPayments = pgTable("treasury_outbound_payments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  payrollRunId: varchar("payroll_run_id").references(() => payrollRuns.id),
+  workerId: varchar("worker_id").references(() => workers.id),
+  stripeOutboundPaymentId: text("stripe_outbound_payment_id").unique(),
+  stripeFinancialAccountId: text("stripe_financial_account_id"),
+  amount: integer("amount").notNull(),
+  currency: text("currency").default("usd"),
+  status: text("status").notNull().default("pending"),
+  recipientName: text("recipient_name"),
+  routingNumber: text("routing_number"),
+  accountNumber: text("account_number"),
+  memo: text("memo"),
+  errorMessage: text("error_message"),
+  stripeRawStatus: text("stripe_raw_status"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertTreasuryOutboundPaymentSchema = createInsertSchema(treasuryOutboundPayments).omit({ id: true, createdAt: true, updatedAt: true });
+export type TreasuryOutboundPayment = typeof treasuryOutboundPayments.$inferSelect;
+export type InsertTreasuryOutboundPayment = z.infer<typeof insertTreasuryOutboundPaymentSchema>;

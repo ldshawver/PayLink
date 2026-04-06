@@ -2269,6 +2269,236 @@ export async function registerRoutes(
     }
   });
 
+  // ── Stripe Treasury Routes ─────────────────────────────────────────────────
+
+  app.get("/api/treasury/status", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company associated with this account" });
+      const company = await storage.getCompany(user.companyId);
+      if (!company) return res.status(404).json({ message: "Company not found" });
+
+      const { getOrCreateFinancialAccount } = await import("./treasury.js");
+
+      if (!company.stripeFinancialAccountId) {
+        return res.json({ connected: false, company: { id: company.id, name: company.name } });
+      }
+
+      const { getFinancialAccount } = await import("./treasury.js");
+      const fa = await getFinancialAccount(company.stripeFinancialAccountId);
+      res.json({ connected: true, financialAccount: fa, company: { id: company.id, name: company.name } });
+    } catch (error: any) {
+      console.error("Treasury status error:", error);
+      res.status(500).json({ message: error.message || "Failed to get treasury status" });
+    }
+  });
+
+  app.post("/api/treasury/setup", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company associated with this account" });
+      const company = await storage.getCompany(user.companyId);
+      if (!company) return res.status(404).json({ message: "Company not found" });
+
+      const { getOrCreateFinancialAccount } = await import("./treasury.js");
+      const fa = await getOrCreateFinancialAccount(company);
+
+      if (fa.id !== company.stripeFinancialAccountId) {
+        await storage.updateCompany(company.id, { stripeFinancialAccountId: fa.id } as any);
+      }
+
+      res.json({ success: true, financialAccount: fa });
+    } catch (error: any) {
+      console.error("Treasury setup error:", error);
+      res.status(500).json({ message: error.message || "Failed to set up Stripe Treasury" });
+    }
+  });
+
+  app.get("/api/treasury/transactions", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company" });
+      const payrollRunId = req.query.payrollRunId as string | undefined;
+      const transactions = await storage.getTreasuryOutboundPayments(user.companyId, payrollRunId);
+      res.json(transactions);
+    } catch (error: any) {
+      console.error("Treasury transactions error:", error);
+      res.status(500).json({ message: "Failed to fetch treasury transactions" });
+    }
+  });
+
+  app.post("/api/treasury/sync", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company" });
+      const company = await storage.getCompany(user.companyId);
+      if (!company?.stripeFinancialAccountId) return res.status(400).json({ message: "Treasury not set up" });
+
+      const { listOutboundPayments } = await import("./treasury.js");
+      const stripePayments = await listOutboundPayments(company.stripeFinancialAccountId);
+
+      let updated = 0;
+      for (const sp of stripePayments) {
+        const existing = await storage.getTreasuryOutboundPaymentByStripeId(sp.id);
+        if (existing) {
+          const newStatus = sp.status === "posted" ? "completed" : sp.status === "failed" ? "failed" : sp.status === "returned" ? "returned" : sp.status === "canceled" ? "canceled" : existing.status;
+          if (newStatus !== existing.status) {
+            await storage.updateTreasuryOutboundPayment(existing.id, {
+              status: newStatus,
+              stripeRawStatus: sp.status,
+              errorMessage: sp.returned_details?.reason || null,
+            } as any);
+            updated++;
+          }
+        }
+      }
+
+      res.json({ synced: stripePayments.length, updated });
+    } catch (error: any) {
+      console.error("Treasury sync error:", error);
+      res.status(500).json({ message: error.message || "Failed to sync treasury" });
+    }
+  });
+
+  app.post("/api/payroll-runs/:id/disburse-stripe", requireAuth, requireRole("admin"), requireActiveSubscription, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.status(400).json({ message: "No company" });
+      const company = await storage.getCompany(user.companyId);
+      if (!company) return res.status(404).json({ message: "Company not found" });
+      if (!company.stripeFinancialAccountId) return res.status(400).json({ message: "Stripe Treasury is not set up. Go to Treasury settings to enable it." });
+
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      if (run.companyId !== user.companyId) return res.status(403).json({ message: "Not authorized" });
+      if (run.status !== "processed" && run.status !== "approved") return res.status(400).json({ message: "Payroll run must be processed and approved before disbursing" });
+      if (!run.approvedAt) return res.status(400).json({ message: "Payroll run must be approved before disbursing" });
+      if (run.lockedAt || run.isLocked) return res.status(400).json({ message: "Payroll run is locked" });
+
+      const items = await storage.getPayrollItems(run.id);
+      if (items.length === 0) return res.status(400).json({ message: "No payroll items found" });
+
+      const allPayMethods = await storage.getPayMethods();
+      const payMethodMap = new Map(allPayMethods.map(pm => [pm.workerId, pm]));
+
+      const { validatePayrollReadiness, getFinancialAccount, createOutboundPayment } = await import("./treasury.js");
+
+      const fa = await getFinancialAccount(company.stripeFinancialAccountId);
+      const balance = fa.balance;
+
+      const totalNetPay = items.reduce((sum, item) => {
+        if ((item.paymentMethod || "check") !== "direct_deposit" && (item.paymentMethod || "check") !== "ach") return sum;
+        return sum + parseFloat(item.netPay || "0");
+      }, 0);
+
+      if (balance && balance.cash < totalNetPay) {
+        return res.status(400).json({
+          message: `Insufficient balance. Financial account has $${balance.cash.toFixed(2)} but payroll requires $${totalNetPay.toFixed(2)}.`,
+          balance: balance.cash,
+          required: totalNetPay,
+        });
+      }
+
+      const directDepositItems = items.filter(item => {
+        const pm = payMethodMap.get(item.workerId);
+        return pm?.methodType === "direct_deposit";
+      });
+
+      const validationInput = directDepositItems.map(item => {
+        const pm = payMethodMap.get(item.workerId);
+        return { worker: { firstName: "", lastName: item.workerName || item.workerId, id: item.workerId } as any, payMethod: pm, netPay: parseFloat(item.netPay || "0") };
+      });
+
+      const { valid, errors } = validatePayrollReadiness(validationInput);
+      if (!valid) return res.status(400).json({ message: "Payroll validation failed", errors });
+
+      const results: { workerId: string; workerName: string; amount: number; status: string; error?: string }[] = [];
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const item of directDepositItems) {
+        const pm = payMethodMap.get(item.workerId)!;
+        const netPay = parseFloat(item.netPay || "0");
+        if (netPay <= 0) continue;
+        const amountCents = Math.round(netPay * 100);
+        const workerName = item.workerName || item.workerId;
+
+        try {
+          const payment = await createOutboundPayment({
+            financialAccountId: company.stripeFinancialAccountId!,
+            routingNumber: pm.routingNumber!,
+            accountNumber: pm.accountNumber!,
+            accountType: (pm.accountType || "checking") as "checking" | "savings",
+            recipientName: workerName,
+            amountCents,
+            memo: `PAYROLL ${run.id.substring(0, 8).toUpperCase()}`,
+            idempotencyKey: `payroll-${run.id}-${item.workerId}`,
+          });
+
+          await storage.createTreasuryOutboundPayment({
+            companyId: company.id,
+            payrollRunId: run.id,
+            workerId: item.workerId,
+            stripeOutboundPaymentId: payment.stripeOutboundPaymentId,
+            stripeFinancialAccountId: company.stripeFinancialAccountId,
+            amount: amountCents,
+            currency: "usd",
+            status: payment.status === "posted" ? "completed" : "pending",
+            recipientName: workerName,
+            routingNumber: pm.routingNumber,
+            accountNumber: pm.accountNumber ? `****${pm.accountNumber.slice(-4)}` : null,
+            memo: `PAYROLL ${run.id.substring(0, 8).toUpperCase()}`,
+            stripeRawStatus: payment.status,
+          });
+
+          results.push({ workerId: item.workerId, workerName, amount: netPay, status: payment.status });
+          successCount++;
+        } catch (err: any) {
+          console.error(`[TREASURY] Failed payment for ${workerName}:`, err);
+          await storage.createTreasuryOutboundPayment({
+            companyId: company.id,
+            payrollRunId: run.id,
+            workerId: item.workerId,
+            stripeOutboundPaymentId: null,
+            stripeFinancialAccountId: company.stripeFinancialAccountId,
+            amount: amountCents,
+            currency: "usd",
+            status: "failed",
+            recipientName: workerName,
+            routingNumber: pm.routingNumber,
+            accountNumber: pm.accountNumber ? `****${pm.accountNumber.slice(-4)}` : null,
+            memo: `PAYROLL ${run.id.substring(0, 8).toUpperCase()}`,
+            errorMessage: err.message,
+            stripeRawStatus: "failed",
+          });
+          results.push({ workerId: item.workerId, workerName, amount: netPay, status: "failed", error: err.message });
+          failCount++;
+        }
+      }
+
+      if (successCount > 0) {
+        await storage.updatePayrollRun(run.id, {
+          achStatus: "submitted",
+          achSubmittedAt: new Date(),
+          achBatchId: `TRS-${run.id.substring(0, 8).toUpperCase()}-${Date.now()}`,
+          status: failCount === 0 ? "paid" : run.status,
+        });
+      }
+
+      res.json({
+        success: failCount === 0,
+        successCount,
+        failCount,
+        results,
+        message: failCount === 0
+          ? `Successfully initiated ${successCount} direct deposit(s) via Stripe Treasury`
+          : `${successCount} payments initiated, ${failCount} failed. Check transaction details.`,
+      });
+    } catch (error: any) {
+      console.error("Treasury disburse error:", error);
+      res.status(500).json({ message: error.message || "Failed to disburse payroll via Stripe Treasury" });
+    }
+  });
 
   // ── Per-agency liability breakdown ────────────────────────────────────────
   app.get("/api/payroll-runs/:id/agency-liabilities", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {

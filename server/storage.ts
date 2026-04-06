@@ -203,6 +203,8 @@ import {
   type BizDocumentItem, type InsertBizDocumentItem,
   type BizDocumentAttachment, type InsertBizDocumentAttachment,
   type BizDocumentHistory, type InsertBizDocumentHistory,
+  treasuryOutboundPayments,
+  type TreasuryOutboundPayment, type InsertTreasuryOutboundPayment,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -971,6 +973,12 @@ export interface IStorage {
   // Biz Document History
   getBizDocumentHistory(documentId: string): Promise<BizDocumentHistory[]>;
   addBizDocumentHistory(data: InsertBizDocumentHistory): Promise<BizDocumentHistory>;
+
+  // ── Treasury ──────────────────────────────────────────────────────────────
+  getTreasuryOutboundPayments(companyId: string, payrollRunId?: string): Promise<TreasuryOutboundPayment[]>;
+  getTreasuryOutboundPaymentByStripeId(stripeId: string): Promise<TreasuryOutboundPayment | undefined>;
+  createTreasuryOutboundPayment(data: InsertTreasuryOutboundPayment): Promise<TreasuryOutboundPayment>;
+  updateTreasuryOutboundPayment(id: string, data: Partial<TreasuryOutboundPayment>): Promise<TreasuryOutboundPayment | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -4266,6 +4274,25 @@ export class DatabaseStorage implements IStorage {
   async addBizDocumentHistory(data: InsertBizDocumentHistory): Promise<BizDocumentHistory> {
     const [h] = await db.insert(bizDocumentHistory).values(data).returning();
     return h;
+  }
+
+  // ── Treasury ──────────────────────────────────────────────────────────────
+  async getTreasuryOutboundPayments(companyId: string, payrollRunId?: string): Promise<TreasuryOutboundPayment[]> {
+    const conditions = [eq(treasuryOutboundPayments.companyId, companyId)];
+    if (payrollRunId) conditions.push(eq(treasuryOutboundPayments.payrollRunId, payrollRunId));
+    return db.select().from(treasuryOutboundPayments).where(and(...conditions)).orderBy(desc(treasuryOutboundPayments.createdAt));
+  }
+  async getTreasuryOutboundPaymentByStripeId(stripeId: string): Promise<TreasuryOutboundPayment | undefined> {
+    const [r] = await db.select().from(treasuryOutboundPayments).where(eq(treasuryOutboundPayments.stripeOutboundPaymentId, stripeId));
+    return r;
+  }
+  async createTreasuryOutboundPayment(data: InsertTreasuryOutboundPayment): Promise<TreasuryOutboundPayment> {
+    const [r] = await db.insert(treasuryOutboundPayments).values(data).returning();
+    return r;
+  }
+  async updateTreasuryOutboundPayment(id: string, data: Partial<TreasuryOutboundPayment>): Promise<TreasuryOutboundPayment | undefined> {
+    const [r] = await db.update(treasuryOutboundPayments).set({ ...data, updatedAt: new Date() }).where(eq(treasuryOutboundPayments.id, id)).returning();
+    return r;
   }
 }
 

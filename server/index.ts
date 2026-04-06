@@ -2173,6 +2173,29 @@ Thank you,
       render_engine TEXT DEFAULT 'browser-print',
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    // ── Stripe Treasury columns ────────────────────────────────────────────────
+    await run("companies.stripe_financial_account_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS stripe_financial_account_id TEXT`);
+    await run("pay_methods.stripe_bank_account_id", sql`ALTER TABLE pay_methods ADD COLUMN IF NOT EXISTS stripe_bank_account_id TEXT`);
+    await run("treasury_outbound_payments table", sql`CREATE TABLE IF NOT EXISTS treasury_outbound_payments (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      payroll_run_id VARCHAR REFERENCES payroll_runs(id),
+      worker_id VARCHAR REFERENCES workers(id),
+      stripe_outbound_payment_id TEXT UNIQUE,
+      stripe_financial_account_id TEXT,
+      amount INTEGER NOT NULL,
+      currency TEXT DEFAULT 'usd',
+      status TEXT NOT NULL DEFAULT 'pending',
+      recipient_name TEXT,
+      routing_number TEXT,
+      account_number TEXT,
+      memo TEXT,
+      error_message TEXT,
+      stripe_raw_status TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");
