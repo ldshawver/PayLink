@@ -3573,3 +3573,24 @@ export const bizDocumentHistory = pgTable("biz_document_history", {
 export const insertBizDocumentHistorySchema = createInsertSchema(bizDocumentHistory).omit({ id: true, changedAt: true });
 export type BizDocumentHistory = typeof bizDocumentHistory.$inferSelect;
 export type InsertBizDocumentHistory = z.infer<typeof insertBizDocumentHistorySchema>;
+
+// ── Check Print Audit Logs ─────────────────────────────────────────────────────
+export const checkPrintAuditLogs = pgTable("check_print_audit_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  payrollRunId: varchar("payroll_run_id").references(() => payrollRuns.id),
+  companyId: varchar("company_id").references(() => companies.id),
+  initiatedByUserId: varchar("initiated_by_user_id").references(() => users.id),
+  checkCount: integer("check_count").default(0),
+  totalAmount: numeric("total_amount"),
+  fundingAccountId: varchar("funding_account_id"),
+  micrValidation: text("micr_validation"),
+  validationErrors: jsonb("validation_errors").$type<Array<{ workerId: string; workerName: string; errors: string[] }>>().default([]),
+  printBlocked: boolean("print_blocked").default(false),
+  templateId: varchar("template_id"),
+  renderEngine: text("render_engine").default("browser-print"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertCheckPrintAuditLogSchema = createInsertSchema(checkPrintAuditLogs).omit({ id: true, createdAt: true });
+export type CheckPrintAuditLog = typeof checkPrintAuditLogs.$inferSelect;
+export type InsertCheckPrintAuditLog = z.infer<typeof insertCheckPrintAuditLogSchema>;

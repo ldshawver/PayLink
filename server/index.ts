@@ -2155,6 +2155,22 @@ Thank you,
     } catch (e: any) {
       console.log("Auto-migration skipped (biz_document_templates seed):", e.message);
     }
+
+    await run("check_print_audit_logs table", sql`CREATE TABLE IF NOT EXISTS check_print_audit_logs (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      payroll_run_id VARCHAR REFERENCES payroll_runs(id),
+      company_id VARCHAR REFERENCES companies(id),
+      initiated_by_user_id VARCHAR REFERENCES users(id),
+      check_count INTEGER DEFAULT 0,
+      total_amount NUMERIC,
+      funding_account_id VARCHAR,
+      micr_validation TEXT,
+      validation_errors JSONB DEFAULT '[]',
+      print_blocked BOOLEAN DEFAULT FALSE,
+      template_id VARCHAR,
+      render_engine TEXT DEFAULT 'browser-print',
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");

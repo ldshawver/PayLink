@@ -8748,6 +8748,34 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  // ── Check Print Audit Log ─────────────────────────────────────────────────
+  app.post("/api/check-print-audit", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.session as any)?.userId;
+      const {
+        payrollRunId, companyId, checkCount, totalAmount, fundingAccountId,
+        micrValidation, validationErrors, printBlocked, templateId,
+      } = req.body;
+      await db.execute(sql`
+        INSERT INTO check_print_audit_logs (
+          payroll_run_id, company_id, initiated_by_user_id,
+          check_count, total_amount, funding_account_id,
+          micr_validation, validation_errors, print_blocked,
+          template_id, render_engine
+        ) VALUES (
+          ${payrollRunId || null}, ${companyId || null}, ${userId || null},
+          ${checkCount || 0}, ${totalAmount || 0}, ${fundingAccountId || null},
+          ${micrValidation || "unknown"}, ${JSON.stringify(validationErrors || [])},
+          ${printBlocked ? true : false}, ${templateId || null}, 'browser-print'
+        )
+      `);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Check print audit log failed:", error.message);
+      res.json({ success: false, error: error.message });
+    }
+  });
+
   // ── Payroll Payment Methods ───────────────────────────────────────────────
   app.get("/api/payroll-payment-methods", async (req, res) => {
     try {

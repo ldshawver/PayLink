@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
 import { useParams, useSearch } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Printer, ArrowLeft, FileText, Lock, AlertTriangle } from "lucide-react";
+import { Printer, ArrowLeft, FileText, Lock, AlertTriangle, XCircle, CheckCircle2, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { Link } from "wouter";
 import type { PayrollRun, PayrollItem, Worker, Company, TaxDeduction, CheckTemplate, PayStubAccount, AccrualAccount, AccrualBalance, PayStubAmendment, RemittanceSource } from "@shared/schema";
 
@@ -160,10 +160,12 @@ function CheckPortion({
   const periodEnd = run.periodEnd ? new Date(run.periodEnd + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "";
   const memoText = periodStart && periodEnd ? `Pay period ${periodStart} – ${periodEnd}` : "";
 
-  // Routing / account from remittance source
-  const routing = (remittanceSource?.routingNumber || "000000000").replace(/\D/g, "").padEnd(9, "0").slice(0, 9);
-  const account = (remittanceSource?.accountNumber || "0000000000").replace(/\D/g, "");
-  const checkNum = String(item.checkNumber || "0001").padStart(4, "0");
+  // Routing / account from remittance source — no silent fallback values
+  const routing = (remittanceSource?.routingNumber || "").replace(/\D/g, "");
+  const account = (remittanceSource?.accountNumber || "").replace(/\D/g, "");
+  const checkNum = String(item.checkNumber || "").replace(/\D/g, "").padStart(4, "0");
+  // Only render MICR if all required banking fields are present and valid length
+  const micrReady = routing.length === 9 && account.length >= 4 && !!(item.checkNumber);
   const institutionName = remittanceSource?.institution || "";
 
   // Alignment offsets from remittance source (in inches, positive = down/right)
@@ -355,7 +357,7 @@ function CheckPortion({
       </div>
 
       {/* ── MICR CLEAR BAND (bottom 0.625in, ANSI X9.27) ── */}
-      {config.showMicrLine ? (
+      {config.showMicrLine && micrReady ? (
         <div style={{
           height: "0.625in",
           borderTop: "0.5px solid #ccc",
@@ -367,7 +369,7 @@ function CheckPortion({
           <MicrLine routing={routing} account={account} checkNum={checkNum} />
         </div>
       ) : (
-        /* Reserve the same space even if MICR is hidden so check height stays constant */
+        /* Reserve the same space so check height stays constant; MICR omitted if banking data is incomplete */
         <div style={{ height: "0.625in", flexShrink: 0 }} />
       )}
     </div>
@@ -1439,6 +1441,207 @@ function PayrollPacketSummaryPage({
   );
 }
 
+// ── Check Print Validation ───────────────────────────────────────────────────
+
+type ValidationIssue = {
+  severity: "blocking" | "warning";
+  field: string;
+  message: string;
+  fixPath?: string;
+  fixLabel?: string;
+};
+
+function buildMicr(routing: string, account: string, checkNum: string): { valid: boolean; error?: string; field?: string } {
+  const r = routing.replace(/\D/g, "");
+  const a = account.replace(/\D/g, "");
+  const c = checkNum.replace(/\D/g, "");
+  if (!r || r.length !== 9) {
+    return { valid: false, error: `Routing number must be exactly 9 digits (got ${r.length || 0})`, field: "routing" };
+  }
+  const digits = r.split("").map(Number);
+  const checksum = (3*digits[0] + 7*digits[1] + digits[2] + 3*digits[3] + 7*digits[4] + digits[5] + 3*digits[6] + 7*digits[7] + digits[8]) % 10;
+  if (checksum !== 0) {
+    return { valid: false, error: `Routing number "${r}" failed ABA checksum — verify it is correct`, field: "routing" };
+  }
+  if (!a || a.length < 4) {
+    return { valid: false, error: `Account number is ${a ? `too short (${a.length} digits, need ≥4)` : "missing"}`, field: "account" };
+  }
+  if (!c) {
+    return { valid: false, error: "Check number is missing", field: "checkNum" };
+  }
+  return { valid: true };
+}
+
+function validateCheckReadiness(
+  item: PayrollItem,
+  worker: Worker | undefined,
+  remittanceSources: RemittanceSource[],
+  companyId: string,
+  micrFontLoaded: boolean | null,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (!worker) {
+    issues.push({ severity: "blocking", field: "worker", message: "Worker record not found for this payroll item", fixPath: "/app/employees", fixLabel: "Open Employees" });
+    return issues;
+  }
+  if (!worker.firstName && !worker.lastName) {
+    issues.push({ severity: "blocking", field: "payee", message: "Worker has no name (required for payee line)", fixPath: `/app/employees`, fixLabel: "Edit Worker" });
+  }
+  const netPay = Number(item.netPay || 0);
+  if (netPay <= 0) {
+    issues.push({ severity: "blocking", field: "amount", message: `Net pay is $${netPay.toFixed(2)} — cannot print a check for zero or negative amount`, fixPath: "/app/payroll?tab=process", fixLabel: "Open Payroll" });
+  }
+  if (item.paymentMethod && item.paymentMethod !== "check") {
+    issues.push({ severity: "blocking", field: "paymentMethod", message: `Payment method is "${item.paymentMethod}" — this employee is not set up for paper checks`, fixPath: "/app/payroll?tab=process", fixLabel: "Open Payroll" });
+  }
+  if (!item.checkNumber) {
+    issues.push({ severity: "blocking", field: "checkNumber", message: "No check number assigned — process the payroll run first to assign check numbers", fixPath: "/app/payroll?tab=process", fixLabel: "Open Payroll" });
+  }
+  const remittanceSource = remittanceSources.find(s => s.companyId === companyId && s.status === "enabled") || remittanceSources.find(s => s.companyId === companyId);
+  if (!remittanceSource) {
+    issues.push({ severity: "blocking", field: "remittanceSource", message: "No remittance source (bank account) configured for this company — add one in Settings", fixPath: "/app/settings", fixLabel: "Open Settings" });
+    return issues;
+  }
+  const routing = remittanceSource.routingNumber || "";
+  const account = remittanceSource.accountNumber || "";
+  const checkNum = String(item.checkNumber || "");
+  const micrResult = buildMicr(routing, account, checkNum);
+  if (!micrResult.valid && micrResult.field === "routing") {
+    issues.push({ severity: "blocking", field: "routing", message: micrResult.error!, fixPath: "/app/settings", fixLabel: "Open Remittance Sources" });
+  }
+  if (!micrResult.valid && micrResult.field === "account") {
+    issues.push({ severity: "blocking", field: "account", message: micrResult.error!, fixPath: "/app/settings", fixLabel: "Open Remittance Sources" });
+  }
+  if (!micrResult.valid && micrResult.field === "checkNum") {
+    issues.push({ severity: "blocking", field: "checkNum", message: micrResult.error!, fixPath: "/app/payroll?tab=process", fixLabel: "Open Payroll" });
+  }
+  if (micrFontLoaded === false) {
+    issues.push({ severity: "blocking", field: "micrFont", message: "MICR E-13B font did not load — routing/account line will not be machine-readable. Do not use for live checks.", fixPath: "/app/settings", fixLabel: "Check Print Settings" });
+  }
+  return issues;
+}
+
+function CheckValidationErrorCard({ item, worker, issues }: { item: PayrollItem; worker?: Worker; issues: ValidationIssue[] }) {
+  const netPay = Number(item.netPay || 0);
+  return (
+    <div className="check-page print-hide" style={{ width: "8.5in", padding: "0.5in", boxSizing: "border-box", fontFamily: "Arial, sans-serif" }}>
+      <div style={{ border: "3px solid #dc2626", borderRadius: "8px", padding: "24px", background: "#fef2f2", minHeight: "3.667in", boxSizing: "border-box" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px" }}>
+          <AlertTriangle style={{ width: 24, height: 24, color: "#dc2626", flexShrink: 0 }} />
+          <span style={{ fontWeight: "700", fontSize: "18px", color: "#dc2626" }}>Check Print Blocked</span>
+        </div>
+        <p style={{ fontSize: "14px", color: "#7f1d1d", marginBottom: "16px" }}>
+          <strong>{worker ? `${worker.firstName} ${worker.lastName}` : "(unknown worker)"}</strong>
+          {" "}— Check #{item.checkNumber || "(unassigned)"} — ${netPay.toFixed(2)}
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          {issues.map((issue, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: "10px", background: "white", border: "1px solid #fca5a5", borderRadius: "6px", padding: "12px" }}>
+              <div style={{ width: 18, height: 18, background: "#dc2626", borderRadius: "50%", flexShrink: 0, marginTop: "2px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ color: "white", fontSize: "11px", fontWeight: "bold" }}>✕</span>
+              </div>
+              <div>
+                <div style={{ fontSize: "13px", fontWeight: "600", color: "#991b1b" }}>{issue.message}</div>
+                {issue.fixPath && issue.fixLabel && (
+                  <a href={issue.fixPath} style={{ fontSize: "12px", color: "#2563eb", textDecoration: "underline" }}>{issue.fixLabel} →</a>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        <p style={{ marginTop: "20px", fontSize: "11px", color: "#6b7280" }}>
+          This card will not appear on any printed document. Resolve the issues above, then return to this page to print.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function CheckDiagnosticsPanel({
+  checkItemsWithValidation, micrFontLoaded, templateName, fundingAccountId,
+}: {
+  checkItemsWithValidation: Array<{ item: PayrollItem; worker?: Worker; issues: ValidationIssue[]; remittanceSource?: RemittanceSource }>;
+  micrFontLoaded: boolean | null;
+  templateName: string;
+  fundingAccountId?: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const allValid = checkItemsWithValidation.every(c => c.issues.length === 0);
+  return (
+    <div className="mx-4 mb-3 rounded-md border border-slate-200 bg-slate-50 dark:bg-slate-950/20 dark:border-slate-700 print-hide" data-testid="panel-diagnostics">
+      <button
+        className="w-full flex items-center justify-between p-3 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md"
+        onClick={() => setOpen(v => !v)}
+        data-testid="button-diagnostics-toggle"
+      >
+        <span className="flex items-center gap-2">
+          {allValid
+            ? <CheckCircle2 className="h-4 w-4 text-green-600" />
+            : <AlertTriangle className="h-4 w-4 text-red-500" />}
+          Print Diagnostics — {allValid ? "All checks ready" : `${checkItemsWithValidation.filter(c => c.issues.length > 0).length} check(s) have issues`}
+        </span>
+        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+      </button>
+      {open && (
+        <div className="p-3 border-t border-slate-200 dark:border-slate-700 space-y-2 text-xs">
+          <div className="grid grid-cols-2 gap-2 text-slate-600 dark:text-slate-400 mb-3">
+            <div><span className="font-medium">Render engine:</span> browser-print (CSS @media print)</div>
+            <div><span className="font-medium">Template:</span> {templateName}</div>
+            <div><span className="font-medium">MICR font:</span> {micrFontLoaded === true ? <span className="text-green-600 font-medium">✓ Loaded</span> : micrFontLoaded === false ? <span className="text-red-600 font-medium">✕ Not detected</span> : "Checking…"}</div>
+            <div><span className="font-medium">Funding account:</span> {fundingAccountId || "(none linked)"}</div>
+          </div>
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr className="bg-slate-100 dark:bg-slate-800">
+                <th className="text-left p-2 border border-slate-200 dark:border-slate-700">Payee</th>
+                <th className="text-left p-2 border border-slate-200 dark:border-slate-700">Check #</th>
+                <th className="text-right p-2 border border-slate-200 dark:border-slate-700">Amount</th>
+                <th className="text-left p-2 border border-slate-200 dark:border-slate-700">Routing</th>
+                <th className="text-left p-2 border border-slate-200 dark:border-slate-700">Account</th>
+                <th className="text-center p-2 border border-slate-200 dark:border-slate-700">MICR</th>
+                <th className="text-left p-2 border border-slate-200 dark:border-slate-700">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {checkItemsWithValidation.map(({ item, worker, issues, remittanceSource }) => {
+                const routing = (remittanceSource?.routingNumber || "").replace(/\D/g, "");
+                const account = (remittanceSource?.accountNumber || "").replace(/\D/g, "");
+                const micrCheck = buildMicr(routing, account, String(item.checkNumber || ""));
+                const blocked = issues.some(i => i.severity === "blocking");
+                return (
+                  <tr key={item.id} className={blocked ? "bg-red-50 dark:bg-red-950/20" : "bg-white dark:bg-transparent"}>
+                    <td className="p-2 border border-slate-200 dark:border-slate-700">
+                      {worker ? `${worker.firstName} ${worker.lastName}` : item.workerId}
+                    </td>
+                    <td className="p-2 border border-slate-200 dark:border-slate-700 font-mono">{item.checkNumber || "—"}</td>
+                    <td className="p-2 border border-slate-200 dark:border-slate-700 text-right">${Number(item.netPay || 0).toFixed(2)}</td>
+                    <td className="p-2 border border-slate-200 dark:border-slate-700 font-mono">
+                      {routing ? `•••${routing.slice(-4)} (${routing.length} digits)` : <span className="text-red-600">missing</span>}
+                    </td>
+                    <td className="p-2 border border-slate-200 dark:border-slate-700 font-mono">
+                      {account ? `•••${account.slice(-4)} (${account.length} digits)` : <span className="text-red-600">missing</span>}
+                    </td>
+                    <td className="p-2 border border-slate-200 dark:border-slate-700 text-center">
+                      {micrCheck.valid
+                        ? <span className="text-green-600">✓</span>
+                        : <span className="text-red-600" title={micrCheck.error}>✕</span>}
+                    </td>
+                    <td className="p-2 border border-slate-200 dark:border-slate-700">
+                      {blocked
+                        ? <span className="text-red-600 font-medium">Blocked</span>
+                        : <span className="text-green-600 font-medium">Ready</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PrintCheckPage() {
   const { runId } = useParams<{ runId: string }>();
   const search = useSearch();
@@ -1460,7 +1663,39 @@ export default function PrintCheckPage() {
     });
   }, []);
 
-  async function handlePrint() {
+  async function handlePrint(
+    checkItemsWithValidation: Array<{ item: PayrollItem; worker?: Worker; issues: ValidationIssue[]; remittanceSource?: RemittanceSource }>,
+    runId: string,
+    companyId: string | undefined,
+    activeTemplateId: string | undefined,
+    totalAmount: number,
+  ) {
+    const hasBlocking = checkItemsWithValidation.some(c => c.issues.some(i => i.severity === "blocking"));
+    const micrOverall = micrFontLoaded === false ? "font_missing" : hasBlocking ? "blocked" : "ok";
+    const validationErrors = checkItemsWithValidation
+      .filter(c => c.issues.length > 0)
+      .map(c => ({
+        workerId: c.item.workerId,
+        workerName: c.worker ? `${c.worker.firstName} ${c.worker.lastName}` : c.item.workerId,
+        errors: c.issues.map(i => i.message),
+      }));
+    // Fire-and-forget audit log
+    fetch("/api/check-print-audit", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        payrollRunId: runId,
+        companyId: companyId || null,
+        checkCount: checkItemsWithValidation.filter(c => c.issues.length === 0).length,
+        totalAmount,
+        micrValidation: micrOverall,
+        validationErrors,
+        printBlocked: hasBlocking,
+        templateId: activeTemplateId || null,
+      }),
+    }).catch(() => {});
+    if (hasBlocking) return;
     await document.fonts.ready;
     window.print();
   }
@@ -1556,6 +1791,17 @@ export default function PrintCheckPage() {
     ? items.filter(item => item.workerId === workerFilter)
     : items.filter(item => !item.paymentMethod || item.paymentMethod === "check");
 
+  // ── Pre-render validation (check mode only) ──
+  const checkItemsWithValidation = !isPacketMode ? checkWorkerItems.map(item => {
+    const worker = getWorker(item.workerId);
+    const remittanceSource = remittanceSources.find(s => s.companyId === run.companyId && s.status === "enabled") || remittanceSources.find(s => s.companyId === run.companyId);
+    const issues = validateCheckReadiness(item, worker, remittanceSources, run.companyId, micrFontLoaded);
+    return { item, worker, issues, remittanceSource };
+  }) : [];
+
+  const hasBlockingIssues = !isPacketMode && checkItemsWithValidation.some(c => c.issues.some(i => i.severity === "blocking"));
+  const totalCheckAmount = checkWorkerItems.reduce((sum, i) => sum + Number(i.netPay || 0), 0);
+
   const printLabel = isPacketMode
     ? "Print Payroll Packet"
     : workerFilter
@@ -1570,7 +1816,12 @@ export default function PrintCheckPage() {
             <ArrowLeft className="mr-2 h-4 w-4" />Back to Payroll
           </Button>
         </Link>
-        <Button onClick={handlePrint} disabled={!fontReady} data-testid="button-print-checks">
+        <Button
+          onClick={() => handlePrint(checkItemsWithValidation, runId!, company?.id, activeTemplate?.id, totalCheckAmount)}
+          disabled={!fontReady || hasBlockingIssues}
+          data-testid="button-print-checks"
+          title={hasBlockingIssues ? "Resolve blocking issues in the diagnostics panel below before printing" : undefined}
+        >
           <Printer className="mr-2 h-4 w-4" />{fontReady ? printLabel : "Loading fonts…"}
         </Button>
         {!isPacketMode && (
@@ -1607,11 +1858,30 @@ export default function PrintCheckPage() {
         </div>
       )}
 
-      {fontReady && micrFontLoaded === false && !isPacketMode && (
-        <div className="mx-4 mb-3 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 flex items-center gap-2" data-testid="banner-micr-noncompliant">
+      {hasBlockingIssues && fontReady && (
+        <div className="mx-4 mb-3 rounded-md border border-red-400 bg-red-50 dark:bg-red-950/20 p-3 text-sm text-red-700 dark:text-red-400 flex items-center gap-2 print-hide" data-testid="banner-print-blocked">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            <strong>Printing is blocked.</strong> {checkItemsWithValidation.filter(c => c.issues.some(i => i.severity === "blocking")).length} check(s) have blocking issues. Expand the diagnostics panel below to see fix paths.
+          </span>
+        </div>
+      )}
+
+      {fontReady && micrFontLoaded === false && !isPacketMode && !hasBlockingIssues && (
+        <div className="mx-4 mb-3 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 flex items-center gap-2 print-hide" data-testid="banner-micr-noncompliant">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>⚠ MICR NOT COMPLIANT — DO NOT USE FOR LIVE CHECKS. The MICR E-13B font did not load. The routing/account line may not be machine-readable by bank equipment.</span>
         </div>
+      )}
+
+      {/* Diagnostics panel — screen only, check mode only */}
+      {!isPacketMode && fontReady && checkItemsWithValidation.length > 0 && (
+        <CheckDiagnosticsPanel
+          checkItemsWithValidation={checkItemsWithValidation}
+          micrFontLoaded={micrFontLoaded}
+          templateName={activeTemplate?.name || "Default"}
+          fundingAccountId={(run as any).fundingAccountId}
+        />
       )}
 
       <div className="print-content">
@@ -1640,9 +1910,19 @@ export default function PrintCheckPage() {
             })}
           </>
         ) : (
-          checkWorkerItems.map((item) => {
-            const worker = getWorker(item.workerId);
-            if (!worker || !company) return null;
+          checkItemsWithValidation.map(({ item, worker, issues }) => {
+            if (!company) return null;
+            const hasBlocking = issues.some(i => i.severity === "blocking");
+            if (hasBlocking || !worker) {
+              return (
+                <CheckValidationErrorCard
+                  key={item.id}
+                  item={item}
+                  worker={worker}
+                  issues={issues.length > 0 ? issues : [{ severity: "blocking", field: "worker", message: "Worker record not found", fixPath: "/app/employees", fixLabel: "Open Employees" }]}
+                />
+              );
+            }
             return (
               <CheckComponent
                 key={item.id}
@@ -1662,13 +1942,6 @@ export default function PrintCheckPage() {
           })
         )}
       </div>
-
-      {/* MICR non-compliance watermark on check pages when font didn't load */}
-      {fontReady && micrFontLoaded === false && !isPacketMode && (
-        <div style={{ display: "none" }}>
-          {/* Non-compliance handled via visible banner above — shown in print too */}
-        </div>
-      )}
 
       <style>{`
         @media print {
