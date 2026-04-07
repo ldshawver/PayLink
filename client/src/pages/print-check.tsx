@@ -1516,7 +1516,7 @@ function validateCheckReadiness(
     issues.push({ severity: "blocking", field: "checkNum", message: micrResult.error!, fixPath: "/app/payroll?tab=process", fixLabel: "Open Payroll" });
   }
   if (micrFontLoaded === false) {
-    issues.push({ severity: "blocking", field: "micrFont", message: "MICR E-13B font did not load — routing/account line will not be machine-readable. Do not use for live checks.", fixPath: "/app/settings", fixLabel: "Check Print Settings" });
+    issues.push({ severity: "warning", field: "micrFont", message: "MICR E-13B font did not load — routing/account line may not be machine-readable by bank scanners. Printing is still allowed. Visit Check Print Settings to install the font for live checks.", fixPath: "/app/settings", fixLabel: "Check Print Settings" });
   }
   return issues;
 }

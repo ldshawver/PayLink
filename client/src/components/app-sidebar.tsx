@@ -385,6 +385,13 @@ const navSections: NavSection[] = [
     items: [],
   },
   {
+    label: "Settings",
+    icon: Settings,
+    url: "/app/settings",
+    roles: ["admin"],
+    items: [],
+  },
+  {
     label: "Alert Templates",
     icon: Bell,
     url: "/app/notification-templates",
