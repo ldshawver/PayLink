@@ -898,6 +898,70 @@ export async function registerRoutes(
         }
       }
 
+      // ── Self-service late clock-in: require manager approval ──
+      // Only applies when the employee is authenticating with employeeNumber+pin
+      // (not when an admin/manager is manually punching someone in via session).
+      const PUNCH_GRACE_MINUTES = 10;
+      const isSelfService = !!(req.body.employeeNumber && req.body.pin);
+      if (punchType === "clock_in" && isSelfService && !isUnscheduled && scheduledStart) {
+        const lateMs = now.getTime() - scheduledStart.getTime();
+        const lateMin = Math.round(lateMs / 60000);
+        if (lateMin > PUNCH_GRACE_MINUTES) {
+          // Create a pending clock_in_request so managers can approve from the Attendance tab
+          await db.execute(sql`
+            INSERT INTO clock_in_requests
+              (worker_id, company_id, request_type, minutes_diff, schedule_id, scheduled_start, scheduled_end)
+            VALUES
+              (${workerId}, ${companyId}, 'late_clockin', ${lateMin},
+               ${matchingSchedule?.id ?? null},
+               ${scheduledStart ? scheduledStart.toISOString() : null},
+               ${scheduledEnd ? scheduledEnd.toISOString() : null})
+          `);
+          // Notify managers asynchronously
+          (async () => {
+            try {
+              const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
+              const allUsers = await storage.getUsers();
+              const workerObj = await storage.getWorker(workerId);
+              const workerName = workerObj ? `${workerObj.firstName} ${workerObj.lastName}` : workerId;
+              const managers = allUsers.filter(u => (u.role === "admin" || u.role === "manager") && u.isActive && (!u.companyId || u.companyId === companyId));
+              const appUrl = getAppBaseUrl(req);
+              const subject = `Clock-In Approval Required — ${workerName}`;
+              const bodyText = `${workerName} is ${lateMin} minutes late and needs manager approval to clock in.\n\nApprove at ${appUrl}/app/attendance?tab=clock-in-approvals`;
+              for (const mgr of managers) {
+                const mgrWorker = mgr.workerId ? await storage.getWorker(mgr.workerId) : null;
+                const mgrEmail = mgrWorker?.workEmail || mgrWorker?.homeEmail || mgrWorker?.email || null;
+                const mgrPhone = mgrWorker?.mobilePhone || mgrWorker?.homePhone || null;
+                const mgrName = mgrWorker ? `${mgrWorker.firstName} ${mgrWorker.lastName}` : mgr.username;
+                await Promise.all([
+                  sendShiftMarketplaceEmail({ recipientName: mgrName, email: mgrEmail, subject, bodyText }),
+                  sendShiftMarketplaceSms({ recipientName: mgrName, phone: mgrPhone, subject, bodyText: `PayLink: ${workerName} is ${lateMin} min late and needs clock-in approval. ${appUrl}/app/attendance?tab=clock-in-approvals` }),
+                ]);
+              }
+            } catch (e) { console.warn("Late punch notification failed:", e); }
+          })();
+          return res.status(409).json({ message: `You are ${lateMin} minutes late. Your manager has been notified and must approve your clock-in.` });
+        }
+      }
+
+      // ── Self-service early clock-in: require manager approval ──
+      if (punchType === "clock_in" && isSelfService && !isUnscheduled && scheduledStart) {
+        const earlyMs = scheduledStart.getTime() - now.getTime();
+        const earlyMin = Math.round(earlyMs / 60000);
+        if (earlyMin > PUNCH_GRACE_MINUTES) {
+          await db.execute(sql`
+            INSERT INTO clock_in_requests
+              (worker_id, company_id, request_type, minutes_diff, schedule_id, scheduled_start, scheduled_end)
+            VALUES
+              (${workerId}, ${companyId}, 'early_clockin', ${-earlyMin},
+               ${matchingSchedule?.id ?? null},
+               ${scheduledStart ? scheduledStart.toISOString() : null},
+               ${scheduledEnd ? scheduledEnd.toISOString() : null})
+          `);
+          return res.status(409).json({ message: `You are ${earlyMin} minutes early. Manager approval is required to clock in before your scheduled start time.` });
+        }
+      }
+
       const punchApprovalStatus = isUnscheduled ? "pending" : "approved";
       const punch = await storage.createTimePunch({
         workerId, companyId, punchType, punchTime: new Date(),
@@ -933,7 +997,11 @@ export async function registerRoutes(
         });
       } else if (punchType === "clock_out") {
         const entries = await storage.getTimeEntries();
-        const openEntry = entries.find(e => e.workerId === workerId && e.clockIn && !e.clockOut);
+        // Sort by clockIn descending so we always close the MOST RECENT open entry,
+        // not a stale one from an earlier failed or pending clock-in attempt.
+        const openEntry = entries
+          .filter(e => e.workerId === workerId && e.clockIn && !e.clockOut)
+          .sort((a, b) => new Date(b.clockIn!).getTime() - new Date(a.clockIn!).getTime())[0];
         if (openEntry) {
           const clockIn = new Date(openEntry.clockIn!);
           const clockOut = new Date();
@@ -1144,10 +1212,12 @@ export async function registerRoutes(
       }
       // Create punch
       const punch = await storage.createTimePunch({ workerId: worker.id, companyId: worker.companyId, punchType: "clock_out", punchTime: new Date(), approvalStatus: "approved", stationId: null });
-      // Close open time entry
+      // Close open time entry — sort by clockIn DESC to always close the most recent open entry
       const now = new Date();
       const allEntries = await storage.getTimeEntries();
-      const openEntry = allEntries.find(e => e.workerId === worker.id && e.clockIn && !e.clockOut);
+      const openEntry = allEntries
+        .filter(e => e.workerId === worker.id && e.clockIn && !e.clockOut)
+        .sort((a, b) => new Date(b.clockIn!).getTime() - new Date(a.clockIn!).getTime())[0];
       if (openEntry) {
         const clockIn = new Date(openEntry.clockIn!);
         const clockOut = now;
