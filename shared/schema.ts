@@ -1689,10 +1689,18 @@ export const contractorInvoices = pgTable("contractor_invoices", {
   companyId: varchar("company_id").references(() => companies.id),
   contractorId: varchar("contractor_id").notNull().references(() => workers.id),
   invoiceNumber: text("invoice_number"),
+  title: text("title"),
+  invoiceType: text("invoice_type").default("standard"), // deposit | progress | final | time_and_materials | change_order | standard
   invoiceDate: text("invoice_date").notNull(),
   dueDate: text("due_date"),
   amount: numeric("amount").notNull(),
   taxAmount: numeric("tax_amount"),
+  discountAmount: numeric("discount_amount"),
+  amountPaid: numeric("amount_paid").default("0"),
+  balanceDue: numeric("balance_due"),
+  reminderEnabled: boolean("reminder_enabled").default(true),
+  lastReminderSentAt: timestamp("last_reminder_sent_at"),
+  nextReminderAt: timestamp("next_reminder_at"),
   description: text("description"),
   proposalId: varchar("proposal_id"),
   proposalReference: text("proposal_reference"),
@@ -1749,13 +1757,50 @@ export const contractorProposals = pgTable("contractor_proposals", {
   proposalNumber: text("proposal_number"),
   title: text("title"),
   description: text("description"),
+  // ── Enhanced proposal fields ──
+  scopeOfWork: text("scope_of_work"),
+  assumptions: text("assumptions"),
+  exclusions: text("exclusions"),
+  allowances: text("allowances"),
+  materials: text("materials"),
+  warrantyNotes: text("warranty_notes"),
+  scheduleNotes: text("schedule_notes"),
+  internalNotes: text("internal_notes"),
+  clientMessage: text("client_message"),
+  estimatorName: text("estimator_name"),
+  // ── Versioning ──
+  version: integer("version").default(1),
+  revisionOfId: varchar("revision_of_id"),
+  parentProposalId: varchar("parent_proposal_id"),
+  isChangeOrder: boolean("is_change_order").default(false),
+  // ── Dates ──
   issueDate: text("issue_date").notNull(),
   expirationDate: text("expiration_date"),
-  amount: numeric("amount"),
+  sentAt: timestamp("sent_at"),
+  viewedAt: timestamp("viewed_at"),
+  declinedAt: timestamp("declined_at"),
+  // ── Financials ──
+  subtotal: numeric("subtotal"),
   taxAmount: numeric("tax_amount"),
-  lineItems: text("line_items"),
+  discountAmount: numeric("discount_amount"),
+  amount: numeric("amount"),
+  currency: text("currency").default("USD"),
+  // ── Terms ──
+  paymentTerms: text("payment_terms"),
+  changeOrderTerms: text("change_order_terms"),
   notes: text("notes"),
   terms: text("terms"),
+  // ── Approval / Signature capture ──
+  approvalName: text("approval_name"),
+  approvalEmail: text("approval_email"),
+  approvalAt: timestamp("approval_at"),
+  approvalIp: text("approval_ip"),
+  approvalMethod: text("approval_method"),
+  approvalNotes: text("approval_notes"),
+  // ── AI ──
+  aiGeneratedSummary: text("ai_generated_summary"),
+  // ── Legacy / status ──
+  lineItems: text("line_items"),
   status: text("status").notNull().default("draft"),
   submittedAt: timestamp("submitted_at"),
   reviewedByUserId: varchar("reviewed_by_user_id"),
@@ -1764,7 +1809,6 @@ export const contractorProposals = pgTable("contractor_proposals", {
   convertedToInvoiceId: varchar("converted_to_invoice_id"),
   jobId: varchar("job_id"),
   costCenterId: varchar("cost_center_id"),
-  currency: text("currency").default("USD"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -1772,6 +1816,111 @@ export const contractorProposals = pgTable("contractor_proposals", {
 export const insertContractorProposalSchema = createInsertSchema(contractorProposals).omit({ id: true, createdAt: true, updatedAt: true });
 export type ContractorProposal = typeof contractorProposals.$inferSelect;
 export type InsertContractorProposal = z.infer<typeof insertContractorProposalSchema>;
+
+// ── Proposal Line Items ────────────────────────────────────────────────────
+export const proposalLineItems = pgTable("proposal_line_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  proposalId: varchar("proposal_id").notNull(),
+  sortOrder: integer("sort_order").default(0),
+  category: text("category"),
+  name: text("name").notNull(),
+  description: text("description"),
+  quantity: numeric("quantity").default("1"),
+  unit: text("unit"),
+  unitPrice: numeric("unit_price").default("0"),
+  cost: numeric("cost"),
+  markupPercent: numeric("markup_percent"),
+  taxable: boolean("taxable").default(false),
+  optional: boolean("optional").default(false),
+  selected: boolean("selected").default(true),
+  lineTotal: numeric("line_total").default("0"),
+  aiGenerated: boolean("ai_generated").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertProposalLineItemSchema = createInsertSchema(proposalLineItems).omit({ id: true, createdAt: true, updatedAt: true });
+export type ProposalLineItem = typeof proposalLineItems.$inferSelect;
+export type InsertProposalLineItem = z.infer<typeof insertProposalLineItemSchema>;
+
+// ── Proposal Attachments ──────────────────────────────────────────────────
+export const proposalAttachments = pgTable("proposal_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  proposalId: varchar("proposal_id").notNull(),
+  filePath: text("file_path").notNull(),
+  fileName: text("file_name"),
+  fileType: text("file_type"),
+  fileSize: integer("file_size"),
+  attachmentType: text("attachment_type").default("supporting_doc"), // blueprint | site_photo | vendor_quote | supporting_doc | signed_approval | change_order_backup
+  aiSummary: text("ai_summary"),
+  uploadedByWorkerId: varchar("uploaded_by_worker_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertProposalAttachmentSchema = createInsertSchema(proposalAttachments).omit({ id: true, createdAt: true });
+export type ProposalAttachment = typeof proposalAttachments.$inferSelect;
+export type InsertProposalAttachment = z.infer<typeof insertProposalAttachmentSchema>;
+
+// ── Proposal Approval Events (audit log) ─────────────────────────────────
+export const proposalApprovalEvents = pgTable("proposal_approval_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  proposalId: varchar("proposal_id").notNull(),
+  eventType: text("event_type").notNull(), // created | submitted | viewed | approved | declined | revision_requested | superseded | expired | sent
+  oldStatus: text("old_status"),
+  newStatus: text("new_status"),
+  actorUserId: varchar("actor_user_id"),
+  actorName: text("actor_name"),
+  actorEmail: text("actor_email"),
+  notes: text("notes"),
+  ipAddress: text("ip_address"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertProposalApprovalEventSchema = createInsertSchema(proposalApprovalEvents).omit({ id: true, createdAt: true });
+export type ProposalApprovalEvent = typeof proposalApprovalEvents.$inferSelect;
+export type InsertProposalApprovalEvent = z.infer<typeof insertProposalApprovalEventSchema>;
+
+// ── Contractor Payments (invoice payments) ────────────────────────────────
+export const contractorPayments = pgTable("contractor_payments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceId: varchar("invoice_id").notNull(),
+  companyId: varchar("company_id"),
+  contractorId: varchar("contractor_id"),
+  amount: numeric("amount").notNull(),
+  paymentMethod: text("payment_method"),
+  paymentProvider: text("payment_provider"),
+  externalPaymentId: text("external_payment_id"),
+  status: text("status").notNull().default("completed"),
+  paidAt: timestamp("paid_at").defaultNow(),
+  referenceNumber: text("reference_number"),
+  notes: text("notes"),
+  recordedByUserId: varchar("recorded_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertContractorPaymentSchema = createInsertSchema(contractorPayments).omit({ id: true, createdAt: true });
+export type ContractorPayment = typeof contractorPayments.$inferSelect;
+export type InsertContractorPayment = z.infer<typeof insertContractorPaymentSchema>;
+
+// ── Contractor Reminder Logs ──────────────────────────────────────────────
+export const contractorReminderLogs = pgTable("contractor_reminder_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  entityType: text("entity_type").notNull(), // proposal | invoice
+  entityId: varchar("entity_id").notNull(),
+  channel: text("channel").notNull(), // email | sms
+  recipient: text("recipient"),
+  templateKey: text("template_key"),
+  subject: text("subject"),
+  body: text("body"),
+  status: text("status").notNull().default("sent"), // sent | failed | skipped
+  sentAt: timestamp("sent_at").defaultNow(),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertContractorReminderLogSchema = createInsertSchema(contractorReminderLogs).omit({ id: true, createdAt: true });
+export type ContractorReminderLog = typeof contractorReminderLogs.$inferSelect;
+export type InsertContractorReminderLog = z.infer<typeof insertContractorReminderLogSchema>;
 
 // ── Recurring Expense Templates ──────────────────────────────────────────
 export const recurringExpenseTemplates = pgTable("recurring_expense_templates", {

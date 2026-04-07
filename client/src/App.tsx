@@ -50,6 +50,7 @@ import PermissionsPage from "@/pages/permissions";
 import ProvisioningPage from "@/pages/provisioning";
 import AuditLogPage from "@/pages/audit-log";
 import BizDocsPage from "@/pages/biz-docs";
+import ContractorHubPage from "@/pages/contractor-hub";
 import TreasuryPage from "@/pages/treasury";
 import SettingsPage from "@/pages/settings";
 import { Loader2, Menu } from "lucide-react";
@@ -113,6 +114,7 @@ function AuthenticatedRouter() {
       <Route path="/app/provisioning">{() => <RoleGuard roles={["admin"]}><ProvisioningPage /></RoleGuard>}</Route>
       <Route path="/app/audit-log">{() => <RoleGuard roles={["admin", "platform_super_admin"]}><AuditLogPage /></RoleGuard>}</Route>
       <Route path="/app/biz-docs" component={BizDocsPage} />
+      <Route path="/app/contractor-hub" component={ContractorHubPage} />
       <Route path="/app/treasury">{() => <RoleGuard roles={["admin"]}><TreasuryPage /></RoleGuard>}</Route>
       <Route path="/app/settings">{() => <RoleGuard roles={["admin"]}><SettingsPage /></RoleGuard>}</Route>
       <Route component={NotFound} />

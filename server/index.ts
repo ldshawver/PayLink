@@ -2174,6 +2174,131 @@ Thank you,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    // ── Enhanced Contractor Proposals columns ─────────────────────────────────
+    await run("contractor_proposals.scope_of_work", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS scope_of_work TEXT`);
+    await run("contractor_proposals.assumptions", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS assumptions TEXT`);
+    await run("contractor_proposals.exclusions", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS exclusions TEXT`);
+    await run("contractor_proposals.allowances", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS allowances TEXT`);
+    await run("contractor_proposals.materials", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS materials TEXT`);
+    await run("contractor_proposals.warranty_notes", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS warranty_notes TEXT`);
+    await run("contractor_proposals.schedule_notes", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS schedule_notes TEXT`);
+    await run("contractor_proposals.internal_notes", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS internal_notes TEXT`);
+    await run("contractor_proposals.client_message", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS client_message TEXT`);
+    await run("contractor_proposals.estimator_name", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS estimator_name TEXT`);
+    await run("contractor_proposals.version", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1`);
+    await run("contractor_proposals.revision_of_id", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS revision_of_id VARCHAR`);
+    await run("contractor_proposals.parent_proposal_id", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS parent_proposal_id VARCHAR`);
+    await run("contractor_proposals.is_change_order", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS is_change_order BOOLEAN DEFAULT FALSE`);
+    await run("contractor_proposals.sent_at", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP`);
+    await run("contractor_proposals.viewed_at", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS viewed_at TIMESTAMP`);
+    await run("contractor_proposals.declined_at", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS declined_at TIMESTAMP`);
+    await run("contractor_proposals.subtotal", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS subtotal NUMERIC`);
+    await run("contractor_proposals.discount_amount", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS discount_amount NUMERIC`);
+    await run("contractor_proposals.payment_terms", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS payment_terms TEXT`);
+    await run("contractor_proposals.change_order_terms", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS change_order_terms TEXT`);
+    await run("contractor_proposals.approval_name", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS approval_name TEXT`);
+    await run("contractor_proposals.approval_email", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS approval_email TEXT`);
+    await run("contractor_proposals.approval_at", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS approval_at TIMESTAMP`);
+    await run("contractor_proposals.approval_ip", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS approval_ip TEXT`);
+    await run("contractor_proposals.approval_method", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS approval_method TEXT`);
+    await run("contractor_proposals.approval_notes", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS approval_notes TEXT`);
+    await run("contractor_proposals.ai_generated_summary", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS ai_generated_summary TEXT`);
+
+    // ── Contractor Invoices new columns ────────────────────────────────────────
+    await run("contractor_invoices.title", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS title TEXT`);
+    await run("contractor_invoices.invoice_type", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS invoice_type TEXT DEFAULT 'standard'`);
+    await run("contractor_invoices.discount_amount", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS discount_amount NUMERIC`);
+    await run("contractor_invoices.amount_paid", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS amount_paid NUMERIC DEFAULT 0`);
+    await run("contractor_invoices.balance_due", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS balance_due NUMERIC`);
+    await run("contractor_invoices.reminder_enabled", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS reminder_enabled BOOLEAN DEFAULT TRUE`);
+    await run("contractor_invoices.last_reminder_sent_at", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS last_reminder_sent_at TIMESTAMP`);
+    await run("contractor_invoices.next_reminder_at", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS next_reminder_at TIMESTAMP`);
+
+    // ── Proposal Line Items ────────────────────────────────────────────────────
+    await run("proposal_line_items table", sql`CREATE TABLE IF NOT EXISTS proposal_line_items (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      proposal_id VARCHAR NOT NULL,
+      sort_order INTEGER DEFAULT 0,
+      category TEXT,
+      name TEXT NOT NULL,
+      description TEXT,
+      quantity NUMERIC DEFAULT 1,
+      unit TEXT,
+      unit_price NUMERIC DEFAULT 0,
+      cost NUMERIC,
+      markup_percent NUMERIC,
+      taxable BOOLEAN DEFAULT FALSE,
+      optional BOOLEAN DEFAULT FALSE,
+      selected BOOLEAN DEFAULT TRUE,
+      line_total NUMERIC DEFAULT 0,
+      ai_generated BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── Proposal Attachments ──────────────────────────────────────────────────
+    await run("proposal_attachments table", sql`CREATE TABLE IF NOT EXISTS proposal_attachments (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      proposal_id VARCHAR NOT NULL,
+      file_path TEXT NOT NULL,
+      file_name TEXT,
+      file_type TEXT,
+      file_size INTEGER,
+      attachment_type TEXT DEFAULT 'supporting_doc',
+      ai_summary TEXT,
+      uploaded_by_worker_id VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── Proposal Approval Events ──────────────────────────────────────────────
+    await run("proposal_approval_events table", sql`CREATE TABLE IF NOT EXISTS proposal_approval_events (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      proposal_id VARCHAR NOT NULL,
+      event_type TEXT NOT NULL,
+      old_status TEXT,
+      new_status TEXT,
+      actor_user_id VARCHAR,
+      actor_name TEXT,
+      actor_email TEXT,
+      notes TEXT,
+      ip_address TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── Contractor Payments ──────────────────────────────────────────────────
+    await run("contractor_payments table", sql`CREATE TABLE IF NOT EXISTS contractor_payments (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      invoice_id VARCHAR NOT NULL,
+      company_id VARCHAR,
+      contractor_id VARCHAR,
+      amount NUMERIC NOT NULL,
+      payment_method TEXT,
+      payment_provider TEXT,
+      external_payment_id TEXT,
+      status TEXT NOT NULL DEFAULT 'completed',
+      paid_at TIMESTAMP DEFAULT NOW(),
+      reference_number TEXT,
+      notes TEXT,
+      recorded_by_user_id VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── Contractor Reminder Logs ──────────────────────────────────────────────
+    await run("contractor_reminder_logs table", sql`CREATE TABLE IF NOT EXISTS contractor_reminder_logs (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      entity_type TEXT NOT NULL,
+      entity_id VARCHAR NOT NULL,
+      channel TEXT NOT NULL,
+      recipient TEXT,
+      template_key TEXT,
+      subject TEXT,
+      body TEXT,
+      status TEXT NOT NULL DEFAULT 'sent',
+      sent_at TIMESTAMP DEFAULT NOW(),
+      error_message TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
     // ── Stripe Treasury columns ────────────────────────────────────────────────
     await run("companies.stripe_financial_account_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS stripe_financial_account_id TEXT`);
     await run("pay_methods.stripe_bank_account_id", sql`ALTER TABLE pay_methods ADD COLUMN IF NOT EXISTS stripe_bank_account_id TEXT`);

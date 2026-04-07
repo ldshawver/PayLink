@@ -318,6 +318,45 @@ function periodsPerYearFromSchedule(type: string): number {
   return 26; // biweekly default
 }
 
+// Helper: recalculate contractor proposal subtotal/total from line items
+async function recalcProposalTotals(proposalId: string) {
+  const items = await db.execute(sql`SELECT line_total, taxable, selected FROM proposal_line_items WHERE proposal_id = ${proposalId} AND selected = TRUE`);
+  let subtotal = 0;
+  let taxableAmount = 0;
+  for (const row of items.rows as any[]) {
+    const lt = parseFloat(row.line_total ?? "0");
+    subtotal += lt;
+    if (row.taxable) taxableAmount += lt;
+  }
+  // Fetch current tax rate from proposal
+  const propRes = await db.execute(sql`SELECT tax_amount, discount_amount FROM contractor_proposals WHERE id = ${proposalId}`);
+  if (!propRes.rows.length) return;
+  const prop = propRes.rows[0] as any;
+  const discountAmt = parseFloat(prop.discount_amount ?? "0");
+  // tax_amount stored as dollar amount (not percent)
+  const taxAmt = parseFloat(prop.tax_amount ?? "0");
+  const total = subtotal - discountAmt + taxAmt;
+  await db.execute(sql`UPDATE contractor_proposals SET subtotal = ${subtotal}, amount = ${total}, updated_at = NOW() WHERE id = ${proposalId}`);
+}
+
+// Helper: log a proposal approval event
+async function logProposalEvent(proposalId: string, eventType: string, oldStatus: string | null, newStatus: string | null, req: any, actorName?: string, actorEmail?: string) {
+  try {
+    const userId = (req.session as any)?.userId;
+    let userName = actorName;
+    let userEmail = actorEmail;
+    if (!userName && userId) {
+      const user = await db.execute(sql`SELECT username FROM users WHERE id = ${userId}`);
+      if (user.rows.length) userName = (user.rows[0] as any).username;
+    }
+    const ip = req.ip || req.socket?.remoteAddress || null;
+    await db.execute(sql`
+      INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, actor_email, ip_address)
+      VALUES (${proposalId}, ${eventType}, ${oldStatus}, ${newStatus}, ${userId ?? null}, ${userName ?? null}, ${userEmail ?? null}, ${ip})
+    `);
+  } catch (e) { console.warn("Failed to log proposal event:", e); }
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -6084,19 +6123,35 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (isOwner && !["draft", "revision_requested"].includes(proposal.status)) {
         return res.status(400).json({ message: "Cannot edit a submitted proposal" });
       }
-      const { title, description, issueDate, expirationDate, amount, taxAmount, lineItems, notes, terms, currency } = req.body;
+      const { title, description, issueDate, expirationDate, amount, taxAmount, lineItems, notes, terms, currency,
+              scopeOfWork, assumptions, exclusions, allowances, materials, warrantyNotes, scheduleNotes,
+              internalNotes, clientMessage, estimatorName, paymentTerms, changeOrderTerms, discountAmount,
+              isChangeOrder } = req.body;
       await db.execute(sql`
         UPDATE contractor_proposals SET
           title = COALESCE(${title ?? null}, title),
           description = COALESCE(${description ?? null}, description),
+          scope_of_work = COALESCE(${scopeOfWork ?? null}, scope_of_work),
+          assumptions = COALESCE(${assumptions ?? null}, assumptions),
+          exclusions = COALESCE(${exclusions ?? null}, exclusions),
+          allowances = COALESCE(${allowances ?? null}, allowances),
+          materials = COALESCE(${materials ?? null}, materials),
+          warranty_notes = COALESCE(${warrantyNotes ?? null}, warranty_notes),
+          schedule_notes = COALESCE(${scheduleNotes ?? null}, schedule_notes),
+          internal_notes = COALESCE(${internalNotes ?? null}, internal_notes),
+          client_message = COALESCE(${clientMessage ?? null}, client_message),
+          estimator_name = COALESCE(${estimatorName ?? null}, estimator_name),
+          payment_terms = COALESCE(${paymentTerms ?? null}, payment_terms),
+          change_order_terms = COALESCE(${changeOrderTerms ?? null}, change_order_terms),
           issue_date = COALESCE(${issueDate ?? null}, issue_date),
           expiration_date = ${expirationDate ?? null},
-          amount = COALESCE(${amount ?? null}, amount),
           tax_amount = ${taxAmount ?? null},
+          discount_amount = ${discountAmount ?? null},
           line_items = ${lineItems ? JSON.stringify(lineItems) : proposal.line_items},
-          notes = ${notes ?? null},
-          terms = ${terms ?? null},
+          notes = COALESCE(${notes ?? null}, notes),
+          terms = COALESCE(${terms ?? null}, terms),
           currency = COALESCE(${currency ?? null}, currency),
+          is_change_order = COALESCE(${isChangeOrder ?? null}, is_change_order),
           updated_at = NOW()
         WHERE id = ${req.params.id}
       `);
@@ -6253,6 +6308,356 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const result = await db.execute(sql`SELECT id, name, legal_name FROM companies WHERE subscription_status NOT IN ('suspended') ORDER BY name`);
       res.json(result.rows ?? (result as any));
     } catch (e) { res.status(500).json({ message: "Failed to fetch companies" }); }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PROPOSAL LINE ITEMS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // GET /api/contractor-proposals/:id/line-items
+  app.get("/api/contractor-proposals/:id/line-items", requireAuth, async (req, res) => {
+    try {
+      const result = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${req.params.id} ORDER BY sort_order ASC, created_at ASC`);
+      res.json(result.rows);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch line items" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/line-items
+  app.post("/api/contractor-proposals/:id/line-items", requireAuth, async (req, res) => {
+    try {
+      const { name, description, category, quantity, unit, unitPrice, cost, markupPercent, taxable, optional, selected, sortOrder, aiGenerated } = req.body;
+      if (!name) return res.status(400).json({ message: "name is required" });
+      const qty = parseFloat(quantity ?? "1") || 1;
+      const price = parseFloat(unitPrice ?? "0") || 0;
+      const lineTotal = qty * price;
+      const result = await db.execute(sql`
+        INSERT INTO proposal_line_items (proposal_id, name, description, category, quantity, unit, unit_price, cost, markup_percent, taxable, optional, selected, sort_order, line_total, ai_generated)
+        VALUES (${req.params.id}, ${name}, ${description ?? null}, ${category ?? null}, ${qty}, ${unit ?? null}, ${price}, ${cost ?? null}, ${markupPercent ?? null}, ${taxable ?? false}, ${optional ?? false}, ${selected ?? true}, ${sortOrder ?? 0}, ${lineTotal}, ${aiGenerated ?? false})
+        RETURNING *`);
+      // Recalculate proposal totals
+      await recalcProposalTotals(req.params.id);
+      res.status(201).json(result.rows[0]);
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to create line item" }); }
+  });
+
+  // PATCH /api/proposal-line-items/:id
+  app.patch("/api/proposal-line-items/:id", requireAuth, async (req, res) => {
+    try {
+      const { name, description, category, quantity, unit, unitPrice, cost, markupPercent, taxable, optional, selected, sortOrder } = req.body;
+      const existing = await db.execute(sql`SELECT * FROM proposal_line_items WHERE id = ${req.params.id}`);
+      if (!existing.rows.length) return res.status(404).json({ message: "Line item not found" });
+      const row = existing.rows[0] as any;
+      const qty = parseFloat(quantity ?? row.quantity) || 1;
+      const price = parseFloat(unitPrice ?? row.unit_price) || 0;
+      const lineTotal = qty * price;
+      const result = await db.execute(sql`
+        UPDATE proposal_line_items SET
+          name = ${name ?? row.name}, description = ${description ?? row.description}, category = ${category ?? row.category},
+          quantity = ${qty}, unit = ${unit ?? row.unit}, unit_price = ${price}, cost = ${cost ?? row.cost},
+          markup_percent = ${markupPercent ?? row.markup_percent}, taxable = ${taxable ?? row.taxable},
+          optional = ${optional ?? row.optional}, selected = ${selected ?? row.selected},
+          sort_order = ${sortOrder ?? row.sort_order}, line_total = ${lineTotal}, updated_at = NOW()
+        WHERE id = ${req.params.id} RETURNING *`);
+      await recalcProposalTotals(row.proposal_id);
+      res.json(result.rows[0]);
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to update line item" }); }
+  });
+
+  // DELETE /api/proposal-line-items/:id
+  app.delete("/api/proposal-line-items/:id", requireAuth, async (req, res) => {
+    try {
+      const existing = await db.execute(sql`SELECT * FROM proposal_line_items WHERE id = ${req.params.id}`);
+      if (!existing.rows.length) return res.status(404).json({ message: "Line item not found" });
+      const row = existing.rows[0] as any;
+      await db.execute(sql`DELETE FROM proposal_line_items WHERE id = ${req.params.id}`);
+      await recalcProposalTotals(row.proposal_id);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete line item" }); }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PROPOSAL ATTACHMENTS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // GET /api/contractor-proposals/:id/attachments
+  app.get("/api/contractor-proposals/:id/attachments", requireAuth, async (req, res) => {
+    try {
+      const result = await db.execute(sql`SELECT * FROM proposal_attachments WHERE proposal_id = ${req.params.id} ORDER BY created_at DESC`);
+      res.json(result.rows);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch attachments" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/attachments
+  app.post("/api/contractor-proposals/:id/attachments", requireAuth, upload.single("file"), async (req: any, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const { attachmentType } = req.body;
+      const userId = (req.session as any).userId;
+      const user = userId ? await storage.getUser(userId) : null;
+      const result = await db.execute(sql`
+        INSERT INTO proposal_attachments (proposal_id, file_path, file_name, file_type, file_size, attachment_type, uploaded_by_worker_id)
+        VALUES (${req.params.id}, ${req.file.path}, ${req.file.originalname}, ${req.file.mimetype}, ${req.file.size}, ${attachmentType ?? 'supporting_doc'}, ${user?.workerId ?? null})
+        RETURNING *`);
+      res.status(201).json(result.rows[0]);
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to upload attachment" }); }
+  });
+
+  // DELETE /api/proposal-attachments/:id
+  app.delete("/api/proposal-attachments/:id", requireAuth, async (req, res) => {
+    try {
+      await db.execute(sql`DELETE FROM proposal_attachments WHERE id = ${req.params.id}`);
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete attachment" }); }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PROPOSAL APPROVAL EVENTS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // GET /api/contractor-proposals/:id/events
+  app.get("/api/contractor-proposals/:id/events", requireAuth, async (req, res) => {
+    try {
+      const result = await db.execute(sql`SELECT * FROM proposal_approval_events WHERE proposal_id = ${req.params.id} ORDER BY created_at ASC`);
+      res.json(result.rows);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch events" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/send — mark as sent
+  app.post("/api/contractor-proposals/:id/send", requireAuth, async (req, res) => {
+    try {
+      const proposalRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      if (!proposalRes.rows.length) return res.status(404).json({ message: "Not found" });
+      const proposal = proposalRes.rows[0] as any;
+      const oldStatus = proposal.status;
+      await db.execute(sql`UPDATE contractor_proposals SET status = 'sent', sent_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id}`);
+      await logProposalEvent(req.params.id, "sent", oldStatus, "sent", req);
+      res.json({ message: "Proposal marked as sent" });
+    } catch (e) { res.status(500).json({ message: "Failed to send proposal" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/client-approve — external client approval
+  app.post("/api/contractor-proposals/:id/client-approve", async (req, res) => {
+    try {
+      const { approvalName, approvalEmail, approvalNotes } = req.body;
+      if (!approvalName || !approvalEmail) return res.status(400).json({ message: "Name and email are required" });
+      const proposalRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      if (!proposalRes.rows.length) return res.status(404).json({ message: "Not found" });
+      const proposal = proposalRes.rows[0] as any;
+      if (!["sent", "viewed", "revision_requested"].includes(proposal.status)) {
+        return res.status(409).json({ message: "Proposal is not in a state that can be approved by client" });
+      }
+      const clientIp = req.ip || req.socket.remoteAddress || null;
+      const oldStatus = proposal.status;
+      await db.execute(sql`
+        UPDATE contractor_proposals SET
+          status = 'approved', approval_name = ${approvalName}, approval_email = ${approvalEmail},
+          approval_at = NOW(), approval_ip = ${clientIp}, approval_method = 'digital',
+          approval_notes = ${approvalNotes ?? null}, updated_at = NOW()
+        WHERE id = ${req.params.id}`);
+      await logProposalEvent(req.params.id, "approved", oldStatus, "approved", req, approvalName, approvalEmail);
+      res.json({ message: "Proposal approved", proposalId: req.params.id });
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to approve proposal" }); }
+  });
+
+  // POST /api/contractor-proposals/:id/create-revision — create a new version
+  app.post("/api/contractor-proposals/:id/create-revision", requireAuth, async (req, res) => {
+    try {
+      const proposalRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      if (!proposalRes.rows.length) return res.status(404).json({ message: "Not found" });
+      const p = proposalRes.rows[0] as any;
+      // Mark original as superseded
+      await db.execute(sql`UPDATE contractor_proposals SET status = 'superseded', updated_at = NOW() WHERE id = ${req.params.id}`);
+      await logProposalEvent(req.params.id, "superseded", p.status, "superseded", req);
+      // Create new version
+      const newVersion = (p.version || 1) + 1;
+      const countResult = await db.execute(sql`SELECT COUNT(*) as c FROM contractor_proposals WHERE contractor_id = ${p.contractor_id}`);
+      const count = parseInt((countResult.rows[0] as any).c) + 1;
+      const proposalNumber = `PROP-${String(count).padStart(4, "0")}-v${newVersion}`;
+      const newProposal = await db.execute(sql`
+        INSERT INTO contractor_proposals (company_id, contractor_id, proposal_number, title, description, scope_of_work, assumptions, exclusions, allowances, materials, warranty_notes, schedule_notes, payment_terms, notes, terms, issue_date, expiration_date, subtotal, tax_amount, discount_amount, amount, currency, job_id, cost_center_id, status, version, revision_of_id, parent_proposal_id, is_change_order)
+        VALUES (${p.company_id}, ${p.contractor_id}, ${proposalNumber}, ${p.title}, ${p.description}, ${p.scope_of_work}, ${p.assumptions}, ${p.exclusions}, ${p.allowances}, ${p.materials}, ${p.warranty_notes}, ${p.schedule_notes}, ${p.payment_terms}, ${p.notes}, ${p.terms}, ${p.issue_date}, ${p.expiration_date}, ${p.subtotal}, ${p.tax_amount}, ${p.discount_amount}, ${p.amount}, ${p.currency}, ${p.job_id}, ${p.cost_center_id}, 'draft', ${newVersion}, ${req.params.id}, ${p.parent_proposal_id || req.params.id}, ${p.is_change_order})
+        RETURNING *`);
+      const newId = (newProposal.rows[0] as any).id;
+      // Copy line items to new version
+      await db.execute(sql`INSERT INTO proposal_line_items (proposal_id, sort_order, category, name, description, quantity, unit, unit_price, cost, markup_percent, taxable, optional, selected, line_total) SELECT ${newId}, sort_order, category, name, description, quantity, unit, unit_price, cost, markup_percent, taxable, optional, selected, line_total FROM proposal_line_items WHERE proposal_id = ${req.params.id}`);
+      await logProposalEvent(newId, "created", null, "draft", req);
+      res.status(201).json(newProposal.rows[0]);
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to create revision" }); }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CONTRACTOR PAYMENTS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // GET /api/contractor-invoices/:id/payments
+  app.get("/api/contractor-invoices/:id/payments", requireAuth, async (req, res) => {
+    try {
+      const result = await db.execute(sql`SELECT * FROM contractor_payments WHERE invoice_id = ${req.params.id} ORDER BY paid_at DESC`);
+      res.json(result.rows);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch payments" }); }
+  });
+
+  // POST /api/contractor-invoices/:id/payments — record a payment (enforces proposal approval)
+  app.post("/api/contractor-invoices/:id/payments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const invoiceRes = await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${req.params.id}`);
+      if (!invoiceRes.rows.length) return res.status(404).json({ message: "Invoice not found" });
+      const invoice = invoiceRes.rows[0] as any;
+
+      // ── HARD RULE: proposal must be approved before any payment ──
+      if (invoice.proposal_id) {
+        const proposalRes = await db.execute(sql`SELECT status FROM contractor_proposals WHERE id = ${invoice.proposal_id}`);
+        if (proposalRes.rows.length) {
+          const proposalStatus = (proposalRes.rows[0] as any).status;
+          if (proposalStatus !== "approved") {
+            return res.status(403).json({
+              message: `Payment blocked. The linked proposal is "${proposalStatus}" — it must be approved before any payment can be collected.`,
+              proposalStatus,
+              blocked: true,
+            });
+          }
+        }
+      }
+
+      const { amount, paymentMethod, referenceNumber, notes } = req.body;
+      if (!amount || parseFloat(amount) <= 0) return res.status(400).json({ message: "Valid amount is required" });
+
+      const balanceDue = parseFloat(invoice.balance_due ?? invoice.amount ?? "0");
+      if (parseFloat(amount) > balanceDue + 0.01) {
+        return res.status(400).json({ message: `Payment amount ($${amount}) exceeds balance due ($${balanceDue.toFixed(2)})` });
+      }
+
+      const userId = (req.session as any).userId;
+      const result = await db.execute(sql`
+        INSERT INTO contractor_payments (invoice_id, company_id, contractor_id, amount, payment_method, reference_number, notes, recorded_by_user_id)
+        VALUES (${req.params.id}, ${invoice.company_id}, ${invoice.contractor_id}, ${parseFloat(amount)}, ${paymentMethod ?? null}, ${referenceNumber ?? null}, ${notes ?? null}, ${userId})
+        RETURNING *`);
+
+      // Update invoice paid amount and balance
+      const newAmountPaid = parseFloat(invoice.amount_paid ?? "0") + parseFloat(amount);
+      const total = parseFloat(invoice.amount ?? "0");
+      const newBalance = Math.max(0, total - newAmountPaid);
+      const newStatus = newBalance <= 0.01 ? "paid" : "partially_paid";
+      const paidAt = newBalance <= 0.01 ? sql`NOW()` : sql`${invoice.paid_at ?? null}`;
+      await db.execute(sql`UPDATE contractor_invoices SET amount_paid = ${newAmountPaid}, balance_due = ${newBalance}, status = ${newStatus}, paid_at = ${paidAt}, updated_at = NOW() WHERE id = ${req.params.id}`);
+
+      res.status(201).json(result.rows[0]);
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to record payment" }); }
+  });
+
+  // GET /api/contractor-invoices/:id/reminder-logs
+  app.get("/api/contractor-invoices/:id/reminder-logs", requireAuth, async (req, res) => {
+    try {
+      const result = await db.execute(sql`SELECT * FROM contractor_reminder_logs WHERE entity_type = 'invoice' AND entity_id = ${req.params.id} ORDER BY sent_at DESC`);
+      res.json(result.rows);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch reminder logs" }); }
+  });
+
+  // POST /api/contractor-invoices/:id/send-reminder — manually send reminder
+  app.post("/api/contractor-invoices/:id/send-reminder", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const invoiceRes = await db.execute(sql`SELECT ci.*, w.first_name, w.last_name, w.work_email, w.home_email, w.mobile_phone FROM contractor_invoices ci JOIN workers w ON w.id = ci.contractor_id WHERE ci.id = ${req.params.id}`);
+      if (!invoiceRes.rows.length) return res.status(404).json({ message: "Invoice not found" });
+      const invoice = invoiceRes.rows[0] as any;
+
+      // Block if proposal not approved
+      if (invoice.proposal_id) {
+        const pRes = await db.execute(sql`SELECT status FROM contractor_proposals WHERE id = ${invoice.proposal_id}`);
+        if (pRes.rows.length && (pRes.rows[0] as any).status !== "approved") {
+          return res.status(403).json({ message: "Cannot send reminders for invoices linked to unapproved proposals." });
+        }
+      }
+
+      if (["paid", "void"].includes(invoice.status)) {
+        return res.status(409).json({ message: "Reminders are not sent for paid or void invoices." });
+      }
+
+      const contractorName = `${invoice.first_name} ${invoice.last_name}`;
+      const contractorEmail = invoice.work_email || invoice.home_email;
+      const contractorPhone = invoice.mobile_phone;
+      const amount = parseFloat(invoice.balance_due ?? invoice.amount ?? "0").toFixed(2);
+      const subject = `Payment Reminder — Invoice #${invoice.invoice_number || invoice.id.slice(0, 8)}`;
+      const body = `Hi ${invoice.first_name},\n\nThis is a friendly reminder that Invoice #${invoice.invoice_number || invoice.id.slice(0, 8)} for $${amount} is ${invoice.status === "overdue" ? "overdue" : "due " + (invoice.due_date || "soon")}.\n\nPlease arrange payment at your earliest convenience.\n\nThank you.`;
+
+      const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
+      let emailStatus = "skipped", smsStatus = "skipped";
+      if (contractorEmail) {
+        try { await sendShiftMarketplaceEmail({ recipientName: contractorName, email: contractorEmail, subject, bodyText: body }); emailStatus = "sent"; }
+        catch { emailStatus = "failed"; }
+      }
+      if (contractorPhone) {
+        try { await sendShiftMarketplaceSms({ recipientName: contractorName, phone: contractorPhone, subject, bodyText: `PayLink: Invoice #${invoice.invoice_number || invoice.id.slice(0, 8)} $${amount} is due. Please pay promptly.` }); smsStatus = "sent"; }
+        catch { smsStatus = "failed"; }
+      }
+
+      await db.execute(sql`INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, subject, body, status) VALUES ('invoice', ${req.params.id}, 'email', ${contractorEmail}, ${subject}, ${body}, ${emailStatus})`);
+      if (contractorPhone) await db.execute(sql`INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, subject, body, status) VALUES ('invoice', ${req.params.id}, 'sms', ${contractorPhone}, ${subject}, ${body}, ${smsStatus})`);
+      await db.execute(sql`UPDATE contractor_invoices SET last_reminder_sent_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id}`);
+
+      res.json({ message: "Reminder sent", emailStatus, smsStatus });
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to send reminder" }); }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AI ASSISTANCE FOR PROPOSALS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  app.post("/api/contractor-proposals/:id/ai-assist", requireAuth, async (req, res) => {
+    try {
+      const { action, context } = req.body;
+      // action: draft_scope | improve_scope | suggest_exclusions | suggest_assumptions | suggest_line_items | suggest_payment_terms | generate_summary | flag_missing
+      const openaiApiKey = process.env.OPENAI_API_KEY;
+      if (!openaiApiKey) return res.status(503).json({ message: "AI assistance requires OpenAI configuration" });
+
+      const proposalRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const proposal = proposalRes.rows[0] as any || {};
+      const lineItemsRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${req.params.id}`);
+      const lineItems = lineItemsRes.rows;
+
+      let systemPrompt = `You are a professional contractor proposal assistant. Your job is to help create clear, professional, and accurate proposals. Rules: Never fabricate specific numbers, permit approvals, engineering signoffs, or code compliance. When uncertain, flag with [confirm field measurement], [verify material selection], [vendor quote needed], or [permit scope subject to review]. Be specific and professional. Separate scope, assumptions, exclusions, and allowances clearly.`;
+      let userPrompt = "";
+
+      if (action === "draft_scope") {
+        userPrompt = `Draft a professional scope of work for this project. Use the following notes as context:\n${context || proposal.description || "No notes provided"}\n\nTitle: ${proposal.title || ""}\n\nReturn a clear, professional scope of work in plain paragraphs. Flag any missing details.`;
+      } else if (action === "improve_scope") {
+        userPrompt = `Improve and professionalize this scope of work text:\n${context || proposal.scope_of_work || "No scope provided"}\n\nMake it clearer, more professional, and easier for a client to understand. Keep it factual.`;
+      } else if (action === "suggest_exclusions") {
+        userPrompt = `Based on this project scope:\n${proposal.scope_of_work || context || proposal.description || "No scope"}\n\nSuggest a list of common exclusions for this type of project. Format as a bulleted list.`;
+      } else if (action === "suggest_assumptions") {
+        userPrompt = `Based on this project scope:\n${proposal.scope_of_work || context || proposal.description || "No scope"}\n\nSuggest a list of project assumptions the contractor should state upfront. Format as a bulleted list.`;
+      } else if (action === "suggest_line_items") {
+        userPrompt = `Based on this scope of work:\n${proposal.scope_of_work || context || proposal.description || "No scope"}\n\nSuggest itemized line items for this proposal. For each item include: category, name, description, estimated quantity, unit, and unit price range. Return as JSON array: [{category, name, description, quantity, unit, unitPrice}]`;
+      } else if (action === "suggest_payment_terms") {
+        userPrompt = `Suggest professional payment terms for this contractor proposal with total value approximately $${proposal.amount || "unknown"}. Include deposit, progress payments, and final payment. Return as plain text suitable for a proposal.`;
+      } else if (action === "generate_summary") {
+        const itemNames = lineItems.map((i: any) => i.name).join(", ");
+        userPrompt = `Write a concise, client-friendly summary for this contractor proposal:\nTitle: ${proposal.title || ""}\nScope: ${proposal.scope_of_work || proposal.description || ""}\nKey items: ${itemNames || "Not specified"}\nTotal: $${proposal.amount || "TBD"}\n\nReturn 2-3 sentences suitable for a cover page.`;
+      } else if (action === "flag_missing") {
+        userPrompt = `Review this proposal for missing or unclear information:\nTitle: ${proposal.title || "MISSING"}\nScope: ${proposal.scope_of_work || "MISSING"}\nAssumptions: ${proposal.assumptions || "MISSING"}\nExclusions: ${proposal.exclusions || "MISSING"}\nPayment Terms: ${proposal.payment_terms || "MISSING"}\nLine Items Count: ${lineItems.length}\nTotal: $${proposal.amount || "MISSING"}\n\nList any missing or incomplete sections that should be addressed before sending to the client. Be specific.`;
+      } else {
+        return res.status(400).json({ message: "Unknown action" });
+      }
+
+      const { default: OpenAI } = await import("openai");
+      const openai = new OpenAI({ apiKey: openaiApiKey });
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
+        max_tokens: 1000,
+        temperature: 0.5,
+      });
+      const text = completion.choices[0]?.message?.content || "";
+
+      // For suggest_line_items, try to parse JSON
+      if (action === "suggest_line_items") {
+        try {
+          const match = text.match(/\[[\s\S]*\]/);
+          if (match) return res.json({ result: text, parsed: JSON.parse(match[0]) });
+        } catch { }
+      }
+
+      res.json({ result: text });
+    } catch (e: any) { console.error(e); res.status(500).json({ message: "AI assist failed: " + e.message }); }
   });
 
   app.get("/api/shift-offers", requireAuth, async (req, res) => {
