@@ -14623,16 +14623,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           INSERT INTO staff_message_recipients (message_id, worker_id) VALUES (${newMsg.id}, ${rw.id})
         `);
 
-        // Check worker's messaging preference
-        let prefs: any = {};
-        try { prefs = JSON.parse(rw.preferences || "{}"); } catch {}
-        // Workers without a set preference default to "email" (no longer "app only")
-        const workerChannel = (!prefs.messagingChannel || prefs.messagingChannel === "app") ? "email" : prefs.messagingChannel;
-
-        const shouldEmail = (channel === "email" || channel === "both") && (workerChannel === "email" || workerChannel === "both");
-        // SMS: respects worker's own channel preference. Workers can no longer choose "app only"
-        // so they will always have at least email or sms in their preference.
-        const shouldSms = (channel === "sms" || channel === "both") && (workerChannel === "sms" || workerChannel === "both");
+        // Admin's delivery channel choice is authoritative.
+        // We do NOT gate on the worker's stored preference — if the admin says "send SMS",
+        // every recipient with a phone number gets an SMS regardless of their preference setting.
+        // Worker preferences only apply when the admin chooses "app" (in-app only, no external).
+        const smsPhone = rw.mobile_phone || rw.phone;
+        const shouldEmail = (channel === "email" || channel === "both") && !!rw.email;
+        const shouldSms   = (channel === "sms"   || channel === "both") && !!smsPhone;
 
         if (shouldEmail && rw.email) {
           const { getTransporter } = await import("./notifications");
@@ -14657,13 +14654,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
                 text: `${senderName}: ${body.trim()}`,
                 html,
               });
+              console.log(`[Messaging] Email sent to ${rw.email}`);
             } catch (emailErr: any) {
-              console.error("[Messaging] Email delivery failed:", emailErr.message);
+              console.error(`[Messaging] Email to ${rw.email} failed:`, emailErr.message);
             }
+          } else {
+            console.warn(`[Messaging] Email requested for ${rw.first_name} but SMTP not configured (shouldEmail=${shouldEmail}, hasEmail=${!!rw.email})`);
           }
         }
 
-        const smsPhone = rw.mobile_phone || rw.phone;
         if (shouldSms && smsPhone) {
           try {
             const accountSid = process.env.TWILIO_ACCOUNT_SID;

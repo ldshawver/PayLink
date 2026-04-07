@@ -29,6 +29,8 @@ import {
   Clock,
   MailOpen,
   Mail,
+  AlertTriangle,
+  CheckCircle2,
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -83,8 +85,13 @@ function ComposeDialog({ onClose, onSent }: { onClose: () => void; onSent: () =>
   const [body, setBody] = useState("");
   const [scope, setScope] = useState("one");
   const [recipientId, setRecipientId] = useState("");
-  const [deliveryChannel, setDeliveryChannel] = useState("app");
+  const [deliveryChannel, setDeliveryChannel] = useState("email");
   const [workerSearch, setWorkerSearch] = useState("");
+
+  const { data: notifStatus } = useQuery<{ sms: { configured: boolean }; email: { configured: boolean } }>({
+    queryKey: ["/api/admin/notification-status"],
+    enabled: canBroadcast,
+  });
 
   const { data: workers = [] } = useQuery<Worker[]>({
     queryKey: ["/api/messages/workers"],
@@ -218,7 +225,7 @@ function ComposeDialog({ onClose, onSent }: { onClose: () => void; onSent: () =>
 
         {canBroadcast && (
           <div className="space-y-2">
-            <Label>Delivery</Label>
+            <Label>Delivery Channel</Label>
             <Select value={deliveryChannel} onValueChange={setDeliveryChannel}>
               <SelectTrigger data-testid="select-delivery-channel">
                 <SelectValue />
@@ -229,8 +236,47 @@ function ComposeDialog({ onClose, onSent }: { onClose: () => void; onSent: () =>
                 ))}
               </SelectContent>
             </Select>
+
+            {/* Live status warnings based on server config */}
+            {notifStatus && (
+              <div className="space-y-1">
+                {(deliveryChannel === "email" || deliveryChannel === "both") && (
+                  notifStatus.email.configured ? (
+                    <div className="flex items-center gap-1.5 text-xs text-green-600">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Email is configured and will be delivered
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 text-xs text-orange-600">
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      Email is not configured — recipients will only see this in-app
+                    </div>
+                  )
+                )}
+                {(deliveryChannel === "sms" || deliveryChannel === "both") && (
+                  notifStatus.sms.configured ? (
+                    <div className="flex items-center gap-1.5 text-xs text-green-600">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      SMS is configured and will be delivered to workers with a phone number
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 text-xs text-orange-600">
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      SMS (Twilio) is not configured — texts will not be sent
+                    </div>
+                  )
+                )}
+                {deliveryChannel === "app" && (
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Mail className="h-3.5 w-3.5" />
+                    In-app only — no email or text will be sent
+                  </div>
+                )}
+              </div>
+            )}
+
             <p className="text-xs text-muted-foreground">
-              Each recipient receives the message via whichever of their preferred channels (email and/or text) matches your selection. All messages also appear in-app.
+              All messages appear in-app. Email and text are sent to any recipient who has that contact info on file.
             </p>
           </div>
         )}
