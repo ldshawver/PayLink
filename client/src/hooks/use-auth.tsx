@@ -84,13 +84,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await apiRequest("POST", "/api/auth/logout");
       return res.json();
     },
-    onSuccess: (_data: { redirectUrl?: string }) => {
+    onSuccess: () => {
       queryClient.setQueryData(["/api/auth/me"], null);
       queryClient.clear();
       if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
       const host = window.location.hostname;
       const isLocal = host === "localhost" || host.includes(".repl.") || host.includes(".replit.") || host.includes(".replit.dev") || host.includes(".repl.co");
-      window.location.href = isLocal ? "/clock-in" : (_data?.redirectUrl ?? "https://mypaylink.app/");
+      window.location.href = isLocal ? "/clock-in" : "https://mypaylink.app/";
     },
   });
 

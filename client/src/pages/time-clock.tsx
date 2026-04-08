@@ -104,8 +104,8 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
 
   useEffect(() => {
     if (!successType) return;
-    // sign-in → dashboard immediately
-    if (successType === "sign-in") {
+    // sign-in or clock-in → dashboard
+    if (successType === "sign-in" || successType === "clock-in") {
       setTimeout(() => { window.location.href = "/app/dashboard"; }, 1400);
       return;
     }
@@ -227,7 +227,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
         {/* ── SUCCESS ── */}
         {step === "success" && successType && (
           <div className="flex flex-col items-center gap-5 py-8" data-testid="div-success">
-            <CheckCircle className={`h-16 w-16 ${successType === "sign-in" ? "text-teal-400" : isRedirectSuccess ? "text-amber-400" : "text-emerald-400"}`} />
+            <CheckCircle className={`h-16 w-16 ${(successType === "sign-in" || successType === "clock-in") ? "text-teal-400" : isRedirectSuccess ? "text-amber-400" : "text-emerald-400"}`} />
             <div className="text-center space-y-2">
               <p className="text-xl font-bold text-white">
                 {successType === "clock-in" && (successName ? `Welcome, ${successName}!` : "Clocked In!")}
@@ -237,13 +237,13 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
                 {successType === "sign-in" && (successName ? `Welcome, ${successName}!` : "Signed In!")}
               </p>
               <p className="text-sm text-white/70">
-                {successType === "clock-in" && "You're clocked in. Have a great shift!"}
+                {successType === "clock-in" && "You're clocked in — heading to your dashboard…"}
                 {successType === "break-in" && "You're back on the clock. Let's go!"}
                 {successType === "break-out" && "Take a well-deserved rest. You've earned it!"}
                 {successType === "shift-end" && "Your shift is complete. Have a wonderful rest of your day!"}
                 {successType === "sign-in" && "Redirecting to your dashboard…"}
               </p>
-              {successType === "sign-in" ? (
+              {(successType === "sign-in" || successType === "clock-in") ? (
                 <p className="text-xs text-white/50 mt-2">Taking you there now…</p>
               ) : isRedirectSuccess ? (
                 <p className="text-xs text-white/50 mt-2">
@@ -255,7 +255,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
                 </p>
               )}
             </div>
-            {successType === "sign-in" ? (
+            {(successType === "sign-in" || successType === "clock-in") ? (
               <Button
                 onClick={() => { window.location.href = "/app/dashboard"; }}
                 className="bg-teal-600 hover:bg-teal-700 text-white border-0"

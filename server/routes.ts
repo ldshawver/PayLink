@@ -1183,6 +1183,21 @@ export async function registerRoutes(
       if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in." });
       }
+
+      // ── Create / restore session so the employee lands on their dashboard ──
+      const clockInUsers = await storage.getUsers();
+      let clockInUser = clockInUsers.find(u => u.workerId === worker.id);
+      if (!clockInUser) {
+        const hashedPassword = await bcrypt.hash(pin, 10);
+        clockInUser = await storage.createUser({ username: employeeNumber, password: hashedPassword, role: "employee", companyId: worker.companyId, workerId: worker.id, isActive: true });
+      }
+      if (clockInUser.isActive === false) return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
+      await new Promise<void>((resolve, reject) => {
+        req.session.userId = clockInUser!.id;
+        req.session.username = clockInUser!.username;
+        req.session.save((err) => { if (err) reject(err); else resolve(); });
+      });
+
       // Duplicate clock-in prevention
       const allPunches = await storage.getTimePunches(worker.companyId);
       const workerPunches = allPunches.filter(p => p.workerId === worker.id).sort((a, b) => new Date(b.punchTime).getTime() - new Date(a.punchTime).getTime());
@@ -1307,7 +1322,8 @@ export async function registerRoutes(
         scheduledEnd: scheduledEnd || undefined,
         lateMinutes,
       });
-      res.status(201).json({ punch, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName } });
+
+      res.status(201).json({ punch, worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName }, sessionCreated: true });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Clock in failed" });
