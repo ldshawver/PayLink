@@ -64,6 +64,8 @@ import {
   ChevronRight,
   Home,
   Stethoscope,
+  UserCog,
+  KeyRound,
 } from "lucide-react";
 import {
   Sidebar,
@@ -90,7 +92,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
 import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
-import { canAccessPlatformConsole, isManagerOrAbove, isTenantAdminRole } from "@/lib/roles";
+import { canAccessPlatformConsole, isManagerOrAbove, isTenantAdminRole, expandRoleForLegacyGuards } from "@/lib/roles";
 
 type NavItem = {
   title: string;
@@ -419,6 +421,17 @@ const TENANT_NAV: NavGroup[] = [
         roles: ["admin"],
         items: [],
       },
+      {
+        label: "Tenant Permissions",
+        icon: UserCog,
+        url: "/app/settings?tab=permissions",
+        roles: ["admin"],
+        items: [
+          { title: "Role Assignments", url: "/app/settings?tab=permissions", icon: Users },
+          { title: "Custom Roles", url: "/app/settings?tab=custom-roles", icon: Shield },
+          { title: "Permission Overrides", url: "/app/settings?tab=overrides", icon: KeyRound },
+        ],
+      },
     ],
   },
 ];
@@ -459,7 +472,10 @@ export function AppSidebar() {
 
   const hasAccess = (roles?: string[]) => {
     if (!roles || roles.length === 0) return true;
-    return roles.includes(userRole);
+    // Expand the user's actual role to its legacy aliases so that new role names
+    // (tenant_admin, tenant_manager, etc.) match against legacy role guards ("admin", "manager")
+    const effectiveRoles = expandRoleForLegacyGuards(userRole);
+    return roles.some(r => effectiveRoles.includes(r));
   };
 
   const isActive = (url: string) => {

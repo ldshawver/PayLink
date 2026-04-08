@@ -50,7 +50,25 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 **Backend:**
 -   **Framework:** Express.js + TypeScript.
 -   **Authentication:** Session-based with `express-session`, `connect-pg-simple`, and `bcrypt`.
--   **Authorization (RBAC):** Role-based access control (admin, manager, employee) for frontend and API protection.
+-   **Authorization (RBAC):** 3-layer role hierarchy. See `client/src/lib/roles.ts` for the authoritative definition.
+
+**Role Hierarchy (critical — never bypass):**
+-   **Layer 1 — Platform Console** (`/platform/*`): Only explicit `platform_*` roles may access. `"admin"` is a TENANT role, never a platform role. Dev login: `admin` / `admin` (role: `platform_super_admin`, no companyId).
+    -   `platform_super_admin` — full platform access
+    -   `platform_admin` — full access, cannot change super admin settings
+    -   `platform_sales` — Sales & Licensing modules only
+    -   `platform_implementation` — Implementation/CS modules only
+    -   `platform_support` — read-only tenant data for support
+    -   `platform_billing` — Platform Finance / billing only
+    -   `platform_auditor` — read-only audit log
+-   **Layer 2 — Tenant App** (`/app/*`, admin modules): Tenant-scoped roles with `companyId`. Legacy `"admin"` maps to `tenant_admin`.
+    -   `tenant_owner`, `tenant_admin`, `tenant_hr_admin`, `tenant_payroll_admin`, `tenant_finance_admin`
+    -   `tenant_manager`, `tenant_supervisor`, legacy `manager`, `supervisor`
+-   **Layer 3 — Employee Portal** (`/app/*`, personal modules): Worker roles.
+    -   `employee`, `contractor`
+-   **Server guard helpers** in `server/routes.ts`: `requireRole()` (expands new roles to legacy aliases), `requirePlatformRole()` (platform-only endpoints), `isAdminRole()`, `isManagerRole()`.
+-   **Test accounts** (dev only, password: `test1234`): `test_platform_sales`, `test_platform_implementation`, `test_platform_support`, `test_platform_billing`, `test_platform_auditor`, `test_tenant_owner`, `test_tenant_admin`, `test_tenant_hr_admin`, `test_tenant_payroll_admin`, `test_tenant_finance_admin`, `test_tenant_manager`, `test_tenant_supervisor`, `test_employee`, `test_contractor`.
+-   **CRITICAL**: Never assign `companyId` to a platform-scoped user. Never let a tenant user (`companyId != null`) access `/platform/*`.
 -   **API Design:** RESTful API for managing companies, workers, time, payroll, and HR functions, including payroll summaries and time clock punches.
 -   **Key Features:** Time & Attendance, Employee Management, Company Management, Payroll Processing (multi-step wizard, tax form generation, ACH direct deposit), Policy & HR Management, Reporting (with CSV export), Expense Management (photo uploads, approval, AI receipt scanning), User Account Management (PIN, username/password, kiosk login), Schedule Publishing & Time-Off, Payroll Audit, Worker Groups, Shift Marketplace, SaaS Trial & Billing, Interactive Demo Mode, Onboarding (Customer & Employee), Invoicing System, Document Management (versioning, e-signatures, audit logs), Integration Event Bus (webhooks), Automation Engine, Notifications System (admin-editable email + SMS templates via `notification_templates` table), System Documents, Contractor Onboarding + Agreement System, Trade / Non-Cash Compensation, Unified Invoices & Proposals Module (biz-docs: business creates customer invoices/proposals; Contractor Hub: contractors send proposals to companies, companies accept/reject/pay).
 

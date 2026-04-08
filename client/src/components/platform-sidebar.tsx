@@ -28,6 +28,7 @@ import {
   Banknote,
   ClipboardList,
   FileCheck2,
+  Users,
 } from "lucide-react";
 import {
   Sidebar,
@@ -143,6 +144,16 @@ const PLATFORM_NAV: PlatformNavGroup[] = [
         items: [
           { title: "Provisioning", url: "/platform/provisioning", icon: ServerCog },
           { title: "Tenant Setup", url: "/platform/provisioning", icon: Building2 },
+          { title: "Environment / Demo", url: "/platform/provisioning", icon: ToggleLeft },
+        ],
+      },
+      {
+        label: "Platform Permissions",
+        icon: ShieldCheck,
+        url: "/platform/permissions",
+        module: "provisioning",
+        items: [
+          { title: "Platform Role Assignments", url: "/platform/permissions", icon: Users },
           { title: "Module Access", url: "/platform/permissions", icon: Layers },
           { title: "Feature Flags", url: "/platform/permissions", icon: ToggleLeft },
         ],
@@ -175,7 +186,11 @@ const PLATFORM_NAV: PlatformNavGroup[] = [
         icon: ShieldCheck,
         url: "/platform/audit-log",
         module: "oversight",
-        items: [],
+        items: [
+          { title: "All Events", url: "/platform/audit-log", icon: ClipboardList },
+          { title: "Support Tools", url: "/platform/audit-log", icon: Headphones },
+          { title: "Usage Monitoring", url: "/platform/audit-log", icon: Activity },
+        ],
       },
       {
         label: "Feature Registry",

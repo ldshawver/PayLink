@@ -17,20 +17,97 @@ async function ensureAdminUser() {
       await db.insert(users).values({
         username: "admin",
         password: hashedPassword,
-        role: "admin",
+        role: "platform_super_admin",
       });
-      console.log("Admin user created (admin/admin)");
+      console.log("Platform admin user created (admin/admin) with role platform_super_admin");
     } else {
+      const adminUser = existing[0];
       if (process.env.NODE_ENV === "production") {
         console.log("Admin user exists, skipping password reset (production mode)");
       } else {
         const hashedPassword = await bcrypt.hash("admin", 10);
-        await db.update(users).set({ password: hashedPassword }).where(eq(users.username, "admin"));
+        const updates: Record<string, any> = { password: hashedPassword };
+        // Upgrade legacy "admin" role to platform_super_admin if the user has no tenant company
+        if (adminUser.role === "admin" && !adminUser.companyId) {
+          updates.role = "platform_super_admin";
+          console.log("Admin user upgraded from 'admin' to 'platform_super_admin' (no company assigned)");
+        }
+        await db.update(users).set(updates).where(eq(users.username, "admin"));
         console.log("Admin user password reset to default (dev mode)");
       }
     }
   } catch (e) {
     console.log("Could not ensure admin user (tables may not exist yet)");
+  }
+}
+
+async function seedTestAccounts() {
+  // Only seed test accounts in development
+  if (process.env.NODE_ENV === "production") return;
+  try {
+    const TEST_PASSWORD = "test1234";
+    const hashedPw = await bcrypt.hash(TEST_PASSWORD, 10);
+
+    // Platform-scoped test accounts (no companyId)
+    const platformTestUsers = [
+      { username: "test_platform_sales",          role: "platform_sales" },
+      { username: "test_platform_implementation", role: "platform_implementation" },
+      { username: "test_platform_support",        role: "platform_support" },
+      { username: "test_platform_billing",        role: "platform_billing" },
+      { username: "test_platform_auditor",        role: "platform_auditor" },
+    ];
+
+    for (const u of platformTestUsers) {
+      const exists = await db.select().from(users).where(eq(users.username, u.username));
+      if (exists.length === 0) {
+        await db.insert(users).values({ username: u.username, password: hashedPw, role: u.role });
+        console.log(`Test account created: ${u.username} / ${TEST_PASSWORD} [${u.role}]`);
+      }
+    }
+
+    // Find or create a dev test tenant company for tenant-scoped accounts
+    let testCompany = await db.select().from(companies).where(eq(companies.name, "__dev_test_tenant__"));
+    let testCompanyId: string;
+    if (testCompany.length === 0) {
+      const [c] = await db.insert(companies).values({
+        name: "__dev_test_tenant__",
+        subscriptionStatus: "trial",
+        planName: "basic",
+        isDemo: true,
+      }).returning();
+      testCompanyId = c.id;
+      console.log(`Dev test tenant company created (id: ${testCompanyId})`);
+    } else {
+      testCompanyId = testCompany[0].id;
+    }
+
+    // Tenant-scoped test accounts
+    const tenantTestUsers = [
+      { username: "test_tenant_owner",           role: "tenant_owner" },
+      { username: "test_tenant_admin",           role: "tenant_admin" },
+      { username: "test_tenant_hr_admin",        role: "tenant_hr_admin" },
+      { username: "test_tenant_payroll_admin",   role: "tenant_payroll_admin" },
+      { username: "test_tenant_finance_admin",   role: "tenant_finance_admin" },
+      { username: "test_tenant_manager",         role: "tenant_manager" },
+      { username: "test_tenant_supervisor",      role: "tenant_supervisor" },
+      { username: "test_employee",               role: "employee" },
+      { username: "test_contractor",             role: "contractor" },
+    ];
+
+    for (const u of tenantTestUsers) {
+      const exists = await db.select().from(users).where(eq(users.username, u.username));
+      if (exists.length === 0) {
+        await db.insert(users).values({
+          username: u.username,
+          password: hashedPw,
+          role: u.role,
+          companyId: testCompanyId,
+        });
+        console.log(`Test account created: ${u.username} / ${TEST_PASSWORD} [${u.role}]`);
+      }
+    }
+  } catch (e: any) {
+    console.log("Could not seed test accounts:", e?.message || e);
   }
 }
 
@@ -661,6 +738,7 @@ export async function seedDatabase() {
   await seedExpenseCategories();
   await seedPlatformModules();
   await seedEnterprisePermissions();
+  await seedTestAccounts();
 
   try {
     const existingCompanies = await db.select().from(companies);

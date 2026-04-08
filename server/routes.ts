@@ -109,6 +109,30 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+/**
+ * Expand a role to its effective legacy aliases for backward-compatible role checks.
+ * New explicit platform/tenant roles map to the legacy strings used in existing guards.
+ *
+ * Critical: platform_* roles are NOT tenant admins — they bypass tenant checks only
+ * for platform-console operations. For tenant-scoped API routes they are treated as
+ * super-admins so that platform support staff can assist tenants.
+ */
+function expandRoleForGuard(role: string): string[] {
+  if (role === "platform_super_admin" || role === "platform_admin") {
+    return ["admin", "manager", "supervisor", role];
+  }
+  if (role === "platform_support" || role === "platform_implementation") {
+    return ["admin", "manager", role];
+  }
+  if (["tenant_owner", "tenant_admin", "tenant_hr_admin", "tenant_payroll_admin", "tenant_finance_admin"].includes(role)) {
+    return ["admin", role];
+  }
+  if (["tenant_manager", "tenant_supervisor"].includes(role)) {
+    return ["manager", "supervisor", role];
+  }
+  return [role];
+}
+
 function requireRole(...roles: string[]) {
   return async (req: Request, res: Response, next: NextFunction) => {
     if (!req.session?.userId) {
@@ -118,8 +142,36 @@ function requireRole(...roles: string[]) {
     if (!user) {
       return res.status(401).json({ message: "User not found" });
     }
-    if (!roles.includes(user.role || "")) {
+    // Expand the user's role to include legacy aliases so new role names work with
+    // existing requireRole("admin") / requireRole("manager") guards throughout the codebase.
+    const effectiveRoles = expandRoleForGuard(user.role || "");
+    if (!roles.some(r => effectiveRoles.includes(r))) {
       return res.status(403).json({ message: "Insufficient permissions" });
+    }
+    next();
+  };
+}
+
+/**
+ * Middleware that requires an explicit platform-scoped role.
+ * Tenant admins — including legacy "admin" with a companyId — are rejected.
+ * Used to protect platform-only API endpoints.
+ */
+function requirePlatformRole() {
+  const PLATFORM_ROLES = [
+    "platform_super_admin", "platform_admin", "platform_sales",
+    "platform_implementation", "platform_support", "platform_billing", "platform_auditor",
+  ];
+  return async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.session?.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const user = await storage.getUser(req.session.userId);
+    if (!user) {
+      return res.status(401).json({ message: "User not found" });
+    }
+    if (!PLATFORM_ROLES.includes(user.role || "")) {
+      return res.status(403).json({ message: "Platform Console access required" });
     }
     next();
   };
@@ -130,6 +182,24 @@ function blockDemoWrites(req: Request, res: Response, next: NextFunction) {
     return res.status(403).json({ message: "Demo mode is read-only. Sign up for a free trial to make changes." });
   }
   next();
+}
+
+/**
+ * Role-check helpers for inline data-level authorization inside route handlers.
+ * These recognize both legacy strings and the new explicit role names.
+ */
+function isAdminRole(role: string | null | undefined): boolean {
+  if (!role) return false;
+  return ["admin", "platform_super_admin", "platform_admin", "tenant_owner",
+    "tenant_admin", "tenant_hr_admin", "tenant_payroll_admin", "tenant_finance_admin",
+  ].includes(role);
+}
+
+function isManagerRole(role: string | null | undefined): boolean {
+  if (!role) return false;
+  return isAdminRole(role) || ["manager", "supervisor", "tenant_manager", "tenant_supervisor",
+    "platform_support", "platform_implementation",
+  ].includes(role);
 }
 
 async function getSessionCompanyId(req: Request): Promise<string | null> {
