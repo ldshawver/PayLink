@@ -5,6 +5,8 @@ import bcrypt from "bcrypt";
 import multer from "multer";
 import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePhone } from "./notifications";
 import path from "path";
+import os from "os";
+import { execSync } from "child_process";
 import { db } from "./db";
 import { sql, eq } from "drizzle-orm";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog } from "@shared/schema";
@@ -16827,7 +16829,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   function getGitInfo(): Record<string, string> {
     try {
-      const { execSync } = require("child_process");
       const commit = execSync("git rev-parse --short HEAD 2>/dev/null").toString().trim();
       const branch = execSync("git rev-parse --abbrev-ref HEAD 2>/dev/null").toString().trim();
       const date = execSync("git log -1 --format=%ci 2>/dev/null").toString().trim();
@@ -16846,7 +16847,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       memoryMb: mem.rss / 1024 / 1024,
       nodeEnv: process.env.NODE_ENV || "development",
       port: process.env.PORT || 5000,
-      hostname: require("os").hostname(),
+      hostname: os.hostname(),
       git: getGitInfo(),
       generatedAt: new Date().toISOString(),
     });
@@ -17051,7 +17052,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           arch: process.arch,
           nodeEnv: process.env.NODE_ENV || "development",
           port: process.env.PORT || 5000,
-          hostname: require("os").hostname(),
+          hostname: os.hostname(),
           uptimeSeconds: Math.floor(process.uptime()),
           memoryMb: mem.rss / 1024 / 1024,
           git,
