@@ -2796,18 +2796,68 @@ export async function registerRoutes(
     try {
       const run = await storage.getPayrollRun(req.params.id as string);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      // Block deletion of ACH-submitted or ACH-settled runs — real money has moved
+      if (run.achStatus === "submitted" || run.achStatus === "settled") {
+        return res.status(409).json({ message: "Cannot delete a payroll run with submitted or settled ACH payments. Contact your bank to reverse the transaction." });
+      }
       if (run.lockedAt || run.isLocked) {
-        return res.status(409).json({ message: "Cannot delete a locked payroll run" });
+        return res.status(409).json({ message: "Cannot delete a locked payroll run. Unlock it first by clicking 'Reopen for Editing'." });
       }
+      // Cascade-delete all dependent records in the correct FK order
+      const { inArray } = await import("drizzle-orm");
+      const { payStubTransactions: pstTable, payrollTransactionRuns: ptrTable, payrollPaymentRecords: pprTable, payrollSummaries: psTable, achBatches: abTable, payrollItems: piTable } = await import("../shared/schema.js");
       const items = await storage.getPayrollItems(run.id);
-      for (const item of items) {
-        await storage.deletePayrollItem(item.id);
+      const itemIds = items.map(i => i.id);
+      // 1. Delete pay_stub_transactions (references payroll_items)
+      if (itemIds.length > 0) {
+        await db.delete(pstTable).where(inArray(pstTable.payrollItemId, itemIds));
       }
+      // 2. Delete payroll_transaction_runs (references payroll_runs and payroll_items)
+      await db.delete(ptrTable).where(eq(ptrTable.payrollRunId, run.id));
+      // 3. Delete payroll_payment_records (references payroll_runs and payroll_items)
+      await db.delete(pprTable).where(eq(pprTable.payrollRunId, run.id));
+      // 4. Delete the payroll items themselves
+      if (itemIds.length > 0) {
+        await db.delete(piTable).where(inArray(piTable.id, itemIds));
+      }
+      // 5. Delete payroll_summaries (references payroll_runs)
+      await db.delete(psTable).where(eq(psTable.payrollRunId, run.id));
+      // 6. Delete ach_batches (references payroll_runs)
+      await db.delete(abTable).where(eq(abTable.payrollRunId, run.id));
+      // 6b. Clear payroll_run_id on reimbursement items so they return to "pending" pool
+      const { payrollReimbursementItems: priTable } = await import("../shared/schema.js");
+      await db.update(priTable)
+        .set({ payrollRunId: null, status: "pending", includedInPayrollAt: null } as any)
+        .where(eq(priTable.payrollRunId, run.id));
+      // 7. Delete the payroll run
       await storage.deletePayrollRun(run.id);
       res.json({ message: "Payroll run deleted" });
     } catch (error) {
       console.error("Failed to delete payroll run:", error);
       res.status(500).json({ message: "Failed to delete payroll run" });
+    }
+  });
+
+  // Unlock a payroll run — clears lock fields and resets status to draft (admin only)
+  app.post("/api/payroll-runs/:id/unlock", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      if (run.achStatus === "submitted" || run.achStatus === "settled") {
+        return res.status(409).json({ message: "Cannot unlock a payroll run with submitted or settled ACH payments." });
+      }
+      const updated = await storage.updatePayrollRun(run.id, {
+        lockedAt: null,
+        isLocked: false,
+        lockedBy: null,
+        approvedAt: null,
+        approvedBy: null,
+        status: "draft",
+      } as any);
+      res.json(updated);
+    } catch (error) {
+      console.error("Unlock payroll error:", error);
+      res.status(500).json({ message: "Failed to unlock payroll run" });
     }
   });
 

@@ -603,8 +603,22 @@ function PayrollRunCard({
 
   const reopenMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("PATCH", `/api/payroll-runs/${run.id}`, { status: "draft" });
-      return res.json();
+      if (isLocked) {
+        // Locked runs require the explicit unlock endpoint to clear lockedAt/isLocked
+        const res = await apiRequest("POST", `/api/payroll-runs/${run.id}/unlock`, {});
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.message || "Failed to unlock payroll run");
+        }
+        return res.json();
+      } else {
+        const res = await apiRequest("PATCH", `/api/payroll-runs/${run.id}`, { status: "draft" });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.message || "Failed to reopen payroll run");
+        }
+        return res.json();
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
@@ -1314,7 +1328,7 @@ function PayrollRunCard({
                         </div>
                       )
                   )}
-                  {(run.status === "processed" || run.status === "paid") && (
+                  {(run.status === "processed" || run.status === "paid" || isLocked) && (
                     <Button
                       variant="outline" size="sm"
                       data-testid={`button-reopen-run-${run.id}`}
@@ -1322,7 +1336,9 @@ function PayrollRunCard({
                       onClick={() => reopenMutation.mutate()}
                     >
                       <Pencil className="mr-2 h-4 w-4" />
-                      {reopenMutation.isPending ? "Reopening..." : "Reopen for Editing"}
+                      {reopenMutation.isPending
+                        ? (isLocked ? "Unlocking..." : "Reopening...")
+                        : (isLocked ? "Unlock & Reopen" : "Reopen for Editing")}
                     </Button>
                   )}
                   {(run.status === "processed" || run.status === "paid") && (
