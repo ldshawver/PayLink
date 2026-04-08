@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { lazy, Suspense, useEffect, useState, useCallback } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
@@ -11,51 +11,6 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ClockInButton } from "@/components/clock-in-button";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
-import NotFound from "@/pages/not-found";
-import OnboardingWizard from "@/pages/onboarding";
-import Dashboard from "@/pages/dashboard";
-import AttendancePage from "@/pages/attendance";
-import SchedulePage from "@/pages/schedule";
-import EmployeePage from "@/pages/employee";
-import CompanyPage from "@/pages/company";
-import PayrollPage from "@/pages/payroll";
-import PolicyPage from "@/pages/policy";
-import HRPage from "@/pages/hr";
-import ReportsPage from "@/pages/reports";
-import ExpensesPage from "@/pages/expenses";
-import TimeClock from "@/pages/time-clock";
-import PrintCheckPage from "@/pages/print-check";
-import PrintExpenseCheckPage from "@/pages/print-expense-check";
-import MyProfilePage from "@/pages/my-profile";
-import PayrollAuditPage from "@/pages/payroll-audit";
-import CustomersPage from "@/pages/customers";
-import InvoicesPage from "@/pages/invoices";
-import PayInvoicePage from "@/pages/pay-invoice";
-import BillingPage from "@/pages/billing";
-import CompanyDocumentsPage from "@/pages/company-documents";
-import DealPipelinePage from "@/pages/deal-pipeline";
-import OnboardingProjectsPage from "@/pages/onboarding-projects";
-import OnboardingTemplatesPage from "@/pages/onboarding-templates";
-import EngagementFeedPage from "@/pages/engagement-feed";
-import LicenseRequestsPage from "@/pages/license-requests";
-import PortalOnboardingPage from "@/pages/portal-onboarding";
-import LoginPage from "@/pages/login";
-import NotificationSettingsPage from "@/pages/notification-settings";
-import NotificationTemplatesPage from "@/pages/notification-templates";
-import MessagesPage from "@/pages/messages";
-import TradeCompensationPage from "@/pages/trade-compensation";
-import AgreementsPage from "@/pages/agreements";
-import OnboardingAdminPage from "@/pages/onboarding-admin";
-import OnboardingPortalPage from "@/pages/onboarding-portal";
-import PermissionsPage from "@/pages/permissions";
-import ProvisioningPage from "@/pages/provisioning";
-import AuditLogPage from "@/pages/audit-log";
-import BizDocsPage from "@/pages/biz-docs";
-import ContractorHubPage from "@/pages/contractor-hub";
-import TreasuryPage from "@/pages/treasury";
-import SettingsPage from "@/pages/settings";
-import PlatformHomePage from "@/pages/platform-home";
-import FeatureRegistryPage from "@/pages/feature-registry";
 import { Loader2, Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -66,6 +21,62 @@ import { usePushNotifications } from "@/hooks/use-push-notifications";
 import { useBiometricAuth } from "@/hooks/use-biometric-auth";
 import { useKeyboardManager, usePageTransition, useAppLifecycle } from "@/hooks/use-native-platform";
 import { canAccessPlatformConsole } from "@/lib/roles";
+
+// ─── Lazy page imports (code-split by route) ──────────────────────────────────
+const NotFound = lazy(() => import("@/pages/not-found"));
+const OnboardingWizard = lazy(() => import("@/pages/onboarding"));
+const Dashboard = lazy(() => import("@/pages/dashboard"));
+const AttendancePage = lazy(() => import("@/pages/attendance"));
+const SchedulePage = lazy(() => import("@/pages/schedule"));
+const EmployeePage = lazy(() => import("@/pages/employee"));
+const CompanyPage = lazy(() => import("@/pages/company"));
+const PayrollPage = lazy(() => import("@/pages/payroll"));
+const PolicyPage = lazy(() => import("@/pages/policy"));
+const HRPage = lazy(() => import("@/pages/hr"));
+const ReportsPage = lazy(() => import("@/pages/reports"));
+const ExpensesPage = lazy(() => import("@/pages/expenses"));
+const TimeClock = lazy(() => import("@/pages/time-clock"));
+const PrintCheckPage = lazy(() => import("@/pages/print-check"));
+const PrintExpenseCheckPage = lazy(() => import("@/pages/print-expense-check"));
+const MyProfilePage = lazy(() => import("@/pages/my-profile"));
+const PayrollAuditPage = lazy(() => import("@/pages/payroll-audit"));
+const CustomersPage = lazy(() => import("@/pages/customers"));
+const InvoicesPage = lazy(() => import("@/pages/invoices"));
+const PayInvoicePage = lazy(() => import("@/pages/pay-invoice"));
+const BillingPage = lazy(() => import("@/pages/billing"));
+const CompanyDocumentsPage = lazy(() => import("@/pages/company-documents"));
+const DealPipelinePage = lazy(() => import("@/pages/deal-pipeline"));
+const OnboardingProjectsPage = lazy(() => import("@/pages/onboarding-projects"));
+const OnboardingTemplatesPage = lazy(() => import("@/pages/onboarding-templates"));
+const EngagementFeedPage = lazy(() => import("@/pages/engagement-feed"));
+const LicenseRequestsPage = lazy(() => import("@/pages/license-requests"));
+const PortalOnboardingPage = lazy(() => import("@/pages/portal-onboarding"));
+const LoginPage = lazy(() => import("@/pages/login"));
+const NotificationSettingsPage = lazy(() => import("@/pages/notification-settings"));
+const NotificationTemplatesPage = lazy(() => import("@/pages/notification-templates"));
+const MessagesPage = lazy(() => import("@/pages/messages"));
+const TradeCompensationPage = lazy(() => import("@/pages/trade-compensation"));
+const AgreementsPage = lazy(() => import("@/pages/agreements"));
+const OnboardingAdminPage = lazy(() => import("@/pages/onboarding-admin"));
+const OnboardingPortalPage = lazy(() => import("@/pages/onboarding-portal"));
+const PermissionsPage = lazy(() => import("@/pages/permissions"));
+const ProvisioningPage = lazy(() => import("@/pages/provisioning"));
+const AuditLogPage = lazy(() => import("@/pages/audit-log"));
+const BizDocsPage = lazy(() => import("@/pages/biz-docs"));
+const ContractorHubPage = lazy(() => import("@/pages/contractor-hub"));
+const TreasuryPage = lazy(() => import("@/pages/treasury"));
+const SettingsPage = lazy(() => import("@/pages/settings"));
+const PlatformHomePage = lazy(() => import("@/pages/platform-home"));
+const FeatureRegistryPage = lazy(() => import("@/pages/feature-registry"));
+
+// ─── Shared page-loading fallback ────────────────────────────────────────────
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center min-h-screen">
+      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
 
 function RoleGuard({ roles, children }: { roles: string[]; children: React.ReactNode }) {
   const { user } = useAuth();
@@ -82,48 +93,50 @@ function RoleGuard({ roles, children }: { roles: string[]; children: React.React
 
 function AuthenticatedRouter() {
   return (
-    <Switch>
-      <Route path="/app" component={Dashboard} />
-      <Route path="/app/dashboard" component={Dashboard} />
-      <Route path="/app/onboarding" component={OnboardingWizard} />
-      <Route path="/app/attendance" component={AttendancePage} />
-      <Route path="/app/schedule" component={SchedulePage} />
-      <Route path="/app/employee">{() => <RoleGuard roles={["admin", "manager"]}><EmployeePage /></RoleGuard>}</Route>
-      <Route path="/app/company">{() => <RoleGuard roles={["admin", "manager"]}><CompanyPage /></RoleGuard>}</Route>
-      <Route path="/app/company-documents">{() => <RoleGuard roles={["admin", "manager"]}><CompanyDocumentsPage /></RoleGuard>}</Route>
-      <Route path="/app/payroll">{() => <RoleGuard roles={["admin", "manager"]}><PayrollPage /></RoleGuard>}</Route>
-      <Route path="/app/policy">{() => <RoleGuard roles={["admin"]}><PolicyPage /></RoleGuard>}</Route>
-      <Route path="/app/hr">{() => <RoleGuard roles={["admin", "manager"]}><HRPage /></RoleGuard>}</Route>
-      <Route path="/app/reports">{() => <RoleGuard roles={["admin", "manager"]}><ReportsPage /></RoleGuard>}</Route>
-      <Route path="/app/expenses" component={ExpensesPage} />
-      <Route path="/app/payroll-audit">{() => <RoleGuard roles={["admin", "manager"]}><PayrollAuditPage /></RoleGuard>}</Route>
-      <Route path="/app/customers">{() => <RoleGuard roles={["admin", "manager"]}><CustomersPage /></RoleGuard>}</Route>
-      <Route path="/app/invoices">{() => <RoleGuard roles={["admin", "manager"]}><InvoicesPage /></RoleGuard>}</Route>
-      <Route path="/app/billing">{() => <PlatformRedirect to="/platform/billing" />}</Route>
-      {/* Platform-owner routes — redirect to /platform/* */}
-      <Route path="/app/deal-pipeline">{() => <PlatformRedirect to="/platform/deal-pipeline" />}</Route>
-      <Route path="/app/onboarding-projects">{() => <PlatformRedirect to="/platform/onboarding-projects" />}</Route>
-      <Route path="/app/onboarding-templates">{() => <PlatformRedirect to="/platform/onboarding-templates" />}</Route>
-      <Route path="/app/engagement-feed">{() => <PlatformRedirect to="/platform/engagement-feed" />}</Route>
-      <Route path="/app/license-requests">{() => <PlatformRedirect to="/platform/license-requests" />}</Route>
-      <Route path="/app/print-check/:runId">{() => <RoleGuard roles={["admin", "manager"]}><PrintCheckPage /></RoleGuard>}</Route>
-      <Route path="/app/print-expense-check" component={PrintExpenseCheckPage} />
-      <Route path="/app/my-profile" component={MyProfilePage} />
-      <Route path="/app/notification-settings" component={NotificationSettingsPage} />
-      <Route path="/app/notification-templates" component={NotificationTemplatesPage} />
-      <Route path="/app/messages" component={MessagesPage} />
-      <Route path="/app/trade-compensation">{() => <RoleGuard roles={["admin", "manager"]}><TradeCompensationPage /></RoleGuard>}</Route>
-      <Route path="/app/agreements">{() => <PlatformRedirect to="/platform/agreements" />}</Route>
-      <Route path="/app/contractor-onboarding">{() => <PlatformRedirect to="/platform/contractor-onboarding" />}</Route>
-      <Route path="/app/permissions">{() => <PlatformRedirect to="/platform/permissions" />}</Route>
-      <Route path="/app/provisioning">{() => <PlatformRedirect to="/platform/provisioning" />}</Route>
-      <Route path="/app/audit-log">{() => <PlatformRedirect to="/platform/audit-log" />}</Route>
-      <Route path="/app/biz-docs" component={BizDocsPage} />
-      <Route path="/app/contractor-hub" component={ContractorHubPage} />
-      <Route path="/app/treasury">{() => <RoleGuard roles={["admin"]}><TreasuryPage /></RoleGuard>}</Route>
-      <Route path="/app/settings">{() => <RoleGuard roles={["admin"]}><SettingsPage /></RoleGuard>}</Route>
-      <Route component={NotFound} />
-    </Switch>
+    <Suspense fallback={<PageLoader />}>
+      <Switch>
+        <Route path="/app" component={Dashboard} />
+        <Route path="/app/dashboard" component={Dashboard} />
+        <Route path="/app/onboarding" component={OnboardingWizard} />
+        <Route path="/app/attendance" component={AttendancePage} />
+        <Route path="/app/schedule" component={SchedulePage} />
+        <Route path="/app/employee">{() => <RoleGuard roles={["admin", "manager"]}><EmployeePage /></RoleGuard>}</Route>
+        <Route path="/app/company">{() => <RoleGuard roles={["admin", "manager"]}><CompanyPage /></RoleGuard>}</Route>
+        <Route path="/app/company-documents">{() => <RoleGuard roles={["admin", "manager"]}><CompanyDocumentsPage /></RoleGuard>}</Route>
+        <Route path="/app/payroll">{() => <RoleGuard roles={["admin", "manager"]}><PayrollPage /></RoleGuard>}</Route>
+        <Route path="/app/policy">{() => <RoleGuard roles={["admin"]}><PolicyPage /></RoleGuard>}</Route>
+        <Route path="/app/hr">{() => <RoleGuard roles={["admin", "manager"]}><HRPage /></RoleGuard>}</Route>
+        <Route path="/app/reports">{() => <RoleGuard roles={["admin", "manager"]}><ReportsPage /></RoleGuard>}</Route>
+        <Route path="/app/expenses" component={ExpensesPage} />
+        <Route path="/app/payroll-audit">{() => <RoleGuard roles={["admin", "manager"]}><PayrollAuditPage /></RoleGuard>}</Route>
+        <Route path="/app/customers">{() => <RoleGuard roles={["admin", "manager"]}><CustomersPage /></RoleGuard>}</Route>
+        <Route path="/app/invoices">{() => <RoleGuard roles={["admin", "manager"]}><InvoicesPage /></RoleGuard>}</Route>
+        <Route path="/app/billing">{() => <PlatformRedirect to="/platform/billing" />}</Route>
+        {/* Platform-owner routes — redirect to /platform/* */}
+        <Route path="/app/deal-pipeline">{() => <PlatformRedirect to="/platform/deal-pipeline" />}</Route>
+        <Route path="/app/onboarding-projects">{() => <PlatformRedirect to="/platform/onboarding-projects" />}</Route>
+        <Route path="/app/onboarding-templates">{() => <PlatformRedirect to="/platform/onboarding-templates" />}</Route>
+        <Route path="/app/engagement-feed">{() => <PlatformRedirect to="/platform/engagement-feed" />}</Route>
+        <Route path="/app/license-requests">{() => <PlatformRedirect to="/platform/license-requests" />}</Route>
+        <Route path="/app/print-check/:runId">{() => <RoleGuard roles={["admin", "manager"]}><PrintCheckPage /></RoleGuard>}</Route>
+        <Route path="/app/print-expense-check" component={PrintExpenseCheckPage} />
+        <Route path="/app/my-profile" component={MyProfilePage} />
+        <Route path="/app/notification-settings" component={NotificationSettingsPage} />
+        <Route path="/app/notification-templates" component={NotificationTemplatesPage} />
+        <Route path="/app/messages" component={MessagesPage} />
+        <Route path="/app/trade-compensation">{() => <RoleGuard roles={["admin", "manager"]}><TradeCompensationPage /></RoleGuard>}</Route>
+        <Route path="/app/agreements">{() => <PlatformRedirect to="/platform/agreements" />}</Route>
+        <Route path="/app/contractor-onboarding">{() => <PlatformRedirect to="/platform/contractor-onboarding" />}</Route>
+        <Route path="/app/permissions">{() => <PlatformRedirect to="/platform/permissions" />}</Route>
+        <Route path="/app/provisioning">{() => <PlatformRedirect to="/platform/provisioning" />}</Route>
+        <Route path="/app/audit-log">{() => <PlatformRedirect to="/platform/audit-log" />}</Route>
+        <Route path="/app/biz-docs" component={BizDocsPage} />
+        <Route path="/app/contractor-hub" component={ContractorHubPage} />
+        <Route path="/app/treasury">{() => <RoleGuard roles={["admin"]}><TreasuryPage /></RoleGuard>}</Route>
+        <Route path="/app/settings">{() => <RoleGuard roles={["admin"]}><SettingsPage /></RoleGuard>}</Route>
+        <Route component={NotFound} />
+      </Switch>
+    </Suspense>
   );
 }
 
@@ -202,9 +215,6 @@ function AuthenticatedLayout() {
 function PlatformRoleGuard({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
-  // canAccessPlatformConsole correctly distinguishes platform_* roles from tenant admins.
-  // A tenant admin with role="admin" AND a companyId will be denied.
-  // A legacy platform admin with role="admin" AND no companyId will be allowed.
   const allowed = canAccessPlatformConsole(user?.role, user?.companyId);
   if (!allowed) {
     setTimeout(() => setLocation("/app"), 0);
@@ -216,22 +226,24 @@ function PlatformRoleGuard({ children }: { children: React.ReactNode }) {
 function PlatformRouter() {
   return (
     <PlatformRoleGuard>
-      <Switch>
-        <Route path="/platform" component={PlatformHomePage} />
-        <Route path="/platform/deal-pipeline" component={DealPipelinePage} />
-        <Route path="/platform/license-requests" component={LicenseRequestsPage} />
-        <Route path="/platform/agreements" component={AgreementsPage} />
-        <Route path="/platform/onboarding-projects" component={OnboardingProjectsPage} />
-        <Route path="/platform/onboarding-templates" component={OnboardingTemplatesPage} />
-        <Route path="/platform/engagement-feed" component={EngagementFeedPage} />
-        <Route path="/platform/contractor-onboarding" component={OnboardingAdminPage} />
-        <Route path="/platform/provisioning" component={ProvisioningPage} />
-        <Route path="/platform/permissions" component={PermissionsPage} />
-        <Route path="/platform/audit-log" component={AuditLogPage} />
-        <Route path="/platform/billing" component={BillingPage} />
-        <Route path="/platform/feature-registry" component={FeatureRegistryPage} />
-        <Route component={NotFound} />
-      </Switch>
+      <Suspense fallback={<PageLoader />}>
+        <Switch>
+          <Route path="/platform" component={PlatformHomePage} />
+          <Route path="/platform/deal-pipeline" component={DealPipelinePage} />
+          <Route path="/platform/license-requests" component={LicenseRequestsPage} />
+          <Route path="/platform/agreements" component={AgreementsPage} />
+          <Route path="/platform/onboarding-projects" component={OnboardingProjectsPage} />
+          <Route path="/platform/onboarding-templates" component={OnboardingTemplatesPage} />
+          <Route path="/platform/engagement-feed" component={EngagementFeedPage} />
+          <Route path="/platform/contractor-onboarding" component={OnboardingAdminPage} />
+          <Route path="/platform/provisioning" component={ProvisioningPage} />
+          <Route path="/platform/permissions" component={PermissionsPage} />
+          <Route path="/platform/audit-log" component={AuditLogPage} />
+          <Route path="/platform/billing" component={BillingPage} />
+          <Route path="/platform/feature-registry" component={FeatureRegistryPage} />
+          <Route component={NotFound} />
+        </Switch>
+      </Suspense>
     </PlatformRoleGuard>
   );
 }
@@ -387,19 +399,35 @@ function AppContent() {
   const [location] = useLocation();
 
   if (location.startsWith("/portal/onboarding/")) {
-    return <PortalOnboardingPage />;
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <PortalOnboardingPage />
+      </Suspense>
+    );
   }
 
   if (location.startsWith("/onboarding/")) {
-    return <OnboardingPortalPage />;
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <OnboardingPortalPage />
+      </Suspense>
+    );
   }
 
   if (location.startsWith("/pay/")) {
-    return <PayInvoicePage />;
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <PayInvoicePage />
+      </Suspense>
+    );
   }
 
   if (location === "/clock-in" || location === "/time-clock") {
-    return <TimeClock />;
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <TimeClock />
+      </Suspense>
+    );
   }
 
   if (location === "/login") {
@@ -408,17 +436,15 @@ function AppContent() {
     }
     return (
       <BiometricGate>
-        <LoginPage />
+        <Suspense fallback={<PageLoader />}>
+          <LoginPage />
+        </Suspense>
       </BiometricGate>
     );
   }
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <PageLoader />;
   }
 
   if (!user) {
@@ -451,11 +477,7 @@ function RedirectToLogin() {
   useEffect(() => {
     setLocation("/login");
   }, [setLocation]);
-  return (
-    <div className="flex items-center justify-center min-h-screen">
-      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-    </div>
-  );
+  return <PageLoader />;
 }
 
 function RedirectToApp() {
@@ -463,11 +485,7 @@ function RedirectToApp() {
   useEffect(() => {
     setLocation("/app");
   }, [setLocation]);
-  return (
-    <div className="flex items-center justify-center min-h-screen">
-      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-    </div>
-  );
+  return <PageLoader />;
 }
 
 function App() {

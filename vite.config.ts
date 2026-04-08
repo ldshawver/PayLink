@@ -45,6 +45,7 @@ export default defineConfig({
       },
       injectManifest: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff,woff2}"],
+        maximumFileSizeToCacheInBytes: 3145728,
       },
     }),
     ...(process.env.NODE_ENV !== "production" &&
@@ -70,6 +71,38 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules")) {
+            if (id.includes("react-dom") || id.includes("react/")) {
+              return "vendor-react";
+            }
+            if (id.includes("@tanstack/react-query")) {
+              return "vendor-query";
+            }
+            if (id.includes("@radix-ui/")) {
+              return "vendor-radix";
+            }
+            if (id.includes("react-hook-form") || id.includes("@hookform/")) {
+              return "vendor-form";
+            }
+            if (id.includes("recharts") || id.includes("d3-") || id.includes("victory")) {
+              return "vendor-charts";
+            }
+            if (id.includes("lucide-react") || id.includes("react-icons")) {
+              return "vendor-icons";
+            }
+            if (id.includes("date-fns") || id.includes("dayjs") || id.includes("moment")) {
+              return "vendor-dates";
+            }
+            if (id.includes("zod") || id.includes("drizzle-zod")) {
+              return "vendor-validation";
+            }
+          }
+        },
+      },
+    },
   },
   server: {
     fs: {
