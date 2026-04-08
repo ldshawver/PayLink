@@ -32,8 +32,32 @@ import {
   AlertTriangle,
   CheckCircle2,
 } from "lucide-react";
-import { format, formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow } from "date-fns";
 import { cn } from "@/lib/utils";
+
+function formatInTimezone(date: Date, timezone: string, fmt: string): string {
+  try {
+    if (fmt === "relative") {
+      return formatDistanceToNow(date, { addSuffix: true });
+    }
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).format(date);
+  } catch {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).format(date);
+  }
+}
 
 interface Message {
   id: string;
@@ -112,14 +136,37 @@ function ComposeDialog({ onClose, onSent }: { onClose: () => void; onSent: () =>
         recipientWorkerId: scope === "one" ? recipientId : undefined,
         deliveryChannel: canBroadcast ? deliveryChannel : "app",
       });
+      const data = await res.json();
       if (!res.ok) {
-        const data = await res.json();
         throw new Error(data.message || "Failed to send");
       }
-      return res.json();
+      // 207 = message saved but external delivery failed
+      if (res.status === 207) {
+        return { partial: true, data };
+      }
+      return { partial: false, data };
     },
-    onSuccess: () => {
-      toast({ title: "Message sent" });
+    onSuccess: (result: any) => {
+      if (result?.partial) {
+        const summary = result.data?.deliverySummary;
+        const partialSuccess = result.data?.partialSuccess;
+        let description = result.data?.error || "Some recipients may not have received external delivery.";
+        if (summary) {
+          const parts = [];
+          if (summary.emailSent > 0) parts.push(`${summary.emailSent} email${summary.emailSent > 1 ? "s" : ""} sent`);
+          if (summary.emailFailed > 0) parts.push(`${summary.emailFailed} email${summary.emailFailed > 1 ? "s" : ""} failed`);
+          if (summary.smsSent > 0) parts.push(`${summary.smsSent} SMS sent`);
+          if (summary.smsFailed > 0) parts.push(`${summary.smsFailed} SMS failed`);
+          if (parts.length) description = parts.join(", ") + ". Recipients can see the message in-app.";
+        }
+        toast({
+          title: partialSuccess ? "Message sent with some failures" : "Message saved — delivery failed",
+          description,
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "Message sent" });
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/messages"] });
       queryClient.invalidateQueries({ queryKey: ["/api/messages/unread-count"] });
       onSent();
@@ -298,7 +345,7 @@ function ComposeDialog({ onClose, onSent }: { onClose: () => void; onSent: () =>
   );
 }
 
-function MessageThread({ message, onBack }: { message: Message; onBack: () => void }) {
+function MessageThread({ message, onBack, timezone }: { message: Message; onBack: () => void; timezone?: string }) {
   const { toast } = useToast();
   const [replyBody, setReplyBody] = useState("");
   const [showReply, setShowReply] = useState(false);
@@ -370,10 +417,10 @@ function MessageThread({ message, onBack }: { message: Message; onBack: () => vo
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        <MessageBubble msg={msg} isFirst />
+        <MessageBubble msg={msg} isFirst timezone={timezone} />
         {isLoading && <p className="text-sm text-muted-foreground text-center py-2">Loading replies...</p>}
         {msg.replies?.map((reply) => (
-          <MessageBubble key={reply.id} msg={reply} />
+          <MessageBubble key={reply.id} msg={reply} timezone={timezone} />
         ))}
       </div>
 
@@ -419,7 +466,8 @@ function MessageThread({ message, onBack }: { message: Message; onBack: () => vo
   );
 }
 
-function MessageBubble({ msg, isFirst }: { msg: Message; isFirst?: boolean }) {
+function MessageBubble({ msg, isFirst, timezone }: { msg: Message; isFirst?: boolean; timezone?: string }) {
+  const tz = timezone || "America/New_York";
   const createdAt = msg.created_at ? new Date(msg.created_at) : null;
   return (
     <div className={cn("rounded-lg border p-4", isFirst ? "bg-card" : "bg-muted/40")}>
@@ -433,7 +481,7 @@ function MessageBubble({ msg, isFirst }: { msg: Message; isFirst?: boolean }) {
             {createdAt && (
               <p className="text-xs text-muted-foreground">
                 {formatDistanceToNow(createdAt, { addSuffix: true })}
-                <span className="ml-2 opacity-70">{format(createdAt, "MMM d, h:mm a")}</span>
+                <span className="ml-2 opacity-70">{formatInTimezone(createdAt, tz, "display")}</span>
               </p>
             )}
           </div>
@@ -453,11 +501,14 @@ function MessageRow({
   msg,
   selected,
   onSelect,
+  timezone,
 }: {
   msg: Message;
   selected: boolean;
   onSelect: () => void;
+  timezone?: string;
 }) {
+  const tz = timezone || "America/New_York";
   const createdAt = msg.created_at ? new Date(msg.created_at) : null;
   const isUnread = !msg.read_at;
 
@@ -491,7 +542,7 @@ function MessageRow({
                 </Badge>
               )}
               {createdAt && (
-                <span className="text-xs text-muted-foreground">
+                <span className="text-xs text-muted-foreground" title={formatInTimezone(createdAt, tz, "display")}>
                   {formatDistanceToNow(createdAt, { addSuffix: true })}
                 </span>
               )}
@@ -516,6 +567,7 @@ function MessageRow({
 export default function MessagesPage() {
   const { user } = useAuth();
   const role = (user as any)?.role || "employee";
+  const companyId = (user as any)?.companyId;
   const [folder, setFolder] = useState<"inbox" | "sent">("inbox");
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
   const [showCompose, setShowCompose] = useState(false);
@@ -532,6 +584,20 @@ export default function MessagesPage() {
   const { data: unreadCount } = useQuery<{ count: number }>({
     queryKey: ["/api/messages/unread-count"],
   });
+
+  const { data: companyData } = useQuery<{ timezone?: string }>({
+    queryKey: ["/api/companies", companyId],
+    queryFn: async () => {
+      if (!companyId) return {};
+      const res = await fetch(`/api/companies/${companyId}`, { credentials: "include" });
+      if (!res.ok) return {};
+      return res.json();
+    },
+    enabled: !!companyId,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const companyTimezone = companyData?.timezone || "America/New_York";
 
   const unread = unreadCount?.count ?? 0;
 
@@ -626,6 +692,7 @@ export default function MessagesPage() {
                   msg={msg}
                   selected={selectedMessage?.id === msg.id}
                   onSelect={() => setSelectedMessage(msg)}
+                  timezone={companyTimezone}
                 />
               ))
             )}
@@ -641,6 +708,7 @@ export default function MessagesPage() {
             <MessageThread
               message={selectedMessage}
               onBack={() => setSelectedMessage(null)}
+              timezone={companyTimezone}
             />
           ) : (
             <div className="text-center text-muted-foreground">

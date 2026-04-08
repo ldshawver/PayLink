@@ -14633,6 +14633,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(403).json({ message: "Only admins and managers can send broadcast messages" });
       }
 
+      // Employees and contractors are restricted to in-app only
+      if (!canBroadcast && deliveryChannel && deliveryChannel !== "app") {
+        return res.status(403).json({ message: "Employees and contractors can only send in-app messages" });
+      }
+
       const channel = canBroadcast ? (deliveryChannel || "app") : "app";
       const effectiveCompanyId = companyId || senderCompanyId;
 
@@ -14641,11 +14646,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(400).json({ message: "Company ID is required for company-wide messages" });
       }
 
-      // Create message record — persist sender_name and sender_user_id for stable attribution
+      // Create message record — persist sender_name and sender_user_id for stable attribution.
+      // Explicitly set created_at to UTC now so the timestamp reflects true send time
+      // regardless of server timezone configuration.
       const senderUserId = senderId ? null : String(userId);
+      const sentAtUtc = new Date().toISOString();
       const msgResult = await db.execute(sql`
-        INSERT INTO staff_messages (company_id, sender_id, sender_name, sender_user_id, subject, body, scope, recipient_worker_id, delivery_channel, is_reply)
-        VALUES (${effectiveCompanyId}, ${senderId}, ${senderName}, ${senderUserId}, ${subject.trim()}, ${body.trim()}, ${scope}, ${recipientWorkerId || null}, ${channel}, FALSE)
+        INSERT INTO staff_messages (company_id, sender_id, sender_name, sender_user_id, subject, body, scope, recipient_worker_id, delivery_channel, is_reply, created_at)
+        VALUES (${effectiveCompanyId}, ${senderId}, ${senderName}, ${senderUserId}, ${subject.trim()}, ${body.trim()}, ${scope}, ${recipientWorkerId || null}, ${channel}, FALSE, ${sentAtUtc}::timestamptz)
         RETURNING *
       `);
       const newMsg = (msgResult.rows ?? msgResult as any)[0];
@@ -14688,22 +14696,29 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         recipientWorkers = rw.rows ?? (rw as any);
       }
 
-      for (const rw of recipientWorkers) {
+      // Pre-load SMTP transporter and Twilio client once for efficiency
+      const { getTransporter } = await import("./notifications");
+      const smtp = (channel === "email" || channel === "both") ? getTransporter() : null;
+      let twilioClient: any = null;
+      const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
+      if ((channel === "sms" || channel === "both") && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && twilioFrom) {
+        const twilio = (await import("twilio")).default;
+        twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+      }
+
+      const sendResults = await Promise.allSettled(recipientWorkers.map(async (rw) => {
+        // Always insert in-app recipient record regardless of external channel
         await db.execute(sql`
           INSERT INTO staff_message_recipients (message_id, worker_id) VALUES (${newMsg.id}, ${rw.id})
         `);
 
-        // Admin's delivery channel choice is authoritative.
-        // We do NOT gate on the worker's stored preference — if the admin says "send SMS",
-        // every recipient with a phone number gets an SMS regardless of their preference setting.
-        // Worker preferences only apply when the admin chooses "app" (in-app only, no external).
         const smsPhone = rw.mobile_phone || rw.phone;
         const shouldEmail = (channel === "email" || channel === "both") && !!rw.email;
         const shouldSms   = (channel === "sms"   || channel === "both") && !!smsPhone;
 
+        const recipientResults: { type: string; ok: boolean; error?: string }[] = [];
+
         if (shouldEmail && rw.email) {
-          const { getTransporter } = await import("./notifications");
-          const smtp = getTransporter();
           if (smtp) {
             const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
               <div style="background:linear-gradient(135deg,#0d9488,#2563eb);padding:20px;border-radius:8px 8px 0 0;">
@@ -14725,38 +14740,79 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
                 html,
               });
               console.log(`[Messaging] Email sent to ${rw.email}`);
+              recipientResults.push({ type: "email", ok: true });
             } catch (emailErr: any) {
               console.error(`[Messaging] Email to ${rw.email} failed:`, emailErr.message);
+              recipientResults.push({ type: "email", ok: false, error: emailErr.message });
             }
           } else {
-            console.warn(`[Messaging] Email requested for ${rw.first_name} but SMTP not configured (shouldEmail=${shouldEmail}, hasEmail=${!!rw.email})`);
+            console.warn(`[Messaging] Email requested for ${rw.first_name} but SMTP not configured`);
+            recipientResults.push({ type: "email", ok: false, error: "SMTP not configured" });
           }
         }
 
         if (shouldSms && smsPhone) {
-          try {
-            const accountSid = process.env.TWILIO_ACCOUNT_SID;
-            const authToken = process.env.TWILIO_AUTH_TOKEN;
-            const fromNumber = process.env.TWILIO_PHONE_NUMBER;
-            if (accountSid && authToken && fromNumber) {
-              const twilio = (await import("twilio")).default;
-              const client = twilio(accountSid, authToken);
-              await client.messages.create({
+          if (twilioClient) {
+            try {
+              await twilioClient.messages.create({
                 body: `PayLink message from ${senderName}: ${subject.trim()}\n\n${body.trim().substring(0, 200)}`,
-                from: normalizePhone(fromNumber),
+                from: normalizePhone(twilioFrom!),
                 to: normalizePhone(smsPhone),
               });
               console.log(`[SMS] Message delivered to ${smsPhone}`);
-            } else {
-              console.warn("[SMS] Twilio not configured — skipping SMS for message");
+              recipientResults.push({ type: "sms", ok: true });
+            } catch (smsErr: any) {
+              console.error("[Messaging] SMS delivery failed:", smsErr.message);
+              recipientResults.push({ type: "sms", ok: false, error: smsErr.message });
             }
-          } catch (smsErr: any) {
-            console.error("[Messaging] SMS delivery failed:", smsErr.message);
+          } else {
+            console.warn("[SMS] Twilio not configured — skipping SMS for message");
+            recipientResults.push({ type: "sms", ok: false, error: "Twilio not configured" });
           }
+        }
+
+        return { workerId: rw.id, results: recipientResults };
+      }));
+
+      // Collect delivery summary
+      const deliverySummary = {
+        total: recipientWorkers.length,
+        emailSent: 0, emailFailed: 0,
+        smsSent: 0, smsFailed: 0,
+        errors: [] as string[],
+      };
+      for (const r of sendResults) {
+        if (r.status === "fulfilled") {
+          for (const dr of r.value.results) {
+            if (dr.type === "email") dr.ok ? deliverySummary.emailSent++ : deliverySummary.emailFailed++;
+            if (dr.type === "sms") dr.ok ? deliverySummary.smsSent++ : deliverySummary.smsFailed++;
+            if (!dr.ok && dr.error) deliverySummary.errors.push(dr.error);
+          }
+        } else {
+          deliverySummary.errors.push(String(r.reason));
         }
       }
 
-      res.json(newMsg);
+      // Surface any external delivery failure to the admin — even partial failures matter
+      const requestedExternal = channel === "email" || channel === "sms" || channel === "both";
+      const hasAnyFailure = deliverySummary.emailFailed > 0 || deliverySummary.smsFailed > 0;
+      const hasAnySuccess = deliverySummary.emailSent > 0 || deliverySummary.smsSent > 0;
+
+      if (requestedExternal && hasAnyFailure) {
+        const uniqueErrors = [...new Set(deliverySummary.errors)].slice(0, 3);
+        const allFailed = !hasAnySuccess;
+        return res.status(207).json({
+          message: allFailed
+            ? "Message saved but external delivery failed"
+            : "Message saved — some recipients had delivery failures",
+          messageId: newMsg.id,
+          deliverySummary,
+          error: uniqueErrors.join("; "),
+          partialSuccess: hasAnySuccess,
+        });
+      }
+
+      res.json({ ...newMsg, deliverySummary });
     } catch (err) {
       console.error("[Messages] POST /api/messages failed:", err);
       res.status(500).json({ message: safeErrorMessage(err, "Failed to send message") });
