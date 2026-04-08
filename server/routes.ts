@@ -16812,11 +16812,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   function requirePlatformAudit(req: any, res: any, next: any) {
     if (!req.session?.userId) return res.status(401).json({ message: "Not authenticated" });
-    // role is checked after we load the user
-    db.select().from(users).where(eq(users.id, req.session.userId)).then(([u]) => {
-      if (!u || u.role !== "platform_super_admin") return res.status(403).json({ message: "Platform super admin only" });
+    if (!req.user) {
+      // user not yet loaded — load it now
+      storage.getUser(req.session.userId).then(u => {
+        if (!u || u.role !== "platform_super_admin") return res.status(403).json({ message: "Platform super admin only" });
+        req.user = u;
+        next();
+      }).catch(() => res.status(500).json({ message: "Auth error" }));
+    } else {
+      if (req.user.role !== "platform_super_admin") return res.status(403).json({ message: "Platform super admin only" });
       next();
-    }).catch(() => res.status(500).json({ message: "Auth error" }));
+    }
   }
 
   function getGitInfo(): Record<string, string> {
