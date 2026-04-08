@@ -2299,6 +2299,11 @@ Thank you,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    // ── Tenant enforcement columns ─────────────────────────────────────────────
+    await run("companies.agreement_signed_at", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS agreement_signed_at TIMESTAMP`);
+    await run("companies.agreement_signed_by_user_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS agreement_signed_by_user_id VARCHAR`);
+    await run("companies.gate_override_reason", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS gate_override_reason TEXT`);
+
     // ── Stripe Treasury columns ────────────────────────────────────────────────
     await run("companies.stripe_financial_account_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS stripe_financial_account_id TEXT`);
     await run("pay_methods.stripe_bank_account_id", sql`ALTER TABLE pay_methods ADD COLUMN IF NOT EXISTS stripe_bank_account_id TEXT`);

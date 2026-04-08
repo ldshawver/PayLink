@@ -21,6 +21,7 @@ import { usePushNotifications } from "@/hooks/use-push-notifications";
 import { useBiometricAuth } from "@/hooks/use-biometric-auth";
 import { useKeyboardManager, usePageTransition, useAppLifecycle } from "@/hooks/use-native-platform";
 import { canAccessPlatformConsole } from "@/lib/roles";
+import { AccountBlocked } from "@/components/account-blocked";
 
 // ─── Lazy page imports (code-split by route) ──────────────────────────────────
 const NotFound = lazy(() => import("@/pages/not-found"));
@@ -457,6 +458,12 @@ function AppContent() {
         <RedirectToLogin />
       </BiometricGate>
     );
+  }
+
+  // Tenant gate: block access if subscription/billing is not valid
+  // Platform users (no companyId) always pass through
+  if (user.companyId && user.tenantGate && !user.tenantGate.allowed) {
+    return <AccountBlocked gate={user.tenantGate} />;
   }
 
   if (location.startsWith("/platform")) {

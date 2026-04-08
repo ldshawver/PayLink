@@ -2,6 +2,13 @@ import { createContext, useContext, useEffect, useRef, type ReactNode } from "re
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
 
+export type TenantGate = {
+  allowed: boolean;
+  reason?: string;
+  code?: string;
+  policyDetail?: string;
+};
+
 type AuthUser = {
   id: string;
   username: string;
@@ -9,6 +16,7 @@ type AuthUser = {
   companyId?: string | null;
   workerId?: string | null;
   worker?: { id: string; firstName: string; lastName: string; companyId: string } | null;
+  tenantGate?: TenantGate;
 };
 
 type AuthContextType = {

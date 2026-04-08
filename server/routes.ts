@@ -7,6 +7,7 @@ import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePh
 import path from "path";
 import os from "os";
 import { execSync } from "child_process";
+import { checkTenantGate } from "./tenant-enforcement";
 import { db } from "./db";
 import { sql, eq } from "drizzle-orm";
 import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog } from "@shared/schema";
@@ -509,7 +510,12 @@ export async function registerRoutes(
         workerType = w.workerType;
       }
     }
-    res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, workerType, worker: workerInfo });
+    // Tenant gate: platform users always pass, tenant users checked against subscription status
+    let tenantGate: { allowed: boolean; reason?: string; code?: string; policyDetail?: string } = { allowed: true };
+    if (user.companyId) {
+      tenantGate = await checkTenantGate(user.companyId);
+    }
+    res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, workerType, worker: workerInfo, tenantGate });
   });
 
   app.post("/api/auth/pin-login", async (req, res) => {
@@ -17023,9 +17029,352 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/platform/audit/export", requirePlatformAudit, async (req, res) => {
+  // ─── audit/deploy ─────────────────────────────────────────────────────────
+  app.get("/api/platform/audit/deploy", requirePlatformAudit, (_req, res) => {
+    const required = ["DATABASE_URL", "SESSION_SECRET", "NODE_ENV", "PORT"];
+    const optional = ["APP_BASE_URL", "SMTP_HOST", "SMTP_USER", "SMTP_FROM", "STRIPE_SECRET_KEY", "TWILIO_ACCOUNT_SID"];
+    const missing = required.filter(k => !process.env[k]);
+    const optionalMissing = optional.filter(k => !process.env[k]);
+    const git = getGitInfo();
+    let pm2Status: any = null;
+    try { pm2Status = execSync("pm2 jlist 2>/dev/null").toString().trim(); } catch {}
+    res.json({
+      environment: process.env.NODE_ENV || "development",
+      port: process.env.PORT || 5000,
+      appBaseUrl: process.env.APP_BASE_URL || null,
+      git,
+      requiredEnvVars: required,
+      missingRequiredVars: missing,
+      optionalEnvVars: optional,
+      missingOptionalVars: optionalMissing,
+      readiness: {
+        overall: missing.length === 0,
+        database: !!process.env.DATABASE_URL,
+        session: !!process.env.SESSION_SECRET,
+        environment: !!process.env.NODE_ENV,
+        port: !!process.env.PORT,
+      },
+      pm2: (() => {
+        if (!pm2Status) return null;
+        try {
+          return JSON.parse(pm2Status).map((p: any) => ({
+            name: p.name,
+            status: p.pm2_env?.status,
+            pid: p.pid,
+            restarts: p.pm2_env?.restart_time,
+            uptimeMs: p.pm2_env?.pm_uptime ? Date.now() - p.pm2_env.pm_uptime : null,
+          }));
+        } catch { return null; }
+      })(),
+      generatedAt: new Date().toISOString(),
+    });
+  });
+
+  // ─── audit/features ───────────────────────────────────────────────────────
+  app.get("/api/platform/audit/features", requirePlatformAudit, (_req, res) => {
+    const features = [
+      { id: "time_tracking", name: "Time & Attendance", module: "core", enabled: true, gated: false },
+      { id: "payroll", name: "Payroll Processing", module: "core", enabled: true, gated: false },
+      { id: "employee_management", name: "Employee Management", module: "core", enabled: true, gated: false },
+      { id: "scheduling", name: "Schedule Publishing", module: "core", enabled: true, gated: false },
+      { id: "time_off", name: "Time-Off Requests", module: "core", enabled: true, gated: false },
+      { id: "expense_management", name: "Expense Management", module: "hr", enabled: true, gated: false },
+      { id: "document_management", name: "Document Management", module: "hr", enabled: true, gated: false },
+      { id: "hr_policies", name: "HR Policy Management", module: "hr", enabled: true, gated: false },
+      { id: "worker_agreements", name: "Worker Agreement Signing", module: "hr", enabled: true, gated: false },
+      { id: "contractor_hub", name: "Contractor Hub", module: "contractor", enabled: true, gated: false },
+      { id: "invoicing", name: "Invoicing & Proposals (Biz Docs)", module: "billing", enabled: true, gated: false },
+      { id: "payroll_audit", name: "Payroll Audit Logs", module: "audit", enabled: true, gated: false },
+      { id: "shift_marketplace", name: "Shift Marketplace", module: "scheduling", enabled: true, gated: false },
+      { id: "worker_groups", name: "Worker Groups", module: "hr", enabled: true, gated: false },
+      { id: "automation_engine", name: "Automation Engine", module: "platform", enabled: true, gated: false },
+      { id: "integration_bus", name: "Integration Event Bus (Webhooks)", module: "platform", enabled: true, gated: false },
+      { id: "notifications", name: "Notifications (Email + SMS)", module: "platform", enabled: true, gated: !(process.env.SMTP_USER && process.env.SMTP_PASS), missingFor: [!process.env.SMTP_USER && "SMTP_USER", !process.env.SMTP_PASS && "SMTP_PASS", !process.env.TWILIO_ACCOUNT_SID && "TWILIO (SMS only)"].filter(Boolean) },
+      { id: "stripe_billing", name: "Stripe Billing & Subscriptions", module: "billing", enabled: !!process.env.STRIPE_SECRET_KEY, gated: !process.env.STRIPE_SECRET_KEY, missingFor: [!process.env.STRIPE_SECRET_KEY && "STRIPE_SECRET_KEY"].filter(Boolean) },
+      { id: "ai_receipt_scan", name: "AI Receipt Scanning", module: "expense", enabled: !!process.env.OPENAI_API_KEY, gated: !process.env.OPENAI_API_KEY, missingFor: [!process.env.OPENAI_API_KEY && "OPENAI_API_KEY"].filter(Boolean) },
+      { id: "biometric_auth", name: "Biometric Authentication (Mobile)", module: "mobile", enabled: true, gated: false },
+      { id: "push_notifications", name: "Push Notifications (Mobile)", module: "mobile", enabled: true, gated: false },
+      { id: "pwa", name: "Progressive Web App (PWA)", module: "web", enabled: true, gated: false },
+      { id: "demo_mode", name: "Interactive Demo Mode", module: "platform", enabled: true, gated: false },
+      { id: "tenant_enforcement", name: "Tenant Subscription Enforcement", module: "platform", enabled: true, gated: false },
+      { id: "platform_audit", name: "Platform Audit Surface", module: "platform", enabled: true, gated: false },
+    ];
+    const registries = {
+      roleRegistry: ["platform_super_admin", "platform_admin", "platform_sales", "platform_implementation", "platform_support", "platform_billing", "platform_auditor", "tenant_owner", "tenant_admin", "tenant_hr_admin", "tenant_payroll_admin", "tenant_finance_admin", "tenant_manager", "tenant_supervisor", "admin", "manager", "supervisor", "employee", "contractor"],
+      tenantLifecycleStates: ["trial_active", "active_paid", "grace", "past_due", "cancelled", "suspended"],
+      moduleGatingRules: [
+        { module: "notifications_email", requiresEnvVars: ["SMTP_USER", "SMTP_PASS"] },
+        { module: "notifications_sms", requiresEnvVars: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER"] },
+        { module: "stripe_billing", requiresEnvVars: ["STRIPE_SECRET_KEY"] },
+        { module: "ai_receipt_scan", requiresEnvVars: ["OPENAI_API_KEY"] },
+      ],
+    };
+    res.json({ features, registries, count: features.length, generatedAt: new Date().toISOString() });
+  });
+
+  // ─── audit/contracts ──────────────────────────────────────────────────────
+  app.get("/api/platform/audit/contracts", requirePlatformAudit, async (_req, res) => {
     try {
-      // Collect all sections
+      const companies = await db.execute(sql`
+        SELECT c.id, c.name, c.subscription_status, c.plan_name, c.is_demo,
+               c.agreement_signed_at, c.agreement_signed_by_user_id, c.gate_override_reason,
+               c.trial_end, c.stripe_customer_id, c.stripe_subscription_id
+        FROM companies c ORDER BY c.name
+      `);
+      const rows = (companies.rows as any[]).map(c => ({
+        companyId: c.id,
+        companyName: c.name,
+        isDemo: c.is_demo,
+        planName: c.plan_name,
+        subscriptionStatus: c.subscription_status,
+        stripeCustomerId: c.stripe_customer_id ? "[redacted]" : null,
+        stripeSubscriptionId: c.stripe_subscription_id ? "[redacted]" : null,
+        agreementSignedAt: c.agreement_signed_at,
+        agreementOnFile: !!c.agreement_signed_at,
+        agreementSignedByUserId: c.agreement_signed_by_user_id,
+        gateOverrideReason: c.gate_override_reason,
+        trialEnd: c.trial_end,
+        accessStatus: c.is_demo ? "demo_exempt" :
+          c.subscription_status === "active_paid" ? "active" :
+          c.subscription_status === "trial_active" ? "trial" :
+          c.subscription_status === "grace" ? "grace" :
+          c.subscription_status === "past_due" ? "blocked_past_due" :
+          c.subscription_status === "cancelled" ? "blocked_cancelled" :
+          c.subscription_status === "suspended" ? "blocked_suspended" : "unknown",
+      }));
+      res.json({ contracts: rows, count: rows.length, generatedAt: new Date().toISOString() });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message || "Failed to load contracts" });
+    }
+  });
+
+  // ─── audit/licensing ──────────────────────────────────────────────────────
+  app.get("/api/platform/audit/licensing", requirePlatformAudit, async (_req, res) => {
+    try {
+      const rows = await db.execute(sql`
+        SELECT c.id, c.name, c.plan_name, c.subscription_status, c.billing_active,
+               c.payment_method_on_file, c.trial_start, c.trial_end, c.trial_used,
+               c.grace_period_end, c.grace_period_days, c.is_demo,
+               (SELECT count(*) FROM workers w WHERE w.company_id = c.id AND w.is_active = true) as active_workers
+        FROM companies c ORDER BY c.name
+      `);
+      const plans = (rows.rows as any[]).map(c => ({
+        companyId: c.id,
+        companyName: c.name,
+        isDemo: c.is_demo,
+        planName: c.plan_name,
+        subscriptionStatus: c.subscription_status,
+        billingActive: c.billing_active,
+        paymentMethodOnFile: c.payment_method_on_file,
+        trialStart: c.trial_start,
+        trialEnd: c.trial_end,
+        trialUsed: c.trial_used,
+        gracePeriodEnd: c.grace_period_end,
+        gracePeriodDays: c.grace_period_days,
+        activeWorkers: parseInt(c.active_workers ?? 0),
+        licenseStatus:
+          c.is_demo ? "demo" :
+          c.subscription_status === "active_paid" ? "licensed" :
+          c.subscription_status === "trial_active" ? "trial" :
+          c.subscription_status === "grace" ? "grace_period" :
+          ["past_due", "cancelled", "suspended"].includes(c.subscription_status) ? "unlicensed" : "unknown",
+      }));
+      const summary = {
+        total: plans.length,
+        licensed: plans.filter(p => p.licenseStatus === "licensed").length,
+        trial: plans.filter(p => p.licenseStatus === "trial").length,
+        demo: plans.filter(p => p.licenseStatus === "demo").length,
+        grace: plans.filter(p => p.licenseStatus === "grace_period").length,
+        unlicensed: plans.filter(p => p.licenseStatus === "unlicensed").length,
+      };
+      res.json({ licensing: plans, summary, generatedAt: new Date().toISOString() });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message || "Failed to load licensing" });
+    }
+  });
+
+  // ─── audit/billing ────────────────────────────────────────────────────────
+  app.get("/api/platform/audit/billing", requirePlatformAudit, async (_req, res) => {
+    try {
+      const rows = await db.execute(sql`
+        SELECT c.id, c.name, c.plan_name, c.subscription_status, c.billing_active,
+               c.payment_method_on_file, c.trial_end, c.grace_period_end, c.is_demo,
+               c.stripe_customer_id, c.stripe_subscription_id
+        FROM companies c ORDER BY c.name
+      `);
+      const tenants = (rows.rows as any[]).map(c => ({
+        companyId: c.id,
+        companyName: c.name,
+        isDemo: c.is_demo,
+        planName: c.plan_name,
+        subscriptionStatus: c.subscription_status,
+        billingActive: c.billing_active,
+        paymentMethodOnFile: c.payment_method_on_file,
+        trialEnd: c.trial_end,
+        gracePeriodEnd: c.grace_period_end,
+        hasStripeCustomer: !!c.stripe_customer_id,
+        hasStripeSubscription: !!c.stripe_subscription_id,
+        billingHealth:
+          c.is_demo ? "exempt" :
+          c.subscription_status === "active_paid" && c.billing_active ? "healthy" :
+          c.subscription_status === "active_paid" && !c.billing_active ? "active_no_billing" :
+          c.subscription_status === "trial_active" ? "trial" :
+          c.subscription_status === "grace" ? "grace" :
+          c.subscription_status === "past_due" ? "past_due" :
+          c.subscription_status === "cancelled" ? "cancelled" :
+          c.subscription_status === "suspended" ? "suspended" : "unknown",
+      }));
+      const summary = {
+        total: tenants.length,
+        healthy: tenants.filter(t => t.billingHealth === "healthy").length,
+        trial: tenants.filter(t => t.billingHealth === "trial").length,
+        exempt: tenants.filter(t => t.billingHealth === "exempt").length,
+        grace: tenants.filter(t => t.billingHealth === "grace").length,
+        pastDue: tenants.filter(t => t.billingHealth === "past_due").length,
+        cancelled: tenants.filter(t => t.billingHealth === "cancelled").length,
+        suspended: tenants.filter(t => t.billingHealth === "suspended").length,
+      };
+      const stripeConfigured = !!process.env.STRIPE_SECRET_KEY;
+      res.json({
+        billing: tenants,
+        summary,
+        stripeConfigured,
+        stripeWebhookConfigured: !!process.env.STRIPE_WEBHOOK_SECRET,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message || "Failed to load billing" });
+    }
+  });
+
+  // ─── audit/logs/app ───────────────────────────────────────────────────────
+  app.get("/api/platform/audit/logs/app", requirePlatformAudit, async (_req, res) => {
+    try {
+      const limit = 100;
+      let events: any[] = [];
+      // Pull from automation_events if it exists
+      try {
+        const evts = await db.execute(sql`
+          SELECT ae.id, ae.company_id, ae.trigger_type, ae.status, ae.created_at,
+                 c.name as company_name
+          FROM automation_events ae
+          LEFT JOIN companies c ON c.id = ae.company_id
+          ORDER BY ae.created_at DESC LIMIT ${limit}
+        `);
+        events = (evts.rows as any[]).map(r => ({
+          type: "automation_event",
+          companyId: r.company_id,
+          companyName: r.company_name,
+          trigger: r.trigger_type,
+          status: r.status,
+          at: r.created_at,
+        }));
+      } catch {}
+      // Also pull from payroll_runs as operational log
+      let payrollLog: any[] = [];
+      try {
+        const pr = await db.execute(sql`
+          SELECT pr.id, pr.company_id, pr.status, pr.pay_date, pr.created_at,
+                 c.name as company_name
+          FROM payroll_runs pr
+          LEFT JOIN companies c ON c.id = pr.company_id
+          ORDER BY pr.created_at DESC LIMIT 20
+        `);
+        payrollLog = (pr.rows as any[]).map(r => ({
+          type: "payroll_run",
+          companyId: r.company_id,
+          companyName: r.company_name,
+          status: r.status,
+          payDate: r.pay_date,
+          at: r.created_at,
+        }));
+      } catch {}
+      res.json({
+        automationEvents: events,
+        payrollLog,
+        totalEvents: events.length,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message || "Failed to load app logs" });
+    }
+  });
+
+  // ─── audit/logs/deploy ────────────────────────────────────────────────────
+  app.get("/api/platform/audit/logs/deploy", requirePlatformAudit, (_req, res) => {
+    let gitLog: any[] = [];
+    try {
+      const raw = execSync("git log --oneline -30 2>/dev/null").toString().trim();
+      gitLog = raw.split("\n").filter(Boolean).map(line => {
+        const [commit, ...rest] = line.split(" ");
+        return { commit, message: rest.join(" ") };
+      });
+    } catch {}
+    let gitDiff: string | null = null;
+    try {
+      gitDiff = execSync("git diff --stat HEAD~1 HEAD 2>/dev/null").toString().trim() || null;
+    } catch {}
+    let remoteDiff: string | null = null;
+    try {
+      remoteDiff = execSync("git log origin/main..HEAD --oneline 2>/dev/null").toString().trim() || null;
+    } catch {}
+    res.json({
+      recentCommits: gitLog,
+      lastDiffStat: gitDiff,
+      undeployedCommits: remoteDiff ? remoteDiff.split("\n").filter(Boolean).map(line => {
+        const [commit, ...rest] = line.split(" ");
+        return { commit, message: rest.join(" ") };
+      }) : [],
+      generatedAt: new Date().toISOString(),
+    });
+  });
+
+  // ─── audit/tenants (enhanced with gate status) ────────────────────────────
+  // NOTE: The original /api/platform/audit/tenants endpoint above is kept.
+  // This new endpoint overlaps with contracts; the UI should use contracts+licensing for detail.
+
+  // ─── Platform audit — mark agreement signed ────────────────────────────────
+  app.post("/api/platform/audit/contracts/:companyId/sign", requirePlatformAudit, async (req, res) => {
+    const { companyId } = req.params;
+    const userId = (req as any).user?.id;
+    try {
+      await db.execute(sql`
+        UPDATE companies
+        SET agreement_signed_at = NOW(),
+            agreement_signed_by_user_id = ${userId}
+        WHERE id = ${companyId}
+      `);
+      res.json({ success: true, signedAt: new Date().toISOString(), signedByUserId: userId });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message || "Failed to update agreement" });
+    }
+  });
+
+  // ─── Platform audit — clear gate override ─────────────────────────────────
+  app.post("/api/platform/audit/licensing/:companyId/gate-override", requirePlatformAudit, async (req, res) => {
+    const { companyId } = req.params;
+    const { reason, subscriptionStatus } = req.body;
+    try {
+      if (subscriptionStatus) {
+        await db.execute(sql`
+          UPDATE companies
+          SET subscription_status = ${subscriptionStatus},
+              gate_override_reason = ${reason || null}
+          WHERE id = ${companyId}
+        `);
+      } else {
+        await db.execute(sql`
+          UPDATE companies SET gate_override_reason = ${reason || null} WHERE id = ${companyId}
+        `);
+      }
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message || "Failed to set gate override" });
+    }
+  });
+
+  app.get("/api/platform/audit/export", requirePlatformAudit, async (_req, res) => {
+    try {
       const git = getGitInfo();
       const mem = process.memoryUsage();
 
@@ -17054,14 +17403,84 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         dbConnected = true;
       } catch {}
 
-      const companyRows = await db.execute(sql`
-        SELECT c.id, c.name, c.plan_name, c.subscription_status, c.trial_end, c.is_demo,
-               (SELECT count(*) FROM workers w WHERE w.company_id = c.id AND w.is_active = true) as worker_count
+      const tenantRows = await db.execute(sql`
+        SELECT c.id, c.name, c.plan_name, c.subscription_status, c.billing_active,
+               c.payment_method_on_file, c.trial_start, c.trial_end, c.trial_used,
+               c.grace_period_end, c.grace_period_days, c.is_demo,
+               c.agreement_signed_at, c.gate_override_reason,
+               c.stripe_customer_id, c.stripe_subscription_id,
+               (SELECT count(*) FROM workers w WHERE w.company_id = c.id AND w.is_active = true) as active_workers
         FROM companies c ORDER BY c.name
       `).catch(() => ({ rows: [] }));
 
+      const tenants = (tenantRows.rows as any[]).map(c => ({
+        companyId: c.id,
+        companyName: c.name,
+        isDemo: c.is_demo,
+        planName: c.plan_name,
+        subscriptionStatus: c.subscription_status,
+        billingActive: c.billing_active,
+        paymentMethodOnFile: c.payment_method_on_file,
+        trialStart: c.trial_start,
+        trialEnd: c.trial_end,
+        trialUsed: c.trial_used,
+        gracePeriodEnd: c.grace_period_end,
+        gracePeriodDays: c.grace_period_days,
+        agreementSignedAt: c.agreement_signed_at,
+        agreementOnFile: !!c.agreement_signed_at,
+        gateOverrideReason: c.gate_override_reason,
+        hasStripeCustomer: !!c.stripe_customer_id,
+        hasStripeSubscription: !!c.stripe_subscription_id,
+        activeWorkers: parseInt(c.active_workers ?? 0),
+        accessStatus:
+          c.is_demo ? "demo_exempt" :
+          c.subscription_status === "active_paid" ? "active" :
+          c.subscription_status === "trial_active" ? "trial" :
+          c.subscription_status === "grace" ? "grace" :
+          c.subscription_status === "past_due" ? "blocked_past_due" :
+          c.subscription_status === "cancelled" ? "blocked_cancelled" :
+          c.subscription_status === "suspended" ? "blocked_suspended" : "unknown",
+      }));
+
+      const required = ["DATABASE_URL", "SESSION_SECRET", "NODE_ENV", "PORT"];
+      const missingRequired = required.filter(k => !process.env[k]);
+
+      let gitLog: any[] = [];
+      try {
+        const raw = execSync("git log --oneline -20 2>/dev/null").toString().trim();
+        gitLog = raw.split("\n").filter(Boolean).map(line => {
+          const [commit, ...rest] = line.split(" ");
+          return { commit, message: rest.join(" ") };
+        });
+      } catch {}
+
+      const features = [
+        { id: "time_tracking", module: "core", enabled: true },
+        { id: "payroll", module: "core", enabled: true },
+        { id: "scheduling", module: "core", enabled: true },
+        { id: "expense_management", module: "hr", enabled: true },
+        { id: "document_management", module: "hr", enabled: true },
+        { id: "worker_agreements", module: "hr", enabled: true },
+        { id: "contractor_hub", module: "contractor", enabled: true },
+        { id: "invoicing", module: "billing", enabled: true },
+        { id: "notifications", module: "platform", enabled: !!(smtpUser && smtpPass) },
+        { id: "stripe_billing", module: "billing", enabled: !!process.env.STRIPE_SECRET_KEY },
+        { id: "ai_receipt_scan", module: "expense", enabled: !!process.env.OPENAI_API_KEY },
+        { id: "tenant_enforcement", module: "platform", enabled: true },
+        { id: "platform_audit", module: "platform", enabled: true },
+      ];
+
+      const summary = {
+        totalTenants: tenants.length,
+        activeTenants: tenants.filter(t => t.accessStatus === "active").length,
+        trialTenants: tenants.filter(t => t.accessStatus === "trial").length,
+        blockedTenants: tenants.filter(t => t.accessStatus.startsWith("blocked")).length,
+        demoTenants: tenants.filter(t => t.isDemo).length,
+      };
+
       res.json({
         exportedAt: new Date().toISOString(),
+        schemaVersion: "2.0",
         system: {
           nodeVersion: process.version,
           platform: process.platform,
@@ -17073,32 +17492,46 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           memoryMb: mem.rss / 1024 / 1024,
           git,
         },
+        deploy: {
+          requiredEnvVars: required,
+          missingRequiredVars: missingRequired,
+          readiness: { overall: missingRequired.length === 0, checks: required.map(k => ({ key: k, set: !!process.env[k] })) },
+          recentCommits: gitLog,
+        },
         integrations: {
-          smtp: {
-            configured: !!(((smtpHostExplicit || smtpHostDerived)) && smtpUser && smtpPass),
-            hasHostExplicit: !!smtpHostExplicit,
-            hasHostDerived: !!smtpHostDerived,
-            derivedHost: smtpHostDerived || null,
-            hasUser: !!smtpUser,
-            hasPass: !!smtpPass,
-            from: process.env.SMTP_FROM || smtpUser || null,
-          },
-          twilio: {
-            configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && twilioPhone),
-            hasSid: !!process.env.TWILIO_ACCOUNT_SID,
-            hasToken: !!process.env.TWILIO_AUTH_TOKEN,
-            hasPhone: !!twilioPhone,
-          },
-          stripe: {
-            configured: !!process.env.STRIPE_SECRET_KEY,
-            hasSecret: !!process.env.STRIPE_SECRET_KEY,
-            hasWebhook: !!process.env.STRIPE_WEBHOOK_SECRET,
-          },
+          smtp: { configured: !!(((smtpHostExplicit || smtpHostDerived)) && smtpUser && smtpPass), hasUser: !!smtpUser, hasPass: !!smtpPass, from: process.env.SMTP_FROM || smtpUser || null },
+          twilio: { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && twilioPhone), hasSid: !!process.env.TWILIO_ACCOUNT_SID, hasToken: !!process.env.TWILIO_AUTH_TOKEN, hasPhone: !!twilioPhone },
+          stripe: { configured: !!process.env.STRIPE_SECRET_KEY, hasSecret: !!process.env.STRIPE_SECRET_KEY, hasWebhook: !!process.env.STRIPE_WEBHOOK_SECRET },
           db: { hasUrl: !!process.env.DATABASE_URL, connected: dbConnected, tableCount },
+          openai: { configured: !!process.env.OPENAI_API_KEY },
         },
         database: { tables },
-        tenants: companyRows.rows,
-        envKeys: Object.keys(process.env).filter(k => !k.toLowerCase().includes("pass") && !k.toLowerCase().includes("secret") && !k.toLowerCase().includes("token") && !k.toLowerCase().includes("key") && !k.toLowerCase().includes("sid")).sort(),
+        features,
+        tenants,
+        summary,
+        registries: {
+          roles: ["platform_super_admin", "platform_admin", "platform_sales", "platform_implementation", "platform_support", "platform_billing", "platform_auditor", "tenant_owner", "tenant_admin", "tenant_hr_admin", "tenant_payroll_admin", "tenant_finance_admin", "tenant_manager", "tenant_supervisor", "admin", "manager", "supervisor", "employee", "contractor"],
+          tenantLifecycleStates: ["trial_active", "active_paid", "grace", "past_due", "cancelled", "suspended"],
+          gatingRules: [
+            { trigger: "trial_expired", condition: "subscription_status=trial_active AND trial_end < NOW()", action: "block" },
+            { trigger: "past_due", condition: "subscription_status=past_due", action: "block" },
+            { trigger: "grace_expired", condition: "subscription_status=grace AND grace_period_end < NOW()", action: "block" },
+            { trigger: "cancelled", condition: "subscription_status=cancelled", action: "block" },
+            { trigger: "suspended", condition: "subscription_status=suspended", action: "block" },
+          ],
+          auditEndpoints: [
+            "/api/platform/audit/system", "/api/platform/audit/deploy", "/api/platform/audit/routes",
+            "/api/platform/audit/features", "/api/platform/audit/roles", "/api/platform/audit/permissions",
+            "/api/platform/audit/integrations", "/api/platform/audit/migrations", "/api/platform/audit/tenants",
+            "/api/platform/audit/contracts", "/api/platform/audit/licensing", "/api/platform/audit/billing",
+            "/api/platform/audit/logs/app", "/api/platform/audit/logs/deploy", "/api/platform/audit/export",
+          ],
+        },
+        envKeys: Object.keys(process.env).filter(k =>
+          !k.toLowerCase().includes("pass") && !k.toLowerCase().includes("secret") &&
+          !k.toLowerCase().includes("token") && !k.toLowerCase().includes("key") &&
+          !k.toLowerCase().includes("sid") && !k.toLowerCase().includes("url")
+        ).sort(),
       });
     } catch (e: any) {
       res.status(500).json({ message: e?.message || "Audit export failed" });
