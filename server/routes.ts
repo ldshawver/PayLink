@@ -771,7 +771,15 @@ export async function registerRoutes(
       if (data.timezone) {
         const existing = await storage.getCompany(req.params.id as string);
         if (existing && existing.timezone !== data.timezone) {
-          console.log(`[TIMEZONE CHANGE] Company ${req.params.id} (${existing.name}): "${existing.timezone}" → "${data.timezone}" by user ${req.session.userId}`);
+          await writeAuditLog({
+            actorUserId: req.session.userId!,
+            targetResource: `company:${req.params.id}`,
+            changeType: "timezone_change",
+            beforeValue: existing.timezone || null,
+            afterValue: data.timezone,
+            note: `Timezone changed on company "${existing.name}". Affects: punch date assignment, overtime calculation, schedule comparisons, payroll period grouping.`,
+            companyId: req.params.id as string,
+          });
         }
       }
       const company = await storage.updateCompany(req.params.id as string, data);
@@ -1486,6 +1494,8 @@ export async function registerRoutes(
 
       for (const item of itemsToCheck) {
         const worker = workerMap[item.workerId];
+        // Skip inactive workers — they may appear in processed items if terminated mid-period
+        if (worker && worker.isActive === false) continue;
         const workerName = worker ? `${worker.firstName} ${worker.lastName}` : `Worker ${item.workerId.slice(0, 8)}`;
         const isContractor = worker?.workerType === "contractor" || worker?.employmentType === "contractor";
         const payType = (item.payType || (worker as any)?.payType || "hourly") as string;
@@ -1510,7 +1520,7 @@ export async function registerRoutes(
               title: `${workerName} — Zero annual salary`,
               detail: `This salaried employee has a $0.00 annual pay rate. Their gross pay of $${grossPay.toFixed(2)} could not be correctly calculated. Update their compensation record before processing.`,
               worker: workerName,
-              fixPath: "/payroll?tab=process",
+              fixPath: "/app/employees",
               fixLabel: "Open Employee Profile",
             });
           }
@@ -1522,7 +1532,7 @@ export async function registerRoutes(
               title: `${workerName} — Zero hourly pay rate`,
               detail: `This hourly employee has a $0.00/hr pay rate. Their gross pay of $${grossPay.toFixed(2)} is likely incorrect. Update their hourly rate before finalizing payroll.`,
               worker: workerName,
-              fixPath: "/payroll?tab=process",
+              fixPath: "/app/employees",
               fixLabel: "Open Employee Profile",
             });
           }
@@ -1540,7 +1550,7 @@ export async function registerRoutes(
                 title: `${workerName} — Gross pay from manual adjustments`,
                 detail: `No time entries found, but gross pay of $${grossPay.toFixed(2)} is sourced from pay adjustments: ${adjDesc}. Verify this is intentional.`,
                 worker: workerName,
-                fixPath: "/payroll?tab=amendments",
+                fixPath: "/app/payroll?tab=amendments",
                 fixLabel: "Review Adjustments",
               });
             } else {
@@ -1550,7 +1560,7 @@ export async function registerRoutes(
                 title: `${workerName} — Gross pay with no recorded hours`,
                 detail: `This hourly employee has $${grossPay.toFixed(2)} gross pay but no time entries for this period. Verify whether hours were recorded, a manual adjustment exists, or this is an error.`,
                 worker: workerName,
-                fixPath: "/time-clock",
+                fixPath: "/app/attendance?tab=timesheet",
                 fixLabel: "Open Time Clock",
               });
             }
@@ -1563,7 +1573,7 @@ export async function registerRoutes(
               title: `${workerName} — High hours this period`,
               detail: `${workerName} has ${totalHours.toFixed(1)} total hours this pay period, which exceeds 60 hours/week. Verify overtime calculation and ensure compliance with labor laws.`,
               worker: workerName,
-              fixPath: "/time-clock",
+              fixPath: "/app/attendance?tab=timesheet",
               fixLabel: "Review Time Entries",
             });
           }
@@ -1574,7 +1584,7 @@ export async function registerRoutes(
             title: `${workerName} — Salary worker with $0 gross pay`,
             detail: `This salaried employee shows $0.00 gross pay. Check their annual salary rate and pay period schedule to ensure correct proration.`,
             worker: workerName,
-            fixPath: "/payroll?tab=process",
+            fixPath: "/app/settings",
             fixLabel: "Open Payroll Settings",
           });
         }
@@ -1593,7 +1603,7 @@ export async function registerRoutes(
               title: `${workerName} — Incomplete tax setup`,
               detail: `Missing: ${missingItems.join("; ")}.`,
               worker: workerName,
-              fixPath: "/payroll?tab=tax-wizard",
+              fixPath: "/app/payroll?tab=tax-wizard",
               fixLabel: "Open Tax Setup",
             });
           }
@@ -1628,7 +1638,7 @@ export async function registerRoutes(
             title: `${w.firstName} ${w.lastName} — Zero pay rate`,
             detail: `This hourly employee has a $0.00/hr pay rate and will be excluded from payroll. Update their compensation before running payroll.`,
             worker: `${w.firstName} ${w.lastName}`,
-            fixPath: "/payroll?tab=process",
+            fixPath: "/app/employees",
             fixLabel: "Open Employee Profile",
           });
         }
@@ -1640,7 +1650,7 @@ export async function registerRoutes(
             title: `${w.firstName} ${w.lastName} — Missing SSN`,
             detail: `SSN is required for W-2 filing. Add this employee's SSN before year-end reporting.`,
             worker: `${w.firstName} ${w.lastName}`,
-            fixPath: "/payroll?tab=tax-wizard",
+            fixPath: "/app/payroll?tab=tax-wizard",
             fixLabel: "Open Tax Setup",
           });
         }
@@ -11100,8 +11110,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       const result = await db.transaction(async (tx) => {
         const companyResult = await tx.execute(sql`
-          INSERT INTO companies (name, subscription_status, plan_name, is_demo, pay_frequency, overtime_threshold, trial_end)
-          VALUES ('Demo Company', 'active_paid', 'professional', TRUE, 'biweekly', 40, ${demoExpiration})
+          INSERT INTO companies (name, subscription_status, plan_name, is_demo, pay_frequency, overtime_threshold, trial_end, timezone, timezone_confirmed)
+          VALUES ('Demo Company', 'active_paid', 'professional', TRUE, 'biweekly', 40, ${demoExpiration}, 'America/New_York', FALSE)
           RETURNING id
         `);
         const companyId = companyResult.rows[0].id as string;

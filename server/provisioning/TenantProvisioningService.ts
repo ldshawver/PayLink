@@ -70,9 +70,9 @@ async function getOrCreateGate(companyId: string): Promise<TenantCommercialGate>
 async function stepCreateTenant(companyId: string): Promise<void> {
   await db
     .update(companies)
-    .set({ subscriptionStatus: "active_paid", billingActive: true })
+    .set({ subscriptionStatus: "active_paid", billingActive: true, timezoneConfirmed: false })
     .where(eq(companies.id, companyId));
-  await writeAuditLog(companyId, "tenant.provisioned", "createTenant", "success", "Company record activated and billing set to active");
+  await writeAuditLog(companyId, "tenant.provisioned", "createTenant", "success", "Company record activated and billing set to active. Timezone confirmation required.");
 }
 
 async function stepAssignSubscription(companyId: string, templateKey: string): Promise<void> {

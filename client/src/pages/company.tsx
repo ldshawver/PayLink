@@ -288,6 +288,7 @@ function CompanyInfoTab() {
   const [form, setForm] = useState(emptyCompanyForm());
   const [editId, setEditId] = useState<string | null>(null);
   const [originalTimezone, setOriginalTimezone] = useState<string>("");
+  const [tzConfirmOpen, setTzConfirmOpen] = useState(false);
 
   const { data: companies, isLoading } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -391,23 +392,76 @@ function CompanyInfoTab() {
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Company</DialogTitle></DialogHeader>
           <CompanyFormFields form={form} setForm={setForm} enterprises={enterprises} legalEntities={legalEntities} />
-          {originalTimezone && form.timezone && form.timezone !== originalTimezone && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300 mt-2" data-testid="timezone-change-warning">
-              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-              <span>Changing the timezone from <strong>{originalTimezone}</strong> to <strong>{form.timezone}</strong> will affect how future punches and payroll are recorded. All future time entries will use the new timezone.</span>
-            </div>
-          )}
           <Button
             data-testid="button-save-company"
             className="w-full mt-2"
             disabled={!form.name || editMutation.isPending}
-            onClick={() => editId && editMutation.mutate({
-              id: editId,
-              data: { ...form, ...(form.timezone ? { timezoneConfirmed: "true" } : {}) },
-            })}
+            onClick={() => {
+              if (!editId) return;
+              const isTimezoneChange = form.timezone && form.timezone !== originalTimezone;
+              if (isTimezoneChange) {
+                setTzConfirmOpen(true);
+              } else {
+                editMutation.mutate({
+                  id: editId,
+                  data: { ...form, ...(form.timezone ? { timezoneConfirmed: "true" } : {}) },
+                });
+              }
+            }}
           >
             {editMutation.isPending ? "Saving..." : "Save Changes"}
           </Button>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={tzConfirmOpen} onOpenChange={setTzConfirmOpen}>
+        <DialogContent className="max-w-md" data-testid="dialog-timezone-confirm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Confirm Timezone Change
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            {originalTimezone ? (
+              <p>You are changing the company timezone from <strong>{originalTimezone}</strong> to <strong>{form.timezone}</strong>.</p>
+            ) : (
+              <p>You are setting the company timezone to <strong>{form.timezone}</strong> for the first time.</p>
+            )}
+            <p className="text-muted-foreground">This will affect the following areas going forward:</p>
+            <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+              <li>Scheduling — shifts and schedule comparisons</li>
+              <li>Attendance — clock-in/out times and timesheet date assignment</li>
+              <li>Payroll — pay period grouping and overtime calculation boundaries</li>
+            </ul>
+            <p className="font-medium text-amber-700 dark:text-amber-400">Historical records will not be retroactively changed. Only future entries will use the new timezone.</p>
+          </div>
+          <div className="flex gap-2 mt-2">
+            <Button
+              variant="outline"
+              className="flex-1"
+              data-testid="button-timezone-cancel"
+              onClick={() => setTzConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="flex-1"
+              data-testid="button-timezone-confirm"
+              disabled={editMutation.isPending}
+              onClick={() => {
+                setTzConfirmOpen(false);
+                if (editId) {
+                  editMutation.mutate({
+                    id: editId,
+                    data: { ...form, timezoneConfirmed: "true" },
+                  });
+                }
+              }}
+            >
+              {editMutation.isPending ? "Saving..." : "Yes, Change Timezone"}
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
 

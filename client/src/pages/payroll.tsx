@@ -1144,23 +1144,39 @@ function PayrollRunCard({
               {/* ── Payroll Preflight Summary (draft only) ─────────────── */}
               {run.status === "draft" && items.length > 0 && (() => {
                 const workerMap = Object.fromEntries(allWorkersForRun.map(w => [w.id, w]));
+                const contractorItems = items.filter(i => {
+                  const w = workerMap[i.workerId];
+                  return w?.workerType === "contractor";
+                });
                 const hourlyItems = items.filter(i => {
                   const w = workerMap[i.workerId];
-                  return !w || w.payType === "hourly" || !w.payType;
+                  return w?.workerType !== "contractor" && (!w || w.payType === "hourly" || !w.payType);
                 });
                 const salaryItems = items.filter(i => {
                   const w = workerMap[i.workerId];
-                  return w?.payType === "salary";
+                  return w?.workerType !== "contractor" && w?.payType === "salary";
                 });
                 const hourlyWithTime = hourlyItems.filter(i => Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0) > 0);
                 const hourlyMissingTime = hourlyItems.filter(i => Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0) === 0);
+                const totalApprovedHours = items.reduce((sum, i) => sum + Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0), 0);
+                const estimatedGross = items.reduce((sum, i) => sum + Number(i.grossPay || 0), 0);
                 return (
-                  <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 p-3 space-y-2" data-testid={`preflight-summary-${run.id}`}>
-                    <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wide">Payroll Preflight</p>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 p-3 space-y-3" data-testid={`preflight-summary-${run.id}`}>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wide">Payroll Preflight</p>
+                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                        <span data-testid={`preflight-total-hours-${run.id}`}>
+                          <span className="font-semibold text-foreground">{totalApprovedHours.toFixed(1)}</span> approved hrs
+                        </span>
+                        <span data-testid={`preflight-estimated-gross-${run.id}`}>
+                          Est. gross: <span className="font-semibold text-foreground">${estimatedGross.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                       <div className="text-center">
                         <p className="text-lg font-bold">{items.length}</p>
-                        <p className="text-xs text-muted-foreground">Workers in run</p>
+                        <p className="text-xs text-muted-foreground">Payees in run</p>
                       </div>
                       <div className="text-center">
                         <p className={`text-lg font-bold ${hourlyWithTime.length > 0 ? "text-emerald-600" : "text-slate-400"}`}>{hourlyWithTime.length}</p>
@@ -1174,6 +1190,10 @@ function PayrollRunCard({
                         <p className="text-lg font-bold text-blue-600">{salaryItems.length}</p>
                         <p className="text-xs text-muted-foreground">Salaried</p>
                       </div>
+                      <div className="text-center" data-testid={`preflight-contractors-${run.id}`}>
+                        <p className={`text-lg font-bold ${contractorItems.length > 0 ? "text-purple-600" : "text-slate-400"}`}>{contractorItems.length}</p>
+                        <p className="text-xs text-muted-foreground">Contractors</p>
+                      </div>
                     </div>
                     {hourlyMissingTime.length > 0 && hourlyMissingTime.length < hourlyItems.length && (
                       <p className="text-xs text-amber-700 dark:text-amber-400">
@@ -1181,9 +1201,23 @@ function PayrollRunCard({
                       </p>
                     )}
                     {processGateErrors.length > 0 && (
-                      <p className="text-xs text-red-600 dark:text-red-400 font-medium">
-                        ✕ {processGateErrors.length} blocker{processGateErrors.length > 1 ? "s" : ""} must be resolved before processing.
-                      </p>
+                      <details className="text-xs" data-testid={`preflight-blockers-${run.id}`}>
+                        <summary className="cursor-pointer text-red-600 dark:text-red-400 font-medium select-none">
+                          ✕ {processGateErrors.length} blocker{processGateErrors.length > 1 ? "s" : ""} must be resolved before processing
+                        </summary>
+                        <ul className="mt-1.5 space-y-1 pl-2 border-l-2 border-red-300 dark:border-red-700">
+                          {processGateErrors.map((e, idx) => (
+                            <li key={idx} className="text-red-700 dark:text-red-300">
+                              <span>{e.message}</span>
+                              {e.fixPath && (
+                                <Link href={e.fixPath}>
+                                  <span className="ml-1 underline underline-offset-2 hover:text-red-900 dark:hover:text-red-100 cursor-pointer">Fix →</span>
+                                </Link>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
                     )}
                   </div>
                 );
