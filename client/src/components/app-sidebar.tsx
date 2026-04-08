@@ -66,6 +66,7 @@ import {
   Stethoscope,
   UserCog,
   KeyRound,
+  Printer,
 } from "lucide-react";
 import {
   Sidebar,
@@ -165,10 +166,13 @@ const TENANT_NAV: NavGroup[] = [
         ],
       },
       {
-        label: "Expenses & Invoices",
+        label: "Expenses",
         icon: Receipt,
         url: "/app/expenses",
-        items: [],
+        items: [
+          { title: "My Expenses", url: "/app/expenses?tab=mine", icon: Receipt },
+          { title: "Submit Receipt", url: "/app/expenses?tab=submit", icon: FilePlus2 },
+        ],
       },
       {
         label: "My Profile",
@@ -277,15 +281,31 @@ const TENANT_NAV: NavGroup[] = [
         ],
       },
       {
-        label: "Invoices & Proposals",
-        icon: FileText,
+        label: "Proposals",
+        icon: FilePlus2,
         url: "/app/biz-docs",
+        roles: ["admin", "manager"],
         items: [
-          { title: "All Documents", url: "/app/biz-docs", icon: FileText },
-          { title: "Invoices", url: "/app/biz-docs?tab=invoices", icon: Receipt },
           { title: "Proposals", url: "/app/biz-docs?tab=proposals", icon: FilePlus2 },
-          { title: "Contractor Hub", url: "/app/contractor-hub", icon: Briefcase },
+          { title: "Business Documents", url: "/app/biz-docs", icon: FileText },
         ],
+      },
+      {
+        label: "Expense Management",
+        icon: Receipt,
+        url: "/app/expenses",
+        roles: ["admin", "manager"],
+        items: [
+          { title: "All Expenses", url: "/app/expenses", icon: Receipt },
+          { title: "Expense Reports", url: "/app/reports?tab=expense", icon: FileBarChart },
+        ],
+      },
+      {
+        label: "Contractor Hub",
+        icon: Briefcase,
+        url: "/app/contractor-hub",
+        roles: ["admin"],
+        items: [],
       },
       {
         label: "Trade Compensation",
@@ -412,7 +432,10 @@ const TENANT_NAV: NavGroup[] = [
         icon: Settings,
         url: "/app/settings",
         roles: ["admin"],
-        items: [],
+        items: [
+          { title: "Company Policies", url: "/app/settings", icon: Shield },
+          { title: "Check Print Calibration", url: "/app/settings#calibration", icon: Printer },
+        ],
       },
       {
         label: "Alert Templates",

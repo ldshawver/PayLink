@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -17,12 +17,17 @@ import {
   FileText,
   Download,
   BookOpen,
+  Printer,
+  CheckCircle2,
+  XCircle,
+  Minus,
+  Plus,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import type { SystemDocument } from "@shared/schema";
+import type { SystemDocument, RemittanceSource } from "@shared/schema";
 import {
   Select,
   SelectContent,
@@ -413,6 +418,156 @@ function SystemDocumentsSection() {
   );
 }
 
+function CheckPrintCalibrationSection() {
+  const { toast } = useToast();
+  const { data: remittanceSources = [], isLoading } = useQuery<RemittanceSource[]>({
+    queryKey: ["/api/remittance-sources"],
+  });
+  const [micrStatus, setMicrStatus] = useState<"checking" | "ok" | "missing">("checking");
+
+  useEffect(() => {
+    document.fonts.ready.then(async () => {
+      try {
+        const loaded = await document.fonts.load("12px MICRNumeric", "1234567890");
+        setMicrStatus(loaded.length > 0 ? "ok" : "missing");
+      } catch {
+        setMicrStatus("missing");
+      }
+    });
+  }, []);
+
+  const updateAlignment = useMutation({
+    mutationFn: async ({ id, verticalAlignment, horizontalAlignment }: { id: string; verticalAlignment: string; horizontalAlignment: string }) =>
+      apiRequest("PATCH", `/api/remittance-sources/${id}`, { verticalAlignment, horizontalAlignment }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/remittance-sources"] });
+      toast({ title: "Alignment saved", description: "Check print offset updated." });
+    },
+    onError: () => toast({ title: "Error", description: "Could not save alignment.", variant: "destructive" }),
+  });
+
+  const [localOffsets, setLocalOffsets] = useState<Record<string, { v: string; h: string }>>({});
+
+  const getOffset = (src: RemittanceSource) => {
+    if (localOffsets[src.id]) return localOffsets[src.id];
+    return { v: String(src.verticalAlignment ?? "0"), h: String(src.horizontalAlignment ?? "0") };
+  };
+
+  const adjust = (id: string, field: "v" | "h", delta: number) => {
+    const current = localOffsets[id] || { v: String(remittanceSources.find(s => s.id === id)?.verticalAlignment ?? "0"), h: String(remittanceSources.find(s => s.id === id)?.horizontalAlignment ?? "0") };
+    const newVal = Math.round((parseFloat(current[field] || "0") + delta) * 100) / 100;
+    setLocalOffsets(prev => ({ ...prev, [id]: { ...current, [field]: String(newVal) } }));
+  };
+
+  const checkSources = remittanceSources.filter(s => s.type === "check" || !s.type);
+
+  return (
+    <div id="calibration">
+      <div className="flex items-center gap-2 mb-4">
+        <Printer className="h-4 w-4 text-primary" />
+        <h2 className="text-sm font-semibold">Check Print Calibration</h2>
+        <p className="text-xs text-muted-foreground ml-2">Adjust vertical/horizontal offsets for check stock alignment</p>
+        <Badge
+          variant={micrStatus === "ok" ? "default" : micrStatus === "missing" ? "destructive" : "secondary"}
+          className="ml-auto text-xs"
+          data-testid="badge-micr-font-status"
+        >
+          {micrStatus === "ok" ? <><CheckCircle2 className="h-3 w-3 mr-1" />MICR font ready</> : micrStatus === "missing" ? <><XCircle className="h-3 w-3 mr-1" />MICR font not detected</> : "Checking…"}
+        </Badge>
+      </div>
+
+      {micrStatus === "missing" && (
+        <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300 flex items-start gap-2" data-testid="banner-micr-missing">
+          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+          <div>
+            <strong>MICR E-13B font not detected.</strong> The font file is installed at <code className="text-xs bg-black/10 px-1 rounded">/fonts/micr-e13b.ttf</code>.
+            If checks still show "MICR not detected", try a hard-refresh (Ctrl+Shift+R) or clear the browser cache. Non-MICR printing is still allowed but checks will not be bank-scannable.
+          </div>
+        </div>
+      )}
+
+      {isLoading ? (
+        <Card><CardContent className="p-6 text-sm text-muted-foreground">Loading remittance sources…</CardContent></Card>
+      ) : checkSources.length === 0 ? (
+        <Card>
+          <CardContent className="p-6 flex flex-col items-center text-center gap-2">
+            <Printer className="h-8 w-8 text-muted-foreground/30" />
+            <p className="text-sm text-muted-foreground">No check remittance sources configured.</p>
+            <p className="text-xs text-muted-foreground/70">Add a remittance source under Payroll → Remittance Sources, then return here to calibrate alignment.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {checkSources.map(src => {
+            const off = getOffset(src);
+            return (
+              <Card key={src.id} data-testid={`card-calibration-${src.id}`}>
+                <CardContent className="p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <div className="font-medium text-sm">{src.name}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        {src.institution || "No institution"} · Routing: {src.routingNumber ? `****${src.routingNumber.slice(-4)}` : "—"} · Account: {src.accountNumber ? `****${src.accountNumber.slice(-4)}` : "—"}
+                      </div>
+                      <div className="text-xs mt-1">
+                        <Badge variant={src.status === "enabled" ? "default" : "secondary"} className="text-xs">{src.status || "enabled"}</Badge>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-6">
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-xs text-muted-foreground font-medium">Vertical (in)</span>
+                        <div className="flex items-center gap-1">
+                          <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => adjust(src.id, "v", -0.01)} data-testid={`button-v-down-${src.id}`}><Minus className="h-3 w-3" /></Button>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            className="h-7 w-20 text-center text-xs"
+                            value={off.v}
+                            onChange={e => setLocalOffsets(prev => ({ ...prev, [src.id]: { ...getOffset(src), v: e.target.value } }))}
+                            data-testid={`input-v-offset-${src.id}`}
+                          />
+                          <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => adjust(src.id, "v", 0.01)} data-testid={`button-v-up-${src.id}`}><Plus className="h-3 w-3" /></Button>
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-xs text-muted-foreground font-medium">Horizontal (in)</span>
+                        <div className="flex items-center gap-1">
+                          <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => adjust(src.id, "h", -0.01)} data-testid={`button-h-left-${src.id}`}><Minus className="h-3 w-3" /></Button>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            className="h-7 w-20 text-center text-xs"
+                            value={off.h}
+                            onChange={e => setLocalOffsets(prev => ({ ...prev, [src.id]: { ...getOffset(src), h: e.target.value } }))}
+                            data-testid={`input-h-offset-${src.id}`}
+                          />
+                          <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => adjust(src.id, "h", 0.01)} data-testid={`button-h-right-${src.id}`}><Plus className="h-3 w-3" /></Button>
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        disabled={updateAlignment.isPending}
+                        onClick={() => updateAlignment.mutate({ id: src.id, verticalAlignment: off.v, horizontalAlignment: off.h })}
+                        data-testid={`button-save-alignment-${src.id}`}
+                      >
+                        <Save className="h-3.5 w-3.5 mr-1.5" />Save Offset
+                      </Button>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground/70 mt-3 leading-relaxed">
+                    Positive vertical = shift down · Negative = shift up · Positive horizontal = shift right · Negative = shift left.
+                    Print a test check on plain paper, overlay on check stock to measure the offset, then enter the difference here.
+                  </p>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { data: companies, isLoading } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -494,6 +649,8 @@ export default function SettingsPage() {
       </div>
 
       <SystemDocumentsSection />
+
+      <CheckPrintCalibrationSection />
 
       <Card>
         <CardHeader className="pb-3">
