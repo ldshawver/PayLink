@@ -13,12 +13,21 @@ import {
   CreditCard,
   ChevronDown,
   ArrowLeft,
-  Settings,
   Grid3X3,
   FileBadge,
   Handshake,
   Rocket,
   Building2,
+  Layers,
+  ToggleLeft,
+  Monitor,
+  Receipt,
+  BarChart3,
+  Headphones,
+  Activity,
+  Banknote,
+  ClipboardList,
+  FileCheck2,
 } from "lucide-react";
 import {
   Sidebar,
@@ -44,6 +53,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
 import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
+import { canAccessPlatformModule, isPlatformRole } from "@/lib/roles";
 
 type PlatformNavItem = {
   title: string;
@@ -55,54 +65,126 @@ type PlatformNavSection = {
   label: string;
   icon: any;
   url: string;
+  module?: string;
   items: PlatformNavItem[];
 };
 
-const platformSections: PlatformNavSection[] = [
+type PlatformNavGroup = {
+  groupLabel: string;
+  module?: string;
+  sections: PlatformNavSection[];
+};
+
+const PLATFORM_NAV: PlatformNavGroup[] = [
   {
-    label: "Console Home",
-    icon: LayoutDashboard,
-    url: "/platform",
-    items: [],
-  },
-  {
-    label: "Sales & Licensing",
-    icon: Handshake,
-    url: "/platform/deal-pipeline",
-    items: [
-      { title: "Deal Pipeline", url: "/platform/deal-pipeline", icon: Kanban },
-      { title: "License Requests", url: "/platform/license-requests", icon: FileBadge },
-      { title: "Agreements", url: "/platform/agreements", icon: FileText },
+    groupLabel: "",
+    sections: [
+      {
+        label: "Console Home",
+        icon: LayoutDashboard,
+        url: "/platform",
+        items: [],
+      },
     ],
   },
   {
-    label: "Customer Success",
-    icon: Rocket,
-    url: "/platform/onboarding-projects",
-    items: [
-      { title: "Onboarding Projects", url: "/platform/onboarding-projects", icon: ClipboardCheck },
-      { title: "Templates", url: "/platform/onboarding-templates", icon: LayoutTemplate },
-      { title: "Engagement Feed", url: "/platform/engagement-feed", icon: Rss },
-      { title: "Contractor Onboarding", url: "/platform/contractor-onboarding", icon: UserCheck },
+    groupLabel: "Licensing",
+    module: "licensing",
+    sections: [
+      {
+        label: "Sales & Deals",
+        icon: Handshake,
+        url: "/platform/deal-pipeline",
+        module: "licensing",
+        items: [
+          { title: "Deal Pipeline", url: "/platform/deal-pipeline", icon: Kanban },
+          { title: "License Requests", url: "/platform/license-requests", icon: FileBadge },
+        ],
+      },
+      {
+        label: "Agreements",
+        icon: FileCheck2,
+        url: "/platform/agreements",
+        module: "licensing",
+        items: [
+          { title: "Templates", url: "/platform/agreements?tab=templates", icon: LayoutTemplate },
+          { title: "Signed Agreements", url: "/platform/agreements?tab=agreements", icon: ClipboardCheck },
+        ],
+      },
     ],
   },
   {
-    label: "Platform Admin",
-    icon: Settings,
-    url: "/platform/provisioning",
-    items: [
-      { title: "Provisioning", url: "/platform/provisioning", icon: ServerCog },
-      { title: "Tenant Setup", url: "/platform/provisioning", icon: Building2 },
-      { title: "Permissions", url: "/platform/permissions", icon: KeyRound },
-      { title: "Platform Audit Log", url: "/platform/audit-log", icon: ShieldCheck },
-      { title: "Billing", url: "/platform/billing", icon: CreditCard },
+    groupLabel: "Implementation",
+    module: "implementation",
+    sections: [
+      {
+        label: "Customer Success",
+        icon: Rocket,
+        url: "/platform/onboarding-projects",
+        module: "implementation",
+        items: [
+          { title: "Onboarding Projects", url: "/platform/onboarding-projects", icon: ClipboardCheck },
+          { title: "Project Templates", url: "/platform/onboarding-templates", icon: LayoutTemplate },
+          { title: "Engagement Feed", url: "/platform/engagement-feed", icon: Rss },
+          { title: "Contractor Onboarding", url: "/platform/contractor-onboarding", icon: UserCheck },
+        ],
+      },
     ],
   },
   {
-    label: "Feature Registry",
-    icon: Grid3X3,
-    url: "/platform/feature-registry",
-    items: [],
+    groupLabel: "Provisioning & Controls",
+    module: "provisioning",
+    sections: [
+      {
+        label: "Tenant Provisioning",
+        icon: ServerCog,
+        url: "/platform/provisioning",
+        module: "provisioning",
+        items: [
+          { title: "Provisioning", url: "/platform/provisioning", icon: ServerCog },
+          { title: "Tenant Setup", url: "/platform/provisioning", icon: Building2 },
+          { title: "Module Access", url: "/platform/permissions", icon: Layers },
+          { title: "Feature Flags", url: "/platform/permissions", icon: ToggleLeft },
+        ],
+      },
+    ],
+  },
+  {
+    groupLabel: "Platform Finance",
+    module: "platform_finance",
+    sections: [
+      {
+        label: "Billing & Subscriptions",
+        icon: CreditCard,
+        url: "/platform/billing",
+        module: "platform_finance",
+        items: [
+          { title: "Billing", url: "/platform/billing", icon: CreditCard },
+          { title: "Subscription Plans", url: "/platform/billing", icon: Receipt },
+          { title: "Platform Invoices", url: "/platform/billing", icon: FileText },
+        ],
+      },
+    ],
+  },
+  {
+    groupLabel: "Oversight",
+    module: "oversight",
+    sections: [
+      {
+        label: "Platform Audit Log",
+        icon: ShieldCheck,
+        url: "/platform/audit-log",
+        module: "oversight",
+        items: [],
+      },
+      {
+        label: "Feature Registry",
+        icon: Grid3X3,
+        url: "/platform/feature-registry",
+        module: "feature_registry",
+        items: [],
+      },
+    ],
   },
 ];
 
@@ -129,6 +211,13 @@ function PlatformLogoutButton() {
 
 export function PlatformSidebar() {
   const [location] = useLocation();
+  const { user } = useAuth();
+  const userRole = user?.role || "";
+
+  const canSeeModule = (module?: string) => {
+    if (!module) return true;
+    return canAccessPlatformModule(userRole, module as any);
+  };
 
   const isActive = (url: string) => {
     if (url === "/platform") return location === "/platform";
@@ -136,9 +225,56 @@ export function PlatformSidebar() {
   };
 
   const isSubItemActive = (url: string) => {
-    const basePath = url.split("?")[0];
-    return location === basePath;
+    const [path, qs] = url.split("?");
+    if (location !== path) return false;
+    if (!qs) return true;
+    const tab = new URLSearchParams(qs).get("tab");
+    const locTab = new URLSearchParams(window.location.search).get("tab");
+    return tab === locTab;
   };
+
+  function renderSection(section: PlatformNavSection) {
+    if (!canSeeModule(section.module)) return null;
+    if (section.items.length === 0) {
+      return (
+        <SidebarMenuItem key={section.label}>
+          <SidebarMenuButton asChild isActive={isActive(section.url)} size="lg">
+            <Link href={section.url} data-testid={`link-platform-nav-${section.label.toLowerCase().replace(/[\s&/]+/g, "-")}`}>
+              <section.icon className="h-5 w-5 text-amber-400" />
+              <span className="text-[15px] font-medium">{section.label}</span>
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      );
+    }
+    return (
+      <Collapsible key={section.label} defaultOpen={isActive(section.url)} className="group/collapsible">
+        <SidebarMenuItem>
+          <CollapsibleTrigger asChild>
+            <SidebarMenuButton isActive={isActive(section.url)} size="lg" data-testid={`link-platform-nav-${section.label.toLowerCase().replace(/[\s&/]+/g, "-")}`}>
+              <section.icon className="h-5 w-5 text-amber-400" />
+              <span className="text-[15px] font-medium">{section.label}</span>
+              <ChevronDown className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
+            </SidebarMenuButton>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <SidebarMenuSub>
+              {section.items.map((item) => (
+                <SidebarMenuSubItem key={item.title}>
+                  <SidebarMenuSubButton asChild isActive={isSubItemActive(item.url)} size="md">
+                    <Link href={item.url} data-testid={`link-platform-subnav-${item.title.toLowerCase().replace(/[\s/&]+/g, "-")}`}>
+                      <item.icon className="h-4 w-4 text-amber-400/70" />
+                      <span className="text-[14px]">{item.title}</span>
+                    </Link>
+                  </SidebarMenuSubButton>
+                </SidebarMenuSubItem>
+              ))}
+            </SidebarMenuSub>
+          </CollapsibleContent>
+        </SidebarMenuItem>
+      </Collapsible>
+    );
+  }
 
   return (
     <Sidebar>
@@ -161,58 +297,47 @@ export function PlatformSidebar() {
       </SidebarHeader>
 
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {platformSections.map((section) => {
-                if (section.items.length === 0) {
-                  return (
-                    <SidebarMenuItem key={section.label}>
-                      <SidebarMenuButton asChild isActive={isActive(section.url)} size="lg">
-                        <Link href={section.url} data-testid={`link-platform-nav-${section.label.toLowerCase().replace(/\s+/g, "-")}`}>
-                          <section.icon className="h-5 w-5 text-amber-400" />
-                          <span className="text-[15px] font-medium">{section.label}</span>
-                        </Link>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                }
+        {PLATFORM_NAV.map((group) => {
+          if (group.module && !canSeeModule(group.module)) return null;
+          const visibleSections = group.sections.filter(s => canSeeModule(s.module));
+          if (visibleSections.length === 0) return null;
 
-                return (
-                  <Collapsible key={section.label} defaultOpen={isActive(section.url)} className="group/collapsible">
-                    <SidebarMenuItem>
-                      <CollapsibleTrigger asChild>
-                        <SidebarMenuButton isActive={isActive(section.url)} size="lg" data-testid={`link-platform-nav-${section.label.toLowerCase().replace(/\s+/g, "-")}`}>
-                          <section.icon className="h-5 w-5 text-amber-400" />
-                          <span className="text-[15px] font-medium">{section.label}</span>
-                          <ChevronDown className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
-                        </SidebarMenuButton>
-                      </CollapsibleTrigger>
-                      <CollapsibleContent>
-                        <SidebarMenuSub>
-                          {section.items.map((item) => (
-                            <SidebarMenuSubItem key={item.title}>
-                              <SidebarMenuSubButton asChild isActive={isSubItemActive(item.url)} size="md">
-                                <Link href={item.url} data-testid={`link-platform-subnav-${item.title.toLowerCase().replace(/[\s/&]/g, "-")}`}>
-                                  <item.icon className="h-4 w-4 text-amber-400/70" />
-                                  <span className="text-[14px]">{item.title}</span>
-                                </Link>
-                              </SidebarMenuSubButton>
-                            </SidebarMenuSubItem>
-                          ))}
-                        </SidebarMenuSub>
-                      </CollapsibleContent>
-                    </SidebarMenuItem>
-                  </Collapsible>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+          if (!group.groupLabel) {
+            return (
+              <SidebarGroup key="home">
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {visibleSections.map(s => renderSection(s))}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            );
+          }
+
+          return (
+            <SidebarGroup key={group.groupLabel}>
+              <SidebarGroupLabel className="text-[11px] uppercase tracking-widest text-amber-400/50 font-semibold px-2 py-1">
+                {group.groupLabel}
+              </SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {visibleSections.map(s => renderSection(s))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          );
+        })}
       </SidebarContent>
 
       <SidebarFooter className="p-4 space-y-3">
-        <div className="text-[10px] text-amber-400/60 uppercase tracking-widest font-semibold px-1">Internal Only — Not Tenant-Facing</div>
+        <div className="text-[10px] text-amber-400/60 uppercase tracking-widest font-semibold px-1">
+          Internal Only — Not Tenant-Facing
+        </div>
+        {isPlatformRole(userRole) && (
+          <div className="text-[10px] text-sidebar-foreground/40 px-1">
+            Role: <span className="text-amber-400/80">{userRole}</span>
+          </div>
+        )}
         <PlatformLogoutButton />
         <div className="text-xs text-sidebar-foreground/50">PayLink Platform v2.0</div>
       </SidebarFooter>

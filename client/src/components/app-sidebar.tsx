@@ -90,6 +90,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
 import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
+import { canAccessPlatformConsole, isManagerOrAbove, isTenantAdminRole } from "@/lib/roles";
 
 type NavItem = {
   title: string;
@@ -167,6 +168,21 @@ const TENANT_NAV: NavGroup[] = [
         url: "/app/expenses",
         items: [],
       },
+      {
+        label: "My Profile",
+        icon: UserCircle,
+        url: "/app/my-profile",
+        items: [
+          { title: "Preferences", url: "/app/my-profile?tab=preferences", icon: Settings },
+          { title: "Pay Stubs", url: "/app/my-profile?tab=paystubs", icon: Receipt },
+          { title: "Documents", url: "/app/my-profile?tab=documents", icon: FileText },
+          { title: "Reviews", url: "/app/my-profile?tab=reviews", icon: Star },
+          { title: "Qualifications", url: "/app/my-profile?tab=qualifications", icon: Zap },
+          { title: "Languages", url: "/app/my-profile?tab=languages", icon: Languages },
+          { title: "Memberships", url: "/app/my-profile?tab=memberships", icon: IdCard },
+          { title: "Notifications", url: "/app/notification-settings", icon: Bell },
+        ],
+      },
     ],
   },
   {
@@ -191,6 +207,12 @@ const TENANT_NAV: NavGroup[] = [
           { title: "User Accounts", url: "/app/employee?tab=user-accounts", icon: Shield, roles: ["admin"] },
         ],
       },
+    ],
+  },
+  {
+    groupLabel: "HR",
+    roles: ["admin", "manager"],
+    sections: [
       {
         label: "HR",
         icon: BadgeCheck,
@@ -401,23 +423,6 @@ const TENANT_NAV: NavGroup[] = [
   },
 ];
 
-// ─── Employee Portal sections (shown to all roles but filtered by role) ───────
-
-const EMPLOYEE_PORTAL_SECTION: NavSection = {
-  label: "My Profile",
-  icon: UserCircle,
-  url: "/app/my-profile",
-  items: [
-    { title: "Preferences", url: "/app/my-profile?tab=preferences", icon: Settings },
-    { title: "Pay Stubs", url: "/app/my-profile?tab=paystubs", icon: Receipt },
-    { title: "Documents", url: "/app/my-profile?tab=documents", icon: FileText },
-    { title: "Reviews", url: "/app/my-profile?tab=reviews", icon: Star },
-    { title: "Qualifications", url: "/app/my-profile?tab=qualifications", icon: Zap },
-    { title: "Languages", url: "/app/my-profile?tab=languages", icon: Languages },
-    { title: "Memberships", url: "/app/my-profile?tab=memberships", icon: IdCard },
-    { title: "Notifications", url: "/app/notification-settings", icon: Bell },
-  ],
-};
 
 function LogoutButton() {
   const { user, logout } = useAuth();
@@ -449,8 +454,8 @@ export function AppSidebar() {
   const locationTab = new URLSearchParams(search).get("tab");
 
   const userRole = user?.role || "employee";
-  const isPlatformAdmin = userRole === "platform_super_admin" || userRole === "admin";
-  const isManager = ["admin", "manager", "supervisor"].includes(userRole);
+  const isPlatformUser = canAccessPlatformConsole(userRole, user?.companyId);
+  const isManager = isManagerOrAbove(userRole);
 
   const hasAccess = (roles?: string[]) => {
     if (!roles || roles.length === 0) return true;
@@ -553,20 +558,8 @@ export function AppSidebar() {
           );
         })}
 
-        {/* Employee Portal section — always visible */}
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-[11px] uppercase tracking-widest text-sidebar-foreground/40 font-semibold px-2 py-1">
-            My Portal
-          </SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {renderSection(EMPLOYEE_PORTAL_SECTION)}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        {/* Platform Console link — only for platform admins */}
-        {isPlatformAdmin && (
+        {/* Platform Console link — only for platform-scoped users */}
+        {isPlatformUser && (
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>

@@ -65,6 +65,7 @@ import { UpgradeModal } from "@/components/upgrade-modal";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
 import { useBiometricAuth } from "@/hooks/use-biometric-auth";
 import { useKeyboardManager, usePageTransition, useAppLifecycle } from "@/hooks/use-native-platform";
+import { canAccessPlatformConsole } from "@/lib/roles";
 
 function RoleGuard({ roles, children }: { roles: string[]; children: React.ReactNode }) {
   const { user } = useAuth();
@@ -198,12 +199,13 @@ function AuthenticatedLayout() {
 
 // ─── Platform Console Router & Layout ────────────────────────────────────────
 
-const PLATFORM_ROLES = ["admin", "platform_super_admin"];
-
 function PlatformRoleGuard({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
-  const allowed = PLATFORM_ROLES.includes(user?.role || "");
+  // canAccessPlatformConsole correctly distinguishes platform_* roles from tenant admins.
+  // A tenant admin with role="admin" AND a companyId will be denied.
+  // A legacy platform admin with role="admin" AND no companyId will be allowed.
+  const allowed = canAccessPlatformConsole(user?.role, user?.companyId);
   if (!allowed) {
     setTimeout(() => setLocation("/app"), 0);
     return null;
