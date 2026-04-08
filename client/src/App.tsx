@@ -68,6 +68,8 @@ const TreasuryPage = lazy(() => import("@/pages/treasury"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
 const PlatformHomePage = lazy(() => import("@/pages/platform-home"));
 const FeatureRegistryPage = lazy(() => import("@/pages/feature-registry"));
+const RoleManagementPage = lazy(() => import("@/pages/role-management"));
+const PlatformAuditPage = lazy(() => import("@/pages/platform-audit"));
 
 // ─── Shared page-loading fallback ────────────────────────────────────────────
 function PageLoader() {
@@ -134,6 +136,7 @@ function AuthenticatedRouter() {
         <Route path="/app/contractor-hub" component={ContractorHubPage} />
         <Route path="/app/treasury">{() => <RoleGuard roles={["admin"]}><TreasuryPage /></RoleGuard>}</Route>
         <Route path="/app/settings">{() => <RoleGuard roles={["admin"]}><SettingsPage /></RoleGuard>}</Route>
+        <Route path="/app/role-management">{() => <RoleGuard roles={["admin"]}><RoleManagementPage /></RoleGuard>}</Route>
         <Route component={NotFound} />
       </Switch>
     </Suspense>
@@ -241,6 +244,7 @@ function PlatformRouter() {
           <Route path="/platform/audit-log" component={AuditLogPage} />
           <Route path="/platform/billing" component={BillingPage} />
           <Route path="/platform/feature-registry" component={FeatureRegistryPage} />
+          <Route path="/platform/audit" component={PlatformAuditPage} />
           <Route component={NotFound} />
         </Switch>
       </Suspense>

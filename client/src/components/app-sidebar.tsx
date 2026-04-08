@@ -424,12 +424,12 @@ const TENANT_NAV: NavGroup[] = [
       {
         label: "Tenant Permissions",
         icon: UserCog,
-        url: "/app/settings?tab=permissions",
+        url: "/app/role-management",
         roles: ["admin"],
         items: [
-          { title: "Role Assignments", url: "/app/settings?tab=permissions", icon: Users },
-          { title: "Custom Roles", url: "/app/settings?tab=custom-roles", icon: Shield },
-          { title: "Permission Overrides", url: "/app/settings?tab=overrides", icon: KeyRound },
+          { title: "Role Assignments", url: "/app/role-management?tab=assignments", icon: Users },
+          { title: "Custom Roles", url: "/app/role-management?tab=custom-roles", icon: Shield },
+          { title: "Permission Overrides", url: "/app/role-management?tab=overrides", icon: KeyRound },
         ],
       },
     ],

@@ -199,6 +199,19 @@ const PLATFORM_NAV: PlatformNavGroup[] = [
         module: "feature_registry",
         items: [],
       },
+      {
+        label: "Deployment Audit",
+        icon: Monitor,
+        url: "/platform/audit",
+        module: "oversight",
+        items: [
+          { title: "System & Runtime", url: "/platform/audit", icon: ServerCog },
+          { title: "Integrations Status", url: "/platform/audit", icon: Activity },
+          { title: "Role Registry", url: "/platform/audit", icon: ShieldCheck },
+          { title: "Tenant Overview", url: "/platform/audit", icon: Building2 },
+          { title: "Export Audit Bundle", url: "/platform/audit", icon: FileText },
+        ],
+      },
     ],
   },
 ];

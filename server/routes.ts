@@ -14358,14 +14358,49 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   // Admin — SMS/notification config status
   app.get("/api/admin/notification-status", requireRole("admin"), async (_req, res) => {
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+    const smtpHostExplicit = process.env.SMTP_HOST;
+    // Derive host from email domain if not explicitly set
+    let smtpHostDerived: string | undefined;
+    if (!smtpHostExplicit && smtpUser && smtpUser.includes("@")) {
+      const domain = smtpUser.split("@")[1].toLowerCase();
+      const knownHosts: Record<string, string> = {
+        "gmail.com": "smtp.gmail.com", "googlemail.com": "smtp.gmail.com",
+        "outlook.com": "smtp.office365.com", "hotmail.com": "smtp.office365.com", "live.com": "smtp.office365.com",
+        "yahoo.com": "smtp.mail.yahoo.com", "sendgrid.net": "smtp.sendgrid.net",
+        "mailgun.org": "smtp.mailgun.org", "zoho.com": "smtp.zoho.com",
+      };
+      smtpHostDerived = knownHosts[domain] ?? `smtp.${domain}`;
+    }
+    const smtpHost = smtpHostExplicit || smtpHostDerived;
+    const smtpConfigured = !!(smtpHost && smtpUser && smtpPass);
+    const smtpMissing = [
+      !smtpHostExplicit && !smtpHostDerived ? "SMTP_HOST" : null,
+      !smtpUser ? "SMTP_USER" : null,
+      !smtpPass ? "SMTP_PASS" : null,
+    ].filter(Boolean);
+
+    const twilioSid = process.env.TWILIO_ACCOUNT_SID;
+    const twilioToken = process.env.TWILIO_AUTH_TOKEN;
+    const twilioPhone = process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_FROM_NUMBER;
+    const twilioMissing = [
+      !twilioSid ? "TWILIO_ACCOUNT_SID" : null,
+      !twilioToken ? "TWILIO_AUTH_TOKEN" : null,
+      !twilioPhone ? "TWILIO_PHONE_NUMBER" : null,
+    ].filter(Boolean);
+
     res.json({
       sms: {
-        configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER),
-        fromNumber: process.env.TWILIO_PHONE_NUMBER ? "configured" : null,
+        configured: !!(twilioSid && twilioToken && twilioPhone),
+        missing: twilioMissing,
+        fromNumber: twilioPhone ? "configured" : null,
       },
       email: {
-        configured: !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS),
-        from: process.env.SMTP_FROM || null,
+        configured: smtpConfigured,
+        missing: smtpMissing,
+        from: process.env.SMTP_FROM || smtpUser || null,
+        derivedHost: smtpHostDerived || null,
       },
     });
   });
@@ -16769,6 +16804,281 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) {
       console.error("[biz-docs/send-email] error:", e);
       res.status(500).json({ message: e?.message || "Failed to send email" });
+    }
+  });
+
+  // ─── Platform Audit Surface (/api/platform/audit/*) ────────────────────────
+  // All endpoints: platform_super_admin only, no secret values returned.
+
+  function requirePlatformAudit(req: any, res: any, next: any) {
+    if (!req.session?.userId) return res.status(401).json({ message: "Not authenticated" });
+    // role is checked after we load the user
+    db.select().from(users).where(eq(users.id, req.session.userId)).then(([u]) => {
+      if (!u || u.role !== "platform_super_admin") return res.status(403).json({ message: "Platform super admin only" });
+      next();
+    }).catch(() => res.status(500).json({ message: "Auth error" }));
+  }
+
+  function getGitInfo(): Record<string, string> {
+    try {
+      const { execSync } = require("child_process");
+      const commit = execSync("git rev-parse --short HEAD 2>/dev/null").toString().trim();
+      const branch = execSync("git rev-parse --abbrev-ref HEAD 2>/dev/null").toString().trim();
+      const date = execSync("git log -1 --format=%ci 2>/dev/null").toString().trim();
+      const author = execSync("git log -1 --format=%an 2>/dev/null").toString().trim();
+      return { commit, branch, date, author };
+    } catch { return {}; }
+  }
+
+  app.get("/api/platform/audit/system", requirePlatformAudit, (_req, res) => {
+    const mem = process.memoryUsage();
+    res.json({
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      uptimeSeconds: Math.floor(process.uptime()),
+      memoryMb: mem.rss / 1024 / 1024,
+      nodeEnv: process.env.NODE_ENV || "development",
+      port: process.env.PORT || 5000,
+      hostname: require("os").hostname(),
+      git: getGitInfo(),
+      generatedAt: new Date().toISOString(),
+    });
+  });
+
+  app.get("/api/platform/audit/integrations", requirePlatformAudit, async (_req, res) => {
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+    const smtpHostExplicit = process.env.SMTP_HOST;
+    let smtpHostDerived: string | undefined;
+    if (!smtpHostExplicit && smtpUser?.includes("@")) {
+      const domain = smtpUser.split("@")[1].toLowerCase();
+      const known: Record<string, string> = {
+        "gmail.com": "smtp.gmail.com", "googlemail.com": "smtp.gmail.com",
+        "outlook.com": "smtp.office365.com", "hotmail.com": "smtp.office365.com", "live.com": "smtp.office365.com",
+        "yahoo.com": "smtp.mail.yahoo.com", "sendgrid.net": "smtp.sendgrid.net",
+        "mailgun.org": "smtp.mailgun.org", "zoho.com": "smtp.zoho.com",
+      };
+      smtpHostDerived = known[domain] ?? `smtp.${domain}`;
+    }
+    const smtpHost = smtpHostExplicit || smtpHostDerived;
+
+    const twilioPhone = process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_FROM_NUMBER;
+
+    let dbConnected = false;
+    let tableCount = 0;
+    try {
+      const tbls = await db.execute(sql`SELECT count(*) as cnt FROM information_schema.tables WHERE table_schema='public'`);
+      tableCount = parseInt((tbls.rows[0] as any)?.cnt ?? 0);
+      dbConnected = true;
+    } catch {}
+
+    res.json({
+      smtp: {
+        configured: !!(smtpHost && smtpUser && smtpPass),
+        hasHost: !!smtpHostExplicit,
+        hasUser: !!smtpUser,
+        hasPass: !!smtpPass,
+        derivedHost: smtpHostDerived || null,
+        from: process.env.SMTP_FROM || smtpUser || null,
+        missing: [!smtpHostExplicit && !smtpHostDerived ? "SMTP_HOST" : null, !smtpUser ? "SMTP_USER" : null, !smtpPass ? "SMTP_PASS" : null].filter(Boolean),
+      },
+      twilio: {
+        configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && twilioPhone),
+        hasSid: !!process.env.TWILIO_ACCOUNT_SID,
+        hasToken: !!process.env.TWILIO_AUTH_TOKEN,
+        hasPhone: !!twilioPhone,
+        missing: [!process.env.TWILIO_ACCOUNT_SID ? "TWILIO_ACCOUNT_SID" : null, !process.env.TWILIO_AUTH_TOKEN ? "TWILIO_AUTH_TOKEN" : null, !twilioPhone ? "TWILIO_PHONE_NUMBER" : null].filter(Boolean),
+      },
+      stripe: {
+        configured: !!(process.env.STRIPE_SECRET_KEY),
+        hasSecret: !!process.env.STRIPE_SECRET_KEY,
+        hasWebhook: !!process.env.STRIPE_WEBHOOK_SECRET,
+      },
+      db: {
+        hasUrl: !!process.env.DATABASE_URL,
+        connected: dbConnected,
+        tableCount,
+      },
+    });
+  });
+
+  app.get("/api/platform/audit/roles", requirePlatformAudit, (_req, res) => {
+    res.json({
+      layers: {
+        "Layer 1 — Platform Console": [
+          { role: "platform_super_admin", description: "Full platform access", aliases: ["admin", "manager", "supervisor"] },
+          { role: "platform_admin", description: "Full access, cannot change super admin settings", aliases: [] },
+          { role: "platform_sales", description: "Sales & Licensing modules only", aliases: [] },
+          { role: "platform_implementation", description: "Implementation/CS modules only", aliases: [] },
+          { role: "platform_support", description: "Read-only tenant data for support", aliases: [] },
+          { role: "platform_billing", description: "Platform Finance / billing only", aliases: [] },
+          { role: "platform_auditor", description: "Read-only audit log", aliases: [] },
+        ],
+        "Layer 2 — Tenant App": [
+          { role: "tenant_owner", description: "Tenant owner, full tenant access", aliases: ["admin"] },
+          { role: "tenant_admin", description: "Tenant admin", aliases: ["admin"] },
+          { role: "tenant_hr_admin", description: "HR administration", aliases: ["admin"] },
+          { role: "tenant_payroll_admin", description: "Payroll administration", aliases: ["admin"] },
+          { role: "tenant_finance_admin", description: "Finance administration", aliases: ["admin"] },
+          { role: "tenant_manager", description: "Tenant manager", aliases: ["manager", "supervisor"] },
+          { role: "tenant_supervisor", description: "Tenant supervisor", aliases: ["supervisor"] },
+          { role: "admin", description: "Legacy admin (maps to tenant_admin)", aliases: [] },
+          { role: "manager", description: "Legacy manager", aliases: [] },
+          { role: "supervisor", description: "Legacy supervisor", aliases: [] },
+        ],
+        "Layer 3 — Employee Portal": [
+          { role: "employee", description: "Standard employee, personal modules only", aliases: [] },
+          { role: "contractor", description: "Contractor, personal + contractor hub", aliases: [] },
+        ],
+      },
+    });
+  });
+
+  app.get("/api/platform/audit/routes", requirePlatformAudit, (_req, res) => {
+    const routes: { method: string; path: string }[] = [];
+    function extractRoutes(stack: any[], prefix = "") {
+      for (const layer of stack || []) {
+        if (layer.route) {
+          const methods = Object.keys(layer.route.methods).map(m => m.toUpperCase());
+          for (const method of methods) {
+            routes.push({ method, path: prefix + layer.route.path });
+          }
+        } else if (layer.name === "router" && layer.handle?.stack) {
+          const routerPath = layer.regexp?.source?.replace(/\\\//g, "/").replace(/\?(?:\(\?[^)]*\))?/g, "").replace(/\^/, "").replace(/\$/, "") || "";
+          extractRoutes(layer.handle.stack, prefix);
+        }
+      }
+    }
+    try { extractRoutes((app as any)._router?.stack || []); } catch {}
+    res.json({ routes: routes.sort((a, b) => a.path.localeCompare(b.path)), count: routes.length });
+  });
+
+  app.get("/api/platform/audit/tenants", requirePlatformAudit, async (_req, res) => {
+    try {
+      const rows = await db.execute(sql`
+        SELECT c.id, c.name, c.plan_name, c.subscription_status, c.trial_end, c.is_demo,
+               (SELECT count(*) FROM workers w WHERE w.company_id = c.id AND w.is_active = true) as worker_count
+        FROM companies c
+        ORDER BY c.name
+      `);
+      res.json({ tenants: rows.rows, count: rows.rows.length });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message || "Failed to load tenants" });
+    }
+  });
+
+  app.get("/api/platform/audit/migrations", requirePlatformAudit, async (_req, res) => {
+    try {
+      // Return list of existing tables and key columns as migration evidence
+      const tables = await db.execute(sql`
+        SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public' ORDER BY table_name
+      `);
+      const migrations = (tables.rows as any[]).map(r => ({
+        key: r.table_name,
+        type: "table",
+        status: "ok",
+      }));
+      res.json({ migrations, count: migrations.length });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message || "Failed to load migrations" });
+    }
+  });
+
+  app.get("/api/platform/audit/permissions", requirePlatformAudit, async (_req, res) => {
+    try {
+      const perms = await db.execute(sql`
+        SELECT r.name as role_name, rp.resource, rp.can_view, rp.can_create, rp.can_edit, rp.can_delete, rp.can_export, rp.can_approve
+        FROM role_permissions rp
+        JOIN roles r ON r.id = rp.role_id
+        ORDER BY r.name, rp.resource
+      `);
+      res.json({ permissions: perms.rows, count: perms.rows.length });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message || "Failed to load permissions" });
+    }
+  });
+
+  app.get("/api/platform/audit/export", requirePlatformAudit, async (req, res) => {
+    try {
+      // Collect all sections
+      const git = getGitInfo();
+      const mem = process.memoryUsage();
+
+      const smtpUser = process.env.SMTP_USER;
+      const smtpPass = process.env.SMTP_PASS;
+      const smtpHostExplicit = process.env.SMTP_HOST;
+      let smtpHostDerived: string | undefined;
+      if (!smtpHostExplicit && smtpUser?.includes("@")) {
+        const domain = smtpUser.split("@")[1].toLowerCase();
+        const known: Record<string, string> = {
+          "gmail.com": "smtp.gmail.com", "googlemail.com": "smtp.gmail.com",
+          "outlook.com": "smtp.office365.com", "hotmail.com": "smtp.office365.com",
+          "yahoo.com": "smtp.mail.yahoo.com", "sendgrid.net": "smtp.sendgrid.net",
+        };
+        smtpHostDerived = known[domain] ?? `smtp.${domain}`;
+      }
+      const twilioPhone = process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_FROM_NUMBER;
+
+      let dbConnected = false;
+      let tableCount = 0;
+      let tables: string[] = [];
+      try {
+        const tbls = await db.execute(sql`SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name`);
+        tables = (tbls.rows as any[]).map(r => r.table_name);
+        tableCount = tables.length;
+        dbConnected = true;
+      } catch {}
+
+      const companyRows = await db.execute(sql`
+        SELECT c.id, c.name, c.plan_name, c.subscription_status, c.trial_end, c.is_demo,
+               (SELECT count(*) FROM workers w WHERE w.company_id = c.id AND w.is_active = true) as worker_count
+        FROM companies c ORDER BY c.name
+      `).catch(() => ({ rows: [] }));
+
+      res.json({
+        exportedAt: new Date().toISOString(),
+        system: {
+          nodeVersion: process.version,
+          platform: process.platform,
+          arch: process.arch,
+          nodeEnv: process.env.NODE_ENV || "development",
+          port: process.env.PORT || 5000,
+          hostname: require("os").hostname(),
+          uptimeSeconds: Math.floor(process.uptime()),
+          memoryMb: mem.rss / 1024 / 1024,
+          git,
+        },
+        integrations: {
+          smtp: {
+            configured: !!(((smtpHostExplicit || smtpHostDerived)) && smtpUser && smtpPass),
+            hasHostExplicit: !!smtpHostExplicit,
+            hasHostDerived: !!smtpHostDerived,
+            derivedHost: smtpHostDerived || null,
+            hasUser: !!smtpUser,
+            hasPass: !!smtpPass,
+            from: process.env.SMTP_FROM || smtpUser || null,
+          },
+          twilio: {
+            configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && twilioPhone),
+            hasSid: !!process.env.TWILIO_ACCOUNT_SID,
+            hasToken: !!process.env.TWILIO_AUTH_TOKEN,
+            hasPhone: !!twilioPhone,
+          },
+          stripe: {
+            configured: !!process.env.STRIPE_SECRET_KEY,
+            hasSecret: !!process.env.STRIPE_SECRET_KEY,
+            hasWebhook: !!process.env.STRIPE_WEBHOOK_SECRET,
+          },
+          db: { hasUrl: !!process.env.DATABASE_URL, connected: dbConnected, tableCount },
+        },
+        database: { tables },
+        tenants: companyRows.rows,
+        envKeys: Object.keys(process.env).filter(k => !k.toLowerCase().includes("pass") && !k.toLowerCase().includes("secret") && !k.toLowerCase().includes("token") && !k.toLowerCase().includes("key") && !k.toLowerCase().includes("sid")).sort(),
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message || "Audit export failed" });
     }
   });
 

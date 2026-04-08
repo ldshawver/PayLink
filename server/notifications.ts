@@ -32,11 +32,31 @@ export interface ScheduleNotificationPayload {
   scheduleViewUrl: string;
 }
 
+function deriveSmtpHost(email?: string): string | undefined {
+  if (!email || !email.includes("@")) return undefined;
+  const domain = email.split("@")[1].toLowerCase();
+  const knownHosts: Record<string, string> = {
+    "gmail.com": "smtp.gmail.com",
+    "googlemail.com": "smtp.gmail.com",
+    "outlook.com": "smtp.office365.com",
+    "hotmail.com": "smtp.office365.com",
+    "live.com": "smtp.office365.com",
+    "yahoo.com": "smtp.mail.yahoo.com",
+    "yahoo.co.uk": "smtp.mail.yahoo.co.uk",
+    "sendgrid.net": "smtp.sendgrid.net",
+    "mailgun.org": "smtp.mailgun.org",
+    "icloud.com": "smtp.mail.me.com",
+    "me.com": "smtp.mail.me.com",
+    "zoho.com": "smtp.zoho.com",
+  };
+  return knownHosts[domain] ?? `smtp.${domain}`;
+}
+
 export function getTransporter() {
-  const host = process.env.SMTP_HOST;
-  const port = parseInt(process.env.SMTP_PORT || "587");
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
+  const host = process.env.SMTP_HOST || deriveSmtpHost(user);
+  const port = parseInt(process.env.SMTP_PORT || "587");
   const fromAddress = process.env.SMTP_FROM || user || "noreply@paylink.app";
   const useTls = process.env.SMTP_TLS === "true";
 

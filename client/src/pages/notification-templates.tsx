@@ -51,8 +51,8 @@ interface NotificationTemplate {
 }
 
 interface NotifStatus {
-  email: { configured: boolean; from: string | null };
-  sms: { configured: boolean; fromNumber: string | null };
+  email: { configured: boolean; from: string | null; missing?: string[]; derivedHost?: string | null };
+  sms: { configured: boolean; fromNumber: string | null; missing?: string[] };
 }
 
 function VariableBadge({ v }: { v: string }) {
@@ -388,16 +388,32 @@ export default function NotificationTemplatesPage() {
 
       {/* Channel status */}
       {status && (
-        <div className="flex flex-wrap gap-3">
-          <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm border ${status.email.configured ? "bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950 dark:border-emerald-800 dark:text-emerald-300" : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-300"}`}>
-            {status.email.configured ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+        <div className="flex flex-col gap-2">
+          <div className={`flex flex-wrap items-center gap-2 rounded-lg px-3 py-2 text-sm border ${status.email.configured ? "bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950 dark:border-emerald-800 dark:text-emerald-300" : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-300"}`}>
+            {status.email.configured ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
             <span className="font-medium">Email (SMTP):</span>
-            <span>{status.email.configured ? `Configured — from ${status.email.from}` : "Not configured"}</span>
+            {status.email.configured
+              ? <span>Configured — from {status.email.from}{status.email.derivedHost ? ` (host auto-derived: ${status.email.derivedHost})` : ""}</span>
+              : <span className="flex flex-wrap items-center gap-1">
+                  Not configured — missing:&nbsp;
+                  {(status.email.missing ?? ["SMTP_HOST", "SMTP_USER", "SMTP_PASS"]).map((v: string) => (
+                    <code key={v} className="text-xs bg-amber-200/60 dark:bg-amber-900/60 px-1.5 py-0.5 rounded font-mono">{v}</code>
+                  ))}
+                </span>
+            }
           </div>
-          <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm border ${status.sms.configured ? "bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950 dark:border-emerald-800 dark:text-emerald-300" : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-300"}`}>
-            {status.sms.configured ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+          <div className={`flex flex-wrap items-center gap-2 rounded-lg px-3 py-2 text-sm border ${status.sms.configured ? "bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950 dark:border-emerald-800 dark:text-emerald-300" : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-300"}`}>
+            {status.sms.configured ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
             <span className="font-medium">SMS (Twilio):</span>
-            <span>{status.sms.configured ? "Configured" : "Not configured"}</span>
+            {status.sms.configured
+              ? <span>Configured</span>
+              : <span className="flex flex-wrap items-center gap-1">
+                  Not configured — missing:&nbsp;
+                  {(status.sms.missing ?? ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER"]).map((v: string) => (
+                    <code key={v} className="text-xs bg-amber-200/60 dark:bg-amber-900/60 px-1.5 py-0.5 rounded font-mono">{v}</code>
+                  ))}
+                </span>
+            }
           </div>
         </div>
       )}
