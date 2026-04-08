@@ -359,13 +359,13 @@ function PermissionOverridesTab() {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
 
-  const { data: matrix, isLoading } = useQuery<MatrixData>({ queryKey: ["/api/admin/permission-matrix"] });
+  const { data: matrix, isLoading } = useQuery<MatrixData>({ queryKey: ["/api/permissions/matrix"] });
 
   const updatePerm = useMutation({
     mutationFn: (vars: { id: string; field: string; value: boolean }) =>
       apiRequest("PATCH", `/api/role-permissions/${vars.id}`, { [vars.field]: vars.value }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/permission-matrix"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/permissions/matrix"] });
       toast({ title: "Permission updated" });
     },
     onError: () => toast({ title: "Failed to update permission", variant: "destructive" }),
