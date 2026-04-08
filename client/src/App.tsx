@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
+import { PlatformSidebar } from "@/components/platform-sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ClockInButton } from "@/components/clock-in-button";
@@ -53,6 +54,8 @@ import BizDocsPage from "@/pages/biz-docs";
 import ContractorHubPage from "@/pages/contractor-hub";
 import TreasuryPage from "@/pages/treasury";
 import SettingsPage from "@/pages/settings";
+import PlatformHomePage from "@/pages/platform-home";
+import FeatureRegistryPage from "@/pages/feature-registry";
 import { Loader2, Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -95,12 +98,13 @@ function AuthenticatedRouter() {
       <Route path="/app/payroll-audit">{() => <RoleGuard roles={["admin", "manager"]}><PayrollAuditPage /></RoleGuard>}</Route>
       <Route path="/app/customers">{() => <RoleGuard roles={["admin", "manager"]}><CustomersPage /></RoleGuard>}</Route>
       <Route path="/app/invoices">{() => <RoleGuard roles={["admin", "manager"]}><InvoicesPage /></RoleGuard>}</Route>
-      <Route path="/app/billing">{() => <RoleGuard roles={["admin"]}><BillingPage /></RoleGuard>}</Route>
-      <Route path="/app/deal-pipeline">{() => <RoleGuard roles={["admin", "manager"]}><DealPipelinePage /></RoleGuard>}</Route>
-      <Route path="/app/onboarding-projects">{() => <RoleGuard roles={["admin", "manager"]}><OnboardingProjectsPage /></RoleGuard>}</Route>
-      <Route path="/app/onboarding-templates">{() => <RoleGuard roles={["admin", "manager"]}><OnboardingTemplatesPage /></RoleGuard>}</Route>
-      <Route path="/app/engagement-feed">{() => <RoleGuard roles={["admin", "manager"]}><EngagementFeedPage /></RoleGuard>}</Route>
-      <Route path="/app/license-requests">{() => <RoleGuard roles={["admin"]}><LicenseRequestsPage /></RoleGuard>}</Route>
+      <Route path="/app/billing">{() => <PlatformRedirect to="/platform/billing" />}</Route>
+      {/* Platform-owner routes — redirect to /platform/* */}
+      <Route path="/app/deal-pipeline">{() => <PlatformRedirect to="/platform/deal-pipeline" />}</Route>
+      <Route path="/app/onboarding-projects">{() => <PlatformRedirect to="/platform/onboarding-projects" />}</Route>
+      <Route path="/app/onboarding-templates">{() => <PlatformRedirect to="/platform/onboarding-templates" />}</Route>
+      <Route path="/app/engagement-feed">{() => <PlatformRedirect to="/platform/engagement-feed" />}</Route>
+      <Route path="/app/license-requests">{() => <PlatformRedirect to="/platform/license-requests" />}</Route>
       <Route path="/app/print-check/:runId">{() => <RoleGuard roles={["admin", "manager"]}><PrintCheckPage /></RoleGuard>}</Route>
       <Route path="/app/print-expense-check" component={PrintExpenseCheckPage} />
       <Route path="/app/my-profile" component={MyProfilePage} />
@@ -108,11 +112,11 @@ function AuthenticatedRouter() {
       <Route path="/app/notification-templates" component={NotificationTemplatesPage} />
       <Route path="/app/messages" component={MessagesPage} />
       <Route path="/app/trade-compensation">{() => <RoleGuard roles={["admin", "manager"]}><TradeCompensationPage /></RoleGuard>}</Route>
-      <Route path="/app/agreements">{() => <RoleGuard roles={["admin", "manager"]}><AgreementsPage /></RoleGuard>}</Route>
-      <Route path="/app/contractor-onboarding">{() => <RoleGuard roles={["admin", "manager"]}><OnboardingAdminPage /></RoleGuard>}</Route>
-      <Route path="/app/permissions">{() => <RoleGuard roles={["admin", "platform_super_admin"]}><PermissionsPage /></RoleGuard>}</Route>
-      <Route path="/app/provisioning">{() => <RoleGuard roles={["admin"]}><ProvisioningPage /></RoleGuard>}</Route>
-      <Route path="/app/audit-log">{() => <RoleGuard roles={["admin", "platform_super_admin"]}><AuditLogPage /></RoleGuard>}</Route>
+      <Route path="/app/agreements">{() => <PlatformRedirect to="/platform/agreements" />}</Route>
+      <Route path="/app/contractor-onboarding">{() => <PlatformRedirect to="/platform/contractor-onboarding" />}</Route>
+      <Route path="/app/permissions">{() => <PlatformRedirect to="/platform/permissions" />}</Route>
+      <Route path="/app/provisioning">{() => <PlatformRedirect to="/platform/provisioning" />}</Route>
+      <Route path="/app/audit-log">{() => <PlatformRedirect to="/platform/audit-log" />}</Route>
       <Route path="/app/biz-docs" component={BizDocsPage} />
       <Route path="/app/contractor-hub" component={ContractorHubPage} />
       <Route path="/app/treasury">{() => <RoleGuard roles={["admin"]}><TreasuryPage /></RoleGuard>}</Route>
@@ -190,6 +194,104 @@ function AuthenticatedLayout() {
       </div>
     </SidebarProvider>
   );
+}
+
+// ─── Platform Console Router & Layout ────────────────────────────────────────
+
+const PLATFORM_ROLES = ["admin", "platform_super_admin"];
+
+function PlatformRoleGuard({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const [, setLocation] = useLocation();
+  const allowed = PLATFORM_ROLES.includes(user?.role || "");
+  if (!allowed) {
+    setTimeout(() => setLocation("/app"), 0);
+    return null;
+  }
+  return <>{children}</>;
+}
+
+function PlatformRouter() {
+  return (
+    <PlatformRoleGuard>
+      <Switch>
+        <Route path="/platform" component={PlatformHomePage} />
+        <Route path="/platform/deal-pipeline" component={DealPipelinePage} />
+        <Route path="/platform/license-requests" component={LicenseRequestsPage} />
+        <Route path="/platform/agreements" component={AgreementsPage} />
+        <Route path="/platform/onboarding-projects" component={OnboardingProjectsPage} />
+        <Route path="/platform/onboarding-templates" component={OnboardingTemplatesPage} />
+        <Route path="/platform/engagement-feed" component={EngagementFeedPage} />
+        <Route path="/platform/contractor-onboarding" component={OnboardingAdminPage} />
+        <Route path="/platform/provisioning" component={ProvisioningPage} />
+        <Route path="/platform/permissions" component={PermissionsPage} />
+        <Route path="/platform/audit-log" component={AuditLogPage} />
+        <Route path="/platform/billing" component={BillingPage} />
+        <Route path="/platform/feature-registry" component={FeatureRegistryPage} />
+        <Route component={NotFound} />
+      </Switch>
+    </PlatformRoleGuard>
+  );
+}
+
+function PlatformHeader() {
+  const isMobile = useIsMobile();
+  const { toggleSidebar } = useSidebar();
+
+  if (!isMobile) {
+    return (
+      <header className="flex items-center justify-between gap-2 p-2 border-b sticky top-0 z-50 bg-background">
+        <SidebarTrigger data-testid="button-platform-sidebar-toggle" />
+        <div className="flex items-center gap-3">
+          <ThemeToggle />
+        </div>
+      </header>
+    );
+  }
+
+  return (
+    <header className="flex items-center justify-between gap-2 px-3 py-2 border-b sticky top-0 z-50 bg-gradient-to-r from-slate-900 to-amber-900 text-white shadow-md">
+      <button
+        onClick={toggleSidebar}
+        data-testid="button-platform-sidebar-toggle-mobile"
+        className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-white/20 hover:bg-white/30 transition-colors"
+      >
+        <Menu className="h-6 w-6" />
+        <span className="text-sm font-bold">Menu</span>
+      </button>
+      <span className="text-sm font-bold tracking-wide">Platform Console</span>
+      <ThemeToggle />
+    </header>
+  );
+}
+
+function PlatformLayout() {
+  const style = {
+    "--sidebar-width": "16rem",
+    "--sidebar-width-icon": "3rem",
+  };
+
+  return (
+    <SidebarProvider style={style as React.CSSProperties}>
+      <div className="flex h-screen w-full overflow-hidden">
+        <PlatformSidebar />
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+          <PlatformHeader />
+          <main className="flex-1 overflow-y-auto overflow-x-hidden">
+            <PlatformRouter />
+          </main>
+        </div>
+      </div>
+    </SidebarProvider>
+  );
+}
+
+// ─── Old /app/* platform route → /platform/* redirects ───────────────────────
+
+function PlatformRedirect({ to }: { to: string }) {
+  const [, setLocation] = useLocation();
+  useEffect(() => { setLocation(to); }, [to, setLocation]);
+  return <div className="flex items-center justify-center min-h-screen"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>;
 }
 
 function OnboardingRedirect({ children }: { children: React.ReactNode }) {
@@ -322,6 +424,15 @@ function AppContent() {
       <BiometricGate>
         <RedirectToLogin />
       </BiometricGate>
+    );
+  }
+
+  if (location.startsWith("/platform")) {
+    return (
+      <OnboardingRedirect>
+        <NativeFeatureInit />
+        <PlatformLayout />
+      </OnboardingRedirect>
     );
   }
 
