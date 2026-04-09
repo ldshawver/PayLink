@@ -9695,24 +9695,43 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Check Print Audit Log ─────────────────────────────────────────────────
+  app.get("/api/check-print-audit", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin", "platform_support"), async (req, res) => {
+    try {
+      const { companyId, runId, limit = "100" } = req.query as Record<string, string>;
+      let query = `SELECT * FROM check_print_audit_logs`;
+      const conditions: string[] = [];
+      const params: any[] = [];
+      if (companyId) { conditions.push(`company_id = $${params.length + 1}`); params.push(companyId); }
+      if (runId) { conditions.push(`payroll_run_id = $${params.length + 1}`); params.push(runId); }
+      if (conditions.length > 0) query += ` WHERE ${conditions.join(" AND ")}`;
+      query += ` ORDER BY created_at DESC LIMIT ${Math.min(parseInt(limit) || 100, 500)}`;
+      const result = await db.execute(sql.raw(query));
+      res.json((result as any).rows || result);
+    } catch (error: any) {
+      res.status(500).json({ message: "Failed to fetch check audit log", error: error.message });
+    }
+  });
+
   app.post("/api/check-print-audit", requireAuth, async (req, res) => {
     try {
       const userId = (req.session as any)?.userId;
       const {
         payrollRunId, companyId, checkCount, totalAmount, fundingAccountId,
         micrValidation, validationErrors, printBlocked, templateId,
+        eventType, workerId, checkNumber, notes,
       } = req.body;
       await db.execute(sql`
         INSERT INTO check_print_audit_logs (
           payroll_run_id, company_id, initiated_by_user_id,
           check_count, total_amount, funding_account_id,
           micr_validation, validation_errors, print_blocked,
-          template_id, render_engine
+          template_id, render_engine, event_type, worker_id, check_number, notes
         ) VALUES (
           ${payrollRunId || null}, ${companyId || null}, ${userId || null},
           ${checkCount || 0}, ${totalAmount || 0}, ${fundingAccountId || null},
           ${micrValidation || "unknown"}, ${JSON.stringify(validationErrors || [])},
-          ${printBlocked ? true : false}, ${templateId || null}, 'browser-print'
+          ${printBlocked ? true : false}, ${templateId || null}, 'browser-print',
+          ${eventType || 'print'}, ${workerId || null}, ${checkNumber || null}, ${notes || null}
         )
       `);
       res.json({ success: true });

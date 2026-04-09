@@ -1,9 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
 import { useParams, useSearch } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Printer, ArrowLeft, FileText, Lock, AlertTriangle, XCircle, CheckCircle2, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Printer, ArrowLeft, FileText, Lock, AlertTriangle, XCircle, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, Settings2, Save, RefreshCcw, Crosshair } from "lucide-react";
 import { Link } from "wouter";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import type { PayrollRun, PayrollItem, Worker, Company, TaxDeduction, CheckTemplate, PayStubAccount, AccrualAccount, AccrualBalance, PayStubAmendment, RemittanceSource } from "@shared/schema";
 
 function numberToWords(num: number): string {
@@ -41,6 +45,24 @@ const DEFAULT_CONFIG = {
   showYtdTotals: true,
   showPayPeriod: true,
   showEmployeeAddress: true,
+};
+
+type CheckCalibration = {
+  globalTop: number;
+  globalLeft: number;
+  dateTop: number;
+  amountWordsTop: number;
+  memoTop: number;
+  signatureTop: number;
+};
+
+const DEFAULT_CALIBRATION: CheckCalibration = {
+  globalTop: 0,
+  globalLeft: 0,
+  dateTop: 0,
+  amountWordsTop: 0,
+  memoTop: 0,
+  signatureTop: 0,
 };
 
 function CompanyHeader({ company, config }: { company: Company; config: Record<string, boolean> }) {
@@ -148,8 +170,11 @@ function MicrLine({ routing, account, checkNum }: { routing: string; account: st
 
 function CheckPortion({
   item, worker, company, run, config, overrideNetPay, remittanceSources = [],
+  calibration, showGuides = false,
 }: {
   item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; config: Record<string, boolean>; overrideNetPay?: number; remittanceSources?: RemittanceSource[];
+  calibration?: CheckCalibration;
+  showGuides?: boolean;
 }) {
   const remittanceSource = remittanceSources.find(s => s.companyId === company.id && s.status === "enabled") || remittanceSources.find(s => s.companyId === company.id);
   const netPay = overrideNetPay !== undefined ? overrideNetPay : Number(item.netPay || 0);
@@ -168,14 +193,22 @@ function CheckPortion({
   const micrReady = routing.length === 9 && account.length >= 4 && !!(item.checkNumber);
   const institutionName = remittanceSource?.institution || "";
 
-  // Alignment offsets from remittance source (in inches, positive = down/right)
-  const vOffset = Number(remittanceSource?.verticalAlignment || 0);
-  const hOffset = Number(remittanceSource?.horizontalAlignment || 0);
+  // Calibration offsets — prefer explicit calibration prop, fall back to remittance source legacy fields
+  const cal = calibration ?? DEFAULT_CALIBRATION;
+  const gTop = cal.globalTop !== 0 ? cal.globalTop : Number(remittanceSource?.verticalAlignment || 0);
+  const gLeft = cal.globalLeft !== 0 ? cal.globalLeft : Number(remittanceSource?.horizontalAlignment || 0);
+
+  // Guide marker helper — only visible in calibration test mode
+  const guideStyle = (color: string): React.CSSProperties => showGuides ? {
+    outline: `2px dashed ${color}`,
+    outlineOffset: "2px",
+    position: "relative",
+  } : {};
 
   return (
     // Total height: 3.667in.  Bottom 0.625in reserved for MICR band (ANSI X9.27).
     // Content area: top 3.042in with standard check-stock layout.
-    <div style={{ height: "3.667in", boxSizing: "border-box", display: "flex", flexDirection: "column", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif", position: "relative", top: vOffset ? `${vOffset}in` : undefined, left: hOffset ? `${hOffset}in` : undefined }}>
+    <div style={{ height: "3.667in", boxSizing: "border-box", display: "flex", flexDirection: "column", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif", position: "relative", top: gTop ? `${gTop}in` : undefined, left: gLeft ? `${gLeft}in` : undefined, outline: showGuides ? "2px dashed #7c3aed" : undefined }}>
 
       {/* ── CONTENT AREA (top 3.042in) ── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "0.22in 0.55in 0.18in" }}>
@@ -210,7 +243,8 @@ function CheckPortion({
           </div>
 
           {/* Right: check number in bordered box + date + void notice + institution */}
-          <div style={{ textAlign: "right", minWidth: "1.4in" }}>
+          <div style={{ textAlign: "right", minWidth: "1.4in", marginTop: cal.dateTop ? `${cal.dateTop}in` : undefined, ...guideStyle("#dc2626") }}>
+            {showGuides && <div style={{ fontSize: "7px", color: "#dc2626", fontWeight: "bold", textAlign: "left" }}>■ DATE FIELD</div>}
             {config.showCheckNumber && (
               <div style={{
                 border: "1.5px solid #000",
@@ -307,7 +341,8 @@ function CheckPortion({
         )}
 
         {/* ROW 3: Written-out dollar amount + protective fill to right edge */}
-        <div style={{ display: "flex", alignItems: "baseline", borderBottom: "1px solid #000", paddingBottom: "4px", marginBottom: "0.17in" }}>
+        <div style={{ display: "flex", alignItems: "baseline", borderBottom: "1px solid #000", paddingBottom: "4px", marginBottom: "0.17in", marginTop: cal.amountWordsTop ? `${cal.amountWordsTop}in` : undefined, ...guideStyle("#2563eb") }}>
+          {showGuides && <span style={{ fontSize: "7px", color: "#2563eb", fontWeight: "bold", flexShrink: 0, marginRight: "6px" }}>■ AMT WORDS</span>}
           <span style={{ fontSize: "11px", fontWeight: "600", flexShrink: 0, whiteSpace: "nowrap" }}>
             {numberToWords(netPay)} Dollars
           </span>
@@ -334,7 +369,8 @@ function CheckPortion({
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
 
           {/* Memo */}
-          <div>
+          <div style={{ marginTop: cal.memoTop ? `${cal.memoTop}in` : undefined, ...guideStyle("#16a34a") }}>
+            {showGuides && <div style={{ fontSize: "7px", color: "#16a34a", fontWeight: "bold" }}>■ MEMO</div>}
             <div style={{ fontSize: "8px", color: "#666", letterSpacing: "0.5px", marginBottom: "2px" }}>MEMO</div>
             <div style={{
               borderBottom: "1px solid #000",
@@ -348,7 +384,8 @@ function CheckPortion({
           </div>
 
           {/* Signature */}
-          <div>
+          <div style={{ marginTop: cal.signatureTop ? `${cal.signatureTop}in` : undefined, ...guideStyle("#d97706") }}>
+            {showGuides && <div style={{ fontSize: "7px", color: "#d97706", fontWeight: "bold", textAlign: "center" }}>■ SIGNATURE</div>}
             {/* Blank signing space above the label */}
             <div style={{ borderBottom: "1.5px solid #000", width: "2.6in", height: "0.38in", margin: "0 auto" }} />
             <div style={{ fontSize: "8px", color: "#666", marginTop: "2px", letterSpacing: "0.4px", textAlign: "center", width: "2.6in", margin: "2px auto 0" }}>AUTHORIZED SIGNATURE</div>
@@ -1139,6 +1176,8 @@ function StubPortion({
 
 interface CheckProps {
   item: PayrollItem; worker: Worker; company: Company; run: PayrollRun; deductions: TaxDeduction[]; config: Record<string, boolean>; payStubAccounts: PayStubAccount[]; accrualAccounts: AccrualAccount[]; accrualBalances: AccrualBalance[]; amendments?: PayStubAmendment[]; remittanceSources?: RemittanceSource[];
+  calibration?: CheckCalibration;
+  showGuides?: boolean;
 }
 
 function computeCheckNetPay(item: PayrollItem, worker: Worker, deductions: TaxDeduction[], amendments: PayStubAmendment[]): number {
@@ -1168,13 +1207,13 @@ function computeCheckNetPay(item: PayrollItem, worker: Worker, deductions: TaxDe
   return grossPay - totalDed;
 }
 
-function StandardCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [], remittanceSources = [] }: CheckProps) {
+function StandardCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [], remittanceSources = [], calibration, showGuides = false }: CheckProps) {
   const computedNetPay = computeCheckNetPay(item, worker, deductions, amendments);
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
       {/* Top third: the actual check */}
       <div style={{ height: "3.667in" }}>
-        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} overrideNetPay={computedNetPay} remittanceSources={remittanceSources} />
+        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} overrideNetPay={computedNetPay} remittanceSources={remittanceSources} calibration={calibration} showGuides={showGuides} />
       </div>
       {/* Middle third: pay stub summary */}
       <div style={{ height: "3.667in" }}>
@@ -1188,7 +1227,7 @@ function StandardCheck({ item, worker, company, run, deductions, config, payStub
   );
 }
 
-function VoucherCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [], remittanceSources = [] }: CheckProps) {
+function VoucherCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [], remittanceSources = [], calibration, showGuides = false }: CheckProps) {
   const computedNetPay = computeCheckNetPay(item, worker, deductions, amendments);
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
@@ -1196,7 +1235,7 @@ function VoucherCheck({ item, worker, company, run, deductions, config, payStubA
         <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
       </div>
       <div style={{ height: "3.667in" }}>
-        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} overrideNetPay={computedNetPay} remittanceSources={remittanceSources} />
+        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} overrideNetPay={computedNetPay} remittanceSources={remittanceSources} calibration={calibration} showGuides={showGuides} />
       </div>
       <div style={{ height: "4in" }}>
         <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
@@ -1478,8 +1517,12 @@ function validateCheckReadiness(
   remittanceSources: RemittanceSource[],
   companyId: string,
   micrFontLoaded: boolean | null,
+  payDate?: string | null,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
+  if (!payDate) {
+    issues.push({ severity: "blocking", field: "payDate", message: "Pay date is not set on this payroll run — set a pay date before printing checks", fixPath: "/app/payroll?tab=process", fixLabel: "Open Payroll" });
+  }
   if (!worker) {
     issues.push({ severity: "blocking", field: "worker", message: "Worker record not found for this payroll item", fixPath: "/app/employees", fixLabel: "Open Employees" });
     return issues;
@@ -1496,6 +1539,11 @@ function validateCheckReadiness(
   }
   if (!item.checkNumber) {
     issues.push({ severity: "blocking", field: "checkNumber", message: "No check number assigned — process the payroll run first to assign check numbers", fixPath: "/app/payroll?tab=process", fixLabel: "Open Payroll" });
+  }
+  // Duplicate check number guard (within the current run's items is handled at caller level)
+  const checkNumDigits = String(item.checkNumber || "").replace(/\D/g, "");
+  if (checkNumDigits && (checkNumDigits === "0000" || checkNumDigits === "0")) {
+    issues.push({ severity: "blocking", field: "checkNumber", message: "Check number is 0 — assign a valid starting check number in Remittance Sources", fixPath: "/app/settings", fixLabel: "Open Settings" });
   }
   const remittanceSource = remittanceSources.find(s => s.companyId === companyId && s.status === "enabled") || remittanceSources.find(s => s.companyId === companyId);
   if (!remittanceSource) {
@@ -1553,6 +1601,147 @@ function CheckValidationErrorCard({ item, worker, issues }: { item: PayrollItem;
           This card will not appear on any printed document. Resolve the issues above, then return to this page to print.
         </p>
       </div>
+    </div>
+  );
+}
+
+function CalibrationPanel({
+  remittanceSourceId,
+  calibration,
+  onChange,
+  onSave,
+  onTestPrint,
+  saving,
+}: {
+  remittanceSourceId: string | undefined;
+  calibration: CheckCalibration;
+  onChange: (c: CheckCalibration) => void;
+  onSave: () => void;
+  onTestPrint: () => void;
+  saving: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const Field = ({
+    label, field, color, description,
+  }: { label: string; field: keyof CheckCalibration; color: string; description?: string }) => (
+    <div className="flex flex-col gap-1">
+      <Label className="text-xs font-semibold" style={{ color }}>
+        ■ {label}
+      </Label>
+      {description && <p className="text-xs text-muted-foreground leading-tight">{description}</p>}
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-6 w-6 p-0 text-xs"
+          onClick={() => onChange({ ...calibration, [field]: Math.round((calibration[field] - 0.01) * 1000) / 1000 })}
+        >−</Button>
+        <Input
+          type="number"
+          step="0.01"
+          min="-1"
+          max="1"
+          value={calibration[field]}
+          onChange={e => onChange({ ...calibration, [field]: parseFloat(e.target.value) || 0 })}
+          className="w-20 text-xs h-7 text-center"
+          data-testid={`input-cal-${field}`}
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-6 w-6 p-0 text-xs"
+          onClick={() => onChange({ ...calibration, [field]: Math.round((calibration[field] + 0.01) * 1000) / 1000 })}
+        >+</Button>
+        <span className="text-xs text-muted-foreground">in</span>
+        {calibration[field] !== 0 && (
+          <button
+            className="text-xs text-blue-600 hover:text-blue-800 underline"
+            onClick={() => onChange({ ...calibration, [field]: 0 })}
+          >reset</button>
+        )}
+      </div>
+    </div>
+  );
+
+  if (!remittanceSourceId) return null;
+
+  return (
+    <div className="mx-4 mb-3 rounded-md border border-indigo-200 bg-indigo-50 dark:bg-indigo-950/20 dark:border-indigo-700 print-hide" data-testid="panel-calibration">
+      <button
+        className="w-full flex items-center justify-between p-3 text-sm font-medium text-indigo-800 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 rounded-md"
+        onClick={() => setOpen(v => !v)}
+        data-testid="button-calibration-toggle"
+      >
+        <span className="flex items-center gap-2">
+          <Settings2 className="h-4 w-4" />
+          Check Calibration — Adjust field positions for your check stock
+        </span>
+        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+      </button>
+
+      {open && (
+        <div className="p-4 border-t border-indigo-200 dark:border-indigo-700 space-y-5">
+          <p className="text-xs text-indigo-700 dark:text-indigo-300">
+            Enter offset values in inches (positive = down/right, negative = up/left). Changes apply live to the check preview.
+            Use the <strong>■ colored borders</strong> in Test Print mode to identify each field.
+            Save calibration to persist it for this bank account.
+          </p>
+
+          <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+            <Field label="Global: vertical shift" field="globalTop" color="#7c3aed"
+              description="Moves entire check up/down" />
+            <Field label="Global: horizontal shift" field="globalLeft" color="#7c3aed"
+              description="Moves entire check left/right" />
+            <Field label="Date field" field="dateTop" color="#dc2626"
+              description="Check number and date block (top-right)" />
+            <Field label="Amount in words" field="amountWordsTop" color="#2563eb"
+              description="Written-out dollar amount line" />
+            <Field label="Memo line" field="memoTop" color="#16a34a"
+              description="Pay period memo (bottom-left)" />
+            <Field label="Signature line" field="signatureTop" color="#d97706"
+              description="Authorized signature line (bottom-right)" />
+          </div>
+
+          <div className="flex flex-wrap gap-2 pt-2 border-t border-indigo-200 dark:border-indigo-700">
+            <Button
+              size="sm"
+              onClick={onSave}
+              disabled={saving || !remittanceSourceId}
+              data-testid="button-calibration-save"
+            >
+              <Save className="h-3.5 w-3.5 mr-1.5" />
+              {saving ? "Saving…" : "Save Calibration"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onTestPrint}
+              data-testid="button-calibration-test-print"
+            >
+              <Crosshair className="h-3.5 w-3.5 mr-1.5" />
+              Test Print (with guides)
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onChange({ ...DEFAULT_CALIBRATION })}
+              data-testid="button-calibration-reset"
+            >
+              <RefreshCcw className="h-3.5 w-3.5 mr-1.5" />
+              Reset All
+            </Button>
+          </div>
+
+          <div className="text-xs text-indigo-600 dark:text-indigo-400 space-y-1">
+            <p><strong>■ Purple</strong> = whole check container &nbsp;
+               <strong style={{ color: "#dc2626" }}>■ Red</strong> = date/check# block &nbsp;
+               <strong style={{ color: "#2563eb" }}>■ Blue</strong> = amount in words &nbsp;
+               <strong style={{ color: "#16a34a" }}>■ Green</strong> = memo &nbsp;
+               <strong style={{ color: "#d97706" }}>■ Orange</strong> = signature</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1650,16 +1839,44 @@ export default function PrintCheckPage() {
   const workerFilter = searchParams.get("worker") || null;
   const [fontReady, setFontReady] = useState(false);
   const [micrFontLoaded, setMicrFontLoaded] = useState<boolean | null>(null);
+  const [calibration, setCalibration] = useState<CheckCalibration>({ ...DEFAULT_CALIBRATION });
+  const [calibrationTestMode, setCalibrationTestMode] = useState(false);
+  const { toast } = useToast();
 
   useEffect(() => {
     document.fonts.ready.then(async () => {
       setFontReady(true);
+      // 4-method MICR font detection cascade
       try {
+        // Method 1: standard fonts.load
         const loaded = await document.fonts.load("12px MICRNumeric", "1234567890");
-        setMicrFontLoaded(loaded.length > 0);
-      } catch {
-        setMicrFontLoaded(false);
-      }
+        if (loaded.length > 0) { setMicrFontLoaded(true); return; }
+      } catch {}
+      try {
+        // Method 2: canvas pixel-width comparison
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.font = "16px MICRNumeric";
+          const micrW = ctx.measureText("1234567890").width;
+          ctx.font = "16px sans-serif";
+          const fallbackW = ctx.measureText("1234567890").width;
+          if (Math.abs(micrW - fallbackW) > 2) { setMicrFontLoaded(true); return; }
+        }
+      } catch {}
+      try {
+        // Method 3: document.fonts.forEach status
+        let found = false;
+        document.fonts.forEach(f => { if (f.family.includes("MICR") && f.status === "loaded") found = true; });
+        if (found) { setMicrFontLoaded(true); return; }
+      } catch {}
+      try {
+        // Method 4: direct FontFace load
+        const ff = new FontFace("MICRNumeric-check", "url('/fonts/micr-e13b.ttf')");
+        await ff.load();
+        setMicrFontLoaded(true); return;
+      } catch {}
+      setMicrFontLoaded(false);
     });
   }, []);
 
@@ -1731,6 +1948,78 @@ export default function PrintCheckPage() {
 
   const company = run ? companies.find(c => c.id === run.companyId) : undefined;
 
+  // Active remittance source for calibration
+  const activeRemittanceSource = run
+    ? (remittanceSources.find(s => s.companyId === run.companyId && s.status === "enabled") || remittanceSources.find(s => s.companyId === run.companyId))
+    : undefined;
+
+  // Load calibration from remittance source when it first becomes available
+  useEffect(() => {
+    if (!activeRemittanceSource) return;
+    const stored = activeRemittanceSource.calibrationConfig as any;
+    if (stored && typeof stored === "object") {
+      setCalibration({
+        globalTop: Number(stored.globalTop ?? activeRemittanceSource.verticalAlignment ?? 0),
+        globalLeft: Number(stored.globalLeft ?? activeRemittanceSource.horizontalAlignment ?? 0),
+        dateTop: Number(stored.dateTop ?? 0),
+        amountWordsTop: Number(stored.amountWordsTop ?? 0),
+        memoTop: Number(stored.memoTop ?? 0),
+        signatureTop: Number(stored.signatureTop ?? 0),
+      });
+    } else {
+      // Fall back to legacy alignment fields
+      setCalibration({
+        ...DEFAULT_CALIBRATION,
+        globalTop: Number(activeRemittanceSource.verticalAlignment ?? 0),
+        globalLeft: Number(activeRemittanceSource.horizontalAlignment ?? 0),
+      });
+    }
+  }, [activeRemittanceSource?.id]);
+
+  // Save calibration mutation
+  const saveCalibrationMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeRemittanceSource?.id) throw new Error("No remittance source");
+      return apiRequest("PATCH", `/api/remittance-sources/${activeRemittanceSource.id}`, {
+        calibrationConfig: calibration,
+        verticalAlignment: String(calibration.globalTop),
+        horizontalAlignment: String(calibration.globalLeft),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/remittance-sources"] });
+      toast({ title: "Calibration saved", description: "Check alignment settings saved for this bank account." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  // Test print — turns on guides then prints, then turns off guides
+  async function handleCalibrationTestPrint() {
+    setCalibrationTestMode(true);
+    await new Promise(r => setTimeout(r, 300)); // allow re-render
+    fetch("/api/check-print-audit", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        payrollRunId: runId,
+        companyId: company?.id || null,
+        checkCount: 0,
+        totalAmount: 0,
+        micrValidation: "calibration_test",
+        validationErrors: [],
+        printBlocked: false,
+        templateId: null,
+        eventType: "calibration_test",
+      }),
+    }).catch(() => {});
+    await document.fonts.ready;
+    window.print();
+    setTimeout(() => setCalibrationTestMode(false), 500);
+  }
+
   const { data: templates = [] } = useQuery<CheckTemplate[]>({
     queryKey: ["/api/check-templates", company?.id],
     queryFn: async () => {
@@ -1791,11 +2080,27 @@ export default function PrintCheckPage() {
     ? items.filter(item => item.workerId === workerFilter)
     : items.filter(item => !item.paymentMethod || item.paymentMethod === "check");
 
+  // ── Duplicate check number detection ──
+  const checkNumbersSeen = new Set<string>();
+  const duplicateCheckNumbers = new Set<string>();
+  checkWorkerItems.forEach(item => {
+    const cn = String(item.checkNumber || "").trim();
+    if (cn) {
+      if (checkNumbersSeen.has(cn)) duplicateCheckNumbers.add(cn);
+      else checkNumbersSeen.add(cn);
+    }
+  });
+
   // ── Pre-render validation (check mode only) ──
   const checkItemsWithValidation = !isPacketMode ? checkWorkerItems.map(item => {
     const worker = getWorker(item.workerId);
     const remittanceSource = remittanceSources.find(s => s.companyId === run.companyId && s.status === "enabled") || remittanceSources.find(s => s.companyId === run.companyId);
-    const issues = validateCheckReadiness(item, worker, remittanceSources, run.companyId, micrFontLoaded);
+    const issues = validateCheckReadiness(item, worker, remittanceSources, run.companyId, micrFontLoaded, run.payDate);
+    // Duplicate check number warning
+    const cn = String(item.checkNumber || "").trim();
+    if (cn && duplicateCheckNumbers.has(cn)) {
+      issues.push({ severity: "blocking", field: "checkNumber", message: `Check number ${cn} is assigned to multiple employees in this run — duplicate check numbers are not allowed`, fixPath: "/app/payroll?tab=process", fixLabel: "Open Payroll" });
+    }
     return { item, worker, issues, remittanceSource };
   }) : [];
 
@@ -1884,6 +2189,25 @@ export default function PrintCheckPage() {
         />
       )}
 
+      {/* Calibration panel — screen only, check mode only */}
+      {!isPacketMode && (
+        <CalibrationPanel
+          remittanceSourceId={activeRemittanceSource?.id}
+          calibration={calibration}
+          onChange={setCalibration}
+          onSave={() => saveCalibrationMutation.mutate()}
+          onTestPrint={handleCalibrationTestPrint}
+          saving={saveCalibrationMutation.isPending}
+        />
+      )}
+
+      {calibrationTestMode && (
+        <div className="mx-4 mb-3 rounded-md border border-indigo-400 bg-indigo-100 p-3 text-sm text-indigo-800 flex items-center gap-2 print-hide">
+          <Crosshair className="h-4 w-4 shrink-0" />
+          <span><strong>Calibration Test Mode:</strong> Guide markers are visible. The print dialog will open with field outlines shown. Use them to identify each element's position on your check stock.</span>
+        </div>
+      )}
+
       <div className="print-content">
         {isPacketMode && company ? (
           <>
@@ -1905,6 +2229,8 @@ export default function PrintCheckPage() {
                   accrualBalances={accrualBalancesList}
                   amendments={amendments}
                   remittanceSources={remittanceSources}
+                  calibration={calibration}
+                  showGuides={calibrationTestMode}
                 />
               );
             })}
@@ -1937,6 +2263,8 @@ export default function PrintCheckPage() {
                 accrualBalances={accrualBalancesList}
                 amendments={amendments}
                 remittanceSources={remittanceSources}
+                calibration={calibration}
+                showGuides={calibrationTestMode}
               />
             );
           })

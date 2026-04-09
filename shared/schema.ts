@@ -520,6 +520,14 @@ export const remittanceSources = pgTable("remittance_sources", {
   bankAccount: text("bank_account"),
   verticalAlignment: numeric("vertical_alignment").default("0"),
   horizontalAlignment: numeric("horizontal_alignment").default("0"),
+  calibrationConfig: jsonb("calibration_config").$type<{
+    globalTop?: number;
+    globalLeft?: number;
+    dateTop?: number;
+    amountWordsTop?: number;
+    memoTop?: number;
+    signatureTop?: number;
+  } | null>().default(null),
   signatureUrl: text("signature_url"),
   businessNumber: text("business_number"),
   immediateOrigin: text("immediate_origin"),

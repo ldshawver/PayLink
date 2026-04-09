@@ -2173,6 +2173,11 @@ Thank you,
       render_engine TEXT DEFAULT 'browser-print',
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+    await run("check_print_audit_logs.event_type", sql`ALTER TABLE check_print_audit_logs ADD COLUMN IF NOT EXISTS event_type TEXT DEFAULT 'print'`);
+    await run("check_print_audit_logs.worker_id", sql`ALTER TABLE check_print_audit_logs ADD COLUMN IF NOT EXISTS worker_id VARCHAR`);
+    await run("check_print_audit_logs.check_number", sql`ALTER TABLE check_print_audit_logs ADD COLUMN IF NOT EXISTS check_number TEXT`);
+    await run("check_print_audit_logs.notes", sql`ALTER TABLE check_print_audit_logs ADD COLUMN IF NOT EXISTS notes TEXT`);
+    await run("remittance_sources.calibration_config", sql`ALTER TABLE remittance_sources ADD COLUMN IF NOT EXISTS calibration_config JSONB`);
 
     // ── Enhanced Contractor Proposals columns ─────────────────────────────────
     await run("contractor_proposals.scope_of_work", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS scope_of_work TEXT`);

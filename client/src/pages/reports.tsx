@@ -22,7 +22,8 @@ import {
   FolderOpen, Users, ClipboardList, DollarSign, FileText, UserCheck,
   Clock, CalendarDays, AlertTriangle, Download, Printer, BarChart3,
   Shield, Star, Award, Receipt, Building, Calculator, ExternalLink,
-  Save, Trash2, Eye, Search, Briefcase, ChevronDown, ChevronRight
+  Save, Trash2, Eye, Search, Briefcase, ChevronDown, ChevronRight,
+  XCircle, CheckCircle2
 } from "lucide-react";
 import { PayrollSummaryReportDialog } from "@/components/reports/payroll-summary-report";
 import { PayrollRegisterReportDialog } from "@/components/reports/payroll-register-report";
@@ -2851,6 +2852,317 @@ function ExpenseReportSection() {
   );
 }
 
+// ── Check Register Dialog ──────────────────────────────────────────────────
+
+interface CheckAuditLog {
+  id: string;
+  payroll_run_id: string;
+  company_id: string;
+  initiated_by_user_id: string;
+  check_count: number;
+  total_amount: string;
+  micr_validation: string;
+  validation_errors: any;
+  print_blocked: boolean;
+  template_id: string | null;
+  event_type: string;
+  worker_id: string | null;
+  check_number: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+function CheckRegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: runs = [] } = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"] });
+  const [companyId, setCompanyId] = useState("all");
+  const [eventType, setEventType] = useState("all");
+  const [limit, setLimit] = useState("100");
+  const [search, setSearch] = useState("");
+
+  const { data: logs = [], isLoading } = useQuery<CheckAuditLog[]>({
+    queryKey: ["/api/check-print-audit", companyId, limit],
+    queryFn: async () => {
+      const params = new URLSearchParams({ limit });
+      if (companyId !== "all") params.set("companyId", companyId);
+      const res = await fetch(`/api/check-print-audit?${params.toString()}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: open,
+  });
+
+  const filtered = logs.filter(l => {
+    if (eventType !== "all" && (l.event_type || "print") !== eventType) return false;
+    if (search) {
+      const s = search.toLowerCase();
+      return (l.payroll_run_id || "").toLowerCase().includes(s)
+        || (l.check_number || "").toLowerCase().includes(s)
+        || (l.event_type || "").toLowerCase().includes(s);
+    }
+    return true;
+  });
+
+  const companyName = (id: string) => companies.find(c => c.id === id)?.name || id;
+  const runLabel = (id: string) => {
+    const r = runs.find(r => r.id === id);
+    return r ? `${r.periodStart || ""} – ${r.periodEnd || ""}` : id;
+  };
+
+  function exportCsv() {
+    const header = ["Date", "Company", "Pay Run", "Event", "Checks", "Total Amount", "MICR OK", "Check Number", "Notes"].join(",");
+    const rows = filtered.map(l => [
+      new Date(l.created_at).toLocaleString(),
+      `"${companyName(l.company_id)}"`,
+      `"${runLabel(l.payroll_run_id)}"`,
+      l.event_type || "print",
+      l.check_count || "",
+      Number(l.total_amount || 0).toFixed(2),
+      l.micr_validation || "",
+      l.check_number || "",
+      `"${(l.notes || "").replace(/"/g, "'")}"`,
+    ].join(","));
+    const blob = new Blob([header + "\n" + rows.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `check_register_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+  }
+
+  const totalChecks = filtered.reduce((s, l) => s + Number(l.check_count || 0), 0);
+  const totalAmount = filtered.reduce((s, l) => s + Number(l.total_amount || 0), 0);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col" data-testid="dialog-check-register">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Printer className="h-5 w-5 text-primary" />
+            Printed Check Register
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="flex flex-wrap gap-3 items-end mb-3">
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">Company</Label>
+            <Select value={companyId} onValueChange={setCompanyId}>
+              <SelectTrigger className="w-44" data-testid="select-check-reg-company">
+                <SelectValue placeholder="All companies" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All companies</SelectItem>
+                {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">Event type</Label>
+            <Select value={eventType} onValueChange={setEventType}>
+              <SelectTrigger className="w-36" data-testid="select-check-reg-event">
+                <SelectValue placeholder="All events" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All events</SelectItem>
+                <SelectItem value="print">Print</SelectItem>
+                <SelectItem value="calibration_test">Calibration test</SelectItem>
+                <SelectItem value="void">Void</SelectItem>
+                <SelectItem value="reissue">Reissue</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">Max rows</Label>
+            <Select value={limit} onValueChange={setLimit}>
+              <SelectTrigger className="w-24" data-testid="select-check-reg-limit">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="50">50</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+                <SelectItem value="250">250</SelectItem>
+                <SelectItem value="500">500</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1 flex-1 min-w-32">
+            <Label className="text-xs">Search</Label>
+            <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Run ID, check #…" className="h-9" data-testid="input-check-reg-search" />
+          </div>
+          <Button size="sm" variant="outline" onClick={exportCsv} disabled={filtered.length === 0} data-testid="button-check-reg-export">
+            <Download className="h-3.5 w-3.5 mr-1.5" />CSV
+          </Button>
+        </div>
+
+        {/* Summary bar */}
+        <div className="flex gap-6 px-1 py-2 bg-muted/40 rounded-md text-sm mb-2">
+          <span><strong>{filtered.length}</strong> events</span>
+          <span><strong>{totalChecks}</strong> checks printed</span>
+          <span><strong>${totalAmount.toLocaleString("en-US", { minimumFractionDigits: 2 })}</strong> total</span>
+        </div>
+
+        <div className="overflow-auto flex-1">
+          {isLoading ? (
+            <div className="space-y-2">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-9 w-full" />)}</div>
+          ) : filtered.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">No check print events found.</p>
+          ) : (
+            <Table data-testid="table-check-register">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Company</TableHead>
+                  <TableHead>Pay Run</TableHead>
+                  <TableHead>Event</TableHead>
+                  <TableHead className="text-right">Checks</TableHead>
+                  <TableHead className="text-right">Total</TableHead>
+                  <TableHead>MICR</TableHead>
+                  <TableHead>Check #</TableHead>
+                  <TableHead>Notes</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.map(l => (
+                  <TableRow key={l.id} data-testid={`row-check-reg-${l.id}`}>
+                    <TableCell className="text-xs whitespace-nowrap">{new Date(l.created_at).toLocaleString()}</TableCell>
+                    <TableCell className="text-xs">{companyName(l.company_id)}</TableCell>
+                    <TableCell className="text-xs">{runLabel(l.payroll_run_id)}</TableCell>
+                    <TableCell>
+                      <Badge variant={
+                        (l.event_type || "print") === "print" ? "default" :
+                        l.event_type === "calibration_test" ? "secondary" :
+                        l.event_type === "void" ? "destructive" : "outline"
+                      } className="text-xs capitalize">
+                        {l.event_type || "print"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right text-xs">{l.check_count || 0}</TableCell>
+                    <TableCell className="text-right text-xs">${Number(l.total_amount || 0).toFixed(2)}</TableCell>
+                    <TableCell>
+                      <Badge variant={(l.micr_validation === "ok" || l.micr_validation === "calibration_test") ? "secondary" : (l.micr_validation === "fail" ? "destructive" : "outline")} className="text-xs">
+                        {l.micr_validation || "—"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-xs font-mono">{l.check_number || "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{l.notes || "—"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function VoidedChecksDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const [companyId, setCompanyId] = useState("all");
+
+  const { data: allLogs = [], isLoading } = useQuery<CheckAuditLog[]>({
+    queryKey: ["/api/check-print-audit", companyId, "500"],
+    queryFn: async () => {
+      const params = new URLSearchParams({ limit: "500" });
+      if (companyId !== "all") params.set("companyId", companyId);
+      const res = await fetch(`/api/check-print-audit?${params.toString()}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
+    enabled: open,
+  });
+
+  const logs = allLogs.filter(l => l.event_type === "void" || l.event_type === "reissue");
+  const companyName = (id: string) => companies.find(c => c.id === id)?.name || id;
+
+  function exportCsv() {
+    const header = ["Date", "Company", "Run ID", "Event", "Check Number", "Notes"].join(",");
+    const rows = logs.map(l => [
+      new Date(l.created_at).toLocaleString(),
+      `"${companyName(l.company_id)}"`,
+      l.payroll_run_id,
+      l.event_type,
+      l.check_number || "",
+      `"${(l.notes || "").replace(/"/g, "'")}"`,
+    ].join(","));
+    const blob = new Blob([header + "\n" + rows.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `voided_checks_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col" data-testid="dialog-voided-checks">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <XCircle className="h-5 w-5 text-destructive" />
+            Voided / Reissued Checks
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="flex flex-wrap gap-3 items-end mb-3">
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">Company</Label>
+            <Select value={companyId} onValueChange={setCompanyId}>
+              <SelectTrigger className="w-44" data-testid="select-voided-company">
+                <SelectValue placeholder="All companies" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All companies</SelectItem>
+                {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button size="sm" variant="outline" onClick={exportCsv} disabled={logs.length === 0} data-testid="button-voided-export">
+            <Download className="h-3.5 w-3.5 mr-1.5" />CSV
+          </Button>
+        </div>
+
+        <div className="overflow-auto flex-1">
+          {isLoading ? (
+            <div className="space-y-2">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-9 w-full" />)}</div>
+          ) : logs.length === 0 ? (
+            <div className="text-center py-10 space-y-2">
+              <CheckCircle2 className="h-10 w-10 text-green-500 mx-auto" />
+              <p className="text-sm text-muted-foreground">No voided or reissued checks on record.</p>
+            </div>
+          ) : (
+            <Table data-testid="table-voided-checks">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Company</TableHead>
+                  <TableHead>Run ID</TableHead>
+                  <TableHead>Event</TableHead>
+                  <TableHead>Check #</TableHead>
+                  <TableHead>Notes</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {logs.map(l => (
+                  <TableRow key={l.id} data-testid={`row-voided-${l.id}`}>
+                    <TableCell className="text-xs whitespace-nowrap">{new Date(l.created_at).toLocaleString()}</TableCell>
+                    <TableCell className="text-xs">{companyName(l.company_id)}</TableCell>
+                    <TableCell className="text-xs font-mono">{l.payroll_run_id}</TableCell>
+                    <TableCell>
+                      <Badge variant={l.event_type === "void" ? "destructive" : "outline"} className="text-xs capitalize">
+                        {l.event_type}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-xs font-mono">{l.check_number || "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{l.notes || "—"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function ReportsPage() {
   const [tab, setTab] = useTabParam();
   const [whosInOpen, setWhosInOpen] = useState(false);
@@ -2869,6 +3181,8 @@ export default function ReportsPage() {
   const [payrollSummaryReportOpen, setPayrollSummaryReportOpen] = useState(false);
   const [payrollRegisterReportOpen, setPayrollRegisterReportOpen] = useState(false);
   const [timesheetBrandedReportOpen, setTimesheetBrandedReportOpen] = useState(false);
+  const [checkRegisterOpen, setCheckRegisterOpen] = useState(false);
+  const [voidedChecksOpen, setVoidedChecksOpen] = useState(false);
   const [qualificationSummaryOpen, setQualificationSummaryOpen] = useState(false);
   const [reviewSummaryOpen, setReviewSummaryOpen] = useState(false);
   const [w2Open, setW2Open] = useState(false);
@@ -3006,6 +3320,18 @@ export default function ReportsPage() {
               icon={<Building className="h-5 w-5" />}
               onGenerate={() => setGeneralLedgerOpen(true)}
             />
+            <ReportCard
+              title="Printed Check Register"
+              description="Full audit log of every check printing event — company, run, MICR status, check count, and total. Export to CSV for reconciliation."
+              icon={<Printer className="h-5 w-5" />}
+              onGenerate={() => setCheckRegisterOpen(true)}
+            />
+            <ReportCard
+              title="Voided / Reissued Checks"
+              description="Filtered view of voided and reissued checks from the check print audit log for exception reporting and reconciliation."
+              icon={<XCircle className="h-5 w-5" />}
+              onGenerate={() => setVoidedChecksOpen(true)}
+            />
           </div>
         </TabsContent>
 
@@ -3115,6 +3441,10 @@ export default function ReportsPage() {
       <PayrollSummaryReportDialog open={payrollSummaryReportOpen} onOpenChange={setPayrollSummaryReportOpen} />
       <PayrollRegisterReportDialog open={payrollRegisterReportOpen} onOpenChange={setPayrollRegisterReportOpen} />
       <TimesheetReportDialog open={timesheetBrandedReportOpen} onOpenChange={setTimesheetBrandedReportOpen} />
+
+      {/* Check audit dialogs */}
+      <CheckRegisterDialog open={checkRegisterOpen} onOpenChange={setCheckRegisterOpen} />
+      <VoidedChecksDialog open={voidedChecksOpen} onOpenChange={setVoidedChecksOpen} />
     </div>
   );
 }
