@@ -31,6 +31,44 @@
     font-style: normal;
     font-display: block;
   }
+
+  /* ── Branded Report Print Isolation ────────────────────────────────────
+   * Only applies when a .report-print-container is in the DOM.
+   * Uses :has() to conditionally hide the body — this way the existing
+   * print-check page (/app/print-check) is unaffected.
+   * Works inside dialogs/portals because visibility is inherited.
+   */
+  body:has(.report-print-container) {
+    visibility: hidden;
+  }
+  .report-print-container {
+    visibility: visible;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    background: white !important;
+    padding: 0.75in !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+  }
+  .report-print-container * {
+    visibility: visible;
+  }
+  .report-no-print {
+    display: none !important;
+  }
+
+  /* Page breaks for multi-page report sections */
+  .report-page-break {
+    page-break-before: always;
+  }
+
+  /* Remove alternating row backgrounds in print (ink-saving) */
+  .report-print-container tr:nth-child(even) {
+    background: transparent !important;
+  }
 }
 
 /* LIGHT MODE */

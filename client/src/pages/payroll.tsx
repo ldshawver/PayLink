@@ -28,6 +28,8 @@ import {
   AlertTriangle
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { PayrollSummaryReportDialog } from "@/components/reports/payroll-summary-report";
+import { PayrollRegisterReportDialog } from "@/components/reports/payroll-register-report";
 
 function PolicyDocLink() {
   return (
@@ -428,6 +430,8 @@ function AchStatusBadge({ achStatus }: { achStatus: string | null | undefined })
 }
 
 function PayrollSummaryPanel({ run, items }: { run: PayrollRun; items: PayrollItem[] }) {
+  const [reportOpen, setReportOpen] = useState(false);
+  const [registerOpen, setRegisterOpen] = useState(false);
   const itemGross = items.reduce((s, i) => s + Number(i.grossPay || 0), 0);
   const itemDeductions = items.reduce((s, i) => s + Number(i.deductions || 0), 0);
   const itemNet = items.reduce((s, i) => s + Number(i.netPay || 0), 0);
@@ -452,12 +456,19 @@ function PayrollSummaryPanel({ run, items }: { run: PayrollRun; items: PayrollIt
 
   return (
     <div className="rounded-lg border bg-muted/20 p-4 space-y-4 print:bg-white print:border-gray-300" data-testid={`payroll-summary-panel-${run.id}`}>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <h3 className="font-semibold text-sm flex items-center gap-2"><BarChart3 className="h-4 w-4" />Payroll Summary</h3>
-        <Button variant="ghost" size="sm" className="print:hidden" onClick={() => window.print()} data-testid={`button-print-summary-${run.id}`}>
-          <Printer className="h-3 w-3 mr-1" />Print
-        </Button>
+        <div className="flex gap-1.5">
+          <Button variant="outline" size="sm" onClick={() => setReportOpen(true)} data-testid={`button-report-summary-${run.id}`}>
+            <FileText className="h-3 w-3 mr-1" />Summary Report
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setRegisterOpen(true)} data-testid={`button-report-register-${run.id}`}>
+            <Printer className="h-3 w-3 mr-1" />Payroll Register
+          </Button>
+        </div>
       </div>
+      <PayrollSummaryReportDialog open={reportOpen} onOpenChange={setReportOpen} defaultRunId={run.id} />
+      <PayrollRegisterReportDialog open={registerOpen} onOpenChange={setRegisterOpen} defaultRunId={run.id} />
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
         <div className="space-y-0.5">
           <p className="text-xs text-muted-foreground">Pay Period</p>

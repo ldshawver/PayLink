@@ -24,6 +24,9 @@ import {
   Shield, Star, Award, Receipt, Building, Calculator, ExternalLink,
   Save, Trash2, Eye, Search, Briefcase, ChevronDown, ChevronRight
 } from "lucide-react";
+import { PayrollSummaryReportDialog } from "@/components/reports/payroll-summary-report";
+import { PayrollRegisterReportDialog } from "@/components/reports/payroll-register-report";
+import { TimesheetReportDialog } from "@/components/reports/timesheet-report";
 
 const OFFICIAL_FORM_URLS: Record<string, { url: string; source: string }> = {
   w2: { url: "https://www.irs.gov/pub/irs-pdf/fw2.pdf", source: "IRS" },
@@ -2863,6 +2866,9 @@ export default function ReportsPage() {
   const [paystubSummaryOpen, setPaystubSummaryOpen] = useState(false);
   const [generalLedgerOpen, setGeneralLedgerOpen] = useState(false);
   const [taxSummaryOpen, setTaxSummaryOpen] = useState(false);
+  const [payrollSummaryReportOpen, setPayrollSummaryReportOpen] = useState(false);
+  const [payrollRegisterReportOpen, setPayrollRegisterReportOpen] = useState(false);
+  const [timesheetBrandedReportOpen, setTimesheetBrandedReportOpen] = useState(false);
   const [qualificationSummaryOpen, setQualificationSummaryOpen] = useState(false);
   const [reviewSummaryOpen, setReviewSummaryOpen] = useState(false);
   const [w2Open, setW2Open] = useState(false);
@@ -2924,6 +2930,12 @@ export default function ReportsPage() {
         <TabsContent value="timesheet" className="mt-6">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <ReportCard
+              title="Timesheet Detail Report"
+              description="Branded timesheet report with clock in/out, hours breakdown, and totals — filterable by company and date range."
+              icon={<ClipboardList className="h-5 w-5" />}
+              onGenerate={() => setTimesheetBrandedReportOpen(true)}
+            />
+            <ReportCard
               title="Schedule Summary"
               description="Overview of scheduled shifts by department."
               icon={<CalendarDays className="h-5 w-5" />}
@@ -2936,9 +2948,9 @@ export default function ReportsPage() {
               onGenerate={() => setTimesheetSummaryOpen(true)}
             />
             <ReportCard
-              title="Timesheet Detail"
+              title="Timesheet Detail (Legacy)"
               description="Detailed timesheet entries with clock times."
-              icon={<ClipboardList className="h-5 w-5" />}
+              icon={<Clock className="h-5 w-5" />}
               onGenerate={() => setTimesheetDetailOpen(true)}
             />
             <ReportCard
@@ -2964,6 +2976,18 @@ export default function ReportsPage() {
 
         <TabsContent value="payroll" className="mt-6">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <ReportCard
+              title="Payroll Summary"
+              description="Branded summary report: totals, employee table, payment method breakout, and funding required for any pay run."
+              icon={<BarChart3 className="h-5 w-5" />}
+              onGenerate={() => setPayrollSummaryReportOpen(true)}
+            />
+            <ReportCard
+              title="Payroll Register"
+              description="Detailed per-employee register showing hours, gross pay, deductions, net pay, and check number for any pay run."
+              icon={<ClipboardList className="h-5 w-5" />}
+              onGenerate={() => setPayrollRegisterReportOpen(true)}
+            />
             <ReportCard
               title="Paystub Summary"
               description="Summary of all pay stubs by period."
@@ -3086,6 +3110,11 @@ export default function ReportsPage() {
       <DE9CDialog open={de9cOpen} onOpenChange={setDE9COpen} />
       <QualificationSummaryDialog open={qualificationSummaryOpen} onOpenChange={setQualificationSummaryOpen} />
       <ReviewSummaryDialog open={reviewSummaryOpen} onOpenChange={setReviewSummaryOpen} />
+
+      {/* Branded report dialogs */}
+      <PayrollSummaryReportDialog open={payrollSummaryReportOpen} onOpenChange={setPayrollSummaryReportOpen} />
+      <PayrollRegisterReportDialog open={payrollRegisterReportOpen} onOpenChange={setPayrollRegisterReportOpen} />
+      <TimesheetReportDialog open={timesheetBrandedReportOpen} onOpenChange={setTimesheetBrandedReportOpen} />
     </div>
   );
 }
