@@ -1272,10 +1272,7 @@ export async function registerRoutes(
       if (worker.companyId) {
         const todaySchedules = await storage.getSchedulesByDateRange(worker.companyId, today, today);
         const workerSchedule = todaySchedules.find(s => s.workerId === worker.id);
-        if (!workerSchedule) {
-          requestType = "unscheduled";
-          minutesDiff = 0;
-        } else {
+        if (workerSchedule) {
           matchingSchedule = workerSchedule;
           // Convert "HH:MM" schedule times to UTC using the company timezone so
           // the diff calculation is correct regardless of server OS timezone.
@@ -1289,10 +1286,11 @@ export async function registerRoutes(
             requestType = "late_clockin";
           }
         }
+        // No schedule for today → allow clock-in directly (no penalty for unscheduled)
       }
 
-      // If outside grace period → create pending approval request
-      if (requestType) {
+      // Only send to pending approval for schedule violations (early/late), not for unscheduled
+      if (requestType && requestType !== "unscheduled") {
         const requestRow = await db.execute(sql`
           INSERT INTO clock_in_requests
             (worker_id, company_id, request_type, minutes_diff, schedule_id, scheduled_start, scheduled_end)

@@ -183,11 +183,16 @@ document.addEventListener('DOMContentLoaded', function() {
       credentials: 'include',
       body: JSON.stringify({ employeeNumber: empNum, pin: pin })
     })
-    .then(function(res) { return res.json().then(function(d) { return { ok: res.ok, data: d }; }); })
+    .then(function(res) { return res.json().then(function(d) { return { ok: res.ok, status: res.status, data: d }; }); })
     .then(function(r) {
       setChoiceBtnsDisabled(false);
       if (!r.ok) {
         if (errorEl) errorEl.textContent = r.data.message || 'Invalid employee number or PIN.';
+        return;
+      }
+      // 202 = pending manager approval (early/late clock-in)
+      if (r.status === 202 && r.data.status === 'pending_approval') {
+        if (errorEl) errorEl.textContent = r.data.message || 'Manager approval required. Your manager has been notified.';
         return;
       }
       var worker = r.data.worker;
