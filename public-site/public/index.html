@@ -92,10 +92,10 @@
           </div>
         </div>
       </div>
-    </div>
-    <div class="scroll-hint">
-      Scroll down to see more
-      <span class="scroll-hint-arrow">&#8595;</span>
+      <div class="scroll-hint">
+        Scroll down to see more
+        <span class="scroll-hint-arrow">&#8595;</span>
+      </div>
     </div>
   </section>
 
@@ -513,29 +513,53 @@
         <div class="security-stat"><span class="stat-val">Multi-tenant</span><span class="stat-label">Data Isolation</span></div>
       </div>
       <div class="security-deep-grid">
-        <div class="security-deep-card fade-up stagger-1">
-          <h4>Role-Based Access Control (RBAC)</h4>
-          <p>Three enforced roles — Admin, Manager, and Employee — with granular permissions at every API endpoint. Managers cannot see data outside their company. Employees cannot access pay rates or HR records for others. Every route is independently protected.</p>
+        <div class="security-deep-card" data-sec-delay="0">
+          <div class="security-card-status-bar"><span class="security-card-status-dot"></span>PROTOCOL ACTIVE</div>
+          <div class="security-card-body">
+            <h4>Role-Based Access Control (RBAC)</h4>
+            <p>Three enforced roles — Admin, Manager, and Employee — with granular permissions at every API endpoint. Managers cannot see data outside their company. Employees cannot access pay rates or HR records for others. Every route is independently protected.</p>
+          </div>
+          <span class="security-card-hex">0x52424143 · 3-LAYER</span>
         </div>
-        <div class="security-deep-card fade-up stagger-2">
-          <h4>Multi-Tenant Data Isolation</h4>
-          <p>Every record in the database is scoped to a company. No query returns data from another tenant. Company ID is enforced server-side on every read and write — frontend filters alone are never trusted.</p>
+        <div class="security-deep-card" data-sec-delay="110">
+          <div class="security-card-status-bar"><span class="security-card-status-dot"></span>ISOLATION VERIFIED</div>
+          <div class="security-card-body">
+            <h4>Multi-Tenant Data Isolation</h4>
+            <p>Every record in the database is scoped to a company. No query returns data from another tenant. Company ID is enforced server-side on every read and write — frontend filters alone are never trusted.</p>
+          </div>
+          <span class="security-card-hex">0x49534F4C · TENANT-SCOPE</span>
         </div>
-        <div class="security-deep-card fade-up stagger-3">
-          <h4>Encrypted Sessions & Secure Cookies</h4>
-          <p>Sessions are stored server-side in PostgreSQL via a hardened session store. Cookies are httpOnly, Secure, and SameSite-protected. Passwords are hashed with bcrypt (cost factor 10). No plain-text credentials ever stored.</p>
+        <div class="security-deep-card" data-sec-delay="220">
+          <div class="security-card-status-bar"><span class="security-card-status-dot"></span>SESSION HARDENED</div>
+          <div class="security-card-body">
+            <h4>Encrypted Sessions &amp; Secure Cookies</h4>
+            <p>Sessions are stored server-side in PostgreSQL via a hardened session store. Cookies are httpOnly, Secure, and SameSite-protected. Passwords are hashed with bcrypt (cost factor 10). No plain-text credentials ever stored.</p>
+          </div>
+          <span class="security-card-hex">0x53455353 · BCRYPT-10</span>
         </div>
-        <div class="security-deep-card fade-up stagger-4">
-          <h4>Complete Authorization Audit Log</h4>
-          <p>Every sensitive action — payroll runs, schedule changes, document access, approvals, configuration changes — is written to an immutable audit log. Who did what, when, and from where. Required for enterprise compliance audits.</p>
+        <div class="security-deep-card" data-sec-delay="330">
+          <div class="security-card-status-bar"><span class="security-card-status-dot"></span>AUDIT LOGGING</div>
+          <div class="security-card-body">
+            <h4>Complete Authorization Audit Log</h4>
+            <p>Every sensitive action — payroll runs, schedule changes, document access, approvals, configuration changes — is written to an immutable audit log. Who did what, when, and from where. Required for enterprise compliance audits.</p>
+          </div>
+          <span class="security-card-hex">0x41554449 · IMMUTABLE</span>
         </div>
-        <div class="security-deep-card fade-up stagger-5">
-          <h4>Document Security & Legal Hold</h4>
-          <p>HR documents support access control lists (ACLs), retention policies, and legal hold. Documents under hold cannot be deleted regardless of user role. A separate document audit log tracks every view, download, and modification.</p>
+        <div class="security-deep-card" data-sec-delay="440">
+          <div class="security-card-status-bar"><span class="security-card-status-dot"></span>LEGAL HOLD ACTIVE</div>
+          <div class="security-card-body">
+            <h4>Document Security &amp; Legal Hold</h4>
+            <p>HR documents support access control lists (ACLs), retention policies, and legal hold. Documents under hold cannot be deleted regardless of user role. A separate document audit log tracks every view, download, and modification.</p>
+          </div>
+          <span class="security-card-hex">0x444F4353 · ACL-GUARD</span>
         </div>
-        <div class="security-deep-card fade-up stagger-6">
-          <h4>Banking Data Protection</h4>
-          <p>Bank account routing numbers and account numbers for direct deposit are protected by authenticated endpoints with strict employee-scoping. No unauthenticated endpoint can access financial data. ACH files are generated server-side and never exposed to frontend storage.</p>
+        <div class="security-deep-card" data-sec-delay="550">
+          <div class="security-card-status-bar"><span class="security-card-status-dot"></span>BANKING SHIELD</div>
+          <div class="security-card-body">
+            <h4>Banking Data Protection</h4>
+            <p>Bank account routing numbers and account numbers for direct deposit are protected by authenticated endpoints with strict employee-scoping. No unauthenticated endpoint can access financial data. ACH files are generated server-side and never exposed to frontend storage.</p>
+          </div>
+          <span class="security-card-hex">0x42414E4B · ACH-SECURE</span>
         </div>
       </div>
     </div>
@@ -551,22 +575,22 @@
       </p>
       <div class="why-grid">
         <div class="why-item fade-up stagger-1">
-          <div class="why-number">1</div>
+          <div class="why-number" data-val="1">1</div>
           <h3>One System, Not Five</h3>
           <p>Replace your payroll service, time clock app, scheduling tool, expense tracker, and HR documents platform with one integrated system. Data flows from punch to paycheck without imports or exports.</p>
         </div>
         <div class="why-item fade-up stagger-2">
-          <div class="why-number">7</div>
+          <div class="why-number" data-val="7">7</div>
           <h3>Worker Types</h3>
           <p>Hourly, salary, contractors, owner draws, volunteers, shareholders — each handled with correct pay rules, tax treatment, and reporting. No workarounds, no hacks.</p>
         </div>
         <div class="why-item fade-up stagger-3">
-          <div class="why-number">∞</div>
+          <div class="why-number" data-val="∞">∞</div>
           <h3>Companies Under One Roof</h3>
           <p>True multi-company architecture with separate payrolls, isolated HR records, and unified reporting. Manage your entire enterprise from one login with full data separation.</p>
         </div>
         <div class="why-item fade-up stagger-4">
-          <div class="why-number">CA</div>
+          <div class="why-number" data-val="CA">CA</div>
           <h3>California Compliant Out-of-the-Box</h3>
           <p>Daily overtime, double time, meal and rest break tracking, DE 9/DE 9C reporting, and California-specific wage rules are built in — not a paid add-on.</p>
         </div>

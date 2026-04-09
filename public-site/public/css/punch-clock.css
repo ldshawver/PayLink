@@ -23,7 +23,7 @@
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.40);
+  background: rgba(0, 0, 0, 0.65);
   z-index: 1;
   pointer-events: none;
 }
@@ -37,13 +37,15 @@
   justify-content: flex-start;
   flex-direction: column;
   z-index: 2;
-  padding-top: 68px;
-  padding-bottom: 20px;
+  padding-top: 72px;
+  padding-bottom: 0;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .punch-sticky > .scroll-hint {
   position: absolute;
-  bottom: 20px;
+  bottom: 18px;
   left: 0;
   right: 0;
   text-align: center;
@@ -107,8 +109,13 @@
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   transition: none;
+  flex: 1;
+  width: 100%;
+  padding-bottom: 52px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .clock-machine {
@@ -704,3 +711,188 @@
 }
 .punch-back-btn:hover { color: rgba(255,255,255,0.7); }
 .punch-modal-toggle button:hover { color: #0d9488; }
+
+/* ── Short-screen: compact clock so everything stays above fold ─────────── */
+@media (max-height: 780px) {
+  .hero-h2 { display: none; }
+  .hero-buttons { margin-top: 14px !important; }
+  .clock-screen { margin: 8px 20px; padding: 10px 16px; }
+  .clock-header { padding: 8px 20px 6px; }
+  .clock-actions { padding: 0 20px 8px; }
+  .clock-card-slot { margin: 0 20px 8px; }
+  .clock-footer { padding: 0 20px 8px; }
+  .clock-analog { width: 64px; height: 64px; margin-bottom: 8px; }
+  .clock-hand-hour { height: 18px; }
+  .clock-hand-minute { height: 22px; }
+  .clock-hand-second { height: 26px; }
+  .punch-wrap { gap: 2px; }
+}
+@media (max-height: 650px) {
+  .clock-analog { display: none; }
+  .clock-date-display { display: none; }
+  .hero-logo-img { display: none; }
+  .hero-h1 { font-size: 1.5rem; margin-bottom: 4px; }
+}
+
+/* ── Feature card & AI card: scroll-driven scale ────────────────────────── */
+.feature-card,
+.ai-card {
+  scale: var(--scroll-scale, 0.86);
+  transition-property: scale, opacity, transform, box-shadow, border-color;
+  transition-duration: 0.35s;
+  transition-timing-function: ease;
+}
+.feature-card:hover,
+.ai-card:hover {
+  scale: 1 !important;
+}
+
+/* ── Why PayLink number glitch ───────────────────────────────────────────── */
+@keyframes glitch-shimmer {
+  0%   { color: #f59e0b; text-shadow: -2px 0 #10b981, 2px 0 #ef4444; }
+  20%  { color: #ec4899; text-shadow: 2px 0 #06b6d4, -2px 0 #f59e0b; }
+  40%  { color: #10b981; text-shadow: -1px 0 #a855f7, 1px 0 #0d9488; }
+  60%  { color: #3b82f6; text-shadow: 2px 0 #f59e0b, -2px 0 #ec4899; }
+  80%  { color: #a855f7; text-shadow: -2px 0 #22d3ee, 2px 0 #10b981; }
+  100% { color: #f59e0b; text-shadow: 2px 0 #3b82f6, -2px 0 #a855f7; }
+}
+.why-number.glitching {
+  animation: glitch-shimmer 0.07s steps(1) infinite;
+  font-family: 'Courier New', monospace !important;
+  -webkit-text-fill-color: unset !important;
+  background: none !important;
+  -webkit-background-clip: unset !important;
+  background-clip: unset !important;
+  letter-spacing: 0.05em;
+  display: block;
+}
+.why-number.revealed {
+  animation: none;
+  background: var(--gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  text-shadow: none;
+  transition: all 0.3s ease;
+}
+
+/* ── Security terminal card redesign ─────────────────────────────────────── */
+.security-deep-card {
+  background: rgba(0, 8, 3, 0.97) !important;
+  border: 1px solid rgba(16, 185, 129, 0.28) !important;
+  border-left: none !important;
+  border-radius: 8px !important;
+  padding: 0 !important;
+  position: relative;
+  overflow: hidden;
+  font-family: 'Courier New', 'Consolas', monospace;
+  box-shadow:
+    0 0 0 1px rgba(16, 185, 129, 0.1),
+    0 4px 32px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(16, 185, 129, 0.08);
+  opacity: 0;
+  transform: translateX(-28px);
+  transition: opacity 0.55s ease, transform 0.55s cubic-bezier(0.16,1,0.3,1),
+              box-shadow 0.3s, border-color 0.3s;
+}
+.security-deep-card.sec-visible {
+  opacity: 1;
+  transform: translateX(0);
+}
+.security-deep-card:hover {
+  border-color: rgba(16, 185, 129, 0.55) !important;
+  box-shadow:
+    0 0 0 1px rgba(16, 185, 129, 0.2),
+    0 8px 48px rgba(0, 0, 0, 0.7),
+    0 0 24px rgba(16, 185, 129, 0.1),
+    inset 0 1px 0 rgba(16, 185, 129, 0.12);
+}
+.security-deep-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(16,185,129,0.5), transparent);
+}
+.security-deep-card::after {
+  content: '';
+  position: absolute;
+  top: -100%;
+  left: 0; right: 0;
+  height: 60%;
+  background: linear-gradient(180deg, rgba(16,185,129,0.04), transparent);
+  animation: sec-scanline 4s linear infinite;
+  pointer-events: none;
+}
+@keyframes sec-scanline {
+  0%   { top: -60%; }
+  100% { top: 110%; }
+}
+.security-card-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: rgba(16, 185, 129, 0.06);
+  border-bottom: 1px solid rgba(16, 185, 129, 0.15);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: rgba(16, 185, 129, 0.7);
+}
+.security-card-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.8);
+  flex-shrink: 0;
+  animation: sec-pulse 2s ease-in-out infinite;
+}
+@keyframes sec-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 6px rgba(16,185,129,0.8); }
+  50%       { opacity: 0.4; box-shadow: 0 0 2px rgba(16,185,129,0.3); }
+}
+.security-card-body {
+  padding: 16px 18px 18px;
+}
+.security-deep-card h4 {
+  font-size: 0.82rem !important;
+  font-weight: 700 !important;
+  margin-bottom: 10px !important;
+  color: #10b981 !important;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.security-deep-card h4::before {
+  content: '▶';
+  font-size: 0.6rem;
+  color: rgba(16, 185, 129, 0.6);
+  flex-shrink: 0;
+}
+.security-deep-card p {
+  font-size: 0.78rem !important;
+  color: rgba(180, 240, 210, 0.7) !important;
+  line-height: 1.7 !important;
+  font-family: 'Courier New', monospace;
+}
+.security-card-hex {
+  position: absolute;
+  bottom: 8px;
+  right: 12px;
+  font-size: 0.55rem;
+  color: rgba(16, 185, 129, 0.18);
+  letter-spacing: 0.08em;
+  font-family: 'Courier New', monospace;
+  pointer-events: none;
+  white-space: nowrap;
+}
+/* Override fade-up so security cards only use sec-visible */
+.security-deep-card.fade-up,
+.security-deep-card.fade-up.visible {
+  opacity: 0;
+  transform: translateX(-28px);
+}

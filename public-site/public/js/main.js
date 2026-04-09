@@ -1,4 +1,76 @@
 document.addEventListener('DOMContentLoaded', () => {
+
+  /* ── Scroll-driven card scale ──────────────────────────────────────────── */
+  (function initCardScale() {
+    var cards = Array.from(document.querySelectorAll('.feature-card, .ai-card'));
+    if (!cards.length || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    function updateCardScales() {
+      var vcenter = window.innerHeight / 2;
+      cards.forEach(function(card) {
+        var rect = card.getBoundingClientRect();
+        if (rect.bottom < 0 || rect.top > window.innerHeight) return;
+        var dist = Math.abs((rect.top + rect.height / 2) - vcenter);
+        var t = Math.max(0, 1 - dist / (window.innerHeight * 0.75));
+        card.style.setProperty('--scroll-scale', (0.86 + t * 0.14).toFixed(4));
+      });
+    }
+    window.addEventListener('scroll', updateCardScales, { passive: true });
+    window.addEventListener('resize', updateCardScales, { passive: true });
+    updateCardScales();
+  })();
+
+  /* ── Why-number glitch reveal ──────────────────────────────────────────── */
+  (function initGlitch() {
+    var POOL = '0123456789$%#@!*+&×÷∑§¥€£₿▓░█▒↑↓→←⊕⊗';
+    var glitchObs = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        var el = entry.target;
+        if (!entry.isIntersecting || el.dataset.glitched) return;
+        el.dataset.glitched = '1';
+        glitchObs.unobserve(el);
+        var target = el.getAttribute('data-val') || el.textContent.trim();
+        var duration = 1400, tickMs = 55, start = Date.now();
+        el.classList.add('glitching');
+        var timer = setInterval(function() {
+          var prog = Math.min((Date.now() - start) / duration, 1);
+          if (prog >= 1) {
+            clearInterval(timer);
+            el.classList.remove('glitching');
+            el.classList.add('revealed');
+            el.textContent = target;
+            return;
+          }
+          var result = '';
+          for (var i = 0; i < Math.max(target.length, 2); i++) {
+            result += (i < target.length && Math.random() < prog * 1.2)
+              ? target[i]
+              : POOL[Math.floor(Math.random() * POOL.length)];
+          }
+          el.textContent = result;
+        }, tickMs);
+      });
+    }, { threshold: 0.6 });
+    document.querySelectorAll('.why-number[data-val]').forEach(function(el) {
+      glitchObs.observe(el);
+    });
+  })();
+
+  /* ── Security card terminal entrance ──────────────────────────────────── */
+  (function initSecCards() {
+    var secCards = document.querySelectorAll('.security-deep-card');
+    if (!secCards.length) return;
+    var secObs = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (!entry.isIntersecting) return;
+        var card = entry.target;
+        var delay = parseInt(card.getAttribute('data-sec-delay') || '0', 10);
+        setTimeout(function() { card.classList.add('sec-visible'); }, delay);
+        secObs.unobserve(card);
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+    secCards.forEach(function(c) { secObs.observe(c); });
+  })();
+
   const toggle = document.querySelector('.mobile-toggle');
   const mobileMenu = document.querySelector('.mobile-menu');
 
