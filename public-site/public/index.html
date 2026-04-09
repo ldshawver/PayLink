@@ -128,12 +128,12 @@
                 <div class="dash-sidebar-item">📋 Reports</div>
               </div>
               <div class="dash-main">
-                <div class="dash-card"><div class="label">Active Employees</div><div class="value">127</div><div class="change">↑ 12% this quarter</div></div>
-                <div class="dash-card"><div class="label">Hours This Week</div><div class="value">4,280</div><div class="change">↑ 3% vs last week</div></div>
+                <div class="dash-card"><div class="label">Active Employees</div><div class="value dash-countup" data-count="127">0</div><div class="change">↑ 12% this quarter</div></div>
+                <div class="dash-card"><div class="label">Hours This Week</div><div class="value dash-countup" data-count="4280" data-format="comma">0</div><div class="change">↑ 3% vs last week</div></div>
                 <div class="dash-card"><div class="label">Next Payroll</div><div class="value">$184K</div><div class="change">Processing Mar 28</div></div>
-                <div class="dash-card"><div class="label">Open PTO</div><div class="value">14</div><div class="change">5 pending approval</div></div>
-                <div class="dash-card"><div class="label">Contractors</div><div class="value">23</div><div class="change">8 invoices pending</div></div>
-                <div class="dash-card"><div class="label">Compliance</div><div class="value">98%</div><div class="change">All audits passed</div></div>
+                <div class="dash-card"><div class="label">Open PTO</div><div class="value dash-countup" data-count="14">0</div><div class="change">5 pending approval</div></div>
+                <div class="dash-card"><div class="label">Contractors</div><div class="value dash-countup" data-count="23">0</div><div class="change">8 invoices pending</div></div>
+                <div class="dash-card"><div class="label">Compliance</div><div class="value dash-countup" data-count="98" data-suffix="%">0%</div><div class="change">All audits passed</div></div>
               </div>
             </div>
           </div>
@@ -171,11 +171,11 @@
               </div>
               <div class="dash-main">
                 <div class="dash-card tc-card"><div class="tc-clock">9:14 AM</div><div class="tc-label">Current Time</div></div>
-                <div class="dash-card"><div class="label">Clocked In</div><div class="value tc-green">84</div><div class="change">of 127 employees</div></div>
-                <div class="dash-card"><div class="label">Late Arrivals</div><div class="value tc-amber">3</div><div class="change">flagged for review</div></div>
-                <div class="dash-card"><div class="label">On Break</div><div class="value">12</div><div class="change">avg 28 min</div></div>
-                <div class="dash-card"><div class="label">Overtime Today</div><div class="value tc-amber">7</div><div class="change">approaching 8h</div></div>
-                <div class="dash-card"><div class="label">Absent</div><div class="value tc-red">2</div><div class="change">no call / no show</div></div>
+                <div class="dash-card"><div class="label">Clocked In</div><div class="value tc-green dash-countup" data-count="84">0</div><div class="change">of 127 employees</div></div>
+                <div class="dash-card"><div class="label">Late Arrivals</div><div class="value tc-amber dash-countup" data-count="3">0</div><div class="change">flagged for review</div></div>
+                <div class="dash-card"><div class="label">On Break</div><div class="value dash-countup" data-count="12">0</div><div class="change">avg 28 min</div></div>
+                <div class="dash-card"><div class="label">Overtime Today</div><div class="value tc-amber dash-countup" data-count="7">0</div><div class="change">approaching 8h</div></div>
+                <div class="dash-card"><div class="label">Absent</div><div class="value tc-red dash-countup" data-count="2">0</div><div class="change">no call / no show</div></div>
               </div>
             </div>
           </div>
@@ -211,8 +211,8 @@
               <div class="dash-main">
                 <div class="dash-card"><div class="label">Current Run</div><div class="value">Mar 15-28</div><div class="change">Bi-weekly</div></div>
                 <div class="dash-card"><div class="label">Gross Pay</div><div class="value">$184K</div><div class="change">+3.2% vs last</div></div>
-                <div class="dash-card"><div class="label">Employees</div><div class="value">127</div><div class="change">3 on leave</div></div>
-                <div class="dash-card"><div class="label">ACH Ready</div><div class="value">119</div><div class="change">8 by check</div></div>
+                <div class="dash-card"><div class="label">Employees</div><div class="value dash-countup" data-count="127">0</div><div class="change">3 on leave</div></div>
+                <div class="dash-card"><div class="label">ACH Ready</div><div class="value dash-countup" data-count="119">0</div><div class="change">8 by check</div></div>
                 <div class="dash-card"><div class="label">AI Pre-Flight</div><div class="value tc-green">✓ Clear</div><div class="change">No anomalies found</div></div>
                 <div class="dash-card"><div class="label">Tax Withheld</div><div class="value">$41.2K</div><div class="change">Fed + State + CA</div></div>
               </div>
@@ -247,7 +247,19 @@
   <section style="background: var(--dark-card);">
     <div class="container section-center">
       <div class="ai-section-label fade-up">✦ Powered by AI</div>
-      <h2 class="section-title fade-up stagger-1">AI Built Into Your Workflow</h2>
+      <div class="ai-mascot-wrap" aria-hidden="true">
+        <div class="ai-mascot">
+          <div class="ai-mascot-antenna"></div>
+          <div class="ai-mascot-head">
+            <div class="ai-mascot-eye"></div>
+            <div class="ai-mascot-eye"></div>
+          </div>
+          <div class="ai-mascot-body">
+            <div class="ai-typing-dots"><span></span><span></span><span></span></div>
+          </div>
+        </div>
+      </div>
+      <h2 class="section-title ai-typewriter-target" data-ai-text="AI Built Into Your Workflow"><span class="ai-typewriter-text"></span><span class="ai-typewriter-cursor">|</span></h2>
       <p class="section-desc fade-up stagger-2">
         PayLink doesn't bolt on AI as a feature — it's woven into the work you do every day. From scanning a receipt to reviewing payroll before it runs, AI handles the tedious parts so your team can focus on the work that matters.
       </p>

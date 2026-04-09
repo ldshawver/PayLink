@@ -896,3 +896,245 @@
   opacity: 0;
   transform: translateX(-28px);
 }
+
+/* ── Comparison table: center + improve ─────────────────────────────────── */
+.comparison-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.comparison-table {
+  max-width: 920px;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 48px rgba(0,0,0,0.4);
+}
+.comparison-table thead tr {
+  background: rgba(255,255,255,0.03);
+}
+.comparison-table th {
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 14px 18px;
+  color: rgba(255,255,255,0.5);
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  text-align: center;
+}
+.comparison-table th.col-feature {
+  text-align: left;
+  width: 200px;
+  color: rgba(255,255,255,0.4);
+}
+.comparison-table th.paylink-col-header {
+  background: linear-gradient(180deg, rgba(13,148,136,0.22), rgba(6,182,212,0.08));
+  color: #10b981;
+  font-size: 0.9rem;
+  letter-spacing: 0.02em;
+  border-left: 1px solid rgba(13,148,136,0.3);
+  border-right: 1px solid rgba(13,148,136,0.3);
+  position: relative;
+}
+.comparison-table th.paylink-col-header::after {
+  content: '★ BEST';
+  display: block;
+  font-size: 0.52rem;
+  letter-spacing: 0.12em;
+  color: rgba(16,185,129,0.6);
+  font-weight: 600;
+  margin-top: 2px;
+}
+.comparison-table td {
+  padding: 13px 18px;
+  text-align: center;
+  font-size: 0.88rem;
+  color: rgba(255,255,255,0.5);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.comparison-table td.col-feature {
+  text-align: left;
+  color: rgba(255,255,255,0.8);
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+.comparison-table td.col-paylink {
+  background: rgba(13,148,136,0.07);
+  border-left: 1px solid rgba(13,148,136,0.18);
+  border-right: 1px solid rgba(13,148,136,0.18);
+}
+.comparison-table tr:last-child td { border-bottom: none; }
+.comparison-table tr:hover td { background: rgba(255,255,255,0.03); }
+.comparison-table tr:hover td.col-paylink { background: rgba(13,148,136,0.12); }
+.comparison-note {
+  max-width: 920px;
+  width: 100%;
+  font-size: 0.78rem;
+  color: rgba(255,255,255,0.3);
+  margin-top: 14px;
+  text-align: right;
+  padding-right: 4px;
+}
+.check-yes {
+  color: #10b981;
+  font-size: 1.1rem;
+  font-weight: 800;
+  display: inline-block;
+  transition: transform 0.2s;
+}
+.check-no {
+  color: rgba(255,255,255,0.18);
+  font-size: 1rem;
+  display: inline-block;
+}
+.check-partial {
+  color: #f59e0b;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+/* ── Check/X matrix flip animation ──────────────────────────────────────── */
+@keyframes check-matrix {
+  0%   { opacity: 1; }
+  20%  { opacity: 0.3; transform: scale(0.7) rotate(-20deg); }
+  40%  { opacity: 0.6; transform: scale(1.15) rotate(10deg); }
+  70%  { opacity: 0.8; transform: scale(0.95) rotate(-5deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0deg); }
+}
+.ch-matrix {
+  animation: check-matrix 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ── AI mascot robot ─────────────────────────────────────────────────────── */
+.ai-mascot-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+  height: 80px;
+  position: relative;
+}
+.ai-mascot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  animation: ai-float 3s ease-in-out infinite;
+  filter: drop-shadow(0 0 12px rgba(13,148,136,0.5));
+}
+@keyframes ai-float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-8px); }
+}
+.ai-mascot-antenna {
+  width: 3px;
+  height: 14px;
+  background: linear-gradient(180deg, #10b981, #0d9488);
+  border-radius: 2px;
+  position: relative;
+}
+.ai-mascot-antenna::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px rgba(16,185,129,0.9);
+  animation: sec-pulse 1.5s ease-in-out infinite;
+}
+.ai-mascot-head {
+  width: 48px;
+  height: 38px;
+  background: linear-gradient(135deg, rgba(13,148,136,0.25), rgba(6,182,212,0.1));
+  border: 1.5px solid rgba(13,148,136,0.55);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  position: relative;
+}
+.ai-mascot-head::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 8px; right: 8px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(16,185,129,0.5), transparent);
+}
+.ai-mascot-eye {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16,185,129,0.8);
+  animation: ai-blink 4s ease-in-out infinite;
+}
+.ai-mascot-eye:last-child { animation-delay: 0.15s; }
+@keyframes ai-blink {
+  0%, 90%, 100% { transform: scaleY(1); opacity: 1; }
+  95%            { transform: scaleY(0.1); opacity: 0.5; }
+}
+.ai-mascot-body {
+  width: 36px;
+  height: 22px;
+  background: linear-gradient(135deg, rgba(13,148,136,0.2), rgba(6,182,212,0.08));
+  border: 1.5px solid rgba(13,148,136,0.4);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ai-typing-dots {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.ai-typing-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: rgba(16,185,129,0.7);
+  animation: ai-dot-bounce 1.2s ease-in-out infinite;
+}
+.ai-typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+.ai-typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes ai-dot-bounce {
+  0%, 100% { transform: translateY(0); opacity: 0.5; }
+  50%       { transform: translateY(-3px); opacity: 1; }
+}
+
+/* ── AI typewriter heading ───────────────────────────────────────────────── */
+.ai-typewriter-target {
+  min-height: 1.3em;
+}
+.ai-typewriter-cursor {
+  display: inline-block;
+  color: #10b981;
+  animation: tw-blink 0.8s step-start infinite;
+  font-weight: 300;
+  margin-left: 2px;
+}
+@keyframes tw-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+.ai-typewriter-target.tw-done .ai-typewriter-cursor {
+  animation: none;
+  opacity: 0;
+}
+
+/* ── Dashboard count-up flash ────────────────────────────────────────────── */
+.dash-countup.counting {
+  color: #10b981 !important;
+  transition: color 0.3s;
+}
+.dash-countup.done {
+  color: inherit;
+  transition: color 0.6s;
+}

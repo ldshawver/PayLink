@@ -155,6 +155,98 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  /* ── Dashboard number count-up ─────────────────────────────────────────── */
+  function runCountUp(slide) {
+    slide.querySelectorAll('.dash-countup:not([data-counted])').forEach(function(el) {
+      el.setAttribute('data-counted', '1');
+      var target = parseInt(el.getAttribute('data-count') || '0', 10);
+      var suffix = el.getAttribute('data-suffix') || '';
+      var fmt = el.getAttribute('data-format') === 'comma';
+      var dur = Math.min(1200, Math.max(600, target * 5));
+      var start = performance.now();
+      el.classList.add('counting');
+      function tick(now) {
+        var prog = Math.min((now - start) / dur, 1);
+        var ease = 1 - Math.pow(1 - prog, 3);
+        var cur = Math.round(ease * target);
+        el.textContent = (fmt ? cur.toLocaleString() : cur) + suffix;
+        if (prog < 1) {
+          requestAnimationFrame(tick);
+        } else {
+          el.textContent = (fmt ? target.toLocaleString() : target) + suffix;
+          el.classList.remove('counting');
+          el.classList.add('done');
+        }
+      }
+      requestAnimationFrame(tick);
+    });
+  }
+
+  /* ── Check/X matrix animation ───────────────────────────────────────────── */
+  (function initCheckMatrix() {
+    var MPOOL = ['0','1','|','/','-','\\','■','□','▪','▫','#','@','*','%','$','&'];
+    var table = document.querySelector('.comparison-table');
+    if (!table) return;
+    var done = false;
+    var cmpObs = new IntersectionObserver(function(entries) {
+      if (done || !entries[0].isIntersecting) return;
+      done = true;
+      cmpObs.disconnect();
+      var cells = table.querySelectorAll('.check-yes, .check-no');
+      cells.forEach(function(cell, i) {
+        var finalChar = cell.textContent.trim();
+        setTimeout(function() {
+          var iters = 0, maxIters = 12;
+          var timer = setInterval(function() {
+            if (iters >= maxIters) {
+              clearInterval(timer);
+              cell.textContent = finalChar;
+              cell.classList.add('ch-matrix');
+              setTimeout(function() { cell.classList.remove('ch-matrix'); }, 600);
+              return;
+            }
+            cell.textContent = MPOOL[Math.floor(Math.random() * MPOOL.length)];
+            iters++;
+          }, 40);
+        }, i * 38);
+      });
+    }, { threshold: 0.2 });
+    cmpObs.observe(table);
+  })();
+
+  /* ── AI mascot typewriter ────────────────────────────────────────────────── */
+  (function initAITypist() {
+    var target = document.querySelector('.ai-typewriter-target');
+    if (!target) return;
+    var textEl = target.querySelector('.ai-typewriter-text');
+    var mascot = document.querySelector('.ai-mascot');
+    var fullText = target.getAttribute('data-ai-text') || '';
+    var triggered = false;
+    var twObs = new IntersectionObserver(function(entries) {
+      if (triggered || !entries[0].isIntersecting) return;
+      triggered = true;
+      twObs.disconnect();
+      var i = 0;
+      textEl.textContent = '';
+      if (mascot) mascot.style.filter = 'drop-shadow(0 0 18px rgba(16,185,129,0.8))';
+      var timer = setInterval(function() {
+        if (i >= fullText.length) {
+          clearInterval(timer);
+          target.classList.add('tw-done');
+          if (mascot) {
+            setTimeout(function() {
+              mascot.style.filter = 'drop-shadow(0 0 12px rgba(13,148,136,0.5))';
+            }, 600);
+          }
+          return;
+        }
+        textEl.textContent += fullText[i];
+        i++;
+      }, 48);
+    }, { threshold: 0.5 });
+    twObs.observe(target);
+  })();
+
   // ── Dashboard Preview Carousel ──────────────────────────────────────────
   const cycler = document.getElementById('dashCycler');
   if (cycler) {
@@ -167,10 +259,12 @@ document.addEventListener('DOMContentLoaded', () => {
       slides[current].classList.remove('active');
       slides[current].classList.add('exit-left');
       dots[current].classList.remove('active');
-      setTimeout(() => slides[current < slides.length ? current : 0].classList.remove('exit-left'), 400);
+      const prev = current;
+      setTimeout(() => slides[prev].classList.remove('exit-left'), 400);
       current = idx;
       slides[current].classList.add('active');
       dots[current].classList.add('active');
+      runCountUp(slides[current]);
     }
 
     function startAuto() {
@@ -191,6 +285,14 @@ document.addEventListener('DOMContentLoaded', () => {
         startAuto();
       });
     });
+
+    var dashObs = new IntersectionObserver(function(entries) {
+      if (entries[0].isIntersecting) {
+        runCountUp(slides[current]);
+        dashObs.disconnect();
+      }
+    }, { threshold: 0.3 });
+    dashObs.observe(cycler);
 
     startAuto();
   }
