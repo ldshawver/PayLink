@@ -791,6 +791,90 @@
     </div>
   </footer>
 
+  <!-- ── Clock-in / Clock-out Modal ──────────────────────────────────────── -->
+  <div id="punchModal" class="punch-modal-overlay" style="display:none;" role="dialog" aria-modal="true" aria-label="Time clock">
+    <div class="punch-modal-card">
+      <button id="punchModalClose" class="punch-modal-close" aria-label="Close">&times;</button>
+
+      <!-- Step 1: Credentials -->
+      <div id="punchStep1">
+        <div class="punch-modal-header">
+          <div id="punchModalIcon" class="punch-modal-icon">&#9654;</div>
+          <p id="punchModalTitle" class="punch-modal-title">Clock In</p>
+          <p id="punchModalSub" class="punch-modal-sub">Enter your employee number and PIN to continue</p>
+        </div>
+        <div class="punch-modal-field">
+          <label for="punchEmpNum">Employee Number</label>
+          <input type="text" id="punchEmpNum" placeholder="e.g. 1001" autocomplete="off" inputmode="numeric">
+        </div>
+        <div class="punch-modal-field">
+          <label for="punchPin">PIN</label>
+          <input type="password" id="punchPin" placeholder="Enter PIN" autocomplete="off" inputmode="numeric">
+        </div>
+        <p id="punchModalError" class="punch-modal-error"></p>
+        <button id="punchModalContinue" class="punch-modal-submit">
+          <span id="punchModalContinueText">Continue &rarr;</span>
+        </button>
+      </div>
+
+      <!-- Step 2 In: Clock-in choices -->
+      <div id="punchStep2In" style="display:none;">
+        <div class="punch-modal-header">
+          <p class="punch-modal-title">What would you like to do?</p>
+          <p class="punch-modal-sub">Choose an option below</p>
+        </div>
+        <div class="punch-choice-list">
+          <button id="btnChoiceClockIn" class="punch-choice-btn punch-choice-green" type="button">
+            <span class="punch-choice-icon">&#9654;</span>
+            <span><div class="punch-choice-label">Clock In</div><div class="punch-choice-desc">Start tracking time for your shift</div></span>
+          </button>
+          <button id="btnChoiceBreakIn" class="punch-choice-btn punch-choice-blue" type="button">
+            <span class="punch-choice-icon">&#8635;</span>
+            <span><div class="punch-choice-label">Return from Break</div><div class="punch-choice-desc">Resume the clock after a break</div></span>
+          </button>
+          <button id="btnChoiceSignIn" class="punch-choice-btn punch-choice-teal" type="button">
+            <span class="punch-choice-icon">&#10148;</span>
+            <span><div class="punch-choice-label">Sign In to Dashboard</div><div class="punch-choice-desc">Access manager tools without clocking in</div></span>
+          </button>
+        </div>
+        <p id="punchModalError2" class="punch-modal-error"></p>
+        <button id="btnBackToStep1In" class="punch-back-btn" type="button">&#8592; Back</button>
+      </div>
+
+      <!-- Step 2 Out: Clock-out choices -->
+      <div id="punchStep2Out" style="display:none;">
+        <div class="punch-modal-header">
+          <p class="punch-modal-title">Taking a break or done?</p>
+          <p class="punch-modal-sub">Choose what applies to you</p>
+        </div>
+        <div class="punch-choice-list">
+          <button id="btnChoiceBreakOut" class="punch-choice-btn punch-choice-amber" type="button">
+            <span class="punch-choice-icon">&#9749;</span>
+            <span><div class="punch-choice-label">Start Break</div><div class="punch-choice-desc">Pause the clock — I'll be back soon</div></span>
+          </button>
+          <button id="btnChoiceShiftEnd" class="punch-choice-btn punch-choice-red" type="button">
+            <span class="punch-choice-icon">&#9632;</span>
+            <span><div class="punch-choice-label">End Shift</div><div class="punch-choice-desc">Clock out and end my workday</div></span>
+          </button>
+        </div>
+        <p id="punchModalError3" class="punch-modal-error"></p>
+        <button id="btnBackToStep1Out" class="punch-back-btn" type="button">&#8592; Back</button>
+      </div>
+
+      <!-- Success / confirmation state -->
+      <div id="punchModalSuccess" style="display:none;">
+        <div class="punch-modal-success-wrap">
+          <div id="punchSuccessIcon" class="punch-modal-success-icon">&#10003;</div>
+          <p id="punchModalSuccessName" class="punch-modal-success-name"></p>
+          <p id="punchModalSuccessMsg" class="punch-modal-success-msg"></p>
+          <div id="punchCountdownWrap">
+            <p class="punch-modal-countdown">Closing in <span id="punchModalCountdown">5</span>s</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="/js/punch-clock.js"></script>
   <script src="/js/main.js"></script>
 </body>
