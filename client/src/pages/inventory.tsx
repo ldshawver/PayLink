@@ -12,37 +12,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Package, Plus, Pencil, Trash2, Search, Download, Upload, AlertTriangle, TrendingDown } from "lucide-react";
+import { Package, Plus, Pencil, Trash2, Search, Download, AlertTriangle, TrendingDown } from "lucide-react";
 
-const STARTING_INVENTORY = [
-  { name: "1 Gram DMT", quantity: 0 },
-  { name: "DMT Vape (Cartridge Only)", quantity: 0 },
-  { name: "DMT Vape", quantity: 0 },
-  { name: "1 Gram T", quantity: 39 },
-  { name: "1 oz BDO", quantity: 25 },
-  { name: "2 oz BDO", quantity: 40 },
-  { name: "Red Brick", quantity: 7 },
-  { name: "Black Diamond", quantity: 10 },
-  { name: "1 Gram Cocain", quantity: 3.5 },
-  { name: "1 Gram Mushrooms", quantity: 1 },
-  { name: "1 Watermellon Mushroom Gummie", quantity: 10 },
-  { name: "1 Rasberry Mushroom Gummie", quantity: 10 },
-  { name: "Mushroom Tea Bag", quantity: 1 },
-  { name: "Mushroom Milk Chocolate", quantity: 1 },
-  { name: "1/2 Gram Ketamine", quantity: 1 },
-  { name: "1 Molly Pill", quantity: 20 },
-  { name: "Oil Burning Bong Stem", quantity: 1 },
-  { name: "Oil Burner", quantity: 2 },
-  { name: "Butane Lighter", quantity: 2 },
-  { name: "Tremedol", quantity: 6 },
-  { name: "Amoxicilin", quantity: 4 },
-  { name: "Doxycycline", quantity: 3 },
-  { name: "Zinotram", quantity: 9 },
-  { name: "Viagra", quantity: 7 },
-  { name: "Flexerall", quantity: 5 },
-  { name: "CASH", quantity: 60 },
-  { name: "points", quantity: 3 },
-];
 
 interface InventoryItem {
   id: string;
@@ -118,18 +89,6 @@ export default function InventoryPage() {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
-  const seedMutation = useMutation({
-    mutationFn: async () => {
-      for (const item of STARTING_INVENTORY) {
-        await apiRequest("POST", "/api/inventory", { name: item.name, quantity: String(item.quantity) });
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/inventory"] });
-      toast({ title: "Starting inventory loaded" });
-    },
-    onError: (e: any) => toast({ title: "Error loading inventory", description: e.message, variant: "destructive" }),
-  });
 
   const filtered = items.filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -177,12 +136,6 @@ export default function InventoryPage() {
           <Button variant="outline" size="sm" onClick={handleExportCsv} data-testid="button-export-csv">
             <Download className="h-4 w-4 mr-1" /> Export CSV
           </Button>
-          {isManager && items.length === 0 && (
-            <Button variant="outline" size="sm" onClick={() => seedMutation.mutate()} disabled={seedMutation.isPending} data-testid="button-load-starting-inventory">
-              <Upload className="h-4 w-4 mr-1" />
-              {seedMutation.isPending ? "Loading..." : "Load Starting Inventory"}
-            </Button>
-          )}
           {isManager && (
             <Button size="sm" onClick={openAdd} data-testid="button-add-item">
               <Plus className="h-4 w-4 mr-1" /> Add Item
@@ -250,7 +203,7 @@ export default function InventoryPage() {
                 <>
                   <p className="font-medium mb-1">No inventory yet</p>
                   {isManager && (
-                    <p className="text-sm">Click <span className="font-semibold">Load Starting Inventory</span> to populate from the default list, or add items manually.</p>
+                    <p className="text-sm">Click <span className="font-semibold">Add Item</span> to start tracking your stock.</p>
                   )}
                 </>
               ) : (
