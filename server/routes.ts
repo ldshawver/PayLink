@@ -17654,5 +17654,68 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  // ── Inventory ──────────────────────────────────────────────────────────────
+  app.get("/api/inventory", requireAuth, requireRole("admin", "manager", "employee"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      if (!user?.companyId) return res.status(400).json({ message: "No company" });
+      const items = await storage.getInventoryItems(user.companyId);
+      res.json(items);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/inventory", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      if (!user?.companyId) return res.status(400).json({ message: "No company" });
+      const { name, quantity, unit, notes } = req.body;
+      if (!name) return res.status(400).json({ message: "Name is required" });
+      const item = await storage.createInventoryItem({
+        companyId: user.companyId,
+        name: String(name).trim(),
+        quantity: String(quantity ?? 0),
+        unit: unit || null,
+        notes: notes || null,
+      });
+      res.status(201).json(item);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.patch("/api/inventory/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const item = await storage.getInventoryItem(req.params.id);
+      if (!item) return res.status(404).json({ message: "Item not found" });
+      if (item.companyId !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      const { name, quantity, unit, notes } = req.body;
+      const updated = await storage.updateInventoryItem(req.params.id, {
+        ...(name !== undefined && { name: String(name).trim() }),
+        ...(quantity !== undefined && { quantity: String(quantity) }),
+        ...(unit !== undefined && { unit: unit || null }),
+        ...(notes !== undefined && { notes: notes || null }),
+      });
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/inventory/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const item = await storage.getInventoryItem(req.params.id);
+      if (!item) return res.status(404).json({ message: "Item not found" });
+      if (item.companyId !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      await storage.deleteInventoryItem(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
   return httpServer;
 }

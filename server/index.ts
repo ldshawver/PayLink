@@ -2137,6 +2137,17 @@ Thank you,
       time_punch_id VARCHAR
     )`);
 
+    await run("inventory_items table", sql`CREATE TABLE IF NOT EXISTS inventory_items (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      quantity NUMERIC NOT NULL DEFAULT 0,
+      unit TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
     // Seed 6 system document templates (3 invoice, 3 proposal)
     try {
       const templateCount = await db.execute(sql`SELECT COUNT(*) as c FROM biz_document_templates WHERE is_system = TRUE`);

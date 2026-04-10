@@ -71,6 +71,7 @@ const PlatformHomePage = lazy(() => import("@/pages/platform-home"));
 const FeatureRegistryPage = lazy(() => import("@/pages/feature-registry"));
 const RoleManagementPage = lazy(() => import("@/pages/role-management"));
 const PlatformAuditPage = lazy(() => import("@/pages/platform-audit"));
+const InventoryPage = lazy(() => import("@/pages/inventory"));
 
 // ─── Shared page-loading fallback ────────────────────────────────────────────
 function PageLoader() {
@@ -128,6 +129,7 @@ function AuthenticatedRouter() {
         <Route path="/app/notification-templates" component={NotificationTemplatesPage} />
         <Route path="/app/messages" component={MessagesPage} />
         <Route path="/app/trade-compensation">{() => <RoleGuard roles={["admin", "manager"]}><TradeCompensationPage /></RoleGuard>}</Route>
+        <Route path="/app/inventory" component={InventoryPage} />
         <Route path="/app/agreements">{() => <PlatformRedirect to="/platform/agreements" />}</Route>
         <Route path="/app/contractor-onboarding">{() => <PlatformRedirect to="/platform/contractor-onboarding" />}</Route>
         <Route path="/app/permissions">{() => <PlatformRedirect to="/platform/permissions" />}</Route>

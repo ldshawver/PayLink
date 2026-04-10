@@ -67,6 +67,7 @@ import {
   UserCog,
   KeyRound,
   Printer,
+  Package,
 } from "lucide-react";
 import {
   Sidebar,
@@ -314,6 +315,15 @@ const TENANT_NAV: NavGroup[] = [
         roles: ["admin", "manager"],
         items: [
           { title: "Transactions", url: "/app/trade-compensation", icon: ArrowLeftRight },
+        ],
+      },
+      {
+        label: "Inventory",
+        icon: Package,
+        url: "/app/inventory",
+        roles: ["admin", "manager", "employee"],
+        items: [
+          { title: "Stock List", url: "/app/inventory", icon: Package },
         ],
       },
       {

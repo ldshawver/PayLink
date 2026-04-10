@@ -205,6 +205,8 @@ import {
   type BizDocumentHistory, type InsertBizDocumentHistory,
   treasuryOutboundPayments,
   type TreasuryOutboundPayment, type InsertTreasuryOutboundPayment,
+  inventoryItems,
+  type InventoryItem, type InsertInventoryItem,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -979,6 +981,13 @@ export interface IStorage {
   getTreasuryOutboundPaymentByStripeId(stripeId: string): Promise<TreasuryOutboundPayment | undefined>;
   createTreasuryOutboundPayment(data: InsertTreasuryOutboundPayment): Promise<TreasuryOutboundPayment>;
   updateTreasuryOutboundPayment(id: string, data: Partial<TreasuryOutboundPayment>): Promise<TreasuryOutboundPayment | undefined>;
+  // ── Inventory ──────────────────────────────────────────────────────────────
+  getInventoryItems(companyId: string): Promise<InventoryItem[]>;
+  getInventoryItem(id: string): Promise<InventoryItem | undefined>;
+  createInventoryItem(data: InsertInventoryItem): Promise<InventoryItem>;
+  updateInventoryItem(id: string, data: Partial<InventoryItem>): Promise<InventoryItem | undefined>;
+  deleteInventoryItem(id: string): Promise<void>;
+  bulkSetInventory(companyId: string, items: InsertInventoryItem[]): Promise<InventoryItem[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -4293,6 +4302,31 @@ export class DatabaseStorage implements IStorage {
   async updateTreasuryOutboundPayment(id: string, data: Partial<TreasuryOutboundPayment>): Promise<TreasuryOutboundPayment | undefined> {
     const [r] = await db.update(treasuryOutboundPayments).set({ ...data, updatedAt: new Date() }).where(eq(treasuryOutboundPayments.id, id)).returning();
     return r;
+  }
+
+  // ── Inventory ──────────────────────────────────────────────────────────────
+  async getInventoryItems(companyId: string): Promise<InventoryItem[]> {
+    return db.select().from(inventoryItems).where(eq(inventoryItems.companyId, companyId)).orderBy(inventoryItems.name);
+  }
+  async getInventoryItem(id: string): Promise<InventoryItem | undefined> {
+    const [r] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, id));
+    return r;
+  }
+  async createInventoryItem(data: InsertInventoryItem): Promise<InventoryItem> {
+    const [r] = await db.insert(inventoryItems).values(data).returning();
+    return r;
+  }
+  async updateInventoryItem(id: string, data: Partial<InventoryItem>): Promise<InventoryItem | undefined> {
+    const [r] = await db.update(inventoryItems).set({ ...data, updatedAt: new Date() }).where(eq(inventoryItems.id, id)).returning();
+    return r;
+  }
+  async deleteInventoryItem(id: string): Promise<void> {
+    await db.delete(inventoryItems).where(eq(inventoryItems.id, id));
+  }
+  async bulkSetInventory(companyId: string, items: InsertInventoryItem[]): Promise<InventoryItem[]> {
+    await db.delete(inventoryItems).where(eq(inventoryItems.companyId, companyId));
+    if (!items.length) return [];
+    return db.insert(inventoryItems).values(items.map(i => ({ ...i, companyId }))).returning();
   }
 }
 

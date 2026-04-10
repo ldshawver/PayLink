@@ -3780,3 +3780,19 @@ export const treasuryOutboundPayments = pgTable("treasury_outbound_payments", {
 export const insertTreasuryOutboundPaymentSchema = createInsertSchema(treasuryOutboundPayments).omit({ id: true, createdAt: true, updatedAt: true });
 export type TreasuryOutboundPayment = typeof treasuryOutboundPayments.$inferSelect;
 export type InsertTreasuryOutboundPayment = z.infer<typeof insertTreasuryOutboundPaymentSchema>;
+
+// ── Inventory Items ────────────────────────────────────────────────────────────
+export const inventoryItems = pgTable("inventory_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  name: text("name").notNull(),
+  quantity: numeric("quantity").notNull().default("0"),
+  unit: text("unit"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertInventoryItemSchema = createInsertSchema(inventoryItems).omit({ id: true, createdAt: true, updatedAt: true });
+export type InventoryItem = typeof inventoryItems.$inferSelect;
+export type InsertInventoryItem = z.infer<typeof insertInventoryItemSchema>;
