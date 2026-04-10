@@ -524,9 +524,9 @@ export async function registerRoutes(
       if (!employeeNumber || !pin) {
         return res.status(400).json({ message: "Employee number and PIN are required" });
       }
-      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
-      if (!worker || worker.pin !== pin) {
-        return res.status(401).json({ message: "Invalid employee number or PIN" });
+      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
+      if (!worker) {
+        return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
       }
       if (!worker.isActive) {
         return res.status(403).json({ message: "This employee account is inactive" });
@@ -887,15 +887,9 @@ export async function registerRoutes(
       if (!employeeNumber || !pin) {
         return res.status(400).json({ message: "Employee number and PIN are required" });
       }
-      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
+      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
       if (!worker) {
-        return res.status(401).json({ message: "Invalid employee number or PIN" });
-      }
-      if (!worker.pin) {
-        return res.status(401).json({ message: "No PIN is set for this employee. Ask your administrator to set a Time Clock PIN." });
-      }
-      if (worker.pin !== pin) {
-        return res.status(401).json({ message: "Invalid PIN. Please try again." });
+        return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
       }
       if (!worker.isActive) {
         return res.status(403).json({ message: "This employee account is inactive" });
@@ -1165,12 +1159,8 @@ export async function registerRoutes(
       if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
 
       // ── Path 1: Employee number + PIN ────────────────────────────────────
-      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
+      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
       if (worker) {
-        if (!worker.pin) {
-          return res.status(401).json({ message: "No PIN is set for this employee. Ask your administrator to set a Time Clock PIN." });
-        }
-        if (worker.pin !== pin) return res.status(401).json({ message: "Invalid PIN. Please try again." });
         if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
         const allUsers = await storage.getUsers();
         let user = allUsers.find(u => u.workerId === worker.id);
@@ -1224,10 +1214,8 @@ export async function registerRoutes(
     try {
       const { employeeNumber, pin, wageGroupId } = req.body;
       if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
-      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
-      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN" });
-      if (!worker.pin) return res.status(401).json({ message: "No PIN is set for this employee. Ask your administrator to set a Time Clock PIN." });
-      if (worker.pin !== pin) return res.status(401).json({ message: "Invalid PIN. Please try again." });
+      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
+      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
       if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
       if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in." });
@@ -1382,10 +1370,8 @@ export async function registerRoutes(
     try {
       const { employeeNumber, pin } = req.body;
       if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
-      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
-      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN" });
-      if (!worker.pin) return res.status(401).json({ message: "No PIN is set for this employee. Ask your administrator to set a Time Clock PIN." });
-      if (worker.pin !== pin) return res.status(401).json({ message: "Invalid PIN. Please try again." });
+      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
+      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
       if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
       // Must have an open shift
       const allPunches = await storage.getTimePunches(worker.companyId);
@@ -1465,10 +1451,8 @@ export async function registerRoutes(
     try {
       const { employeeNumber, pin } = req.body;
       if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
-      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
-      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN" });
-      if (!worker.pin) return res.status(401).json({ message: "No PIN is set for this employee. Ask your administrator to set a Time Clock PIN." });
-      if (worker.pin !== pin) return res.status(401).json({ message: "Invalid PIN. Please try again." });
+      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
+      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
       if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
       const allPunches = await storage.getTimePunches(worker.companyId);
       const workerPunches = allPunches.filter(p => p.workerId === worker.id).sort((a, b) => new Date(b.punchTime).getTime() - new Date(a.punchTime).getTime());
@@ -1489,10 +1473,8 @@ export async function registerRoutes(
     try {
       const { employeeNumber, pin } = req.body;
       if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
-      const worker = await storage.getWorkerByEmployeeNumber(employeeNumber);
-      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN" });
-      if (!worker.pin) return res.status(401).json({ message: "No PIN is set for this employee. Ask your administrator to set a Time Clock PIN." });
-      if (worker.pin !== pin) return res.status(401).json({ message: "Invalid PIN. Please try again." });
+      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
+      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
       if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
       const allPunches = await storage.getTimePunches(worker.companyId);
       const workerPunches = allPunches.filter(p => p.workerId === worker.id).sort((a, b) => new Date(b.punchTime).getTime() - new Date(a.punchTime).getTime());
