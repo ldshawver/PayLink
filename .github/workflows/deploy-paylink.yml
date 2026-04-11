@@ -130,7 +130,7 @@ jobs:
           [ -n "${{ secrets.MKT_VPS_HOST }}" ] || { echo "Missing MKT_VPS_HOST"; exit 1; }
           [ -n "${{ secrets.MKT_VPS_USER }}" ] || { echo "Missing MKT_VPS_USER"; exit 1; }
           [ -n "${{ secrets.MKT_VPS_PORT }}" ] || { echo "Missing MKT_VPS_PORT"; exit 1; }
-          [ -n "${{ secrets.MKT_VPS_SSH_KEY }}" ] || { echo "Missing MKT_VPS_SSH_KEY"; exit 1; }
+          [ -n "${{ secrets.WEB_VPS_SSH_KEY }}" ] || { echo "Missing WEB_VPS_SSH_KEY"; exit 1; }
 
       - name: Deploy marketing site over SSH
         uses: appleboy/ssh-action@v1.0.3
