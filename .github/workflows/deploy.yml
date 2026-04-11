@@ -53,14 +53,21 @@ jobs:
             npm -v
             pm2 -v
 
-            echo "==> Install dependencies"
-            npm install
+            echo "==> Verify package-lock.json is present"
+            test -f package-lock.json || { echo "ERROR: package-lock.json missing — cannot use npm ci"; exit 1; }
+
+            echo "==> Clean install (rm node_modules + npm ci)"
+            rm -rf node_modules
+            npm ci
+
+            echo "==> Verify date-fns resolved version"
+            npm ls date-fns --depth=0 2>/dev/null || true
 
             echo "==> Build app"
             npm run build
 
-            echo "==> Verify required files"
-            test -f "$APP_ENTRY" || { echo "ERROR: Missing build artifact: $APP_ENTRY"; exit 1; }
+            echo "==> Verify build artifacts before touching PM2"
+            test -f "$APP_ENTRY" || { echo "ERROR: Build failed — $APP_ENTRY missing. Aborting PM2 restart."; exit 1; }
             test -f "$ENV_FILE"  || { echo "ERROR: Missing env file: $ENV_FILE"; exit 1; }
 
             echo "==> Stop old PM2 app if present (also frees the port)"
