@@ -45,6 +45,9 @@ jobs:
             APP_PORT="8000"
             ENV_FILE="/etc/paylink/.env"
 
+            SHARED_MARKETING_DIR="/var/tmp/paylink-marketing-build"
+            MARKETING_PUBLIC="$APP_DIR/public-site/public"
+
             echo "========== PRIVATE APP DEPLOY START =========="
             echo "User: $(whoami)"
             echo "App dir: $APP_DIR"
@@ -76,6 +79,9 @@ jobs:
 
             echo "==> Verify build output"
             test -f "$APP_ENTRY" || { echo "ERROR: Missing build artifact: $APP_ENTRY"; exit 1; }
+
+            echo "==> Verify marketing build output"
+            test -d "$MARKETING_PUBLIC" || { echo "ERROR: Missing marketing public dir: $MARKETING_PUBLIC"; exit 1; }
 
             echo "==> Restart PM2 app"
             pm2 delete "$APP_NAME" 2>/dev/null || true
@@ -116,12 +122,13 @@ jobs:
               exit 1
             fi
 
-            echo "========== PRIVATE APP DEPLOY SUCCESS =========="
-           
-            SHARED_MARKETING_DIR="/var/tmp/paylink-marketing-build"
-            MARKETING_PUBLIC="$APP_DIR/public-site/public"
-
+            echo "==> Export shared marketing build"
             mkdir -p "$SHARED_MARKETING_DIR"
             rm -rf "$SHARED_MARKETING_DIR"/*
             cp -R "$MARKETING_PUBLIC"/. "$SHARED_MARKETING_DIR"/
             chmod -R a+rX "$SHARED_MARKETING_DIR"
+
+            echo "==> Shared marketing build contents"
+            ls -lah "$SHARED_MARKETING_DIR"
+
+            echo "========== PRIVATE APP DEPLOY SUCCESS =========="
