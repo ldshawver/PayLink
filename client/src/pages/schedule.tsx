@@ -681,6 +681,7 @@ export default function SchedulePage() {
     department: "",
     jobId: "",
     positionId: "",
+    costCenterId: "",
     note: "",
   });
 
@@ -690,6 +691,7 @@ export default function SchedulePage() {
     department: "",
     jobId: "",
     positionId: "",
+    costCenterId: "",
     note: "",
     status: "draft" as string,
   });
@@ -704,6 +706,7 @@ export default function SchedulePage() {
     effectiveTo: "",
     jobId: "",
     positionId: "",
+    costCenterId: "",
     note: "",
   });
 
@@ -717,6 +720,7 @@ export default function SchedulePage() {
     effectiveTo: "",
     jobId: "",
     positionId: "",
+    costCenterId: "",
     note: "",
     isActive: true,
   });
@@ -817,6 +821,9 @@ export default function SchedulePage() {
   });
   const { data: positions = [] } = useQuery<any[]>({
     queryKey: ["/api/positions"],
+  });
+  const { data: costCenters = [] } = useQuery<any[]>({
+    queryKey: ["/api/cost-centers"],
   });
 
   const { data: shiftOffers = [] } = useQuery<ShiftOffer[]>({
@@ -948,12 +955,12 @@ export default function SchedulePage() {
 
   const addScheduleMutation = useMutation({
     mutationFn: async (data: typeof scheduleForm) => {
-      await apiRequest("POST", "/api/schedules", { ...data, jobId: data.jobId || null, positionId: data.positionId || null });
+      await apiRequest("POST", "/api/schedules", { ...data, jobId: data.jobId || null, positionId: data.positionId || null, costCenterId: data.costCenterId || null });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
       setAddScheduleOpen(false);
-      setScheduleForm({ workerId: "", companyId: "", date: "", startTime: "", endTime: "", department: "", jobId: "", positionId: "", note: "" });
+      setScheduleForm({ workerId: "", companyId: "", date: "", startTime: "", endTime: "", department: "", jobId: "", positionId: "", costCenterId: "", note: "" });
       toast({ title: "Schedule added" });
     },
     onError: (error: Error) => {
@@ -963,7 +970,7 @@ export default function SchedulePage() {
 
   const updateScheduleMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof editForm }) => {
-      await apiRequest("PATCH", `/api/schedules/${id}`, { ...data, jobId: data.jobId || null, positionId: data.positionId || null });
+      await apiRequest("PATCH", `/api/schedules/${id}`, { ...data, jobId: data.jobId || null, positionId: data.positionId || null, costCenterId: data.costCenterId || null });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
@@ -996,13 +1003,14 @@ export default function SchedulePage() {
         dayOfWeek: parseInt(data.dayOfWeek),
         jobId: data.jobId || null,
         positionId: data.positionId || null,
+        costCenterId: data.costCenterId || null,
         note: data.note || null,
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-schedules"] });
       setAddRecurringOpen(false);
-      setRecurringForm({ companyId: "", workerId: "", dayOfWeek: "", startTime: "", endTime: "", effectiveFrom: "", effectiveTo: "", jobId: "", positionId: "", note: "" });
+      setRecurringForm({ companyId: "", workerId: "", dayOfWeek: "", startTime: "", endTime: "", effectiveFrom: "", effectiveTo: "", jobId: "", positionId: "", costCenterId: "", note: "" });
       toast({ title: "Recurring schedule added" });
     },
     onError: (error: Error) => {
@@ -1113,6 +1121,7 @@ export default function SchedulePage() {
       effectiveTo: rs.effectiveTo || "",
       jobId: (rs as any).jobId || "",
       positionId: (rs as any).positionId || "",
+      costCenterId: (rs as any).costCenterId || "",
       note: (rs as any).note || "",
       isActive: rs.isActive ?? true,
     });
@@ -1127,6 +1136,7 @@ export default function SchedulePage() {
       department: s.department || "",
       jobId: (s as any).jobId || "",
       positionId: (s as any).positionId || "",
+      costCenterId: (s as any).costCenterId || "",
       note: s.note || "",
       status: s.status || "draft",
     });
@@ -1828,6 +1838,7 @@ export default function SchedulePage() {
                       <TableHead>Hours</TableHead>
                       <TableHead>Department</TableHead>
                       <TableHead>Position</TableHead>
+                      <TableHead>Cost Center</TableHead>
                       <TableHead>Status</TableHead>
                       {isAdminOrManager && <TableHead>Actions</TableHead>}
                     </TableRow>
@@ -1835,7 +1846,7 @@ export default function SchedulePage() {
                   <TableBody>
                     {schedules.filter(s => selectedCompany === "all" || s.companyId === selectedCompany).length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={10} className="text-center text-muted-foreground">
+                        <TableCell colSpan={11} className="text-center text-muted-foreground">
                           No scheduled shifts found.
                         </TableCell>
                       </TableRow>
@@ -1857,6 +1868,9 @@ export default function SchedulePage() {
                             <TableCell>{s.department || "-"}</TableCell>
                             <TableCell data-testid={`text-position-${s.id}`}>
                               {(s as any).positionId ? (positions.find((p: any) => p.id === (s as any).positionId)?.title || "-") : "-"}
+                            </TableCell>
+                            <TableCell data-testid={`text-cost-center-${s.id}`}>
+                              {(s as any).costCenterId ? (costCenters.find((cc: any) => cc.id === (s as any).costCenterId)?.name || "-") : "-"}
                             </TableCell>
                             <TableCell>
                               <Badge
@@ -2144,6 +2158,26 @@ export default function SchedulePage() {
                       </Select>
                     </div>
                     <div>
+                      <Label>Cost Center</Label>
+                      <Select
+                        value={recurringForm.costCenterId || "__none__"}
+                        onValueChange={(v) => setRecurringForm((f) => ({ ...f, costCenterId: v === "__none__" ? "" : v }))}
+                      >
+                        <SelectTrigger data-testid="select-recurring-cost-center">
+                          <SelectValue placeholder="Select cost center (optional)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">None</SelectItem>
+                          {costCenters
+                            .filter((cc: any) => !cc.companyId || cc.companyId === recurringForm.companyId)
+                            .filter((cc: any) => cc.isActive !== false)
+                            .map((cc: any) => (
+                              <SelectItem key={cc.id} value={cc.id}>{cc.name}{cc.code ? ` (${cc.code})` : ""}</SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
                       <Label>Note</Label>
                       <Input
                         value={recurringForm.note}
@@ -2185,6 +2219,7 @@ export default function SchedulePage() {
                       <TableHead>End Time</TableHead>
                       <TableHead>Hours</TableHead>
                       <TableHead>Position</TableHead>
+                      <TableHead>Cost Center</TableHead>
                       <TableHead>Effective From</TableHead>
                       <TableHead>Effective To</TableHead>
                       <TableHead>Active</TableHead>
@@ -2194,7 +2229,7 @@ export default function SchedulePage() {
                   <TableBody>
                     {recurringSchedules.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={10} className="text-center text-muted-foreground">
+                        <TableCell colSpan={11} className="text-center text-muted-foreground">
                           No recurring schedules found.
                         </TableCell>
                       </TableRow>
@@ -2210,6 +2245,9 @@ export default function SchedulePage() {
                           <TableCell>{parseTimeToHours(rs.startTime, rs.endTime)}h</TableCell>
                           <TableCell data-testid={`text-recurring-position-${rs.id}`}>
                             {(rs as any).positionId ? (positions.find((p: any) => p.id === (rs as any).positionId)?.title || "-") : "-"}
+                          </TableCell>
+                          <TableCell data-testid={`text-recurring-cost-center-${rs.id}`}>
+                            {(rs as any).costCenterId ? (costCenters.find((cc: any) => cc.id === (rs as any).costCenterId)?.name || "-") : "-"}
                           </TableCell>
                           <TableCell>{rs.effectiveFrom || "-"}</TableCell>
                           <TableCell>{rs.effectiveTo || "-"}</TableCell>
@@ -2398,6 +2436,26 @@ export default function SchedulePage() {
                         .filter((p: any) => p.isActive !== false)
                         .map((p: any) => (
                           <SelectItem key={p.id} value={p.id}>{p.title}</SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Cost Center</label>
+                  <Select
+                    value={editRecurringForm.costCenterId || "__none__"}
+                    onValueChange={(v) => setEditRecurringForm((f) => ({ ...f, costCenterId: v === "__none__" ? "" : v }))}
+                  >
+                    <SelectTrigger data-testid="select-edit-recurring-cost-center">
+                      <SelectValue placeholder="Select cost center (optional)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">None</SelectItem>
+                      {costCenters
+                        .filter((cc: any) => !cc.companyId || cc.companyId === editRecurringForm.companyId)
+                        .filter((cc: any) => cc.isActive !== false)
+                        .map((cc: any) => (
+                          <SelectItem key={cc.id} value={cc.id}>{cc.name}{cc.code ? ` (${cc.code})` : ""}</SelectItem>
                         ))}
                     </SelectContent>
                   </Select>
@@ -2777,6 +2835,26 @@ export default function SchedulePage() {
               </Select>
             </div>
             <div>
+              <Label>Cost Center</Label>
+              <Select
+                value={scheduleForm.costCenterId || "__none__"}
+                onValueChange={(v) => setScheduleForm((f) => ({ ...f, costCenterId: v === "__none__" ? "" : v }))}
+              >
+                <SelectTrigger data-testid="select-schedule-cost-center">
+                  <SelectValue placeholder="Select cost center (optional)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {costCenters
+                    .filter((cc: any) => !cc.companyId || cc.companyId === scheduleForm.companyId)
+                    .filter((cc: any) => cc.isActive !== false)
+                    .map((cc: any) => (
+                      <SelectItem key={cc.id} value={cc.id}>{cc.name}{cc.code ? ` (${cc.code})` : ""}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <Label>Note</Label>
               <Input
                 value={scheduleForm.note}
@@ -2900,6 +2978,26 @@ export default function SchedulePage() {
                       .filter((p: any) => p.isActive !== false)
                       .map((p: any) => (
                         <SelectItem key={p.id} value={p.id}>{p.title}</SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Cost Center</Label>
+                <Select
+                  value={editForm.costCenterId || "__none__"}
+                  onValueChange={(v) => setEditForm((f) => ({ ...f, costCenterId: v === "__none__" ? "" : v }))}
+                >
+                  <SelectTrigger data-testid="select-edit-cost-center">
+                    <SelectValue placeholder="Select cost center (optional)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None</SelectItem>
+                    {costCenters
+                      .filter((cc: any) => !cc.companyId || cc.companyId === (editingSchedule as any)?.companyId)
+                      .filter((cc: any) => cc.isActive !== false)
+                      .map((cc: any) => (
+                        <SelectItem key={cc.id} value={cc.id}>{cc.name}{cc.code ? ` (${cc.code})` : ""}</SelectItem>
                       ))}
                   </SelectContent>
                 </Select>

@@ -3416,12 +3416,13 @@ export async function registerRoutes(
 
   app.post("/api/schedules", requireActiveSubscription, async (req, res) => {
     try {
-      const { workerId, companyId, date, startTime, endTime, department, jobId, positionId, note } = req.body;
+      const { workerId, companyId, date, startTime, endTime, department, jobId, positionId, costCenterId, note } = req.body;
       if (!workerId || !companyId || !date || !startTime || !endTime) {
         return res.status(400).json({ message: "Employee, company, date, start time, and end time are required" });
       }
       try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`); } catch {}
       try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS position_id VARCHAR`); } catch {}
+      try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS cost_center_id VARCHAR`); } catch {}
       const data = {
         workerId,
         companyId,
@@ -3431,6 +3432,7 @@ export async function registerRoutes(
         department: department || null,
         jobId: jobId || null,
         positionId: positionId || null,
+        costCenterId: costCenterId || null,
         note: note || null,
       };
       const schedule = await storage.createSchedule(data);
@@ -3443,13 +3445,14 @@ export async function registerRoutes(
 
   app.patch("/api/schedules/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const { startTime, endTime, department, jobId, positionId, note, status } = req.body;
+      const { startTime, endTime, department, jobId, positionId, costCenterId, note, status } = req.body;
       const updateData: any = {};
       if (startTime !== undefined) updateData.startTime = startTime;
       if (endTime !== undefined) updateData.endTime = endTime;
       if (department !== undefined) updateData.department = department || null;
       if (jobId !== undefined) updateData.jobId = jobId || null;
       if (positionId !== undefined) updateData.positionId = positionId || null;
+      if (costCenterId !== undefined) updateData.costCenterId = costCenterId || null;
       if (note !== undefined) updateData.note = note || null;
       if (status !== undefined) updateData.status = status;
       const schedule = await storage.updateSchedule(req.params.id, updateData);
@@ -3479,29 +3482,27 @@ export async function registerRoutes(
       if (!companyId || !startDate || !endDate) {
         return res.status(400).json({ message: "companyId, startDate, endDate required" });
       }
-      // Ensure job_id and position_id columns exist — safe no-op if already present, fixes VPS without migration
+      // Ensure all schedule columns exist — safe no-op if already present, fixes VPS without migration
       try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`); } catch {}
       try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS position_id VARCHAR`); } catch {}
+      try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS cost_center_id VARCHAR`); } catch {}
       try { await db.execute(sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`); } catch {}
       try { await db.execute(sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS position_id VARCHAR`); } catch {}
+      try { await db.execute(sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS cost_center_id VARCHAR`); } catch {}
       try { await db.execute(sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS note TEXT`); } catch {}
-      // Get ALL recurring schedules (no company filter) so we can match by worker's company too
+      // Get ALL recurring schedules (no company filter) — each generated shift uses the recurring schedule's own companyId
       const allRecurring = await storage.getRecurringSchedules();
-      const allWorkers = await storage.getWorkers();
-      // Match recurring schedules where the recurring record's companyId matches OR the worker belongs to this company
-      const activeRecurring = allRecurring.filter(r => {
-        if (!r.isActive) return false;
-        if (r.companyId === companyId) return true;
-        const worker = allWorkers.find(w => w.id === r.workerId);
-        return worker?.companyId === companyId;
-      });
+      // Match only recurring schedules explicitly assigned to the requested company.
+      // CRITICAL: do NOT fall back to worker.companyId — that caused shifts to be generated under the
+      // wrong company when a worker's default company differed from their recurring schedule's company.
+      const activeRecurring = allRecurring.filter(r => r.isActive && r.companyId === companyId);
 
-      // Pre-load all existing schedules for this company in the date range for duplicate checking
+      // Pre-load all existing schedules in the date range for duplicate checking (company-agnostic)
       const allExisting = await storage.getSchedules();
       const existingSet = new Set(
         allExisting
-          .filter(s => s.companyId === companyId && s.date >= startDate && s.date <= endDate)
-          .map(s => `${s.workerId}::${s.date}::${s.startTime}::${s.endTime}`)
+          .filter(s => s.date >= startDate && s.date <= endDate)
+          .map(s => `${s.workerId}::${s.companyId}::${s.date}::${s.startTime}::${s.endTime}`)
       );
 
       // Build a set of valid job IDs so we don't pass a deleted job_id into the new schedule
@@ -3521,24 +3522,34 @@ export async function registerRoutes(
           if (rs.dayOfWeek !== dayOfWeek) continue;
           if (rs.effectiveFrom && dateStr < rs.effectiveFrom) continue;
           if (rs.effectiveTo && dateStr > rs.effectiveTo) continue;
-          // Skip if an identical shift already exists for this worker on this date
-          const key = `${rs.workerId}::${dateStr}::${rs.startTime}::${rs.endTime}`;
+          // Use the recurring schedule's own companyId — not the request body's companyId.
+          // This is critical: a worker may be scheduled under a different company than their default.
+          const shiftCompanyId = rs.companyId;
+          if (!shiftCompanyId) {
+            console.warn(`Recurring schedule ${rs.id} has no companyId — skipping to avoid misattribution`);
+            skipped++;
+            continue;
+          }
+          // Skip if an identical shift already exists for this worker/company on this date
+          const key = `${rs.workerId}::${shiftCompanyId}::${dateStr}::${rs.startTime}::${rs.endTime}`;
           if (existingSet.has(key)) {
             skipped++;
             continue;
           }
           // Only pass jobId if it still exists — avoids FK violation from deleted jobs
-          const safeJobId = rs.jobId && validJobIds.has(rs.jobId) ? rs.jobId : null;
+          const safeJobId = (rs as any).jobId && validJobIds.has((rs as any).jobId) ? (rs as any).jobId : null;
           try {
             const schedule = await storage.createSchedule({
-              companyId,
+              companyId: shiftCompanyId,
               workerId: rs.workerId,
               date: dateStr,
               startTime: rs.startTime,
               endTime: rs.endTime,
               jobId: safeJobId,
+              positionId: (rs as any).positionId || null,
+              costCenterId: (rs as any).costCenterId || null,
               status: "draft",
-            });
+            } as any);
             created.push(schedule);
             existingSet.add(key); // prevent duplicates within the same generation run
           } catch (scheduleError: any) {
