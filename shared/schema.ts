@@ -191,6 +191,7 @@ export const schedules = pgTable("schedules", {
   endTime: text("end_time").notNull(),
   department: text("department"),
   jobId: varchar("job_id").references(() => jobs.id),
+  positionId: varchar("position_id"),
   status: scheduleStatusEnum("status").default("draft"),
   note: text("note"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -499,6 +500,8 @@ export const recurringSchedules = pgTable("recurring_schedules", {
   effectiveFrom: date("effective_from"),
   effectiveTo: date("effective_to"),
   jobId: varchar("job_id").references(() => jobs.id),
+  positionId: varchar("position_id"),
+  note: text("note"),
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });

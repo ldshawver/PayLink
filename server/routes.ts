@@ -3416,11 +3416,12 @@ export async function registerRoutes(
 
   app.post("/api/schedules", requireActiveSubscription, async (req, res) => {
     try {
-      const { workerId, companyId, date, startTime, endTime, department, jobId, note } = req.body;
+      const { workerId, companyId, date, startTime, endTime, department, jobId, positionId, note } = req.body;
       if (!workerId || !companyId || !date || !startTime || !endTime) {
         return res.status(400).json({ message: "Employee, company, date, start time, and end time are required" });
       }
       try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`); } catch {}
+      try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS position_id VARCHAR`); } catch {}
       const data = {
         workerId,
         companyId,
@@ -3429,6 +3430,7 @@ export async function registerRoutes(
         endTime,
         department: department || null,
         jobId: jobId || null,
+        positionId: positionId || null,
         note: note || null,
       };
       const schedule = await storage.createSchedule(data);
@@ -3441,12 +3443,13 @@ export async function registerRoutes(
 
   app.patch("/api/schedules/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const { startTime, endTime, department, jobId, note, status } = req.body;
+      const { startTime, endTime, department, jobId, positionId, note, status } = req.body;
       const updateData: any = {};
       if (startTime !== undefined) updateData.startTime = startTime;
       if (endTime !== undefined) updateData.endTime = endTime;
       if (department !== undefined) updateData.department = department || null;
       if (jobId !== undefined) updateData.jobId = jobId || null;
+      if (positionId !== undefined) updateData.positionId = positionId || null;
       if (note !== undefined) updateData.note = note || null;
       if (status !== undefined) updateData.status = status;
       const schedule = await storage.updateSchedule(req.params.id, updateData);
@@ -3476,9 +3479,12 @@ export async function registerRoutes(
       if (!companyId || !startDate || !endDate) {
         return res.status(400).json({ message: "companyId, startDate, endDate required" });
       }
-      // Ensure job_id columns exist — safe no-op if already present, fixes VPS without migration
+      // Ensure job_id and position_id columns exist — safe no-op if already present, fixes VPS without migration
       try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`); } catch {}
+      try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS position_id VARCHAR`); } catch {}
       try { await db.execute(sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`); } catch {}
+      try { await db.execute(sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS position_id VARCHAR`); } catch {}
+      try { await db.execute(sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS note TEXT`); } catch {}
       // Get ALL recurring schedules (no company filter) so we can match by worker's company too
       const allRecurring = await storage.getRecurringSchedules();
       const allWorkers = await storage.getWorkers();

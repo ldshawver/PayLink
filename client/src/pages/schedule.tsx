@@ -6,6 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { useTimeFormat, formatShiftTime, formatShiftRange } from "@/hooks/use-time-format";
 import type { Schedule, Worker, Company, RecurringSchedule, ShiftOffer, Department } from "@shared/schema";
+import { isManagerOrAbove } from "@/lib/roles";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -650,7 +651,7 @@ export default function SchedulePage() {
   const { toast } = useToast();
   const { user } = useAuth();
   const timeFormat = useTimeFormat();
-  const isAdminOrManager = user?.role === "admin" || user?.role === "manager";
+  const isAdminOrManager = isManagerOrAbove(user?.role || "");
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useTabParam("schedules");
   const [viewMode, setViewMode] = useState<ViewMode>("week");
@@ -679,6 +680,7 @@ export default function SchedulePage() {
     endTime: "",
     department: "",
     jobId: "",
+    positionId: "",
     note: "",
   });
 
@@ -687,6 +689,7 @@ export default function SchedulePage() {
     endTime: "",
     department: "",
     jobId: "",
+    positionId: "",
     note: "",
     status: "draft" as string,
   });
@@ -700,6 +703,8 @@ export default function SchedulePage() {
     effectiveFrom: "",
     effectiveTo: "",
     jobId: "",
+    positionId: "",
+    note: "",
   });
 
   const [editRecurringForm, setEditRecurringForm] = useState({
@@ -711,6 +716,8 @@ export default function SchedulePage() {
     effectiveFrom: "",
     effectiveTo: "",
     jobId: "",
+    positionId: "",
+    note: "",
     isActive: true,
   });
 
@@ -807,6 +814,9 @@ export default function SchedulePage() {
   });
   const { data: jobs = [] } = useQuery<any[]>({
     queryKey: ["/api/jobs"],
+  });
+  const { data: positions = [] } = useQuery<any[]>({
+    queryKey: ["/api/positions"],
   });
 
   const { data: shiftOffers = [] } = useQuery<ShiftOffer[]>({
@@ -938,12 +948,12 @@ export default function SchedulePage() {
 
   const addScheduleMutation = useMutation({
     mutationFn: async (data: typeof scheduleForm) => {
-      await apiRequest("POST", "/api/schedules", { ...data, jobId: data.jobId || null });
+      await apiRequest("POST", "/api/schedules", { ...data, jobId: data.jobId || null, positionId: data.positionId || null });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
       setAddScheduleOpen(false);
-      setScheduleForm({ workerId: "", companyId: "", date: "", startTime: "", endTime: "", department: "", jobId: "", note: "" });
+      setScheduleForm({ workerId: "", companyId: "", date: "", startTime: "", endTime: "", department: "", jobId: "", positionId: "", note: "" });
       toast({ title: "Schedule added" });
     },
     onError: (error: Error) => {
@@ -953,7 +963,7 @@ export default function SchedulePage() {
 
   const updateScheduleMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof editForm }) => {
-      await apiRequest("PATCH", `/api/schedules/${id}`, { ...data, jobId: data.jobId || null });
+      await apiRequest("PATCH", `/api/schedules/${id}`, { ...data, jobId: data.jobId || null, positionId: data.positionId || null });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/schedules"] });
@@ -985,12 +995,14 @@ export default function SchedulePage() {
         ...data,
         dayOfWeek: parseInt(data.dayOfWeek),
         jobId: data.jobId || null,
+        positionId: data.positionId || null,
+        note: data.note || null,
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-schedules"] });
       setAddRecurringOpen(false);
-      setRecurringForm({ companyId: "", workerId: "", dayOfWeek: "", startTime: "", endTime: "", effectiveFrom: "", effectiveTo: "", jobId: "" });
+      setRecurringForm({ companyId: "", workerId: "", dayOfWeek: "", startTime: "", endTime: "", effectiveFrom: "", effectiveTo: "", jobId: "", positionId: "", note: "" });
       toast({ title: "Recurring schedule added" });
     },
     onError: (error: Error) => {
@@ -1100,6 +1112,8 @@ export default function SchedulePage() {
       effectiveFrom: rs.effectiveFrom || "",
       effectiveTo: rs.effectiveTo || "",
       jobId: (rs as any).jobId || "",
+      positionId: (rs as any).positionId || "",
+      note: (rs as any).note || "",
       isActive: rs.isActive ?? true,
     });
     setEditRecurringOpen(true);
@@ -1112,6 +1126,7 @@ export default function SchedulePage() {
       endTime: s.endTime,
       department: s.department || "",
       jobId: (s as any).jobId || "",
+      positionId: (s as any).positionId || "",
       note: s.note || "",
       status: s.status || "draft",
     });
@@ -1357,13 +1372,15 @@ export default function SchedulePage() {
                   >
                     Show Unscheduled Employees
                   </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={showNotes}
-                    onCheckedChange={setShowNotes}
-                    data-testid="checkbox-show-notes"
-                  >
-                    Show Shift Notes
-                  </DropdownMenuCheckboxItem>
+                  {isAdminOrManager && (
+                    <DropdownMenuCheckboxItem
+                      checked={showNotes}
+                      onCheckedChange={setShowNotes}
+                      data-testid="checkbox-show-notes"
+                    >
+                      Show All Shift Notes
+                    </DropdownMenuCheckboxItem>
+                  )}
                   {isAdminOrManager && (
                     <DropdownMenuCheckboxItem
                       checked={showLaborCosts}
@@ -1668,11 +1685,15 @@ export default function SchedulePage() {
                                               return rate > 0 ? <span className="ml-1 text-emerald-600 dark:text-emerald-400">${cost.toFixed(2)}</span> : null;
                                             })()}
                                           </div>
+                                          {(s as any).positionId && (() => {
+                                            const pos = positions.find((p: any) => p.id === (s as any).positionId);
+                                            return pos ? <div className="text-[10px] text-purple-600 dark:text-purple-400 font-medium leading-tight truncate">{pos.title}</div> : null;
+                                          })()}
                                           {(s as any).jobId && (() => {
                                             const job = jobs.find(j => j.id === (s as any).jobId);
                                             return job ? <div className="text-[10px] text-blue-600 dark:text-blue-400 font-medium leading-tight truncate">{job.name}</div> : null;
                                           })()}
-                                          {showNotes && s.note && (
+                                          {((s.workerId === user?.workerId) || (isAdminOrManager && showNotes)) && s.note && (
                                             <div className="text-muted-foreground text-[10px] italic leading-tight mt-0.5 break-words">{s.note}</div>
                                           )}
                                           {shiftOffers.some(o => o.scheduleId === s.id && o.status === "open") && (
@@ -1806,6 +1827,7 @@ export default function SchedulePage() {
                       <TableHead>End Time</TableHead>
                       <TableHead>Hours</TableHead>
                       <TableHead>Department</TableHead>
+                      <TableHead>Position</TableHead>
                       <TableHead>Status</TableHead>
                       {isAdminOrManager && <TableHead>Actions</TableHead>}
                     </TableRow>
@@ -1813,7 +1835,7 @@ export default function SchedulePage() {
                   <TableBody>
                     {schedules.filter(s => selectedCompany === "all" || s.companyId === selectedCompany).length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="text-center text-muted-foreground">
+                        <TableCell colSpan={10} className="text-center text-muted-foreground">
                           No scheduled shifts found.
                         </TableCell>
                       </TableRow>
@@ -1833,6 +1855,9 @@ export default function SchedulePage() {
                             <TableCell>{s.endTime}</TableCell>
                             <TableCell>{parseTimeToHours(s.startTime, s.endTime)}h</TableCell>
                             <TableCell>{s.department || "-"}</TableCell>
+                            <TableCell data-testid={`text-position-${s.id}`}>
+                              {(s as any).positionId ? (positions.find((p: any) => p.id === (s as any).positionId)?.title || "-") : "-"}
+                            </TableCell>
                             <TableCell>
                               <Badge
                                 variant={s.status === "published" ? "default" : "secondary"}
@@ -2098,6 +2123,35 @@ export default function SchedulePage() {
                         />
                       </div>
                     </div>
+                    <div>
+                      <Label>Position</Label>
+                      <Select
+                        value={recurringForm.positionId || "__none__"}
+                        onValueChange={(v) => setRecurringForm((f) => ({ ...f, positionId: v === "__none__" ? "" : v }))}
+                      >
+                        <SelectTrigger data-testid="select-recurring-position">
+                          <SelectValue placeholder="Select position (optional)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">None</SelectItem>
+                          {positions
+                            .filter((p: any) => !p.companyId || p.companyId === recurringForm.companyId)
+                            .filter((p: any) => p.isActive !== false)
+                            .map((p: any) => (
+                              <SelectItem key={p.id} value={p.id}>{p.title}</SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>Note</Label>
+                      <Input
+                        value={recurringForm.note}
+                        onChange={(e) => setRecurringForm((f) => ({ ...f, note: e.target.value }))}
+                        placeholder="Optional note"
+                        data-testid="input-recurring-note"
+                      />
+                    </div>
                     <Button
                       className="w-full"
                       onClick={() => addRecurringMutation.mutate(recurringForm)}
@@ -2130,6 +2184,7 @@ export default function SchedulePage() {
                       <TableHead>Start Time</TableHead>
                       <TableHead>End Time</TableHead>
                       <TableHead>Hours</TableHead>
+                      <TableHead>Position</TableHead>
                       <TableHead>Effective From</TableHead>
                       <TableHead>Effective To</TableHead>
                       <TableHead>Active</TableHead>
@@ -2139,7 +2194,7 @@ export default function SchedulePage() {
                   <TableBody>
                     {recurringSchedules.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="text-center text-muted-foreground">
+                        <TableCell colSpan={10} className="text-center text-muted-foreground">
                           No recurring schedules found.
                         </TableCell>
                       </TableRow>
@@ -2153,6 +2208,9 @@ export default function SchedulePage() {
                           <TableCell>{formatShiftTime(rs.startTime, timeFormat)}</TableCell>
                           <TableCell>{formatShiftTime(rs.endTime, timeFormat)}</TableCell>
                           <TableCell>{parseTimeToHours(rs.startTime, rs.endTime)}h</TableCell>
+                          <TableCell data-testid={`text-recurring-position-${rs.id}`}>
+                            {(rs as any).positionId ? (positions.find((p: any) => p.id === (rs as any).positionId)?.title || "-") : "-"}
+                          </TableCell>
                           <TableCell>{rs.effectiveFrom || "-"}</TableCell>
                           <TableCell>{rs.effectiveTo || "-"}</TableCell>
                           <TableCell>
@@ -2218,6 +2276,10 @@ export default function SchedulePage() {
                               <div key={rs.id} className="rounded bg-primary/10 p-1.5 text-xs group relative">
                                 <div className="font-medium truncate pr-10">{getWorkerName(workers, rs.workerId)}</div>
                                 <div className="text-muted-foreground">{formatShiftRange(rs.startTime, rs.endTime, timeFormat)}</div>
+                                {(rs as any).positionId && (() => {
+                                  const pos = positions.find((p: any) => p.id === (rs as any).positionId);
+                                  return pos ? <div className="text-[10px] text-purple-600 dark:text-purple-400 font-medium leading-tight truncate">{pos.title}</div> : null;
+                                })()}
                                 <div className="absolute top-0.5 right-0.5 hidden group-hover:flex items-center gap-0.5">
                                   <button
                                     className="p-0.5 rounded hover:bg-primary/20 text-foreground/60 hover:text-foreground"
@@ -2319,6 +2381,35 @@ export default function SchedulePage() {
                       onChange={e => setEditRecurringForm(f => ({ ...f, effectiveTo: e.target.value }))}
                       data-testid="input-edit-recurring-effective-to" />
                   </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Position</label>
+                  <Select
+                    value={editRecurringForm.positionId || "__none__"}
+                    onValueChange={v => setEditRecurringForm(f => ({ ...f, positionId: v === "__none__" ? "" : v }))}
+                  >
+                    <SelectTrigger data-testid="select-edit-recurring-position">
+                      <SelectValue placeholder="Select position (optional)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">None</SelectItem>
+                      {positions
+                        .filter((p: any) => !p.companyId || p.companyId === editRecurringForm.companyId)
+                        .filter((p: any) => p.isActive !== false)
+                        .map((p: any) => (
+                          <SelectItem key={p.id} value={p.id}>{p.title}</SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Note</label>
+                  <Input
+                    value={editRecurringForm.note}
+                    onChange={e => setEditRecurringForm(f => ({ ...f, note: e.target.value }))}
+                    placeholder="Optional note"
+                    data-testid="input-edit-recurring-note"
+                  />
                 </div>
                 <div className="flex items-center gap-2">
                   <input type="checkbox" id="edit-recurring-active" checked={editRecurringForm.isActive}
@@ -2666,6 +2757,26 @@ export default function SchedulePage() {
               </Select>
             </div>
             <div>
+              <Label>Position</Label>
+              <Select
+                value={scheduleForm.positionId || "__none__"}
+                onValueChange={(v) => setScheduleForm((f) => ({ ...f, positionId: v === "__none__" ? "" : v }))}
+              >
+                <SelectTrigger data-testid="select-schedule-position">
+                  <SelectValue placeholder="Select position (optional)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {positions
+                    .filter((p: any) => !p.companyId || p.companyId === scheduleForm.companyId)
+                    .filter((p: any) => p.isActive !== false)
+                    .map((p: any) => (
+                      <SelectItem key={p.id} value={p.id}>{p.title}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <Label>Note</Label>
               <Input
                 value={scheduleForm.note}
@@ -2769,6 +2880,26 @@ export default function SchedulePage() {
                         <SelectItem key={j.id} value={j.id}>
                           {j.name}{!j.companyId ? " (All Companies)" : ""}
                         </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Position</Label>
+                <Select
+                  value={editForm.positionId || "__none__"}
+                  onValueChange={(v) => setEditForm((f) => ({ ...f, positionId: v === "__none__" ? "" : v }))}
+                >
+                  <SelectTrigger data-testid="select-edit-position">
+                    <SelectValue placeholder="Select position (optional)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None</SelectItem>
+                    {positions
+                      .filter((p: any) => !p.companyId || p.companyId === editingSchedule?.companyId)
+                      .filter((p: any) => p.isActive !== false)
+                      .map((p: any) => (
+                        <SelectItem key={p.id} value={p.id}>{p.title}</SelectItem>
                       ))}
                   </SelectContent>
                 </Select>
