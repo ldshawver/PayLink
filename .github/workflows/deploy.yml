@@ -157,14 +157,19 @@ jobs:
             find "$MARKETING_PUBLIC" -type f -exec chmod 644 {} \;
             find "$MARKETING_PUBLIC" -type d -exec chmod 755 {} \;
 
-            echo "==> Sync static marketing files (no sudo)"
+            echo "==> Sync static marketing files"
             if [ -d "$WEB_ROOT" ]; then
               if rsync -av --delete "$MARKETING_PUBLIC/" "$WEB_ROOT/"; then
-                echo "Marketing files synced to $WEB_ROOT"
+                echo "Marketing files synced to $WEB_ROOT (no sudo)"
+              elif sudo rsync -av --delete "$MARKETING_PUBLIC/" "$WEB_ROOT/"; then
+                echo "Marketing files synced to $WEB_ROOT (sudo)"
               else
-                echo "WARN: rsync to $WEB_ROOT failed — likely a permission issue."
-                echo "WARN: To fix, run on the VPS: sudo usermod -aG mypaylink ${{ secrets.VPS_USER }} && sudo chmod -R g+w $WEB_ROOT"
-                echo "WARN: Continuing — core app is healthy."
+                echo "WARN: rsync to $WEB_ROOT failed with and without sudo."
+                echo "WARN: To permanently fix, run on the VPS:"
+                echo "WARN:   sudo usermod -aG mypaylink ${{ secrets.VPS_USER }}"
+                echo "WARN:   sudo chmod -R g+w $WEB_ROOT"
+                echo "WARN:   sudo find $WEB_ROOT -type d -exec chmod g+s {} \\;"
+                echo "WARN: Falling back to Node.js server on port 3000."
               fi
             else
               echo "WARN: WEB_ROOT not found or not accessible — skipping rsync"
@@ -188,104 +193,3 @@ jobs:
             pm2 logs "$SITE_NAME" --lines 75 --nostream || true
 
             echo "========== MARKETING DEPLOY SUCCESS =========="
-name: Deploy PayLink to VPS
-
-on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
-
-concurrency:
-  group: deploy-paylink-production
-  cancel-in-progress: true
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Deploy to VPS over SSH
-        uses: appleboy/ssh-action@v1
-        env:
-          GITHUB_SHA: ${{ github.sha }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          script_stop: true
-          command_timeout: 30m
-          envs: GITHUB_SHA,GITHUB_REF_NAME
-          script: |
-            set -Eeuo pipefail
-
-            APP_NAME="paylink"
-            APP_DIR="/home/${{ secrets.VPS_USER }}/paylink-app/PayLink"
-            APP_ENTRY="$APP_DIR/dist/index.cjs"
-            ENV_FILE="/etc/paylink/.env"
-
-            echo "========== PAYLINK DEPLOY START =========="
-            echo "Branch: $GITHUB_REF_NAME"
-            echo "Commit: $GITHUB_SHA"
-            echo "User: $(whoami)"
-            echo "Dir: $APP_DIR"
-
-            cd "$APP_DIR"
-
-            echo "==> Sync latest code"
-            git fetch origin main
-            git reset --hard origin/main
-
-            echo "==> Versions"
-            node -v
-            npm -v
-            pm2 -v
-
-            echo "==> Install dependencies"
-            npm install
-
-            echo "==> Build"
-            npm run build
-
-            echo "==> Verify required files"
-            test -f "$APP_ENTRY" || { echo "ERROR: Missing build artifact: $APP_ENTRY"; exit 1; }
-            test -f "$ENV_FILE" || { echo "ERROR: Missing env file: $ENV_FILE"; exit 1; }
-
-            echo "==> Restart app"
-            pm2 delete "$APP_NAME" 2>/dev/null || true
-            sleep 2
-
-            pm2 start "$APP_ENTRY" \
-              --name "$APP_NAME" \
-              --cwd "$APP_DIR" \
-              --interpreter node \
-              --node-args="-r dotenv/config" \
-              --update-env \
-              --restart-delay 5000 \
-              --max-restarts 5 \
-              -- dotenv_config_path="$ENV_FILE"
-
-            pm2 save --force
-
-            echo "==> Wait for startup"
-            sleep 15
-
-            echo "==> PM2 status"
-            pm2 list
-            pm2 describe "$APP_NAME" || true
-            pm2 logs "$APP_NAME" --lines 100 --nostream || true
-
-            echo "==> Health checks"
-            HEALTH_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health || true)"
-            READY_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/ready || true)"
-            echo "Health: $HEALTH_CODE | Ready: $READY_CODE"
-
-            if [ "$HEALTH_CODE" != "200" ] && [ "$READY_CODE" != "200" ]; then
-              echo "ERROR: App failed health checks"
-              pm2 logs "$APP_NAME" --lines 150 --nostream || true
-              exit 1
-            fi
-
-            echo "========== PAYLINK DEPLOY SUCCESS =========="
