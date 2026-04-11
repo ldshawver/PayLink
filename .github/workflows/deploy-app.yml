@@ -117,3 +117,11 @@ jobs:
             fi
 
             echo "========== PRIVATE APP DEPLOY SUCCESS =========="
+           
+            SHARED_MARKETING_DIR="/var/tmp/paylink-marketing-build"
+            MARKETING_PUBLIC="$APP_DIR/public-site/public"
+
+            mkdir -p "$SHARED_MARKETING_DIR"
+            rm -rf "$SHARED_MARKETING_DIR"/*
+            cp -R "$MARKETING_PUBLIC"/. "$SHARED_MARKETING_DIR"/
+            chmod -R a+rX "$SHARED_MARKETING_DIR"
