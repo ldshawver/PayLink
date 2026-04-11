@@ -39,9 +39,7 @@ jobs:
           script: |
             set -Eeuo pipefail
 
-            SOURCE_REPO="/home/paylinkssh/paylink-app/PayLink"
-            MARKETING_DIR="$SOURCE_REPO/public-site"
-            MARKETING_PUBLIC="$MARKETING_DIR/public"
+            MARKETING_PUBLIC="/var/tmp/paylink-marketing-build"
             MARKETING_SERVER="$MARKETING_DIR/server.js"
             WEB_ROOT="/home/mypaylink/htdocs/mypaylink.app"
 
