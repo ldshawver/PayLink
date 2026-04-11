@@ -1,0 +1,78 @@
+name: Deploy Marketing Site
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-marketing-production
+  cancel-in-progress: true
+
+jobs:
+  deploy_marketing:
+    name: Deploy mypaylink.app
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate marketing deploy secrets
+        run: |
+          [ -n "${{ secrets.MKT_VPS_HOST }}" ] || { echo "Missing MKT_VPS_HOST"; exit 1; }
+          [ -n "${{ secrets.MKT_VPS_USER }}" ] || { echo "Missing MKT_VPS_USER"; exit 1; }
+          [ -n "${{ secrets.MKT_VPS_PORT }}" ] || { echo "Missing MKT_VPS_PORT"; exit 1; }
+          [ -n "${{ secrets.MKT_VPS_SSH_KEY }}" ] || { echo "Missing MKT_VPS_SSH_KEY"; exit 1; }
+
+      - name: Deploy marketing site over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.MKT_VPS_HOST }}
+          username: ${{ secrets.MKT_VPS_USER }}
+          key: ${{ secrets.MKT_VPS_SSH_KEY }}
+          port: ${{ secrets.MKT_VPS_PORT }}
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            set -Eeuo pipefail
+
+            SOURCE_REPO="/home/paylinkssh/paylink-app/PayLink"
+            MARKETING_DIR="$SOURCE_REPO/public-site"
+            MARKETING_PUBLIC="$MARKETING_DIR/public"
+            MARKETING_SERVER="$MARKETING_DIR/server.js"
+            WEB_ROOT="/home/mypaylink/htdocs/mypaylink.app"
+
+            echo "========== MARKETING DEPLOY START =========="
+            echo "User: $(whoami)"
+            echo "Source repo: $SOURCE_REPO"
+            echo "Web root: $WEB_ROOT"
+
+            test -d "$SOURCE_REPO" || { echo "ERROR: Missing source repo: $SOURCE_REPO"; exit 1; }
+            test -d "$MARKETING_DIR" || { echo "ERROR: Missing marketing dir: $MARKETING_DIR"; exit 1; }
+            test -d "$MARKETING_PUBLIC" || { echo "ERROR: Missing marketing public dir: $MARKETING_PUBLIC"; exit 1; }
+            test -d "$WEB_ROOT" || { echo "ERROR: Missing marketing web root: $WEB_ROOT"; exit 1; }
+
+            echo "==> Sync static marketing files"
+            rsync -av --delete "$MARKETING_PUBLIC/" "$WEB_ROOT/"
+
+            echo "==> Fix file permissions"
+            find "$WEB_ROOT" -type f -exec chmod 644 {} \;
+            find "$WEB_ROOT" -type d -exec chmod 755 {} \;
+
+            echo "==> Restart marketing PM2 process if server exists"
+            if [ -f "$MARKETING_SERVER" ]; then
+              SITE_NAME="paylink-marketing"
+              pm2 describe "$SITE_NAME" >/dev/null 2>&1 \
+                && pm2 restart "$SITE_NAME" --update-env \
+                || pm2 start "$MARKETING_SERVER" --name "$SITE_NAME" --cwd "$MARKETING_DIR"
+              pm2 save --force
+              pm2 describe "$SITE_NAME" || true
+              pm2 logs "$SITE_NAME" --lines 100 --nostream || true
+            else
+              echo "==> No marketing Node server file found; static deploy only"
+            fi
+
+            echo "========== MARKETING DEPLOY SUCCESS =========="
