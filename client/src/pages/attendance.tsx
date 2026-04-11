@@ -78,6 +78,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
+import { isManagerOrAbove } from "@/lib/roles";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type {
   TimeEntry,
@@ -224,6 +226,8 @@ function getWeekDates(weekOffset: number): { start: string; end: string; days: D
 
 function TimesheetTab() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const canEdit = isManagerOrAbove(user?.role || "");
   const [editEntry, setEditEntry] = useState<TimeEntry | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -469,15 +473,19 @@ function TimesheetTab() {
                 <List className="h-4 w-4" />
               </Button>
             </div>
-            <Button size="sm" variant="outline" onClick={() => setConvertOpen(true)} data-testid="button-convert-punches">
-              <RefreshCw className="h-4 w-4 mr-2" />Convert Punches
-            </Button>
+            {canEdit && (
+              <Button size="sm" variant="outline" onClick={() => setConvertOpen(true)} data-testid="button-convert-punches">
+                <RefreshCw className="h-4 w-4 mr-2" />Convert Punches
+              </Button>
+            )}
             <Dialog open={addOpen} onOpenChange={setAddOpen}>
+            {canEdit && (
             <DialogTrigger asChild>
               <Button size="sm" data-testid="button-add-time-entry">
                 <Plus className="h-4 w-4 mr-2" />Add Entry
               </Button>
             </DialogTrigger>
+            )}
           <DialogContent>
             <DialogHeader><DialogTitle>Add Time Entry</DialogTitle></DialogHeader>
             <div className="grid gap-3 mt-2">
@@ -674,10 +682,10 @@ function TimesheetTab() {
                             <td key={i} className={`py-1.5 px-2 text-center border-r last:border-r-0 ${isToday ? "bg-teal-50/50 dark:bg-teal-950/20" : ""}`}>
                               {dayEntries.length > 0 ? (
                                 <button
-                                  className={`w-full rounded px-1.5 py-1 text-xs font-medium transition-opacity hover:opacity-80 ${statusColor(firstEntry?.status)}`}
-                                  onClick={() => firstEntry && openEdit(firstEntry)}
+                                  className={`w-full rounded px-1.5 py-1 text-xs font-medium ${canEdit ? "transition-opacity hover:opacity-80 cursor-pointer" : "cursor-default"} ${statusColor(firstEntry?.status)}`}
+                                  onClick={() => canEdit && firstEntry && openEdit(firstEntry)}
                                   data-testid={`cell-${workerId}-${dateStr}`}
-                                  title={`${dayHours.toFixed(1)}h — click to edit`}
+                                  title={canEdit ? `${dayHours.toFixed(1)}h — click to edit` : `${dayHours.toFixed(1)}h`}
                                 >
                                   <div>{dayHours.toFixed(1)}h</div>
                                   {hasOt && <div className="text-xs opacity-70">+OT</div>}
@@ -799,41 +807,43 @@ function TimesheetTab() {
                         <StatusBadge status={entry.status || "pending"} />
                       </TableCell>
                       <TableCell className="text-right">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button size="icon" variant="ghost" data-testid={`button-entry-menu-${entry.id}`}>
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => openEdit(entry)} data-testid={`button-edit-entry-${entry.id}`}>
-                              <Pencil className="h-4 w-4 mr-2" />Edit
-                            </DropdownMenuItem>
-                            {entry.status === "pending" && (
-                              <DropdownMenuItem
-                                onClick={() => updateEntry.mutate({ id: entry.id, data: { status: "approved" } })}
-                                data-testid={`button-approve-${entry.id}`}
-                              >
-                                <Check className="h-4 w-4 mr-2" />Approve
+                        {canEdit && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button size="icon" variant="ghost" data-testid={`button-entry-menu-${entry.id}`}>
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => openEdit(entry)} data-testid={`button-edit-entry-${entry.id}`}>
+                                <Pencil className="h-4 w-4 mr-2" />Edit
                               </DropdownMenuItem>
-                            )}
-                            {entry.status === "pending" && (
+                              {entry.status === "pending" && (
+                                <DropdownMenuItem
+                                  onClick={() => updateEntry.mutate({ id: entry.id, data: { status: "approved" } })}
+                                  data-testid={`button-approve-${entry.id}`}
+                                >
+                                  <Check className="h-4 w-4 mr-2" />Approve
+                                </DropdownMenuItem>
+                              )}
+                              {entry.status === "pending" && (
+                                <DropdownMenuItem
+                                  onClick={() => updateEntry.mutate({ id: entry.id, data: { status: "rejected" } })}
+                                  data-testid={`button-reject-${entry.id}`}
+                                >
+                                  <X className="h-4 w-4 mr-2" />Reject
+                                </DropdownMenuItem>
+                              )}
                               <DropdownMenuItem
-                                onClick={() => updateEntry.mutate({ id: entry.id, data: { status: "rejected" } })}
-                                data-testid={`button-reject-${entry.id}`}
+                                className="text-destructive"
+                                onClick={() => setDeleteId(entry.id)}
+                                data-testid={`button-delete-entry-${entry.id}`}
                               >
-                                <X className="h-4 w-4 mr-2" />Reject
+                                <Trash2 className="h-4 w-4 mr-2" />Delete
                               </DropdownMenuItem>
-                            )}
-                            <DropdownMenuItem
-                              className="text-destructive"
-                              onClick={() => setDeleteId(entry.id)}
-                              data-testid={`button-delete-entry-${entry.id}`}
-                            >
-                              <Trash2 className="h-4 w-4 mr-2" />Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
                       </TableCell>
                     </TableRow>
                   );
@@ -1003,6 +1013,8 @@ function TimesheetTab() {
 
 function PunchesTab() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const canEdit = isManagerOrAbove(user?.role || "");
   const [editPunch, setEditPunch] = useState<TimePunch | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -1093,11 +1105,13 @@ function PunchesTab() {
       <div className="flex items-center justify-between px-4 pt-4">
         <p className="text-sm text-muted-foreground">{sortedPunches.length} punches</p>
         <Dialog open={addOpen} onOpenChange={setAddOpen}>
+          {canEdit && (
           <DialogTrigger asChild>
             <Button size="sm" data-testid="button-add-punch">
               <Plus className="h-4 w-4 mr-2" />Add Punch
             </Button>
           </DialogTrigger>
+          )}
           <DialogContent>
             <DialogHeader><DialogTitle>Add Manual Punch</DialogTitle></DialogHeader>
             <div className="grid gap-3 mt-2">
@@ -1196,25 +1210,27 @@ function PunchesTab() {
                       {punch.note || "-"}
                     </TableCell>
                     <TableCell className="text-right">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button size="icon" variant="ghost" data-testid={`button-punch-menu-${punch.id}`}>
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => openEdit(punch)} data-testid={`button-edit-punch-${punch.id}`}>
-                            <Pencil className="h-4 w-4 mr-2" />Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="text-destructive"
-                            onClick={() => setDeleteId(punch.id)}
-                            data-testid={`button-delete-punch-${punch.id}`}
-                          >
-                            <Trash2 className="h-4 w-4 mr-2" />Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      {canEdit && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="icon" variant="ghost" data-testid={`button-punch-menu-${punch.id}`}>
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => openEdit(punch)} data-testid={`button-edit-punch-${punch.id}`}>
+                              <Pencil className="h-4 w-4 mr-2" />Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              className="text-destructive"
+                              onClick={() => setDeleteId(punch.id)}
+                              data-testid={`button-delete-punch-${punch.id}`}
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
                     </TableCell>
                   </TableRow>
                 );

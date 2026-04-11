@@ -3106,7 +3106,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/time-punches/:id", requireAuth, async (req, res) => {
+  app.patch("/api/time-punches/:id", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.punchTime) data.punchTime = new Date(data.punchTime);
@@ -3121,7 +3121,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/time-punches/:id", requireAuth, async (req, res) => {
+  app.delete("/api/time-punches/:id", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
       await storage.deleteTimePunch(req.params.id);
       res.json({ message: "Time punch deleted" });
@@ -3142,7 +3142,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/time-punches/:id/approve", requireAuth, async (req, res) => {
+  app.patch("/api/time-punches/:id/approve", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
       const { action } = req.body;
       const approvalStatus = action === "reject" ? "rejected" : "approved";
@@ -3308,7 +3308,7 @@ export async function registerRoutes(
 
   // ── End Clock-In Approval Requests ───────────────────────────────────────────
 
-  app.post("/api/time-entries/convert-from-punches", requireAuth, async (req, res) => {
+  app.post("/api/time-entries/convert-from-punches", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
       const { companyId, startDate, endDate } = req.body;
       if (!companyId || !startDate || !endDate) {
@@ -3365,7 +3365,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/time-entries", requireAuth, async (req, res) => {
+  app.post("/api/time-entries", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.clockIn) data.clockIn = new Date(data.clockIn);
@@ -3378,7 +3378,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/time-entries/:id", requireAuth, async (req, res) => {
+  app.patch("/api/time-entries/:id", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
       const data = { ...req.body };
       if (data.clockIn) data.clockIn = new Date(data.clockIn);
@@ -3394,7 +3394,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/time-entries/:id", requireAuth, async (req, res) => {
+  app.delete("/api/time-entries/:id", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
       await storage.deleteTimeEntry(req.params.id);
       res.json({ message: "Time entry deleted" });
