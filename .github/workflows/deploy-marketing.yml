@@ -40,17 +40,14 @@ jobs:
             set -Eeuo pipefail
 
             MARKETING_PUBLIC="/var/tmp/paylink-marketing-build"
-            MARKETING_SERVER="$MARKETING_DIR/server.js"
             WEB_ROOT="/home/mypaylink/htdocs/mypaylink.app"
 
             echo "========== MARKETING DEPLOY START =========="
             echo "User: $(whoami)"
-            echo "Source repo: $SOURCE_REPO"
+            echo "Marketing public: $MARKETING_PUBLIC"
             echo "Web root: $WEB_ROOT"
 
-            test -d "$SOURCE_REPO" || { echo "ERROR: Missing source repo: $SOURCE_REPO"; exit 1; }
-            test -d "$MARKETING_DIR" || { echo "ERROR: Missing marketing dir: $MARKETING_DIR"; exit 1; }
-            test -d "$MARKETING_PUBLIC" || { echo "ERROR: Missing marketing public dir: $MARKETING_PUBLIC"; exit 1; }
+            test -d "$MARKETING_PUBLIC" || { echo "ERROR: Missing shared marketing build dir: $MARKETING_PUBLIC"; exit 1; }
             test -d "$WEB_ROOT" || { echo "ERROR: Missing marketing web root: $WEB_ROOT"; exit 1; }
 
             echo "==> Sync static marketing files"
@@ -59,18 +56,5 @@ jobs:
             echo "==> Fix file permissions"
             find "$WEB_ROOT" -type f -exec chmod 644 {} \;
             find "$WEB_ROOT" -type d -exec chmod 755 {} \;
-
-            echo "==> Restart marketing PM2 process if server exists"
-            if [ -f "$MARKETING_SERVER" ]; then
-              SITE_NAME="paylink-marketing"
-              pm2 describe "$SITE_NAME" >/dev/null 2>&1 \
-                && pm2 restart "$SITE_NAME" --update-env \
-                || pm2 start "$MARKETING_SERVER" --name "$SITE_NAME" --cwd "$MARKETING_DIR"
-              pm2 save --force
-              pm2 describe "$SITE_NAME" || true
-              pm2 logs "$SITE_NAME" --lines 100 --nostream || true
-            else
-              echo "==> No marketing Node server file found; static deploy only"
-            fi
 
             echo "========== MARKETING DEPLOY SUCCESS =========="
