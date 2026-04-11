@@ -13,16 +13,30 @@ async function ensureAdminUser() {
   try {
     const existing = await db.select().from(users).where(eq(users.username, "admin"));
     if (existing.length === 0) {
-      const hashedPassword = await bcrypt.hash("admin", 10);
+      const initialPassword = process.env.ADMIN_PASSWORD || "admin";
+      const hashedPassword = await bcrypt.hash(initialPassword, 10);
       await db.insert(users).values({
         username: "admin",
         password: hashedPassword,
         role: "platform_super_admin",
       });
-      console.log("Platform admin user created (admin/admin) with role platform_super_admin");
+      if (process.env.ADMIN_PASSWORD) {
+        console.log("Platform admin user created with ADMIN_PASSWORD env var and role platform_super_admin");
+      } else {
+        console.log("Platform admin user created (admin/admin) with role platform_super_admin");
+      }
     } else {
       const adminUser = existing[0];
-      if (process.env.NODE_ENV === "production") {
+      if (process.env.ADMIN_PASSWORD) {
+        const hashedPassword = await bcrypt.hash(process.env.ADMIN_PASSWORD, 10);
+        const updates: Record<string, any> = { password: hashedPassword };
+        if (adminUser.role === "admin" && !adminUser.companyId) {
+          updates.role = "platform_super_admin";
+          console.log("Admin user upgraded from 'admin' to 'platform_super_admin' (no company assigned)");
+        }
+        await db.update(users).set(updates).where(eq(users.username, "admin"));
+        console.log("Admin user password reset via ADMIN_PASSWORD env var");
+      } else if (process.env.NODE_ENV === "production") {
         console.log("Admin user exists, skipping password reset (production mode)");
       } else {
         const hashedPassword = await bcrypt.hash("admin", 10);

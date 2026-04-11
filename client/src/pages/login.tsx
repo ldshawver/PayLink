@@ -561,6 +561,10 @@ function TimeClockPanel() {
 
       <div className="h-px bg-border" />
 
+      <p className="text-sm text-muted-foreground text-center" data-testid="text-clock-instructions">
+        Enter your employee number and PIN to clock in or out.
+      </p>
+
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="empNum" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
@@ -568,6 +572,8 @@ function TimeClockPanel() {
           </Label>
           <Input
             id="empNum"
+            inputMode="numeric"
+            pattern="[0-9]*"
             value={employeeNumber}
             onChange={(e) => setEmployeeNumber(e.target.value)}
             onFocus={() => setActiveField("empNum")}
@@ -585,6 +591,8 @@ function TimeClockPanel() {
           <Input
             id="pin"
             type="password"
+            inputMode="numeric"
+            pattern="[0-9]*"
             value={pin}
             onChange={(e) => setPin(e.target.value)}
             onFocus={() => setActiveField("pin")}
