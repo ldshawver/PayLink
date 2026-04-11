@@ -20,7 +20,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy app over SSH
+      - name: Validate app deploy secrets
+        run: |
+          [ -n "${{ secrets.APP_VPS_HOST }}" ] || { echo "Missing APP_VPS_HOST"; exit 1; }
+          [ -n "${{ secrets.APP_VPS_USER }}" ] || { echo "Missing APP_VPS_USER"; exit 1; }
+          [ -n "${{ secrets.APP_VPS_PORT }}" ] || { echo "Missing APP_VPS_PORT"; exit 1; }
+          [ -n "${{ secrets.APP_VPS_SSH_KEY }}" ] || { echo "Missing APP_VPS_SSH_KEY"; exit 1; }
+
+      - name: Deploy private app over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.APP_VPS_HOST }}
@@ -53,8 +60,10 @@ jobs:
             npm -v
             pm2 -v
 
-            echo "==> Validate repo permissions"
-            test -w "$APP_DIR/package.json" || { echo "ERROR: Cannot write/read repo files in $APP_DIR"; ls -lah "$APP_DIR"; exit 1; }
+            echo "==> Validate repo files"
+            test -d "$APP_DIR" || { echo "ERROR: Missing repo dir: $APP_DIR"; exit 1; }
+            test -f "$APP_DIR/package.json" || { echo "ERROR: Missing package.json"; exit 1; }
+            test -f "$ENV_FILE" || { echo "ERROR: Missing env file: $ENV_FILE"; exit 1; }
 
             echo "==> Install dependencies"
             npm ci
@@ -62,9 +71,8 @@ jobs:
             echo "==> Build app"
             npm run build
 
-            echo "==> Verify files"
+            echo "==> Verify build output"
             test -f "$APP_ENTRY" || { echo "ERROR: Missing build artifact: $APP_ENTRY"; exit 1; }
-            test -f "$ENV_FILE" || { echo "ERROR: Missing env file: $ENV_FILE"; exit 1; }
 
             echo "==> Restart PM2 app"
             pm2 delete "$APP_NAME" 2>/dev/null || true
@@ -80,6 +88,7 @@ jobs:
               --max-restarts 5 \
               -- dotenv_config_path="$ENV_FILE"
 
+            echo "==> Save PM2 process list"
             pm2 save --force
 
             echo "==> Wait for startup"
@@ -116,7 +125,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy marketing over SSH
+      - name: Validate marketing deploy secrets
+        run: |
+          [ -n "${{ secrets.MKT_VPS_HOST }}" ] || { echo "Missing MKT_VPS_HOST"; exit 1; }
+          [ -n "${{ secrets.MKT_VPS_USER }}" ] || { echo "Missing MKT_VPS_USER"; exit 1; }
+          [ -n "${{ secrets.MKT_VPS_PORT }}" ] || { echo "Missing MKT_VPS_PORT"; exit 1; }
+          [ -n "${{ secrets.MKT_VPS_SSH_KEY }}" ] || { echo "Missing MKT_VPS_SSH_KEY"; exit 1; }
+
+      - name: Deploy marketing site over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.MKT_VPS_HOST }}
@@ -128,62 +144,45 @@ jobs:
           script: |
             set -Eeuo pipefail
 
-            SITE_NAME="paylink-marketing"
-            APP_DIR="/home/mypaylinks/paylink-app/PayLink"
-            MARKETING_DIR="$APP_DIR/public-site"
+            # Repo already exists under the private app deploy user
+            SOURCE_REPO="/home/paylinkssh/paylink-app/PayLink"
+
+            # Adjust this if your marketing source folder name differs
+            MARKETING_DIR="$SOURCE_REPO/public-site"
             MARKETING_PUBLIC="$MARKETING_DIR/public"
             MARKETING_SERVER="$MARKETING_DIR/server.js"
 
-            # CloudPanel site root for mypaylink.app
-            WEB_ROOT="/home/mypaylinks/htdocs/mypaylink.app"
+            # CloudPanel marketing site root
+            WEB_ROOT="/home/mypaylink/htdocs/mypaylink.app"
 
             echo "========== MARKETING DEPLOY START =========="
             echo "User: $(whoami)"
-            echo "App dir: $APP_DIR"
+            echo "Source repo: $SOURCE_REPO"
             echo "Web root: $WEB_ROOT"
 
-            cd "$APP_DIR"
-
-            echo "==> Git sync"
-            git fetch origin main
-            git reset --hard origin/main
-
-            echo "==> Versions"
-            node -v
-            npm -v
-            pm2 -v
-
-            echo "==> Install dependencies"
-            npm ci
-
-            echo "==> Verify marketing paths"
+            test -d "$SOURCE_REPO" || { echo "ERROR: Missing source repo: $SOURCE_REPO"; exit 1; }
             test -d "$MARKETING_DIR" || { echo "ERROR: Missing marketing dir: $MARKETING_DIR"; exit 1; }
             test -d "$MARKETING_PUBLIC" || { echo "ERROR: Missing marketing public dir: $MARKETING_PUBLIC"; exit 1; }
-            test -d "$WEB_ROOT" || { echo "ERROR: Missing CloudPanel web root: $WEB_ROOT"; exit 1; }
+            test -d "$WEB_ROOT" || { echo "ERROR: Missing marketing web root: $WEB_ROOT"; exit 1; }
 
-            echo "==> Fix file permissions"
-            find "$MARKETING_PUBLIC" -type f -exec chmod 644 {} \;
-            find "$MARKETING_PUBLIC" -type d -exec chmod 755 {} \;
-
-            echo "==> Sync static files to CloudPanel web root"
+            echo "==> Sync static marketing files"
             rsync -av --delete "$MARKETING_PUBLIC/" "$WEB_ROOT/"
 
-            echo "==> Start/restart marketing Node service"
+            echo "==> Fix file permissions"
+            find "$WEB_ROOT" -type f -exec chmod 644 {} \;
+            find "$WEB_ROOT" -type d -exec chmod 755 {} \;
+
+            echo "==> Restart marketing PM2 process if server exists"
             if [ -f "$MARKETING_SERVER" ]; then
+              SITE_NAME="paylink-marketing"
               pm2 describe "$SITE_NAME" >/dev/null 2>&1 \
                 && pm2 restart "$SITE_NAME" --update-env \
-                || pm2 start "$MARKETING_SERVER" \
-                    --name "$SITE_NAME" \
-                    --cwd "$MARKETING_DIR"
+                || pm2 start "$MARKETING_SERVER" --name "$SITE_NAME" --cwd "$MARKETING_DIR"
               pm2 save --force
+              pm2 describe "$SITE_NAME" || true
+              pm2 logs "$SITE_NAME" --lines 100 --nostream || true
             else
-              echo "ERROR: Missing marketing server: $MARKETING_SERVER"
-              exit 1
+              echo "==> No marketing Node server file found; static deploy only"
             fi
 
-            echo "==> PM2 diagnostics"
-            pm2 list
-            pm2 describe "$SITE_NAME" || true
-            pm2 logs "$SITE_NAME" --lines 100 --nostream || true
-
-            echo "========== MARKETING DEPLOY SUCCESS =========="  
+            echo "========== MARKETING DEPLOY SUCCESS =========="
