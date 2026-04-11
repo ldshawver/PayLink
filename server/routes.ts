@@ -435,7 +435,7 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/portal/"];
+  const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/portal/", "/time-clock/"];
   app.use("/api", (req, res, next) => {
     if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
     blockDemoWrites(req, res, next);
