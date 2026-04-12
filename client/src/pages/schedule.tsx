@@ -1145,7 +1145,6 @@ export default function SchedulePage() {
 
   const handleTabChange = (value: string) => {
     if (value === "templates") value = "recurring";
-    setActiveTab(value);
     setLocation(value === "schedules" ? "/app/schedule" : `/app/schedule?tab=${value}`);
   };
 

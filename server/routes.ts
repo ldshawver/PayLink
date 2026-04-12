@@ -10486,6 +10486,35 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         afterJson: JSON.stringify(listing),
       });
 
+      try {
+        const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
+        const listerWorker = await storage.getWorker(listing.listedByWorkerId!);
+        const listerName = listerWorker ? `${listerWorker.firstName} ${listerWorker.lastName}` : "An employee";
+        const schedule = await storage.getSchedule(listing.scheduleId);
+        const shiftDate = schedule?.date || "unknown date";
+        const shiftTime = schedule ? `${schedule.startTime}–${schedule.endTime}` : "";
+        const appUrl = process.env.APP_BASE_URL || "https://mypaylink.app";
+        if (listing.companyId) {
+          const allWorkers = await storage.getWorkers();
+          const eligible = allWorkers.filter(w =>
+            w.companyId === listing.companyId && w.id !== listing.listedByWorkerId && (w.isActive || w.status === "active") && w.workerType === "employee"
+          );
+          const subject = "New Shift Available — Shift Marketplace";
+          for (const w of eligible) {
+            const wEmail = w.workEmail || w.homeEmail || w.email;
+            const wPhone = w.mobilePhone || w.phone || w.homePhone;
+            const wName = `${w.firstName} ${w.lastName}`;
+            const bodyText = `${listerName} has posted a shift on ${shiftDate} (${shiftTime}) to the Shift Marketplace.\n\nLog in to PayLink and go to Schedule → Shift Marketplace to request this shift.\n\n${appUrl}/app/schedule?tab=marketplace`;
+            await Promise.all([
+              sendShiftMarketplaceEmail({ recipientName: wName, email: wEmail, subject, bodyText }),
+              sendShiftMarketplaceSms({ recipientName: wName, phone: wPhone, subject, bodyText: `PayLink: ${listerName} posted a shift on ${shiftDate} ${shiftTime}. Log in to request it! ${appUrl}/app/schedule?tab=marketplace` }),
+            ]);
+          }
+        }
+      } catch (notifErr) {
+        console.error("[Marketplace Listing] Notification error (non-fatal):", (notifErr as Error).message);
+      }
+
       res.status(201).json(listing);
     } catch (e) { res.status(500).json({ message: "Failed to create listing" }); }
   });
@@ -10599,6 +10628,48 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         metadataJson: JSON.stringify(eligibility),
       });
 
+      try {
+        const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
+        const appUrl = process.env.APP_BASE_URL || "https://mypaylink.app";
+        const requesterName = candidate ? `${candidate.firstName} ${candidate.lastName}` : "An employee";
+        const listerName = lister ? `${lister.firstName} ${lister.lastName}` : "An employee";
+        const shiftDate = schedule?.date || "unknown date";
+        const shiftTime = schedule ? `${schedule.startTime}–${schedule.endTime}` : "";
+        const approvalUrl = `${appUrl}/app/schedule?tab=marketplace`;
+
+        // Notify managers/admins for approval
+        const allUsers = await storage.getUsers();
+        const managers = allUsers.filter(u =>
+          (u.role === "admin" || u.role === "manager" || u.role === "tenant_admin" || u.role === "tenant_manager") &&
+          (!u.companyId || u.companyId === listing.companyId)
+        );
+        const mgrSubject = `Shift Exchange Request — Approval Needed`;
+        for (const mgr of managers) {
+          const mgrWorker = mgr.workerId ? await storage.getWorker(mgr.workerId) : null;
+          const mgrEmail = mgrWorker?.workEmail || mgrWorker?.homeEmail || null;
+          const mgrPhone = mgrWorker?.mobilePhone || mgrWorker?.homePhone || null;
+          const mgrName = mgrWorker ? `${mgrWorker.firstName} ${mgrWorker.lastName}` : mgr.username;
+          const bodyText = `${requesterName} has requested to take over the shift posted by ${listerName}.\n\nShift: ${shiftDate} (${shiftTime})\n\nPlease log in to approve or deny this request.\n\n${approvalUrl}`;
+          await Promise.all([
+            sendShiftMarketplaceEmail({ recipientName: mgrName, email: mgrEmail, subject: mgrSubject, bodyText }),
+            sendShiftMarketplaceSms({ recipientName: mgrName, phone: mgrPhone, subject: mgrSubject, bodyText: `PayLink: ${requesterName} wants to pick up ${listerName}'s shift on ${shiftDate} ${shiftTime}. Approve at ${approvalUrl}` }),
+          ]);
+        }
+
+        // Also notify the original lister
+        const listerEmail = lister?.workEmail || lister?.homeEmail || lister?.email;
+        const listerPhone = lister?.mobilePhone || lister?.phone || lister?.homePhone;
+        if (listerEmail || listerPhone) {
+          const listerBodyText = `${requesterName} has requested to take over your shift on ${shiftDate} (${shiftTime}).\n\nA manager will review and approve or deny this request. You remain responsible for this shift until it is approved.\n\n${approvalUrl}`;
+          await Promise.all([
+            sendShiftMarketplaceEmail({ recipientName: listerName, email: listerEmail, subject: "Someone Requested Your Posted Shift", bodyText: listerBodyText }),
+            sendShiftMarketplaceSms({ recipientName: listerName, phone: listerPhone, subject: "Shift Request Received", bodyText: `PayLink: ${requesterName} requested your shift on ${shiftDate} ${shiftTime}. Pending manager approval.` }),
+          ]);
+        }
+      } catch (notifErr) {
+        console.error("[Marketplace Request] Notification error (non-fatal):", (notifErr as Error).message);
+      }
+
       res.status(201).json({ request, eligibility });
     } catch (e) {
       console.error("Marketplace request error:", e);
@@ -10652,6 +10723,50 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         afterJson: JSON.stringify(updated),
         metadataJson: JSON.stringify({ reviewNote }),
       });
+
+      try {
+        const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
+        const appUrl = process.env.APP_BASE_URL || "https://mypaylink.app";
+        const schedule = await storage.getSchedule(listing.scheduleId);
+        const shiftDate = schedule?.date || "unknown date";
+        const shiftTime = schedule ? `${schedule.startTime}–${schedule.endTime}` : "";
+        const requesterWorker = await storage.getWorker(request.requestingWorkerId!);
+        const listerWorker = await storage.getWorker(listing.listedByWorkerId!);
+        const requesterName = requesterWorker ? `${requesterWorker.firstName} ${requesterWorker.lastName}` : "The requesting employee";
+        const listerName = listerWorker ? `${listerWorker.firstName} ${listerWorker.lastName}` : "The original employee";
+        const noteText = reviewNote ? `\n\nManager note: ${reviewNote}` : "";
+        const marketplaceUrl = `${appUrl}/app/schedule?tab=marketplace`;
+
+        if (decision === "approved") {
+          // Notify requester — they got the shift
+          const reqEmail = requesterWorker?.workEmail || requesterWorker?.homeEmail || requesterWorker?.email;
+          const reqPhone = requesterWorker?.mobilePhone || requesterWorker?.phone || requesterWorker?.homePhone;
+          const reqBodyText = `Your request to pick up the shift on ${shiftDate} (${shiftTime}) has been approved.\n\nThis shift is now assigned to you. Please report for duty as scheduled.${noteText}\n\n${marketplaceUrl}`;
+          await Promise.all([
+            sendShiftMarketplaceEmail({ recipientName: requesterName, email: reqEmail, subject: "Shift Exchange Approved — You're On!", bodyText: reqBodyText }),
+            sendShiftMarketplaceSms({ recipientName: requesterName, phone: reqPhone, subject: "Shift Approved", bodyText: `PayLink: Your request for the shift on ${shiftDate} ${shiftTime} was APPROVED. You're on!${noteText}` }),
+          ]);
+          // Notify lister — they're off the hook
+          const lstrEmail = listerWorker?.workEmail || listerWorker?.homeEmail || listerWorker?.email;
+          const lstrPhone = listerWorker?.mobilePhone || listerWorker?.phone || listerWorker?.homePhone;
+          const lstrBodyText = `Good news — ${requesterName} has been approved to cover your shift on ${shiftDate} (${shiftTime}). You are no longer responsible for this shift.${noteText}\n\n${marketplaceUrl}`;
+          await Promise.all([
+            sendShiftMarketplaceEmail({ recipientName: listerName, email: lstrEmail, subject: "Your Shift Has Been Covered", bodyText: lstrBodyText }),
+            sendShiftMarketplaceSms({ recipientName: listerName, phone: lstrPhone, subject: "Shift Covered", bodyText: `PayLink: ${requesterName} has been approved to cover your shift on ${shiftDate} ${shiftTime}. You're all set!` }),
+          ]);
+        } else {
+          // Notify requester — denied
+          const reqEmail = requesterWorker?.workEmail || requesterWorker?.homeEmail || requesterWorker?.email;
+          const reqPhone = requesterWorker?.mobilePhone || requesterWorker?.phone || requesterWorker?.homePhone;
+          const reqBodyText = `Your request to pick up the shift on ${shiftDate} (${shiftTime}) has been denied.${noteText}\n\nIf you have questions, please speak with your manager.\n\n${marketplaceUrl}`;
+          await Promise.all([
+            sendShiftMarketplaceEmail({ recipientName: requesterName, email: reqEmail, subject: "Shift Exchange Request Denied", bodyText: reqBodyText }),
+            sendShiftMarketplaceSms({ recipientName: requesterName, phone: reqPhone, subject: "Shift Request Denied", bodyText: `PayLink: Your request for the shift on ${shiftDate} ${shiftTime} was denied.${noteText}` }),
+          ]);
+        }
+      } catch (notifErr) {
+        console.error("[Marketplace Review] Notification error (non-fatal):", (notifErr as Error).message);
+      }
 
       res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to review request" }); }
