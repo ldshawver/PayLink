@@ -1321,26 +1321,33 @@ export class DatabaseStorage implements IStorage {
       return schedule;
     } catch (e: any) {
       if (e.code === "42703" || String(e.message).includes("does not exist")) {
-        // Fallback: build raw SET clause without job_id
-        const { jobId, ...rest } = data as any;
-        const setClauses: string[] = [];
-        const vals: any[] = [];
-        let idx = 1;
-        if (rest.startTime !== undefined) { setClauses.push(`start_time = $${idx++}`); vals.push(rest.startTime); }
-        if (rest.endTime !== undefined) { setClauses.push(`end_time = $${idx++}`); vals.push(rest.endTime); }
-        if (rest.department !== undefined) { setClauses.push(`department = $${idx++}`); vals.push(rest.department || null); }
-        if (rest.status !== undefined) { setClauses.push(`status = $${idx++}`); vals.push(rest.status); }
-        if (rest.note !== undefined) { setClauses.push(`note = $${idx++}`); vals.push(rest.note || null); }
-        if (setClauses.length === 0) {
-          const [s] = await db.execute(sql`SELECT id, worker_id, company_id, date, start_time, end_time, department, status, note, created_at, NULL::varchar as job_id FROM schedules WHERE id = ${id}`).then(r => r.rows);
-          if (!s) return undefined;
-          return { id: (s as any).id, workerId: (s as any).worker_id, companyId: (s as any).company_id, date: (s as any).date, startTime: (s as any).start_time, endTime: (s as any).end_time, department: (s as any).department, jobId: null, status: (s as any).status, note: (s as any).note, createdAt: (s as any).created_at } as Schedule;
+        // Fallback: retry with only the core columns that have always existed,
+        // dropping any newer columns (job_id, position_id, cost_center_id, note)
+        // that may not yet exist on older VPS databases.
+        const { jobId, positionId, costCenterId, ...rest } = data as any;
+        const safeData: any = {};
+        if (rest.startTime !== undefined) safeData.startTime = rest.startTime;
+        if (rest.endTime !== undefined) safeData.endTime = rest.endTime;
+        if (rest.department !== undefined) safeData.department = rest.department || null;
+        if (rest.status !== undefined) safeData.status = rest.status;
+        if (rest.note !== undefined) safeData.note = rest.note || null;
+        if (Object.keys(safeData).length === 0) {
+          const [s] = await db.select().from(schedules).where(eq(schedules.id, id));
+          return s;
         }
-        vals.push(id);
-        const { rows } = await db.execute(sql.raw(`UPDATE schedules SET ${setClauses.join(', ')} WHERE id = $${idx} RETURNING id, worker_id, company_id, date, start_time, end_time, department, status, note, created_at, NULL::varchar as job_id`, vals));
-        if (!rows[0]) return undefined;
-        const r = rows[0] as any;
-        return { id: r.id, workerId: r.worker_id, companyId: r.company_id, date: r.date, startTime: r.start_time, endTime: r.end_time, department: r.department, jobId: null, status: r.status, note: r.note, createdAt: r.created_at } as Schedule;
+        try {
+          const [s] = await db.update(schedules).set(safeData).where(eq(schedules.id, id)).returning();
+          return s;
+        } catch (e2: any) {
+          // note column also missing — drop it too
+          const { note: _n, ...coreSafe } = safeData;
+          if (Object.keys(coreSafe).length === 0) {
+            const [s] = await db.select().from(schedules).where(eq(schedules.id, id));
+            return s;
+          }
+          const [s] = await db.update(schedules).set(coreSafe).where(eq(schedules.id, id)).returning();
+          return s;
+        }
       }
       throw e;
     }
@@ -1624,7 +1631,7 @@ export class DatabaseStorage implements IStorage {
       return r;
     } catch (e: any) {
       if (e.code === "42703" || String(e.message).includes("does not exist")) {
-        const { jobId, ...rest } = data as any;
+        const { jobId, positionId, costCenterId, note, ...rest } = data as any;
         const [r] = await db.insert(recurringSchedules).values(rest).returning();
         return r;
       }
@@ -1637,7 +1644,8 @@ export class DatabaseStorage implements IStorage {
       return r;
     } catch (e: any) {
       if (e.code === "42703" || String(e.message).includes("does not exist")) {
-        const { jobId, ...rest } = data as any;
+        // Strip newer columns that may not yet exist on older VPS databases
+        const { jobId, positionId, costCenterId, note, ...rest } = data as any;
         const [r] = await db.update(recurringSchedules).set(rest).where(eq(recurringSchedules.id, id)).returning();
         return r;
       }

@@ -285,7 +285,13 @@ app.use((req, res, next) => {
       catch (e: any) { console.log(`Auto-migration skipped (${label}):`, e.message); }
     };
     await run("schedules.job_id", sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`);
+    await run("schedules.position_id", sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS position_id VARCHAR`);
+    await run("schedules.cost_center_id", sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS cost_center_id VARCHAR`);
+    await run("schedules.note", sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS note TEXT`);
     await run("recurring_schedules.job_id", sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`);
+    await run("recurring_schedules.position_id", sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS position_id VARCHAR`);
+    await run("recurring_schedules.cost_center_id", sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS cost_center_id VARCHAR`);
+    await run("recurring_schedules.note", sql`ALTER TABLE recurring_schedules ADD COLUMN IF NOT EXISTS note TEXT`);
     await run("employee_groups.company_id nullable", sql`ALTER TABLE employee_groups ALTER COLUMN company_id DROP NOT NULL`);
     await run("employee_titles.company_id nullable", sql`ALTER TABLE employee_titles ALTER COLUMN company_id DROP NOT NULL`);
     await run("pay_stub_amendments.amendment_type", sql`ALTER TABLE pay_stub_amendments ADD COLUMN IF NOT EXISTS amendment_type TEXT DEFAULT 'earning'`);
