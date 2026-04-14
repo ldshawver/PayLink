@@ -7294,15 +7294,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/contractor-contracts", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const { companyId, contractorId } = req.query as Record<string, string>;
+      const { companyId } = req.query as Record<string, string>;
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       let rows;
-      if (user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_")) {
+      if (isAdmin) {
+        // Admins can see company contracts; platform roles see all if no companyId filter
         const cid = companyId || user?.companyId;
-        const result = await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.company_id = ${cid} ORDER BY cc.created_at DESC`);
+        const isPlatform = (user?.role || "").startsWith("platform_");
+        const result = isPlatform && !cid
+          ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id ORDER BY cc.created_at DESC LIMIT 500`)
+          : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.company_id = ${cid} ORDER BY cc.created_at DESC`);
         rows = result.rows;
       } else {
+        // Contractors only see their own — always derived from session, never from query param
         const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-        const wId = contractorId || (wRes.rows[0] as any)?.id;
+        const wId = (wRes.rows[0] as any)?.id;
+        if (!wId) return res.json([]);
         const result = await db.execute(sql`SELECT * FROM contractor_contracts WHERE contractor_id = ${wId} ORDER BY created_at DESC`);
         rows = result.rows;
       }
@@ -7444,15 +7451,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/dam-documents", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const { workerId, companyId, documentType, linkedEntityId } = req.query as Record<string, string>;
+      const { companyId, linkedEntityId } = req.query as Record<string, string>;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       let result;
       if (isAdmin) {
+        // Admins filter by company; optionally by linked entity
         const cid = companyId || user?.companyId;
-        result = await db.execute(sql`SELECT * FROM dam_documents WHERE (company_id = ${cid} OR worker_id = ${workerId || null}) AND is_archived = FALSE ${linkedEntityId ? sql`AND linked_entity_id = ${linkedEntityId}` : sql``} ORDER BY created_at DESC`);
+        result = await db.execute(sql`
+          SELECT * FROM dam_documents
+          WHERE is_archived = FALSE
+            AND (company_id = ${cid} OR (company_id IS NULL AND worker_id IN (SELECT id FROM workers WHERE company_id = ${cid})))
+            ${linkedEntityId ? sql`AND linked_entity_id = ${linkedEntityId}` : sql``}
+          ORDER BY created_at DESC
+        `);
       } else {
+        // Contractors only see their own documents — workerId always from session
         const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-        const wId = workerId || (wRes.rows[0] as any)?.id;
+        const wId = (wRes.rows[0] as any)?.id;
+        if (!wId) return res.json([]);
         result = await db.execute(sql`SELECT * FROM dam_documents WHERE worker_id = ${wId} AND is_archived = FALSE ORDER BY created_at DESC`);
       }
       res.json(result.rows);
@@ -7476,11 +7492,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch document" }); }
   });
 
-  app.post("/api/dam-documents", requireAuth, upload.single("file"), async (req: any, res) => {
+  app.post("/api/dam-documents", requireAuth, documentUpload.single("file"), async (req: any, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = req.body.workerId || (wRes.rows[0] as any)?.id || null;
+      const sessionWorkerId = (wRes.rows[0] as any)?.id || null;
+      // For non-admins, always use session-derived workerId (never trust body)
+      const workerId = isAdmin ? (req.body.workerId || sessionWorkerId) : sessionWorkerId;
       const { title, description, documentType, tags, linkedEntityType, linkedEntityId, isPublic, ownerType } = req.body;
       const filePath = req.file ? `/uploads/${req.file.filename}` : req.body.filePath;
       if (!filePath) return res.status(400).json({ message: "File or filePath required" });
@@ -7625,9 +7644,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Contractor Branding ───────────────────────────────────────────────────
   app.get("/api/contractor-branding", requireAuth, async (req, res) => {
     try {
-      const { workerId } = req.query as Record<string, string>;
+      const user = await storage.getUser(req.session.userId!);
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const { workerId: queryWorkerId } = req.query as Record<string, string>;
       const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const wId = workerId || (wRes.rows[0] as any)?.id;
+      const sessionWorkerId = (wRes.rows[0] as any)?.id;
+      // Admins can look up any worker's branding; contractors only see their own
+      const wId = isAdmin ? (queryWorkerId || sessionWorkerId) : sessionWorkerId;
       if (!wId) return res.status(404).json({ message: "Worker not found" });
       const result = await db.execute(sql`SELECT * FROM contractor_branding WHERE worker_id = ${wId}`);
       res.json(result.rows[0] || null);
@@ -7636,8 +7659,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/contractor-branding", requireAuth, upload.single("logo"), async (req: any, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const wId = req.body.workerId || (wRes.rows[0] as any)?.id;
+      const sessionWorkerId = (wRes.rows[0] as any)?.id;
+      // Non-admins can only manage their own branding
+      const wId = isAdmin ? (req.body.workerId || sessionWorkerId) : sessionWorkerId;
       if (!wId) return res.status(400).json({ message: "Worker not found" });
       const { businessName, tagline, primaryColor, secondaryColor, fontFamily, coverNote, signatureText, websiteUrl, licenseNumber, insuranceInfo, footerText, showLogo, showLicenseNumber } = req.body;
       const logoPath = req.file ? `/uploads/${req.file.filename}` : req.body.logoPath || null;
