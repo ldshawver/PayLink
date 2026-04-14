@@ -7380,8 +7380,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to create contract: " + e.message }); }
   });
 
+  // ── Shared helper: verify contract belongs to caller's company (or is platform) ──
+  async function assertContractCompanyAccess(contractId: string, sessionUserId: string): Promise<any | null> {
+    const user = await storage.getUser(sessionUserId);
+    const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+    if (!isAdmin) return null; // Only admins/managers can perform write ops on contracts
+    const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractId}`);
+    const contract = contractRes.rows[0] as any;
+    if (!contract) return null;
+    const isPlatform = (user?.role || "").startsWith("platform_");
+    // Platform admins can access any contract; tenant admins must match company
+    if (!isPlatform && user?.companyId && contract.company_id !== user.companyId) return null;
+    return contract;
+  }
+
   app.patch("/api/contractor-contracts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      if (["void", "fully_signed"].includes(contract.status)) return res.status(400).json({ message: "Cannot modify a void or fully-signed contract" });
       const { title, description, scopeOfWork, paymentTerms, totalValue, startDate, endDate, specialTerms, bodyHtml, bodyMarkdown, status } = req.body;
       const result = await db.execute(sql`
         UPDATE contractor_contracts SET
@@ -7407,6 +7424,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/contractor-contracts/:id/send", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      if (contract.status !== "draft") return res.status(400).json({ message: "Only draft contracts can be sent" });
       const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'sent', sent_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
       res.json(result.rows[0]);
@@ -7472,6 +7492,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/contractor-contracts/:id/void", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      if (contract.status === "void") return res.status(400).json({ message: "Contract is already void" });
       const { reason } = req.body;
       const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'void', voided_at = NOW(), void_reason = ${reason || null}, updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
@@ -7498,9 +7521,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/contractor-contracts/:id/snapshot", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
-      const contract = contractRes.rows[0] as any;
-      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
       const versionCount = await db.execute(sql`SELECT COUNT(*) FROM contract_versions WHERE contract_id = ${req.params.id}`);
       const version = parseInt((versionCount.rows[0] as any).count) + 1;
       const result = await db.execute(sql`
@@ -7600,10 +7622,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.id;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const isPlatform = (user?.role || "").startsWith("platform_");
       const existing = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
       if (!existing.rows[0]) return res.status(404).json({ message: "Document not found" });
       const doc = existing.rows[0] as any;
       if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      // Cross-tenant guard: admin must belong to same company (unless platform)
+      if (isAdmin && !isPlatform && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
       const { title, description, tags, isArchived, isPublic, linkedEntityType, linkedEntityId } = req.body;
       const result = await db.execute(sql`
         UPDATE dam_documents SET
@@ -7628,10 +7653,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.id;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const isPlatform = (user?.role || "").startsWith("platform_");
       const existing = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
       if (!existing.rows[0]) return res.status(404).json({ message: "Document not found" });
       const doc = existing.rows[0] as any;
       if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      // Cross-tenant guard: admin must belong to same company (unless platform)
+      if (isAdmin && !isPlatform && user?.companyId && doc.company_id && doc.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
       await db.execute(sql`UPDATE dam_documents SET is_archived = TRUE, updated_at = NOW() WHERE id = ${req.params.id}`);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to archive document: " + e.message }); }
@@ -7655,9 +7683,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/contractor-templates/:id", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
       const result = await db.execute(sql`SELECT * FROM contractor_templates WHERE id = ${req.params.id}`);
       if (!result.rows[0]) return res.status(404).json({ message: "Template not found" });
-      res.json(result.rows[0]);
+      const tpl = result.rows[0] as any;
+      // Non-platform users may only see global templates or their company's templates
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      if (!isPlatform && !tpl.is_global && tpl.company_id && tpl.company_id !== user?.companyId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      res.json(tpl);
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch template" }); }
   });
 
@@ -7677,6 +7712,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/contractor-templates/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      // Verify template ownership before mutating
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const tplRes = await db.execute(sql`SELECT id, company_id, is_global FROM contractor_templates WHERE id = ${req.params.id}`);
+      if (!tplRes.rows[0]) return res.status(404).json({ message: "Template not found" });
+      const tpl = tplRes.rows[0] as any;
+      // Non-platform admins can only edit their own company's templates (not other companies' or global templates they don't own)
+      if (!isPlatform && tpl.company_id && tpl.company_id !== user?.companyId) return res.status(403).json({ message: "Access denied" });
       const { name, description, industry, bodyJson, defaultPaymentTerms, defaultScopeTemplate, defaultAssumptions, defaultExclusions, defaultWarranty, isActive } = req.body;
       const result = await db.execute(sql`
         UPDATE contractor_templates SET
@@ -7701,6 +7744,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/contractor-templates/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      // Verify template ownership before soft-deleting
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const tplRes = await db.execute(sql`SELECT id, company_id FROM contractor_templates WHERE id = ${req.params.id}`);
+      if (!tplRes.rows[0]) return res.status(404).json({ message: "Template not found" });
+      const tpl = tplRes.rows[0] as any;
+      if (!isPlatform && tpl.company_id && tpl.company_id !== user?.companyId) return res.status(403).json({ message: "Access denied" });
       await db.execute(sql`UPDATE contractor_templates SET is_active = FALSE, updated_at = NOW() WHERE id = ${req.params.id}`);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to delete template: " + e.message }); }
