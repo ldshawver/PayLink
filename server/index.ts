@@ -2325,6 +2325,235 @@ Thank you,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    // ── contractor_proposals extended columns ──────────────────────────────────
+    await run("contractor_proposals.work_type", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS work_type TEXT`);
+    await run("contractor_proposals.estimated_hours", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS estimated_hours NUMERIC`);
+    await run("contractor_proposals.estimated_labor_budget", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS estimated_labor_budget NUMERIC`);
+    await run("contractor_proposals.payment_type", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS payment_type TEXT DEFAULT 'monetary'`);
+    await run("contractor_proposals.trade_offered", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS trade_offered TEXT`);
+    await run("contractor_proposals.trade_value", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS trade_value NUMERIC`);
+    await run("contractor_proposals.trade_terms", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS trade_terms TEXT`);
+    await run("contractor_proposals.template_id", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS template_id VARCHAR`);
+    await run("contractor_proposals.branding_id", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS branding_id VARCHAR`);
+
+    // ── contractor_invoices.contract_id ───────────────────────────────────────
+    await run("contractor_invoices.contract_id", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS contract_id VARCHAR`);
+
+    // ── proposal_versions table ───────────────────────────────────────────────
+    await run("proposal_versions table", sql`CREATE TABLE IF NOT EXISTS proposal_versions (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      proposal_id VARCHAR NOT NULL,
+      version INTEGER NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      change_notes TEXT,
+      created_by_user_id VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── proposal_negotiations table ───────────────────────────────────────────
+    await run("proposal_negotiations table", sql`CREATE TABLE IF NOT EXISTS proposal_negotiations (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      proposal_id VARCHAR NOT NULL,
+      initiated_by_worker_id VARCHAR,
+      initiated_by_user_id VARCHAR,
+      direction TEXT NOT NULL DEFAULT 'company_to_contractor',
+      status TEXT NOT NULL DEFAULT 'pending',
+      proposed_amount NUMERIC,
+      proposed_terms TEXT,
+      counter_notes TEXT,
+      responded_at TIMESTAMP,
+      responded_by_user_id VARCHAR,
+      response_notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── contractor_contracts table ────────────────────────────────────────────
+    await run("contractor_contracts table", sql`CREATE TABLE IF NOT EXISTS contractor_contracts (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR REFERENCES companies(id),
+      contractor_id VARCHAR NOT NULL REFERENCES workers(id),
+      proposal_id VARCHAR,
+      contract_number TEXT,
+      title TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      contract_type TEXT DEFAULT 'service',
+      start_date TEXT,
+      end_date TEXT,
+      total_value NUMERIC,
+      currency TEXT DEFAULT 'USD',
+      payment_type TEXT DEFAULT 'monetary',
+      trade_details TEXT,
+      trade_value NUMERIC,
+      payment_terms TEXT,
+      scope_of_work TEXT,
+      special_terms TEXT,
+      governing_law TEXT,
+      confidentiality BOOLEAN DEFAULT FALSE,
+      non_compete BOOLEAN DEFAULT FALSE,
+      body_html TEXT,
+      body_markdown TEXT,
+      signed_pdf_path TEXT,
+      template_id VARCHAR,
+      sent_at TIMESTAMP,
+      fully_signed_at TIMESTAMP,
+      voided_at TIMESTAMP,
+      void_reason TEXT,
+      created_by_user_id VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── contract_signers table ────────────────────────────────────────────────
+    await run("contract_signers table", sql`CREATE TABLE IF NOT EXISTS contract_signers (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      contract_id VARCHAR NOT NULL,
+      signer_type TEXT NOT NULL DEFAULT 'worker',
+      worker_id VARCHAR,
+      user_id VARCHAR,
+      name TEXT NOT NULL,
+      email TEXT,
+      role TEXT DEFAULT 'contractor',
+      "order" INTEGER DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'pending',
+      signed_at TIMESTAMP,
+      signature_data TEXT,
+      ip_address TEXT,
+      reminder_sent_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── contract_versions table ───────────────────────────────────────────────
+    await run("contract_versions table", sql`CREATE TABLE IF NOT EXISTS contract_versions (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      contract_id VARCHAR NOT NULL,
+      version INTEGER NOT NULL,
+      snapshot_html TEXT,
+      snapshot_json TEXT,
+      pdf_path TEXT,
+      reason TEXT,
+      created_by_user_id VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── dam_documents table ───────────────────────────────────────────────────
+    await run("dam_documents table", sql`CREATE TABLE IF NOT EXISTS dam_documents (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR,
+      worker_id VARCHAR,
+      owner_type TEXT NOT NULL DEFAULT 'worker',
+      document_type TEXT NOT NULL DEFAULT 'general',
+      title TEXT NOT NULL,
+      description TEXT,
+      file_path TEXT NOT NULL,
+      file_name TEXT,
+      file_type TEXT,
+      file_size INTEGER,
+      mime_type TEXT,
+      tags TEXT,
+      is_archived BOOLEAN DEFAULT FALSE,
+      is_public BOOLEAN DEFAULT FALSE,
+      expires_at TIMESTAMP,
+      linked_entity_type TEXT,
+      linked_entity_id VARCHAR,
+      uploaded_by_user_id VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── dam_document_access_logs table ────────────────────────────────────────
+    await run("dam_document_access_logs table", sql`CREATE TABLE IF NOT EXISTS dam_document_access_logs (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id VARCHAR NOT NULL,
+      accessed_by_user_id VARCHAR,
+      accessed_by_worker_id VARCHAR,
+      action TEXT NOT NULL DEFAULT 'view',
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── contractor_templates table ────────────────────────────────────────────
+    await run("contractor_templates table", sql`CREATE TABLE IF NOT EXISTS contractor_templates (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR,
+      template_type TEXT NOT NULL DEFAULT 'proposal',
+      name TEXT NOT NULL,
+      description TEXT,
+      industry TEXT,
+      body_json TEXT,
+      default_payment_terms TEXT,
+      default_scope_template TEXT,
+      default_assumptions TEXT,
+      default_exclusions TEXT,
+      default_warranty TEXT,
+      is_global BOOLEAN DEFAULT FALSE,
+      is_active BOOLEAN DEFAULT TRUE,
+      usage_count INTEGER DEFAULT 0,
+      created_by_user_id VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── contractor_branding table ─────────────────────────────────────────────
+    await run("contractor_branding table", sql`CREATE TABLE IF NOT EXISTS contractor_branding (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      worker_id VARCHAR NOT NULL UNIQUE,
+      business_name TEXT,
+      tagline TEXT,
+      logo_path TEXT,
+      primary_color TEXT DEFAULT '#0f766e',
+      secondary_color TEXT DEFAULT '#64748b',
+      font_family TEXT DEFAULT 'Inter',
+      cover_note TEXT,
+      signature_text TEXT,
+      website_url TEXT,
+      license_number TEXT,
+      insurance_info TEXT,
+      footer_text TEXT,
+      show_logo BOOLEAN DEFAULT TRUE,
+      show_license_number BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── contractor_notifications table ────────────────────────────────────────
+    await run("contractor_notifications table", sql`CREATE TABLE IF NOT EXISTS contractor_notifications (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      worker_id VARCHAR,
+      user_id VARCHAR,
+      company_id VARCHAR,
+      notification_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT,
+      entity_type TEXT,
+      entity_id VARCHAR,
+      is_read BOOLEAN DEFAULT FALSE,
+      read_at TIMESTAMP,
+      action_url TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // ── contractor_reminders table ────────────────────────────────────────────
+    await run("contractor_reminders table", sql`CREATE TABLE IF NOT EXISTS contractor_reminders (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      worker_id VARCHAR,
+      user_id VARCHAR,
+      company_id VARCHAR,
+      entity_type TEXT NOT NULL,
+      entity_id VARCHAR,
+      reminder_type TEXT NOT NULL DEFAULT 'follow_up',
+      title TEXT NOT NULL,
+      notes TEXT,
+      scheduled_at TIMESTAMP NOT NULL,
+      channel TEXT DEFAULT 'in_app',
+      status TEXT NOT NULL DEFAULT 'pending',
+      sent_at TIMESTAMP,
+      dismissed_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
     // ── Tenant enforcement columns ─────────────────────────────────────────────
     await run("companies.agreement_signed_at", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS agreement_signed_at TIMESTAMP`);
     await run("companies.agreement_signed_by_user_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS agreement_signed_by_user_id VARCHAR`);

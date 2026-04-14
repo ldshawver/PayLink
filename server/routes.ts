@@ -7200,6 +7200,538 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { console.error(e); res.status(500).json({ message: "AI assist failed: " + e.message }); }
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CONTRACTOR HUB — EXTENDED API (Task #31)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ── Proposal: convert to contract ─────────────────────────────────────────
+  app.post("/api/contractor-proposals/:id/convert-to-contract", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const prop = propRes.rows[0] as any;
+      if (!prop) return res.status(404).json({ message: "Proposal not found" });
+      if (!["approved", "accepted"].includes(prop.status)) return res.status(400).json({ message: "Only approved proposals can be converted to contracts" });
+
+      const counterRes = await db.execute(sql`SELECT nextval('contract_number_seq')` as any).catch(() => null);
+      const contractNumber = `CON-${Date.now()}`;
+
+      const contractRes = await db.execute(sql`
+        INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, status, created_by_user_id)
+        VALUES (${prop.company_id}, ${prop.contractor_id}, ${prop.id}, ${contractNumber}, ${prop.title || "Service Contract"}, ${prop.description}, ${prop.scope_of_work}, ${prop.payment_terms}, ${prop.amount}, ${prop.currency || "USD"}, ${prop.payment_type || "monetary"}, ${prop.trade_offered}, ${prop.trade_value}, ${prop.issue_date}, 'draft', ${req.session.userId})
+        RETURNING *
+      `);
+      const contract = contractRes.rows[0] as any;
+
+      // Update proposal to reference contract
+      await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${contract.id} WHERE id = ${req.params.id}`);
+
+      res.status(201).json(contract);
+    } catch (e: any) { console.error(e); res.status(500).json({ message: "Failed to convert to contract: " + e.message }); }
+  });
+
+  // ── Proposal Versions ─────────────────────────────────────────────────────
+  app.get("/api/contractor-proposals/:id/versions", requireAuth, async (req, res) => {
+    try {
+      const result = await db.execute(sql`SELECT * FROM proposal_versions WHERE proposal_id = ${req.params.id} ORDER BY version DESC`);
+      res.json(result.rows);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch versions" }); }
+  });
+
+  app.post("/api/contractor-proposals/:id/snapshot", requireAuth, async (req, res) => {
+    try {
+      const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const prop = propRes.rows[0] as any;
+      if (!prop) return res.status(404).json({ message: "Proposal not found" });
+      const lineItemsRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${req.params.id}`);
+      const snapshot = JSON.stringify({ proposal: prop, lineItems: lineItemsRes.rows });
+      const versionResult = await db.execute(sql`
+        INSERT INTO proposal_versions (proposal_id, version, snapshot_json, change_notes, created_by_user_id)
+        VALUES (${req.params.id}, ${prop.version || 1}, ${snapshot}, ${req.body.changeNotes || null}, ${req.session.userId})
+        RETURNING *
+      `);
+      res.status(201).json(versionResult.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to create snapshot: " + e.message }); }
+  });
+
+  // ── Proposal Negotiations ─────────────────────────────────────────────────
+  app.get("/api/contractor-proposals/:id/negotiations", requireAuth, async (req, res) => {
+    try {
+      const result = await db.execute(sql`SELECT * FROM proposal_negotiations WHERE proposal_id = ${req.params.id} ORDER BY created_at DESC`);
+      res.json(result.rows);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch negotiations" }); }
+  });
+
+  app.post("/api/contractor-proposals/:id/negotiate", requireAuth, async (req, res) => {
+    try {
+      const { proposedAmount, proposedTerms, counterNotes, direction } = req.body;
+      const user = await storage.getUser(req.session.userId!);
+      const dir = direction || (user?.role === "contractor" || user?.role === "employee" ? "contractor_to_company" : "company_to_contractor");
+      const result = await db.execute(sql`
+        INSERT INTO proposal_negotiations (proposal_id, initiated_by_user_id, initiated_by_worker_id, direction, proposed_amount, proposed_terms, counter_notes)
+        VALUES (${req.params.id}, ${req.session.userId}, ${user?.workerId || null}, ${dir}, ${proposedAmount || null}, ${proposedTerms || null}, ${counterNotes || null})
+        RETURNING *
+      `);
+      // Update proposal status to reflect negotiation in progress
+      await db.execute(sql`UPDATE contractor_proposals SET status = 'revision_requested' WHERE id = ${req.params.id} AND status NOT IN ('approved','rejected','void')`);
+      res.status(201).json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to create negotiation: " + e.message }); }
+  });
+
+  app.patch("/api/contractor-proposals/:id/negotiations/:negId", requireAuth, async (req, res) => {
+    try {
+      const { status, responseNotes } = req.body;
+      if (!["accepted", "rejected"].includes(status)) return res.status(400).json({ message: "status must be accepted or rejected" });
+      const result = await db.execute(sql`
+        UPDATE proposal_negotiations SET status = ${status}, response_notes = ${responseNotes || null}, responded_at = NOW(), responded_by_user_id = ${req.session.userId}
+        WHERE id = ${req.params.negId} AND proposal_id = ${req.params.id}
+        RETURNING *
+      `);
+      if (!result.rows[0]) return res.status(404).json({ message: "Negotiation not found" });
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to respond to negotiation: " + e.message }); }
+  });
+
+  // ── Contractor Contracts ──────────────────────────────────────────────────
+  app.get("/api/contractor-contracts", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const { companyId, contractorId } = req.query as Record<string, string>;
+      let rows;
+      if (user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_")) {
+        const cid = companyId || user?.companyId;
+        const result = await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.company_id = ${cid} ORDER BY cc.created_at DESC`);
+        rows = result.rows;
+      } else {
+        const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+        const wId = contractorId || (wRes.rows[0] as any)?.id;
+        const result = await db.execute(sql`SELECT * FROM contractor_contracts WHERE contractor_id = ${wId} ORDER BY created_at DESC`);
+        rows = result.rows;
+      }
+      res.json(rows);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch contracts" }); }
+  });
+
+  app.get("/api/contractor-contracts/:id", requireAuth, async (req, res) => {
+    try {
+      const result = await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.id = ${req.params.id}`);
+      if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      const signers = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id} ORDER BY "order" ASC`);
+      res.json({ ...(result.rows[0] as any), signers: signers.rows });
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch contract" }); }
+  });
+
+  app.post("/api/contractor-contracts", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { companyId, contractorId, proposalId, title, description, scopeOfWork, paymentTerms, totalValue, currency, paymentType, tradeDetails, tradeValue, startDate, endDate, contractType, specialTerms, bodyHtml, bodyMarkdown, templateId } = req.body;
+      if (!contractorId || !title) return res.status(400).json({ message: "contractorId and title are required" });
+      const contractNumber = `CON-${Date.now()}`;
+      const user = await storage.getUser(req.session.userId!);
+      const result = await db.execute(sql`
+        INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, end_date, contract_type, special_terms, body_html, body_markdown, template_id, status, created_by_user_id)
+        VALUES (${companyId || user?.companyId}, ${contractorId}, ${proposalId || null}, ${contractNumber}, ${title}, ${description || null}, ${scopeOfWork || null}, ${paymentTerms || null}, ${totalValue || null}, ${currency || "USD"}, ${paymentType || "monetary"}, ${tradeDetails || null}, ${tradeValue || null}, ${startDate || null}, ${endDate || null}, ${contractType || "service"}, ${specialTerms || null}, ${bodyHtml || null}, ${bodyMarkdown || null}, ${templateId || null}, 'draft', ${req.session.userId})
+        RETURNING *
+      `);
+      res.status(201).json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to create contract: " + e.message }); }
+  });
+
+  app.patch("/api/contractor-contracts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { title, description, scopeOfWork, paymentTerms, totalValue, startDate, endDate, specialTerms, bodyHtml, bodyMarkdown, status } = req.body;
+      const result = await db.execute(sql`
+        UPDATE contractor_contracts SET
+          title = COALESCE(${title || null}, title),
+          description = COALESCE(${description || null}, description),
+          scope_of_work = COALESCE(${scopeOfWork || null}, scope_of_work),
+          payment_terms = COALESCE(${paymentTerms || null}, payment_terms),
+          total_value = COALESCE(${totalValue || null}, total_value),
+          start_date = COALESCE(${startDate || null}, start_date),
+          end_date = COALESCE(${endDate || null}, end_date),
+          special_terms = COALESCE(${specialTerms || null}, special_terms),
+          body_html = COALESCE(${bodyHtml || null}, body_html),
+          body_markdown = COALESCE(${bodyMarkdown || null}, body_markdown),
+          status = COALESCE(${status || null}, status),
+          updated_at = NOW()
+        WHERE id = ${req.params.id}
+        RETURNING *
+      `);
+      if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to update contract: " + e.message }); }
+  });
+
+  app.post("/api/contractor-contracts/:id/send", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'sent', sent_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
+      if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to send contract: " + e.message }); }
+  });
+
+  app.post("/api/contractor-contracts/:id/sign", requireAuth, async (req, res) => {
+    try {
+      const { name, signatureData, role } = req.body;
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id || null;
+
+      const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
+      const contract = contractRes.rows[0] as any;
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      if (!["sent", "partially_signed"].includes(contract.status)) return res.status(400).json({ message: "Contract is not available for signing" });
+
+      // Upsert signer record
+      const existing = await db.execute(sql`SELECT id FROM contract_signers WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId} OR user_id = ${req.session.userId})`);
+      let signer;
+      if (existing.rows.length > 0) {
+        const updated = await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = NOW(), signature_data = ${signatureData || null}, ip_address = ${req.ip || null} WHERE id = ${(existing.rows[0] as any).id} RETURNING *`);
+        signer = updated.rows[0];
+      } else {
+        const inserted = await db.execute(sql`INSERT INTO contract_signers (contract_id, worker_id, user_id, name, role, status, signed_at, signature_data, ip_address) VALUES (${req.params.id}, ${workerId}, ${req.session.userId}, ${name || user?.username || "Unknown"}, ${role || "contractor"}, 'signed', NOW(), ${signatureData || null}, ${req.ip || null}) RETURNING *`);
+        signer = inserted.rows[0];
+      }
+
+      // Check if all signers signed
+      const allSigners = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id}`);
+      const allSigned = allSigners.rows.length > 0 && allSigners.rows.every((s: any) => s.status === "signed");
+      const newStatus = allSigned ? "fully_signed" : "partially_signed";
+      await db.execute(sql`UPDATE contractor_contracts SET status = ${newStatus}, fully_signed_at = ${allSigned ? new Date() : null}, updated_at = NOW() WHERE id = ${req.params.id}`);
+
+      res.json({ signer, contractStatus: newStatus });
+    } catch (e: any) { res.status(500).json({ message: "Failed to sign contract: " + e.message }); }
+  });
+
+  app.post("/api/contractor-contracts/:id/void", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { reason } = req.body;
+      const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'void', voided_at = NOW(), void_reason = ${reason || null}, updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
+      if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to void contract: " + e.message }); }
+  });
+
+  app.get("/api/contractor-contracts/:id/versions", requireAuth, async (req, res) => {
+    try {
+      const result = await db.execute(sql`SELECT * FROM contract_versions WHERE contract_id = ${req.params.id} ORDER BY version DESC`);
+      res.json(result.rows);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch contract versions" }); }
+  });
+
+  app.post("/api/contractor-contracts/:id/snapshot", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
+      const contract = contractRes.rows[0] as any;
+      if (!contract) return res.status(404).json({ message: "Contract not found" });
+      const versionCount = await db.execute(sql`SELECT COUNT(*) FROM contract_versions WHERE contract_id = ${req.params.id}`);
+      const version = parseInt((versionCount.rows[0] as any).count) + 1;
+      const result = await db.execute(sql`
+        INSERT INTO contract_versions (contract_id, version, snapshot_json, reason, created_by_user_id)
+        VALUES (${req.params.id}, ${version}, ${JSON.stringify(contract)}, ${req.body.reason || null}, ${req.session.userId})
+        RETURNING *
+      `);
+      res.status(201).json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to create contract snapshot: " + e.message }); }
+  });
+
+  // ── DAM Documents ─────────────────────────────────────────────────────────
+  app.get("/api/dam-documents", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const { workerId, companyId, documentType, linkedEntityId } = req.query as Record<string, string>;
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      let result;
+      if (isAdmin) {
+        const cid = companyId || user?.companyId;
+        result = await db.execute(sql`SELECT * FROM dam_documents WHERE (company_id = ${cid} OR worker_id = ${workerId || null}) AND is_archived = FALSE ${linkedEntityId ? sql`AND linked_entity_id = ${linkedEntityId}` : sql``} ORDER BY created_at DESC`);
+      } else {
+        const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+        const wId = workerId || (wRes.rows[0] as any)?.id;
+        result = await db.execute(sql`SELECT * FROM dam_documents WHERE worker_id = ${wId} AND is_archived = FALSE ORDER BY created_at DESC`);
+      }
+      res.json(result.rows);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch documents" }); }
+  });
+
+  app.get("/api/dam-documents/:id", requireAuth, async (req, res) => {
+    try {
+      const result = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
+      if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
+      // Log access
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      await db.execute(sql`INSERT INTO dam_document_access_logs (document_id, accessed_by_user_id, accessed_by_worker_id, action) VALUES (${req.params.id}, ${req.session.userId}, ${(wRes.rows[0] as any)?.id || null}, 'view')`).catch(() => {});
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch document" }); }
+  });
+
+  app.post("/api/dam-documents", requireAuth, upload.single("file"), async (req: any, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = req.body.workerId || (wRes.rows[0] as any)?.id || null;
+      const { title, description, documentType, tags, linkedEntityType, linkedEntityId, isPublic, ownerType } = req.body;
+      const filePath = req.file ? `/uploads/${req.file.filename}` : req.body.filePath;
+      if (!filePath) return res.status(400).json({ message: "File or filePath required" });
+      const result = await db.execute(sql`
+        INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, tags, linked_entity_type, linked_entity_id, is_public, uploaded_by_user_id)
+        VALUES (${user?.companyId || null}, ${workerId}, ${ownerType || "worker"}, ${documentType || "general"}, ${title || req.file?.originalname || "Document"}, ${description || null}, ${filePath}, ${req.file?.originalname || null}, ${req.file?.mimetype?.split("/")[0] || null}, ${req.file?.size || null}, ${req.file?.mimetype || null}, ${tags || null}, ${linkedEntityType || null}, ${linkedEntityId || null}, ${isPublic === "true" || false}, ${req.session.userId})
+        RETURNING *
+      `);
+      res.status(201).json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to upload document: " + e.message }); }
+  });
+
+  app.patch("/api/dam-documents/:id", requireAuth, async (req, res) => {
+    try {
+      const { title, description, tags, isArchived, isPublic, linkedEntityType, linkedEntityId } = req.body;
+      const result = await db.execute(sql`
+        UPDATE dam_documents SET
+          title = COALESCE(${title || null}, title),
+          description = COALESCE(${description || null}, description),
+          tags = COALESCE(${tags || null}, tags),
+          is_archived = COALESCE(${isArchived != null ? isArchived : null}, is_archived),
+          is_public = COALESCE(${isPublic != null ? isPublic : null}, is_public),
+          linked_entity_type = COALESCE(${linkedEntityType || null}, linked_entity_type),
+          linked_entity_id = COALESCE(${linkedEntityId || null}, linked_entity_id),
+          updated_at = NOW()
+        WHERE id = ${req.params.id}
+        RETURNING *
+      `);
+      if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to update document: " + e.message }); }
+  });
+
+  app.delete("/api/dam-documents/:id", requireAuth, async (req, res) => {
+    try {
+      await db.execute(sql`UPDATE dam_documents SET is_archived = TRUE, updated_at = NOW() WHERE id = ${req.params.id}`);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ message: "Failed to archive document: " + e.message }); }
+  });
+
+  // ── Contractor Templates ──────────────────────────────────────────────────
+  app.get("/api/contractor-templates", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const { templateType } = req.query as Record<string, string>;
+      const cid = user?.companyId;
+      const result = await db.execute(sql`
+        SELECT * FROM contractor_templates
+        WHERE is_active = TRUE AND (is_global = TRUE OR company_id = ${cid})
+        ${templateType ? sql`AND template_type = ${templateType}` : sql``}
+        ORDER BY is_global DESC, name ASC
+      `);
+      res.json(result.rows);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch templates" }); }
+  });
+
+  app.get("/api/contractor-templates/:id", requireAuth, async (req, res) => {
+    try {
+      const result = await db.execute(sql`SELECT * FROM contractor_templates WHERE id = ${req.params.id}`);
+      if (!result.rows[0]) return res.status(404).json({ message: "Template not found" });
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch template" }); }
+  });
+
+  app.post("/api/contractor-templates", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { name, description, templateType, industry, bodyJson, defaultPaymentTerms, defaultScopeTemplate, defaultAssumptions, defaultExclusions, defaultWarranty, isGlobal } = req.body;
+      if (!name) return res.status(400).json({ message: "name is required" });
+      const user = await storage.getUser(req.session.userId!);
+      const result = await db.execute(sql`
+        INSERT INTO contractor_templates (company_id, template_type, name, description, industry, body_json, default_payment_terms, default_scope_template, default_assumptions, default_exclusions, default_warranty, is_global, created_by_user_id)
+        VALUES (${user?.companyId || null}, ${templateType || "proposal"}, ${name}, ${description || null}, ${industry || null}, ${bodyJson || null}, ${defaultPaymentTerms || null}, ${defaultScopeTemplate || null}, ${defaultAssumptions || null}, ${defaultExclusions || null}, ${defaultWarranty || null}, ${isGlobal || false}, ${req.session.userId})
+        RETURNING *
+      `);
+      res.status(201).json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to create template: " + e.message }); }
+  });
+
+  app.patch("/api/contractor-templates/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { name, description, industry, bodyJson, defaultPaymentTerms, defaultScopeTemplate, defaultAssumptions, defaultExclusions, defaultWarranty, isActive } = req.body;
+      const result = await db.execute(sql`
+        UPDATE contractor_templates SET
+          name = COALESCE(${name || null}, name),
+          description = COALESCE(${description || null}, description),
+          industry = COALESCE(${industry || null}, industry),
+          body_json = COALESCE(${bodyJson || null}, body_json),
+          default_payment_terms = COALESCE(${defaultPaymentTerms || null}, default_payment_terms),
+          default_scope_template = COALESCE(${defaultScopeTemplate || null}, default_scope_template),
+          default_assumptions = COALESCE(${defaultAssumptions || null}, default_assumptions),
+          default_exclusions = COALESCE(${defaultExclusions || null}, default_exclusions),
+          default_warranty = COALESCE(${defaultWarranty || null}, default_warranty),
+          is_active = COALESCE(${isActive != null ? isActive : null}, is_active),
+          updated_at = NOW()
+        WHERE id = ${req.params.id}
+        RETURNING *
+      `);
+      if (!result.rows[0]) return res.status(404).json({ message: "Template not found" });
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to update template: " + e.message }); }
+  });
+
+  app.delete("/api/contractor-templates/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      await db.execute(sql`UPDATE contractor_templates SET is_active = FALSE, updated_at = NOW() WHERE id = ${req.params.id}`);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ message: "Failed to delete template: " + e.message }); }
+  });
+
+  // ── Contractor Branding ───────────────────────────────────────────────────
+  app.get("/api/contractor-branding", requireAuth, async (req, res) => {
+    try {
+      const { workerId } = req.query as Record<string, string>;
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const wId = workerId || (wRes.rows[0] as any)?.id;
+      if (!wId) return res.status(404).json({ message: "Worker not found" });
+      const result = await db.execute(sql`SELECT * FROM contractor_branding WHERE worker_id = ${wId}`);
+      res.json(result.rows[0] || null);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch branding" }); }
+  });
+
+  app.post("/api/contractor-branding", requireAuth, upload.single("logo"), async (req: any, res) => {
+    try {
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const wId = req.body.workerId || (wRes.rows[0] as any)?.id;
+      if (!wId) return res.status(400).json({ message: "Worker not found" });
+      const { businessName, tagline, primaryColor, secondaryColor, fontFamily, coverNote, signatureText, websiteUrl, licenseNumber, insuranceInfo, footerText, showLogo, showLicenseNumber } = req.body;
+      const logoPath = req.file ? `/uploads/${req.file.filename}` : req.body.logoPath || null;
+      const result = await db.execute(sql`
+        INSERT INTO contractor_branding (worker_id, business_name, tagline, logo_path, primary_color, secondary_color, font_family, cover_note, signature_text, website_url, license_number, insurance_info, footer_text, show_logo, show_license_number)
+        VALUES (${wId}, ${businessName || null}, ${tagline || null}, ${logoPath}, ${primaryColor || "#0f766e"}, ${secondaryColor || "#64748b"}, ${fontFamily || "Inter"}, ${coverNote || null}, ${signatureText || null}, ${websiteUrl || null}, ${licenseNumber || null}, ${insuranceInfo || null}, ${footerText || null}, ${showLogo !== "false"}, ${showLicenseNumber !== "false"})
+        ON CONFLICT (worker_id) DO UPDATE SET
+          business_name = EXCLUDED.business_name, tagline = EXCLUDED.tagline,
+          logo_path = COALESCE(EXCLUDED.logo_path, contractor_branding.logo_path),
+          primary_color = EXCLUDED.primary_color, secondary_color = EXCLUDED.secondary_color,
+          font_family = EXCLUDED.font_family, cover_note = EXCLUDED.cover_note,
+          signature_text = EXCLUDED.signature_text, website_url = EXCLUDED.website_url,
+          license_number = EXCLUDED.license_number, insurance_info = EXCLUDED.insurance_info,
+          footer_text = EXCLUDED.footer_text, show_logo = EXCLUDED.show_logo,
+          show_license_number = EXCLUDED.show_license_number, updated_at = NOW()
+        RETURNING *
+      `);
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to save branding: " + e.message }); }
+  });
+
+  // ── Contractor Notifications ──────────────────────────────────────────────
+  app.get("/api/contractor-notifications", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id;
+      const { unreadOnly } = req.query as Record<string, string>;
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_");
+      let result;
+      if (isAdmin) {
+        result = await db.execute(sql`
+          SELECT * FROM contractor_notifications WHERE (user_id = ${req.session.userId} OR company_id = ${user?.companyId})
+          ${unreadOnly === "true" ? sql`AND is_read = FALSE` : sql``}
+          ORDER BY created_at DESC LIMIT 100
+        `);
+      } else {
+        result = await db.execute(sql`
+          SELECT * FROM contractor_notifications WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null})
+          ${unreadOnly === "true" ? sql`AND is_read = FALSE` : sql``}
+          ORDER BY created_at DESC LIMIT 100
+        `);
+      }
+      res.json(result.rows);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch notifications" }); }
+  });
+
+  app.patch("/api/contractor-notifications/:id/read", requireAuth, async (req, res) => {
+    try {
+      const result = await db.execute(sql`UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
+      if (!result.rows[0]) return res.status(404).json({ message: "Notification not found" });
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to mark notification read" }); }
+  });
+
+  app.post("/api/contractor-notifications/mark-all-read", requireAuth, async (req, res) => {
+    try {
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id;
+      await db.execute(sql`UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW() WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null}) AND is_read = FALSE`);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ message: "Failed to mark all read" }); }
+  });
+
+  // Internal helper: create a contractor notification
+  async function createContractorNotification({ workerId, userId, companyId, notificationType, title, body, entityType, entityId, actionUrl }: { workerId?: string | null; userId?: string | null; companyId?: string | null; notificationType: string; title: string; body?: string; entityType?: string; entityId?: string; actionUrl?: string; }) {
+    try {
+      await db.execute(sql`
+        INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
+        VALUES (${workerId || null}, ${userId || null}, ${companyId || null}, ${notificationType}, ${title}, ${body || null}, ${entityType || null}, ${entityId || null}, ${actionUrl || null})
+      `);
+    } catch (e) { console.error("Failed to create contractor notification:", e); }
+  }
+
+  // ── Contractor Reminders ──────────────────────────────────────────────────
+  app.get("/api/contractor-reminders", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id;
+      const { status, entityType } = req.query as Record<string, string>;
+      const result = await db.execute(sql`
+        SELECT * FROM contractor_reminders
+        WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null} OR company_id = ${user?.companyId || null})
+        ${status ? sql`AND status = ${status}` : sql``}
+        ${entityType ? sql`AND entity_type = ${entityType}` : sql``}
+        ORDER BY scheduled_at ASC
+      `);
+      res.json(result.rows);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch reminders" }); }
+  });
+
+  app.post("/api/contractor-reminders", requireAuth, async (req, res) => {
+    try {
+      const { entityType, entityId, reminderType, title, notes, scheduledAt, channel } = req.body;
+      if (!entityType || !title || !scheduledAt) return res.status(400).json({ message: "entityType, title, and scheduledAt are required" });
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id;
+      const result = await db.execute(sql`
+        INSERT INTO contractor_reminders (worker_id, user_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel)
+        VALUES (${workerId || null}, ${req.session.userId}, ${user?.companyId || null}, ${entityType}, ${entityId || null}, ${reminderType || "follow_up"}, ${title}, ${notes || null}, ${scheduledAt}, ${channel || "in_app"})
+        RETURNING *
+      `);
+      res.status(201).json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to create reminder: " + e.message }); }
+  });
+
+  app.patch("/api/contractor-reminders/:id", requireAuth, async (req, res) => {
+    try {
+      const { title, notes, scheduledAt, channel, status } = req.body;
+      const result = await db.execute(sql`
+        UPDATE contractor_reminders SET
+          title = COALESCE(${title || null}, title),
+          notes = COALESCE(${notes || null}, notes),
+          scheduled_at = COALESCE(${scheduledAt || null}, scheduled_at),
+          channel = COALESCE(${channel || null}, channel),
+          status = COALESCE(${status || null}, status),
+          updated_at = NOW()
+        WHERE id = ${req.params.id}
+        RETURNING *
+      `);
+      if (!result.rows[0]) return res.status(404).json({ message: "Reminder not found" });
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to update reminder: " + e.message }); }
+  });
+
+  app.delete("/api/contractor-reminders/:id", requireAuth, async (req, res) => {
+    try {
+      await db.execute(sql`UPDATE contractor_reminders SET status = 'dismissed', dismissed_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id}`);
+      res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ message: "Failed to dismiss reminder: " + e.message }); }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // END CONTRACTOR HUB EXTENDED API
+  // ═══════════════════════════════════════════════════════════════════════════
+
   app.get("/api/shift-offers", requireAuth, async (req, res) => {
     try {
       const { companyId } = req.query as Record<string, string>;

@@ -1718,6 +1718,7 @@ export const contractorInvoices = pgTable("contractor_invoices", {
   nextReminderAt: timestamp("next_reminder_at"),
   description: text("description"),
   proposalId: varchar("proposal_id"),
+  contractId: varchar("contract_id"),
   proposalReference: text("proposal_reference"),
   projectId: varchar("project_id"),
   jobId: varchar("job_id"),
@@ -1824,6 +1825,16 @@ export const contractorProposals = pgTable("contractor_proposals", {
   convertedToInvoiceId: varchar("converted_to_invoice_id"),
   jobId: varchar("job_id"),
   costCenterId: varchar("cost_center_id"),
+  // ── Extended fields (added via migration) ──
+  workType: text("work_type"),
+  estimatedHours: numeric("estimated_hours"),
+  estimatedLaborBudget: numeric("estimated_labor_budget"),
+  paymentType: text("payment_type").default("monetary"), // monetary | trade | hybrid
+  tradeOffered: text("trade_offered"),
+  tradeValue: numeric("trade_value"),
+  tradeTerms: text("trade_terms"),
+  templateId: varchar("template_id"),
+  brandingId: varchar("branding_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -1894,6 +1905,270 @@ export const proposalApprovalEvents = pgTable("proposal_approval_events", {
 export const insertProposalApprovalEventSchema = createInsertSchema(proposalApprovalEvents).omit({ id: true, createdAt: true });
 export type ProposalApprovalEvent = typeof proposalApprovalEvents.$inferSelect;
 export type InsertProposalApprovalEvent = z.infer<typeof insertProposalApprovalEventSchema>;
+
+// ── Extended fields for contractor_proposals (added via migration) ────────
+// workType, estimatedHours, estimatedLaborBudget, paymentType, tradeOffered,
+// tradeValue, tradeTerms, templateId, brandingId are added via ALTER TABLE below
+// (Drizzle columns declared in contractorProposals table extension below)
+
+// ── Proposal Versions (immutable snapshots per revision) ──────────────────
+export const proposalVersions = pgTable("proposal_versions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  proposalId: varchar("proposal_id").notNull(),
+  version: integer("version").notNull(),
+  snapshotJson: text("snapshot_json").notNull(), // full JSON snapshot of proposal + line items
+  changeNotes: text("change_notes"),
+  createdByUserId: varchar("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertProposalVersionSchema = createInsertSchema(proposalVersions).omit({ id: true, createdAt: true });
+export type ProposalVersion = typeof proposalVersions.$inferSelect;
+export type InsertProposalVersion = z.infer<typeof insertProposalVersionSchema>;
+
+// ── Proposal Negotiations (counter-offer records) ─────────────────────────
+export const proposalNegotiations = pgTable("proposal_negotiations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  proposalId: varchar("proposal_id").notNull(),
+  initiatedByWorkerId: varchar("initiated_by_worker_id"),
+  initiatedByUserId: varchar("initiated_by_user_id"),
+  direction: text("direction").notNull().default("company_to_contractor"), // contractor_to_company | company_to_contractor
+  status: text("status").notNull().default("pending"), // pending | accepted | rejected | superseded
+  proposedAmount: numeric("proposed_amount"),
+  proposedTerms: text("proposed_terms"),
+  counterNotes: text("counter_notes"),
+  respondedAt: timestamp("responded_at"),
+  respondedByUserId: varchar("responded_by_user_id"),
+  responseNotes: text("response_notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertProposalNegotiationSchema = createInsertSchema(proposalNegotiations).omit({ id: true, createdAt: true });
+export type ProposalNegotiation = typeof proposalNegotiations.$inferSelect;
+export type InsertProposalNegotiation = z.infer<typeof insertProposalNegotiationSchema>;
+
+// ── Contractor Contracts ──────────────────────────────────────────────────
+export const contractorContracts = pgTable("contractor_contracts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  contractorId: varchar("contractor_id").notNull().references(() => workers.id),
+  proposalId: varchar("proposal_id"),
+  contractNumber: text("contract_number"),
+  title: text("title").notNull(),
+  description: text("description"),
+  status: text("status").notNull().default("draft"), // draft | sent | partially_signed | fully_signed | active | completed | terminated | void
+  contractType: text("contract_type").default("service"), // service | fixed_price | time_and_materials | retainer | subcontract
+  startDate: text("start_date"),
+  endDate: text("end_date"),
+  totalValue: numeric("total_value"),
+  currency: text("currency").default("USD"),
+  paymentType: text("payment_type").default("monetary"), // monetary | trade | hybrid
+  tradeDetails: text("trade_details"),
+  tradeValue: numeric("trade_value"),
+  paymentTerms: text("payment_terms"),
+  scopeOfWork: text("scope_of_work"),
+  specialTerms: text("special_terms"),
+  governingLaw: text("governing_law"),
+  confidentiality: boolean("confidentiality").default(false),
+  nonCompete: boolean("non_compete").default(false),
+  bodyHtml: text("body_html"),
+  bodyMarkdown: text("body_markdown"),
+  signedPdfPath: text("signed_pdf_path"),
+  templateId: varchar("template_id"),
+  sentAt: timestamp("sent_at"),
+  fullySignedAt: timestamp("fully_signed_at"),
+  voidedAt: timestamp("voided_at"),
+  voidReason: text("void_reason"),
+  createdByUserId: varchar("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertContractorContractSchema = createInsertSchema(contractorContracts).omit({ id: true, createdAt: true, updatedAt: true });
+export type ContractorContract = typeof contractorContracts.$inferSelect;
+export type InsertContractorContract = z.infer<typeof insertContractorContractSchema>;
+
+// ── Contract Signers ──────────────────────────────────────────────────────
+export const contractSigners = pgTable("contract_signers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").notNull(),
+  signerType: text("signer_type").notNull().default("worker"), // worker | user | external
+  workerId: varchar("worker_id"),
+  userId: varchar("user_id"),
+  name: text("name").notNull(),
+  email: text("email"),
+  role: text("role").default("contractor"), // contractor | company_rep | witness | notary
+  order: integer("order").default(1),
+  status: text("status").notNull().default("pending"), // pending | signed | declined | voided
+  signedAt: timestamp("signed_at"),
+  signatureData: text("signature_data"), // base64 or path
+  ipAddress: text("ip_address"),
+  reminderSentAt: timestamp("reminder_sent_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertContractSignerSchema = createInsertSchema(contractSigners).omit({ id: true, createdAt: true });
+export type ContractSigner = typeof contractSigners.$inferSelect;
+export type InsertContractSigner = z.infer<typeof insertContractSignerSchema>;
+
+// ── Contract Versions (immutable signed snapshots) ────────────────────────
+export const contractVersions = pgTable("contract_versions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").notNull(),
+  version: integer("version").notNull(),
+  snapshotHtml: text("snapshot_html"),
+  snapshotJson: text("snapshot_json"),
+  pdfPath: text("pdf_path"),
+  reason: text("reason"),
+  createdByUserId: varchar("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertContractVersionSchema = createInsertSchema(contractVersions).omit({ id: true, createdAt: true });
+export type ContractVersion = typeof contractVersions.$inferSelect;
+export type InsertContractVersion = z.infer<typeof insertContractVersionSchema>;
+
+// ── DAM Documents (Document Asset Management) ─────────────────────────────
+export const damDocuments = pgTable("dam_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id"),
+  workerId: varchar("worker_id"),
+  ownerType: text("owner_type").notNull().default("worker"), // worker | company | platform
+  documentType: text("document_type").notNull().default("general"), // proposal | contract | invoice | attachment | template | certificate | insurance | license | general
+  title: text("title").notNull(),
+  description: text("description"),
+  filePath: text("file_path").notNull(),
+  fileName: text("file_name"),
+  fileType: text("file_type"),
+  fileSize: integer("file_size"),
+  mimeType: text("mime_type"),
+  tags: text("tags"), // comma-separated
+  isArchived: boolean("is_archived").default(false),
+  isPublic: boolean("is_public").default(false),
+  expiresAt: timestamp("expires_at"),
+  linkedEntityType: text("linked_entity_type"), // proposal | contract | invoice
+  linkedEntityId: varchar("linked_entity_id"),
+  uploadedByUserId: varchar("uploaded_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertDamDocumentSchema = createInsertSchema(damDocuments).omit({ id: true, createdAt: true, updatedAt: true });
+export type DamDocument = typeof damDocuments.$inferSelect;
+export type InsertDamDocument = z.infer<typeof insertDamDocumentSchema>;
+
+// ── DAM Document Access Log ───────────────────────────────────────────────
+export const damDocumentAccessLogs = pgTable("dam_document_access_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  documentId: varchar("document_id").notNull(),
+  accessedByUserId: varchar("accessed_by_user_id"),
+  accessedByWorkerId: varchar("accessed_by_worker_id"),
+  action: text("action").notNull().default("view"), // view | download | share | print
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertDamDocumentAccessLogSchema = createInsertSchema(damDocumentAccessLogs).omit({ id: true, createdAt: true });
+export type DamDocumentAccessLog = typeof damDocumentAccessLogs.$inferSelect;
+export type InsertDamDocumentAccessLog = z.infer<typeof insertDamDocumentAccessLogSchema>;
+
+// ── Contractor Templates (proposal/invoice/contract templates) ────────────
+export const contractorTemplates = pgTable("contractor_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id"),
+  templateType: text("template_type").notNull().default("proposal"), // proposal | invoice | contract
+  name: text("name").notNull(),
+  description: text("description"),
+  industry: text("industry"),
+  bodyJson: text("body_json"), // JSON template structure
+  defaultPaymentTerms: text("default_payment_terms"),
+  defaultScopeTemplate: text("default_scope_template"),
+  defaultAssumptions: text("default_assumptions"),
+  defaultExclusions: text("default_exclusions"),
+  defaultWarranty: text("default_warranty"),
+  isGlobal: boolean("is_global").default(false), // platform-wide template
+  isActive: boolean("is_active").default(true),
+  usageCount: integer("usage_count").default(0),
+  createdByUserId: varchar("created_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertContractorTemplateSchema = createInsertSchema(contractorTemplates).omit({ id: true, createdAt: true, updatedAt: true });
+export type ContractorTemplate = typeof contractorTemplates.$inferSelect;
+export type InsertContractorTemplate = z.infer<typeof insertContractorTemplateSchema>;
+
+// ── Contractor Branding (per-contractor brand settings) ───────────────────
+export const contractorBranding = pgTable("contractor_branding", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").notNull().unique(),
+  businessName: text("business_name"),
+  tagline: text("tagline"),
+  logoPath: text("logo_path"),
+  primaryColor: text("primary_color").default("#0f766e"),
+  secondaryColor: text("secondary_color").default("#64748b"),
+  fontFamily: text("font_family").default("Inter"),
+  coverNote: text("cover_note"),
+  signatureText: text("signature_text"),
+  websiteUrl: text("website_url"),
+  licenseNumber: text("license_number"),
+  insuranceInfo: text("insurance_info"),
+  footerText: text("footer_text"),
+  showLogo: boolean("show_logo").default(true),
+  showLicenseNumber: boolean("show_license_number").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertContractorBrandingSchema = createInsertSchema(contractorBranding).omit({ id: true, createdAt: true, updatedAt: true });
+export type ContractorBranding = typeof contractorBranding.$inferSelect;
+export type InsertContractorBranding = z.infer<typeof insertContractorBrandingSchema>;
+
+// ── Contractor In-App Notifications ──────────────────────────────────────
+export const contractorNotifications = pgTable("contractor_notifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id"),
+  userId: varchar("user_id"),
+  companyId: varchar("company_id"),
+  notificationType: text("notification_type").notNull(), // proposal_approved | proposal_rejected | proposal_revision_requested | contract_signed | invoice_paid | invoice_overdue | reminder | general
+  title: text("title").notNull(),
+  body: text("body"),
+  entityType: text("entity_type"), // proposal | contract | invoice | dam_document
+  entityId: varchar("entity_id"),
+  isRead: boolean("is_read").default(false),
+  readAt: timestamp("read_at"),
+  actionUrl: text("action_url"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertContractorNotificationSchema = createInsertSchema(contractorNotifications).omit({ id: true, createdAt: true });
+export type ContractorNotification = typeof contractorNotifications.$inferSelect;
+export type InsertContractorNotification = z.infer<typeof insertContractorNotificationSchema>;
+
+// ── Contractor Reminders (scheduled follow-ups) ───────────────────────────
+export const contractorReminders = pgTable("contractor_reminders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id"),
+  userId: varchar("user_id"),
+  companyId: varchar("company_id"),
+  entityType: text("entity_type").notNull(), // proposal | contract | invoice | general
+  entityId: varchar("entity_id"),
+  reminderType: text("reminder_type").notNull().default("follow_up"), // follow_up | payment | expiry | signature | custom
+  title: text("title").notNull(),
+  notes: text("notes"),
+  scheduledAt: timestamp("scheduled_at").notNull(),
+  channel: text("channel").default("in_app"), // in_app | email | sms | all
+  status: text("status").notNull().default("pending"), // pending | sent | dismissed | completed
+  sentAt: timestamp("sent_at"),
+  dismissedAt: timestamp("dismissed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertContractorReminderSchema = createInsertSchema(contractorReminders).omit({ id: true, createdAt: true, updatedAt: true });
+export type ContractorReminder = typeof contractorReminders.$inferSelect;
+export type InsertContractorReminder = z.infer<typeof insertContractorReminderSchema>;
 
 // ── Contractor Payments (invoice payments) ────────────────────────────────
 export const contractorPayments = pgTable("contractor_payments", {
