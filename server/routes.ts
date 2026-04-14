@@ -7228,9 +7228,31 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { console.error(e); res.status(500).json({ message: "Failed to convert to contract: " + e.message }); }
   });
 
+  // ── Shared helper: verify proposal access (contractor owns it OR admin of company) ──
+  async function assertProposalAccess(proposalId: string, sessionUserId: string): Promise<{ prop: any; isAdmin: boolean } | null> {
+    const user = await storage.getUser(sessionUserId);
+    const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+    const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${proposalId}`);
+    const prop = propRes.rows[0] as any;
+    if (!prop) return null;
+    if (isAdmin) {
+      // Admin must belong to the proposal's company (unless platform)
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      if (!isPlatform && user?.companyId && prop.company_id && prop.company_id !== user.companyId) return null;
+    } else {
+      // Contractor must own the proposal
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${sessionUserId}`);
+      const wId = (wRes.rows[0] as any)?.id;
+      if (!wId || prop.contractor_id !== wId) return null;
+    }
+    return { prop, isAdmin };
+  }
+
   // ── Proposal Versions ─────────────────────────────────────────────────────
   app.get("/api/contractor-proposals/:id/versions", requireAuth, async (req, res) => {
     try {
+      const access = await assertProposalAccess(req.params.id, req.session.userId!);
+      if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
       const result = await db.execute(sql`SELECT * FROM proposal_versions WHERE proposal_id = ${req.params.id} ORDER BY version DESC`);
       res.json(result.rows);
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch versions" }); }
@@ -7238,9 +7260,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/contractor-proposals/:id/snapshot", requireAuth, async (req, res) => {
     try {
-      const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      const prop = propRes.rows[0] as any;
-      if (!prop) return res.status(404).json({ message: "Proposal not found" });
+      const access = await assertProposalAccess(req.params.id, req.session.userId!);
+      if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
+      const { prop } = access;
       const lineItemsRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${req.params.id}`);
       const snapshot = JSON.stringify({ proposal: prop, lineItems: lineItemsRes.rows });
       const versionResult = await db.execute(sql`
@@ -7255,6 +7277,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Proposal Negotiations ─────────────────────────────────────────────────
   app.get("/api/contractor-proposals/:id/negotiations", requireAuth, async (req, res) => {
     try {
+      const access = await assertProposalAccess(req.params.id, req.session.userId!);
+      if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
       const result = await db.execute(sql`SELECT * FROM proposal_negotiations WHERE proposal_id = ${req.params.id} ORDER BY created_at DESC`);
       res.json(result.rows);
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch negotiations" }); }
@@ -7262,12 +7286,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/contractor-proposals/:id/negotiate", requireAuth, async (req, res) => {
     try {
+      const access = await assertProposalAccess(req.params.id, req.session.userId!);
+      if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
       const { proposedAmount, proposedTerms, counterNotes, direction } = req.body;
       const user = await storage.getUser(req.session.userId!);
-      const dir = direction || (user?.role === "contractor" || user?.role === "employee" ? "contractor_to_company" : "company_to_contractor");
+      const dir = direction || (access.isAdmin ? "company_to_contractor" : "contractor_to_company");
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id || null;
       const result = await db.execute(sql`
         INSERT INTO proposal_negotiations (proposal_id, initiated_by_user_id, initiated_by_worker_id, direction, proposed_amount, proposed_terms, counter_notes)
-        VALUES (${req.params.id}, ${req.session.userId}, ${user?.workerId || null}, ${dir}, ${proposedAmount || null}, ${proposedTerms || null}, ${counterNotes || null})
+        VALUES (${req.params.id}, ${req.session.userId}, ${workerId}, ${dir}, ${proposedAmount || null}, ${proposedTerms || null}, ${counterNotes || null})
         RETURNING *
       `);
       // Update proposal status to reflect negotiation in progress
@@ -7278,14 +7306,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/contractor-proposals/:id/negotiations/:negId", requireAuth, async (req, res) => {
     try {
+      // Only the opposing party can respond: admin responds to contractor counter and vice-versa
+      const access = await assertProposalAccess(req.params.id, req.session.userId!);
+      if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
       const { status, responseNotes } = req.body;
       if (!["accepted", "rejected"].includes(status)) return res.status(400).json({ message: "status must be accepted or rejected" });
       const result = await db.execute(sql`
         UPDATE proposal_negotiations SET status = ${status}, response_notes = ${responseNotes || null}, responded_at = NOW(), responded_by_user_id = ${req.session.userId}
-        WHERE id = ${req.params.negId} AND proposal_id = ${req.params.id}
+        WHERE id = ${req.params.negId} AND proposal_id = ${req.params.id} AND status = 'pending'
         RETURNING *
       `);
-      if (!result.rows[0]) return res.status(404).json({ message: "Negotiation not found" });
+      if (!result.rows[0]) return res.status(404).json({ message: "Negotiation not found, already responded, or access denied" });
       res.json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to respond to negotiation: " + e.message }); }
   });
@@ -7394,22 +7425,46 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!contract) return res.status(404).json({ message: "Contract not found" });
       if (!["sent", "partially_signed"].includes(contract.status)) return res.status(400).json({ message: "Contract is not available for signing" });
 
-      // Upsert signer record
-      const existing = await db.execute(sql`SELECT id FROM contract_signers WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId} OR user_id = ${req.session.userId})`);
-      let signer;
-      if (existing.rows.length > 0) {
-        const updated = await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = NOW(), signature_data = ${signatureData || null}, ip_address = ${req.ip || null} WHERE id = ${(existing.rows[0] as any).id} RETURNING *`);
-        signer = updated.rows[0];
-      } else {
-        const inserted = await db.execute(sql`INSERT INTO contract_signers (contract_id, worker_id, user_id, name, role, status, signed_at, signature_data, ip_address) VALUES (${req.params.id}, ${workerId}, ${req.session.userId}, ${name || user?.username || "Unknown"}, ${role || "contractor"}, 'signed', NOW(), ${signatureData || null}, ${req.ip || null}) RETURNING *`);
-        signer = inserted.rows[0];
+      // Authorization: caller must be either:
+      // (a) the contractor on this contract, or
+      // (b) an admin/manager of the company on this contract, or
+      // (c) a registered signer in contract_signers
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const isContractor = workerId && contract.contractor_id === workerId;
+      const isCompanyAdmin = isAdmin && user?.companyId === contract.company_id;
+
+      const registeredSignerRes = await db.execute(sql`
+        SELECT id FROM contract_signers
+        WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId || null} OR user_id = ${req.session.userId}) AND status = 'pending'
+      `);
+      const registeredSigner = registeredSignerRes.rows[0] as any;
+
+      if (!isContractor && !isCompanyAdmin && !registeredSigner) {
+        return res.status(403).json({ message: "Not authorized to sign this contract" });
       }
 
-      // Check if all signers signed
-      const allSigners = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id}`);
-      const allSigned = allSigners.rows.length > 0 && allSigners.rows.every((s: any) => s.status === "signed");
-      const newStatus = allSigned ? "fully_signed" : "partially_signed";
-      await db.execute(sql`UPDATE contractor_contracts SET status = ${newStatus}, fully_signed_at = ${allSigned ? new Date() : null}, updated_at = NOW() WHERE id = ${req.params.id}`);
+      let signer;
+      if (registeredSigner) {
+        // Update existing registered signer record
+        const updated = await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = NOW(), signature_data = ${signatureData || null}, ip_address = ${req.ip || null} WHERE id = ${registeredSigner.id} RETURNING *`);
+        signer = updated.rows[0];
+      } else {
+        // Insert new signer record (contractor or company admin signing without pre-registration)
+        const existing = await db.execute(sql`SELECT id FROM contract_signers WHERE contract_id = ${req.params.id} AND (worker_id = ${workerId} OR user_id = ${req.session.userId})`);
+        if (existing.rows.length > 0) {
+          const updated = await db.execute(sql`UPDATE contract_signers SET status = 'signed', signed_at = NOW(), signature_data = ${signatureData || null}, ip_address = ${req.ip || null} WHERE id = ${(existing.rows[0] as any).id} RETURNING *`);
+          signer = updated.rows[0];
+        } else {
+          const inserted = await db.execute(sql`INSERT INTO contract_signers (contract_id, worker_id, user_id, name, role, status, signed_at, signature_data, ip_address) VALUES (${req.params.id}, ${workerId}, ${req.session.userId}, ${name || user?.username || "Unknown"}, ${role || (isCompanyAdmin ? "company_rep" : "contractor")}, 'signed', NOW(), ${signatureData || null}, ${req.ip || null}) RETURNING *`);
+          signer = inserted.rows[0];
+        }
+      }
+
+      // Check if all registered pending signers have now signed
+      const pendingSigners = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${req.params.id} AND status = 'pending'`);
+      const pendingCount = parseInt((pendingSigners.rows[0] as any).count);
+      const newStatus = pendingCount === 0 ? "fully_signed" : "partially_signed";
+      await db.execute(sql`UPDATE contractor_contracts SET status = ${newStatus}, fully_signed_at = ${newStatus === "fully_signed" ? new Date() : null}, updated_at = NOW() WHERE id = ${req.params.id}`);
 
       res.json({ signer, contractStatus: newStatus });
     } catch (e: any) { res.status(500).json({ message: "Failed to sign contract: " + e.message }); }
@@ -7426,6 +7481,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/contractor-contracts/:id/versions", requireAuth, async (req, res) => {
     try {
+      // Reuse GET /:id ownership logic
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id;
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const contractRes = await db.execute(sql`SELECT contractor_id, company_id FROM contractor_contracts WHERE id = ${req.params.id}`);
+      if (!contractRes.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      const contract = contractRes.rows[0] as any;
+      if (!isAdmin && contract.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && user?.companyId && contract.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
       const result = await db.execute(sql`SELECT * FROM contract_versions WHERE contract_id = ${req.params.id} ORDER BY version DESC`);
       res.json(result.rows);
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch contract versions" }); }
