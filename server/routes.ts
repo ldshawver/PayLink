@@ -7207,9 +7207,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Proposal: convert to contract ─────────────────────────────────────────
   app.post("/api/contractor-proposals/:id/convert-to-contract", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      const prop = propRes.rows[0] as any;
-      if (!prop) return res.status(404).json({ message: "Proposal not found" });
+      // Use assertProposalAccess to enforce company ownership before conversion
+      const access = await assertProposalAccess(req.params.id, req.session.userId!);
+      if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
+      const prop = access.prop;
       if (!["approved", "accepted"].includes(prop.status)) return res.status(400).json({ message: "Only approved proposals can be converted to contracts" });
 
       const contractNumber = `CON-${Date.now()}`;
@@ -7761,11 +7762,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const user = await storage.getUser(req.session.userId!);
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const isPlatform = (user?.role || "").startsWith("platform_");
       const { workerId: queryWorkerId } = req.query as Record<string, string>;
       const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
       const sessionWorkerId = (wRes.rows[0] as any)?.id;
-      // Admins can look up any worker's branding; contractors only see their own
-      const wId = isAdmin ? (queryWorkerId || sessionWorkerId) : sessionWorkerId;
+      let wId: number | null;
+      if (isAdmin && queryWorkerId) {
+        // Verify the requested worker belongs to the caller's company (unless platform)
+        const workerCheck = await db.execute(sql`SELECT id, company_id FROM workers WHERE id = ${queryWorkerId}`);
+        if (!workerCheck.rows[0]) return res.status(404).json({ message: "Worker not found" });
+        const targetWorker = workerCheck.rows[0] as any;
+        if (!isPlatform && user?.companyId && targetWorker.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+        wId = targetWorker.id;
+      } else {
+        wId = sessionWorkerId;
+      }
       if (!wId) return res.status(404).json({ message: "Worker not found" });
       const result = await db.execute(sql`SELECT * FROM contractor_branding WHERE worker_id = ${wId}`);
       res.json(result.rows[0] || null);
@@ -7776,10 +7787,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const user = await storage.getUser(req.session.userId!);
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const isPlatform = (user?.role || "").startsWith("platform_");
       const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
       const sessionWorkerId = (wRes.rows[0] as any)?.id;
-      // Non-admins can only manage their own branding
-      const wId = isAdmin ? (req.body.workerId || sessionWorkerId) : sessionWorkerId;
+      let wId: number | null;
+      if (isAdmin && req.body.workerId) {
+        // Verify the target worker belongs to the caller's company (unless platform)
+        const workerCheck = await db.execute(sql`SELECT id, company_id FROM workers WHERE id = ${req.body.workerId}`);
+        if (!workerCheck.rows[0]) return res.status(404).json({ message: "Worker not found" });
+        const targetWorker = workerCheck.rows[0] as any;
+        if (!isPlatform && user?.companyId && targetWorker.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
+        wId = targetWorker.id;
+      } else {
+        // Non-admins (and admins without override) always manage their own branding
+        wId = sessionWorkerId;
+      }
       if (!wId) return res.status(400).json({ message: "Worker not found" });
       const { businessName, tagline, primaryColor, secondaryColor, fontFamily, coverNote, signatureText, websiteUrl, licenseNumber, insuranceInfo, footerText, showLogo, showLicenseNumber } = req.body;
       const logoPath = req.file ? `/uploads/${req.file.filename}` : req.body.logoPath || null;
@@ -7934,6 +7956,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const { proposalId, contractId, invoiceType, dueDate, paymentTerms, notes } = req.body;
       if (!proposalId && !contractId) return res.status(400).json({ message: "proposalId or contractId required" });
 
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
       let prop: any = null;
       let contract: any = null;
 
@@ -7941,17 +7965,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${proposalId}`);
         prop = propRes.rows[0];
         if (!prop) return res.status(404).json({ message: "Proposal not found" });
+        // Cross-tenant guard: caller must belong to same company as the proposal
+        if (!isPlatform && user?.companyId && prop.company_id && prop.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
         if (!["approved", "accepted"].includes(prop.status)) return res.status(400).json({ message: "Only approved proposals can be invoiced" });
       }
       if (contractId) {
         const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractId}`);
         contract = contractRes.rows[0];
         if (!contract) return res.status(404).json({ message: "Contract not found" });
+        // Cross-tenant guard: caller must belong to same company as the contract
+        if (!isPlatform && user?.companyId && contract.company_id && contract.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
         if (!["fully_signed", "active"].includes(contract.status)) return res.status(400).json({ message: "Contract must be signed before invoicing" });
       }
 
       const source = prop || contract;
-      const user = await storage.getUser(req.session.userId!);
       const invoiceNumber = `INV-${Date.now()}`;
       const today = new Date().toISOString().split("T")[0];
 
