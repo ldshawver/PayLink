@@ -3,23 +3,25 @@
   position: relative;
   background: #050810;
   color: #fff;
+  /* clip-path clips position:fixed children (video/overlay) to the hero bounds */
+  clip-path: inset(0);
 }
 
 .hero-video-bg {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  width: 100%;
-  height: 100%;
+  width: 100vw;
+  height: 100vh;
   object-fit: cover;
   z-index: 0;
   opacity: 0.65;
 }
 
 .hero-video-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  width: 100%;
-  height: 100%;
+  width: 100vw;
+  height: 100vh;
   background: rgba(0, 0, 0, 0.75);
   z-index: 1;
   pointer-events: none;
@@ -38,19 +40,14 @@
   padding-top: 72px;
   padding-bottom: 28px;
   box-sizing: border-box;
-  overflow: hidden;
 }
 
+/* Scroll cue lives in normal flex flow — margin-top: auto pushes it to the
+   bottom of the available space inside .punch-sticky */
 .punch-sticky > .scroll-hint {
-  position: absolute;
-  bottom: 20px;
-  left: 0;
-  right: 0;
+  margin-top: auto;
   text-align: center;
   white-space: normal;
-  margin-top: 0;
-  transform: none;
-  z-index: 10;
 }
 
 .hero-headline {
