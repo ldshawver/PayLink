@@ -1723,6 +1723,10 @@ export const contractorInvoices = pgTable("contractor_invoices", {
   projectId: varchar("project_id"),
   jobId: varchar("job_id"),
   costCenterId: varchar("cost_center_id"),
+  approvedBudget: numeric("approved_budget"),
+  approvedHours: numeric("approved_hours"),
+  approvedTerms: text("approved_terms"),
+  tradeComponent: text("trade_component"),
   paymentTerms: text("payment_terms"),
   status: text("status").notNull().default("draft"),
   approvedBy: varchar("approved_by"),
@@ -1823,6 +1827,7 @@ export const contractorProposals = pgTable("contractor_proposals", {
   reviewedAt: timestamp("reviewed_at"),
   rejectionReason: text("rejection_reason"),
   convertedToInvoiceId: varchar("converted_to_invoice_id"),
+  convertedToContractId: varchar("converted_to_contract_id"),
   jobId: varchar("job_id"),
   costCenterId: varchar("cost_center_id"),
   // ── Extended fields (added via migration) ──

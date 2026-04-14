@@ -2336,8 +2336,15 @@ Thank you,
     await run("contractor_proposals.template_id", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS template_id VARCHAR`);
     await run("contractor_proposals.branding_id", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS branding_id VARCHAR`);
 
-    // ── contractor_invoices.contract_id ───────────────────────────────────────
+    // ── contractor_proposals.converted_to_contract_id ────────────────────────
+    await run("contractor_proposals.converted_to_contract_id", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS converted_to_contract_id VARCHAR`);
+
+    // ── contractor_invoices extended columns ──────────────────────────────────
     await run("contractor_invoices.contract_id", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS contract_id VARCHAR`);
+    await run("contractor_invoices.approved_budget", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS approved_budget NUMERIC`);
+    await run("contractor_invoices.approved_hours", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS approved_hours NUMERIC`);
+    await run("contractor_invoices.approved_terms", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS approved_terms TEXT`);
+    await run("contractor_invoices.trade_component", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS trade_component TEXT`);
 
     // ── proposal_versions table ───────────────────────────────────────────────
     await run("proposal_versions table", sql`CREATE TABLE IF NOT EXISTS proposal_versions (

@@ -7212,7 +7212,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!prop) return res.status(404).json({ message: "Proposal not found" });
       if (!["approved", "accepted"].includes(prop.status)) return res.status(400).json({ message: "Only approved proposals can be converted to contracts" });
 
-      const counterRes = await db.execute(sql`SELECT nextval('contract_number_seq')` as any).catch(() => null);
       const contractNumber = `CON-${Date.now()}`;
 
       const contractRes = await db.execute(sql`
@@ -7222,8 +7221,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
       const contract = contractRes.rows[0] as any;
 
-      // Update proposal to reference contract
-      await db.execute(sql`UPDATE contractor_proposals SET converted_to_invoice_id = ${contract.id} WHERE id = ${req.params.id}`);
+      // Link proposal to the newly created contract (dedicated column)
+      await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${contract.id} WHERE id = ${req.params.id}`);
 
       res.status(201).json(contract);
     } catch (e: any) { console.error(e); res.status(500).json({ message: "Failed to convert to contract: " + e.message }); }
@@ -7313,10 +7312,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/contractor-contracts/:id", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id;
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       const result = await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.id = ${req.params.id}`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      const contract = result.rows[0] as any;
+      // Ownership check: admin sees company contracts; contractor sees own
+      if (!isAdmin && contract.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && user?.companyId && contract.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
       const signers = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id} ORDER BY "order" ASC`);
-      res.json({ ...(result.rows[0] as any), signers: signers.rows });
+      res.json({ ...contract, signers: signers.rows });
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch contract" }); }
   });
 
@@ -7454,13 +7461,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/dam-documents/:id", requireAuth, async (req, res) => {
     try {
-      const result = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
-      if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
-      // Log access
       const user = await storage.getUser(req.session.userId!);
       const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      await db.execute(sql`INSERT INTO dam_document_access_logs (document_id, accessed_by_user_id, accessed_by_worker_id, action) VALUES (${req.params.id}, ${req.session.userId}, ${(wRes.rows[0] as any)?.id || null}, 'view')`).catch(() => {});
-      res.json(result.rows[0]);
+      const workerId = (wRes.rows[0] as any)?.id;
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const result = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
+      if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
+      const doc = result.rows[0] as any;
+      // Ownership: admin sees company docs; contractor sees own
+      if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && user?.companyId && doc.company_id && doc.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
+      await db.execute(sql`INSERT INTO dam_document_access_logs (document_id, accessed_by_user_id, accessed_by_worker_id, action) VALUES (${req.params.id}, ${req.session.userId}, ${workerId || null}, 'view')`).catch(() => {});
+      res.json(doc);
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch document" }); }
   });
 
@@ -7481,8 +7493,33 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to upload document: " + e.message }); }
   });
 
+  app.get("/api/dam-documents/:id/download", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id;
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const result = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
+      if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
+      const doc = result.rows[0] as any;
+      if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && user?.companyId && doc.company_id && doc.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
+      await db.execute(sql`INSERT INTO dam_document_access_logs (document_id, accessed_by_user_id, accessed_by_worker_id, action) VALUES (${req.params.id}, ${req.session.userId}, ${workerId || null}, 'download')`).catch(() => {});
+      // Return download info; actual file serving is handled by static middleware
+      res.json({ filePath: doc.file_path, fileName: doc.file_name, mimeType: doc.mime_type });
+    } catch (e: any) { res.status(500).json({ message: "Failed to initiate download" }); }
+  });
+
   app.patch("/api/dam-documents/:id", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id;
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const existing = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
+      if (!existing.rows[0]) return res.status(404).json({ message: "Document not found" });
+      const doc = existing.rows[0] as any;
+      if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
       const { title, description, tags, isArchived, isPublic, linkedEntityType, linkedEntityId } = req.body;
       const result = await db.execute(sql`
         UPDATE dam_documents SET
@@ -7497,13 +7534,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         WHERE id = ${req.params.id}
         RETURNING *
       `);
-      if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
       res.json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to update document: " + e.message }); }
   });
 
   app.delete("/api/dam-documents/:id", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id;
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const existing = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
+      if (!existing.rows[0]) return res.status(404).json({ message: "Document not found" });
+      const doc = existing.rows[0] as any;
+      if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
       await db.execute(sql`UPDATE dam_documents SET is_archived = TRUE, updated_at = NOW() WHERE id = ${req.params.id}`);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to archive document: " + e.message }); }
@@ -7643,8 +7687,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/contractor-notifications/:id/read", requireAuth, async (req, res) => {
     try {
-      const result = await db.execute(sql`UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
-      if (!result.rows[0]) return res.status(404).json({ message: "Notification not found" });
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id;
+      // Only mark read if the notification belongs to this user or their worker record
+      const result = await db.execute(sql`
+        UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW()
+        WHERE id = ${req.params.id} AND (user_id = ${req.session.userId} OR worker_id = ${workerId || null})
+        RETURNING *
+      `);
+      if (!result.rows[0]) return res.status(404).json({ message: "Notification not found or access denied" });
       res.json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to mark notification read" }); }
   });
@@ -7704,6 +7755,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/contractor-reminders/:id", requireAuth, async (req, res) => {
     try {
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id;
       const { title, notes, scheduledAt, channel, status } = req.body;
       const result = await db.execute(sql`
         UPDATE contractor_reminders SET
@@ -7713,19 +7766,77 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           channel = COALESCE(${channel || null}, channel),
           status = COALESCE(${status || null}, status),
           updated_at = NOW()
-        WHERE id = ${req.params.id}
+        WHERE id = ${req.params.id} AND (user_id = ${req.session.userId} OR worker_id = ${workerId || null})
         RETURNING *
       `);
-      if (!result.rows[0]) return res.status(404).json({ message: "Reminder not found" });
+      if (!result.rows[0]) return res.status(404).json({ message: "Reminder not found or access denied" });
       res.json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to update reminder: " + e.message }); }
   });
 
   app.delete("/api/contractor-reminders/:id", requireAuth, async (req, res) => {
     try {
-      await db.execute(sql`UPDATE contractor_reminders SET status = 'dismissed', dismissed_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id}`);
+      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.id;
+      await db.execute(sql`
+        UPDATE contractor_reminders SET status = 'dismissed', dismissed_at = NOW(), updated_at = NOW()
+        WHERE id = ${req.params.id} AND (user_id = ${req.session.userId} OR worker_id = ${workerId || null})
+      `);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to dismiss reminder: " + e.message }); }
+  });
+
+  // ── Contractor Invoice: create from proposal or contract with guardrail ────
+  app.post("/api/contractor-invoices/from-proposal", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { proposalId, contractId, invoiceType, dueDate, paymentTerms, notes } = req.body;
+      if (!proposalId && !contractId) return res.status(400).json({ message: "proposalId or contractId required" });
+
+      let prop: any = null;
+      let contract: any = null;
+
+      if (proposalId) {
+        const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${proposalId}`);
+        prop = propRes.rows[0];
+        if (!prop) return res.status(404).json({ message: "Proposal not found" });
+        if (!["approved", "accepted"].includes(prop.status)) return res.status(400).json({ message: "Only approved proposals can be invoiced" });
+      }
+      if (contractId) {
+        const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractId}`);
+        contract = contractRes.rows[0];
+        if (!contract) return res.status(404).json({ message: "Contract not found" });
+        if (!["fully_signed", "active"].includes(contract.status)) return res.status(400).json({ message: "Contract must be signed before invoicing" });
+      }
+
+      const source = prop || contract;
+      const user = await storage.getUser(req.session.userId!);
+      const invoiceNumber = `INV-${Date.now()}`;
+      const today = new Date().toISOString().split("T")[0];
+
+      const result = await db.execute(sql`
+        INSERT INTO contractor_invoices (
+          company_id, contractor_id, invoice_number, title, invoice_type,
+          invoice_date, due_date, amount, approved_budget, approved_hours, approved_terms, trade_component,
+          proposal_id, contract_id, payment_terms, description, notes, status
+        ) VALUES (
+          ${source.company_id}, ${source.contractor_id}, ${invoiceNumber},
+          ${"Invoice — " + (source.title || "")}, ${invoiceType || "standard"},
+          ${today}, ${dueDate || null},
+          ${source.amount || source.total_value || "0"},
+          ${prop?.amount || contract?.total_value || null},
+          ${prop?.estimated_hours || null},
+          ${prop?.payment_terms || contract?.payment_terms || null},
+          ${prop?.trade_offered || contract?.trade_details || null},
+          ${proposalId || null}, ${contractId || null},
+          ${paymentTerms || source.payment_terms || null},
+          ${prop?.scope_of_work || contract?.scope_of_work || null},
+          ${notes || null},
+          'draft'
+        )
+        RETURNING *
+      `);
+      res.status(201).json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to create invoice from proposal: " + e.message }); }
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
