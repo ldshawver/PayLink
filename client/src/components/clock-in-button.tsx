@@ -74,15 +74,25 @@ export function ClockInButton() {
   const punchMutation = useMutation({
     mutationFn: async (punchType: string) => {
       if (!activeWorker) throw new Error("Select a worker first");
-      await apiRequest("POST", "/api/time-punches", {
+      const res = await apiRequest("POST", "/api/time-punches", {
         workerId: activeWorker.id,
         companyId: activeWorker.companyId,
         punchType,
       });
+      return res.json() as Promise<{ status?: string; requestId?: string; [key: string]: unknown }>;
     },
-    onSuccess: (_, punchType) => {
+    onSuccess: (data, punchType) => {
       queryClient.invalidateQueries({ queryKey: ["/api/time-punches"] });
       queryClient.invalidateQueries({ queryKey: ["/api/time-entries"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/exceptions"] });
+      // 202 Accepted — clock-in requires manager approval
+      if (data?.status === "pending_approval") {
+        toast({
+          title: "Approval Required",
+          description: "Your clock-in request has been sent to your manager for approval.",
+        });
+        return;
+      }
       const labels: Record<string, string> = {
         clock_in: "Clocked In",
         clock_out: "Clocked Out",

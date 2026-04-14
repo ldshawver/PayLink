@@ -62,6 +62,8 @@ export const companies = pgTable("companies", {
   stationEnforcementEnabled: boolean("station_enforcement_enabled").default(false),
   timezone: text("timezone").default("America/New_York"),
   timezoneConfirmed: boolean("timezone_confirmed").default(false),
+  clockInGraceMinutes: integer("clock_in_grace_minutes").default(10),
+  notifyMgrOnViolations: boolean("notify_mgr_on_violations").default(true),
   stripeFinancialAccountId: text("stripe_financial_account_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });

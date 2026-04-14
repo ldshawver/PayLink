@@ -3563,6 +3563,18 @@ function StationsTab() {
     onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
+  const [graceMinutesEditing, setGraceMinutesEditing] = useState<Record<string, string>>({});
+  const updateGraceMinutesMutation = useMutation({
+    mutationFn: async ({ companyId, minutes }: { companyId: string; minutes: number }) => {
+      await apiRequest("PATCH", `/api/companies/${companyId}`, { clockInGraceMinutes: minutes });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      toast({ title: "Clock-in grace period updated" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
   const prepareData = (data: typeof form) => ({
     ...data,
     companyId: data.companyId === "__all__" ? null : data.companyId || null,
@@ -3649,34 +3661,78 @@ function StationsTab() {
   return (
     <div className="space-y-4">
       {companies && companies.length > 0 && (
-        <Card className="p-4">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
+        <>
+          <Card className="p-4">
+            <div className="space-y-3">
               <div>
-                <h3 className="font-semibold text-sm">Station IP Enforcement</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">When enabled, employees can only clock in from IP addresses that match an active station. The station is detected automatically.</p>
+                <h3 className="font-semibold text-sm">Clock-In Grace Period</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Number of minutes before or after scheduled start that an employee can clock in without requiring manager approval. Early/late punches outside this window are flagged and need approval.</p>
               </div>
+              {companies.map((c) => {
+                const currentGrace = c.clockInGraceMinutes ?? 10;
+                const editingVal = graceMinutesEditing[c.id] ?? String(currentGrace);
+                return (
+                  <div key={c.id} className="flex items-center justify-between border rounded-lg p-3 gap-3">
+                    <span className="text-sm font-medium">{c.name}</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        max={120}
+                        value={editingVal}
+                        onChange={(e) => setGraceMinutesEditing(prev => ({ ...prev, [c.id]: e.target.value }))}
+                        className="w-20 border rounded px-2 py-1 text-sm text-center"
+                        data-testid={`input-grace-minutes-${c.id}`}
+                      />
+                      <span className="text-xs text-muted-foreground">min</span>
+                      <button
+                        className="text-xs px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                        disabled={editingVal === String(currentGrace) || updateGraceMinutesMutation.isPending}
+                        onClick={() => {
+                          const mins = parseInt(editingVal, 10);
+                          if (!isNaN(mins) && mins >= 1) {
+                            updateGraceMinutesMutation.mutate({ companyId: c.id, minutes: mins });
+                          }
+                        }}
+                        data-testid={`button-save-grace-minutes-${c.id}`}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            {companies.map((c) => (
-              <div key={c.id} className="flex items-center justify-between border rounded-lg p-3">
-                <span className="text-sm font-medium">{c.name}</span>
-                <div className="flex items-center gap-2">
-                  <Badge variant={(c as any).stationEnforcementEnabled ? "default" : "secondary"} data-testid={`badge-enforcement-${c.id}`}>
-                    {(c as any).stationEnforcementEnabled ? "Enabled" : "Disabled"}
-                  </Badge>
-                  <Switch
-                    checked={(c as any).stationEnforcementEnabled || false}
-                    onCheckedChange={(v) => toggleEnforcementMutation.mutate({ companyId: c.id, enabled: v })}
-                    data-testid={`switch-enforcement-${c.id}`}
-                  />
+          </Card>
+          <Card className="p-4">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-semibold text-sm">Station IP Enforcement</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">When enabled, employees can only clock in from IP addresses that match an active station. The station is detected automatically.</p>
                 </div>
               </div>
-            ))}
-            {clientIpData && (
-              <p className="text-xs text-muted-foreground">Your current IP address: <span className="font-mono font-medium" data-testid="text-current-ip">{clientIpData.ip}</span></p>
-            )}
-          </div>
-        </Card>
+              {companies.map((c) => (
+                <div key={c.id} className="flex items-center justify-between border rounded-lg p-3">
+                  <span className="text-sm font-medium">{c.name}</span>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={(c as any).stationEnforcementEnabled ? "default" : "secondary"} data-testid={`badge-enforcement-${c.id}`}>
+                      {(c as any).stationEnforcementEnabled ? "Enabled" : "Disabled"}
+                    </Badge>
+                    <Switch
+                      checked={(c as any).stationEnforcementEnabled || false}
+                      onCheckedChange={(v) => toggleEnforcementMutation.mutate({ companyId: c.id, enabled: v })}
+                      data-testid={`switch-enforcement-${c.id}`}
+                    />
+                  </div>
+                </div>
+              ))}
+              {clientIpData && (
+                <p className="text-xs text-muted-foreground">Your current IP address: <span className="font-mono font-medium" data-testid="text-current-ip">{clientIpData.ip}</span></p>
+              )}
+            </div>
+          </Card>
+        </>
       )}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <h2 className="text-lg font-semibold">Stations</h2>

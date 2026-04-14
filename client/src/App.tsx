@@ -82,11 +82,29 @@ function PageLoader() {
   );
 }
 
+// Client-side role expansion — maps new explicit role names to legacy aliases for RoleGuard
+const ADMIN_ROLE_ALIASES = new Set([
+  "admin", "platform_super_admin", "platform_admin", "platform_support", "platform_implementation",
+  "tenant_owner", "tenant_admin", "tenant_hr_admin", "tenant_payroll_admin", "tenant_finance_admin",
+]);
+const MANAGER_ROLE_ALIASES = new Set([
+  ...Array.from(ADMIN_ROLE_ALIASES),
+  "manager", "supervisor", "tenant_manager", "tenant_supervisor",
+]);
+
+function expandRoles(role: string): string[] {
+  const out: string[] = [role];
+  if (ADMIN_ROLE_ALIASES.has(role)) out.push("admin");
+  if (MANAGER_ROLE_ALIASES.has(role)) out.push("manager");
+  return out;
+}
+
 function RoleGuard({ roles, children }: { roles: string[]; children: React.ReactNode }) {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
   const userRole = user?.role || "employee";
-  const allowed = roles.includes(userRole);
+  const expanded = expandRoles(userRole);
+  const allowed = roles.some(r => expanded.includes(r));
 
   if (!allowed) {
     setTimeout(() => setLocation("/app"), 0);

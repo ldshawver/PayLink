@@ -1624,6 +1624,10 @@ app.use((req, res, next) => {
     await run("companies.stripe_subscription_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT`);
     await run("companies.timezone", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'America/New_York'`);
     await run("companies.timezone_confirmed", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone_confirmed BOOLEAN NOT NULL DEFAULT FALSE`);
+    await run("companies.clock_in_grace_minutes", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS clock_in_grace_minutes INTEGER NOT NULL DEFAULT 10`);
+    await run("companies.notify_mgr_on_violations", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS notify_mgr_on_violations BOOLEAN NOT NULL DEFAULT TRUE`);
+    await run("clock_in_requests.manager_notes", sql`ALTER TABLE clock_in_requests ADD COLUMN IF NOT EXISTS manager_notes TEXT`);
+    await run("clock_in_requests.corrected_time", sql`ALTER TABLE clock_in_requests ADD COLUMN IF NOT EXISTS corrected_time TIMESTAMPTZ`);
 
     await run("authorization_audit_log table", sql`
       CREATE TABLE IF NOT EXISTS authorization_audit_log (

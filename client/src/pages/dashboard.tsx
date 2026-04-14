@@ -12,13 +12,15 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogFooter,
 } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard,
   Settings,
@@ -42,6 +44,13 @@ import {
   XCircle,
   CheckCircle2,
   Hourglass,
+  ExternalLink,
+  Check,
+  X,
+  AlertCircle,
+  MessageSquare,
+  Ban,
+  Pencil,
 } from "lucide-react";
 
 const DASHLET_STORAGE_KEY = "paylink-dashlets";
@@ -52,15 +61,22 @@ interface DashletConfig {
   roles?: string[];
 }
 
+const ADMIN_ROLES = [
+  "admin", "manager", "supervisor",
+  "platform_super_admin", "platform_admin", "platform_support", "platform_implementation",
+  "tenant_owner", "tenant_admin", "tenant_hr_admin", "tenant_payroll_admin", "tenant_finance_admin",
+  "tenant_manager", "tenant_supervisor",
+];
+
 const ALL_DASHLETS: DashletConfig[] = [
   { id: "news", label: "News" },
-  { id: "exception-summary", label: "Exception Summary", roles: ["admin", "manager"] },
+  { id: "exception-summary", label: "Exception Summary", roles: ADMIN_ROLES },
   { id: "messages", label: "Messages" },
-  { id: "requests", label: "Requests" },
-  { id: "request-authorizations", label: "Request Authorizations", roles: ["admin", "manager"] },
-  { id: "exceptions", label: "Exceptions", roles: ["admin", "manager"] },
-  { id: "exceptions-subordinates", label: "Exceptions (Subordinates)", roles: ["admin", "manager"] },
-  { id: "schedule-summary-subordinates", label: "Schedule Summary (Subordinates)", roles: ["admin", "manager"] },
+  { id: "requests", label: "My Requests" },
+  { id: "request-authorizations", label: "Awaiting My Approval", roles: ADMIN_ROLES },
+  { id: "exceptions", label: "Exceptions" },
+  { id: "exceptions-subordinates", label: "Exceptions (Subordinates)", roles: ADMIN_ROLES },
+  { id: "schedule-summary-subordinates", label: "Schedule Summary (Subordinates)", roles: ADMIN_ROLES },
   { id: "schedule-summary", label: "Schedule Summary" },
   { id: "whos-in-out", label: "Who's In/Out" },
   { id: "timesheet-summary", label: "Timesheet Summary" },
@@ -137,16 +153,20 @@ function NewsDashlet() {
 }
 
 function ExceptionSummaryDashlet() {
-  const { data: timeEntries, isLoading } = useQuery<TimeEntry[]>({
+  const { data: exceptions, isLoading: loadingEx } = useQuery<any[]>({
+    queryKey: ["/api/dashboard/exceptions"],
+  });
+  const { data: timeEntries, isLoading: loadingEntries } = useQuery<TimeEntry[]>({
     queryKey: ["/api/time-entries"],
   });
 
-  if (isLoading) return <DashletSkeleton />;
+  if (loadingEx || loadingEntries) return <DashletSkeleton />;
 
   const entries = timeEntries || [];
-  const pendingCount = entries.filter((e) => e.status === "pending").length;
-  const highOTCount = entries.filter((e) => Number(e.overtimeHours) > 8).length;
-  const missingClockOutCount = entries.filter((e) => e.clockIn && !e.clockOut).length;
+  const exList = exceptions || [];
+  const pendingApprovalCount = exList.filter((e) => e.status === "pending_approval").length;
+  const missingClockOutCount = exList.filter((e) => e.exceptionType === "Missing clock-out").length;
+  const highOTCount = entries.filter((e) => Number(e.overtimeHours) > 4).length;
 
   return (
     <Card data-testid="dashlet-exception-summary">
@@ -155,21 +175,26 @@ function ExceptionSummaryDashlet() {
           <AlertTriangle className="h-4 w-4 text-teal-accent" />
           Exception Summary
         </CardTitle>
+        <Link href="/app/attendance?tab=clock-in-approvals">
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" data-testid="link-exception-summary-view-all">
+            View All <ExternalLink className="h-3 w-3 ml-1" />
+          </Button>
+        </Link>
       </CardHeader>
       <CardContent>
         <table className="w-full text-sm">
           <tbody>
             <tr className="border-b">
-              <td className="py-1.5 text-muted-foreground">Pending Timesheets</td>
-              <td className="py-1.5 text-right font-medium" data-testid="count-pending">{pendingCount}</td>
+              <td className="py-1.5 text-muted-foreground">Pending Approvals</td>
+              <td className="py-1.5 text-right font-medium" data-testid="count-pending-approval">{pendingApprovalCount}</td>
             </tr>
             <tr className="border-b">
-              <td className="py-1.5 text-muted-foreground">High Overtime (&gt;8h)</td>
-              <td className="py-1.5 text-right font-medium" data-testid="count-high-ot">{highOTCount}</td>
-            </tr>
-            <tr>
               <td className="py-1.5 text-muted-foreground">Missing Clock-Out</td>
               <td className="py-1.5 text-right font-medium" data-testid="count-missing-clockout">{missingClockOutCount}</td>
+            </tr>
+            <tr>
+              <td className="py-1.5 text-muted-foreground">High Overtime (&gt;4h)</td>
+              <td className="py-1.5 text-right font-medium" data-testid="count-high-ot">{highOTCount}</td>
             </tr>
           </tbody>
         </table>
@@ -186,6 +211,11 @@ function MessagesDashlet() {
           <Mail className="h-4 w-4 text-teal-accent" />
           Messages
         </CardTitle>
+        <Link href="/app/messages">
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" data-testid="link-messages-view-all">
+            View All <ExternalLink className="h-3 w-3 ml-1" />
+          </Button>
+        </Link>
       </CardHeader>
       <CardContent>
         <div className="flex flex-col items-center justify-center py-6 text-muted-foreground">
@@ -197,98 +227,522 @@ function MessagesDashlet() {
   );
 }
 
+function statusBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
+  if (status === "approved") return "default";
+  if (status === "denied" || status === "rejected") return "destructive";
+  if (status === "pending" || status === "pending_approval") return "outline";
+  return "secondary";
+}
+
+function statusLabel(status: string): string {
+  if (status === "pending_approval") return "Pending Approval";
+  if (status === "action_required") return "Action Required";
+  return status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, " ");
+}
+
 function RequestsDashlet() {
+  const { data: requests, isLoading } = useQuery<any[]>({
+    queryKey: ["/api/dashboard/my-requests"],
+  });
+
+  if (isLoading) return <DashletSkeleton />;
+
+  const items = requests || [];
+
   return (
     <Card data-testid="dashlet-requests">
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
           <Inbox className="h-4 w-4 text-teal-accent" />
-          Requests
+          My Requests
         </CardTitle>
+        <Link href="/app/attendance?tab=time-off">
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" data-testid="link-requests-view-all">
+            View All <ExternalLink className="h-3 w-3 ml-1" />
+          </Button>
+        </Link>
       </CardHeader>
       <CardContent>
-        <div className="flex flex-col items-center justify-center py-6 text-muted-foreground">
-          <Inbox className="h-8 w-8 mb-2" />
-          <span className="text-sm">No pending requests</span>
-        </div>
+        {items.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-6 text-muted-foreground">
+            <Inbox className="h-8 w-8 mb-2" />
+            <span className="text-sm">No pending requests</span>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {items.slice(0, 5).map((req) => (
+              <Link key={req.id} href={req.actionUrl}>
+                <div
+                  className="flex items-center justify-between gap-2 text-sm cursor-pointer rounded-md hover:bg-muted/50 p-1.5 -mx-1.5 transition-colors"
+                  data-testid={`request-item-${req.id}`}
+                >
+                  <div className="flex flex-col min-w-0">
+                    <span className="truncate font-medium">{req.label}</span>
+                    <span className="text-xs text-muted-foreground truncate">{req.description}</span>
+                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                      {req.companyName && <span className="text-[10px] text-muted-foreground">{req.companyName}</span>}
+                      {req.costCenterName && <span className="text-[10px] text-muted-foreground">· {req.costCenterName}</span>}
+                      {req.submittedAt && (
+                        <span className="text-[10px] text-muted-foreground">
+                          · {new Date(req.submittedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <Badge variant={statusBadgeVariant(req.status)} className="shrink-0 text-[10px]">
+                    {statusLabel(req.status)}
+                  </Badge>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
 }
 
 function RequestAuthorizationsDashlet() {
+  const { toast } = useToast();
+  const { data: approvals, isLoading } = useQuery<any[]>({
+    queryKey: ["/api/dashboard/pending-approvals"],
+  });
+
+  const approvePunch = useMutation({
+    mutationFn: async (id: string) => apiRequest("PATCH", `/api/clock-in-requests/${id}/approve`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/pending-approvals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/exceptions"] });
+      toast({ title: "Punch approved" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to approve punch", variant: "destructive" }),
+  });
+
+  const denyPunch = useMutation({
+    mutationFn: async (id: string) => apiRequest("PATCH", `/api/clock-in-requests/${id}/deny`, { reason: "Denied by manager" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/pending-approvals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/exceptions"] });
+      toast({ title: "Punch denied" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to deny punch", variant: "destructive" }),
+  });
+
+  const approveTimeOff = useMutation({
+    mutationFn: async (id: string) => apiRequest("PATCH", `/api/time-off-requests/${id}/review`, { decision: "approved" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/pending-approvals"] });
+      toast({ title: "Time off approved" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to approve time off", variant: "destructive" }),
+  });
+
+  const denyTimeOff = useMutation({
+    mutationFn: async (id: string) => apiRequest("PATCH", `/api/time-off-requests/${id}/review`, { decision: "denied" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/pending-approvals"] });
+      toast({ title: "Time off denied" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to deny time off", variant: "destructive" }),
+  });
+
+  if (isLoading) return <DashletSkeleton />;
+
+  const items = approvals || [];
+
   return (
     <Card data-testid="dashlet-request-authorizations">
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
           <CheckSquare className="h-4 w-4 text-teal-accent" />
-          Request Authorizations
+          Awaiting My Approval
         </CardTitle>
+        <Link href="/app/attendance?tab=clock-in-approvals">
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" data-testid="link-authorizations-view-all">
+            View All <ExternalLink className="h-3 w-3 ml-1" />
+          </Button>
+        </Link>
       </CardHeader>
       <CardContent>
-        <div className="flex flex-col items-center justify-center py-6 text-muted-foreground">
-          <CheckSquare className="h-8 w-8 mb-2" />
-          <span className="text-sm">No pending authorizations</span>
-        </div>
+        {items.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-6 text-muted-foreground">
+            <CheckSquare className="h-8 w-8 mb-2" />
+            <span className="text-sm">No pending authorizations</span>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {items.slice(0, 5).map((item) => (
+              <div
+                key={item.id}
+                className="flex items-start justify-between gap-2 text-sm"
+                data-testid={`approval-item-${item.id}`}
+              >
+                <Link href={item.actionUrl} className="flex flex-col min-w-0 flex-1 cursor-pointer hover:underline">
+                  <span className="truncate font-medium">{item.requesterName}</span>
+                  <span className="text-xs text-muted-foreground truncate">{item.label}: {item.description}</span>
+                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                    {item.companyName && <span className="text-[10px] text-muted-foreground">{item.companyName}</span>}
+                    {item.costCenterName && <span className="text-[10px] text-muted-foreground">· {item.costCenterName}</span>}
+                    {item.jobName && <span className="text-[10px] text-muted-foreground">· {item.jobName}</span>}
+                    {item.submittedAt && (
+                      <span className="text-[10px] text-muted-foreground">
+                        · {new Date(item.submittedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                      </span>
+                    )}
+                  </div>
+                </Link>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 w-6 p-0 text-green-600 hover:bg-green-50 dark:hover:bg-green-950/30"
+                    disabled={approvePunch.isPending || approveTimeOff.isPending}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (item.requestType === "punch_approval") {
+                        approvePunch.mutate(item.sourceId);
+                      } else {
+                        approveTimeOff.mutate(item.sourceId);
+                      }
+                    }}
+                    data-testid={`button-approve-${item.id}`}
+                    title="Approve"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 w-6 p-0 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                    disabled={denyPunch.isPending || denyTimeOff.isPending}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (item.requestType === "punch_approval") {
+                        denyPunch.mutate(item.sourceId);
+                      } else {
+                        denyTimeOff.mutate(item.sourceId);
+                      }
+                    }}
+                    data-testid={`button-deny-${item.id}`}
+                    title="Deny"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
 }
 
 function ExceptionsDashlet({ label, testId }: { label: string; testId: string }) {
-  const { data: timeEntries, isLoading: loadingEntries } = useQuery<TimeEntry[]>({
-    queryKey: ["/api/time-entries"],
+  const { toast } = useToast();
+  const { data: exceptions, isLoading } = useQuery<any[]>({
+    queryKey: ["/api/dashboard/exceptions"],
   });
-  const { data: workers, isLoading: loadingWorkers } = useQuery<Worker[]>({
-    queryKey: ["/api/workers"],
+  const [commentItem, setCommentItem] = useState<{ id: string; sourceType: string; sourceId: string } | null>(null);
+  const [commentText, setCommentText] = useState("");
+  const [editPunchId, setEditPunchId] = useState<string | null>(null);
+  const [editPunchTime, setEditPunchTime] = useState<string>("");
+
+  const approvePunch = useMutation({
+    mutationFn: async (id: string) => apiRequest("PATCH", `/api/clock-in-requests/${id}/approve`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/exceptions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/pending-approvals"] });
+      toast({ title: "Punch approved" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to approve", variant: "destructive" }),
   });
 
-  if (loadingEntries || loadingWorkers) return <DashletSkeleton />;
+  const denyPunch = useMutation({
+    mutationFn: async (id: string) => apiRequest("PATCH", `/api/clock-in-requests/${id}/deny`, { reason: "Denied by manager" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/exceptions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/pending-approvals"] });
+      toast({ title: "Punch denied" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to deny", variant: "destructive" }),
+  });
 
-  const entries = timeEntries || [];
-  const workerMap = new Map((workers || []).map((w) => [w.id, w]));
-  const pendingEntries = entries
-    .filter((e) => e.status === "pending" || Number(e.overtimeHours) > 8)
-    .slice(0, 5);
+  const approveTimeEntry = useMutation({
+    mutationFn: async (id: string) => apiRequest("PATCH", `/api/time-entries/${id}`, { status: "approved" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/exceptions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/time-entries"] });
+      toast({ title: "Timesheet authorized" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to authorize timesheet", variant: "destructive" }),
+  });
+
+  const rejectTimeEntry = useMutation({
+    mutationFn: async (id: string) => apiRequest("PATCH", `/api/time-entries/${id}`, { status: "rejected" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/exceptions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/time-entries"] });
+      toast({ title: "Timesheet rejected" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to reject timesheet", variant: "destructive" }),
+  });
+
+  const correctPunchTime = useMutation({
+    mutationFn: async ({ id, correctedTime }: { id: string; correctedTime: string }) =>
+      apiRequest("PATCH", `/api/clock-in-requests/${id}/correct-time`, { correctedTime }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/exceptions"] });
+      setEditPunchId(null);
+      setEditPunchTime("");
+      toast({ title: "Corrected time saved" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to save corrected time", variant: "destructive" }),
+  });
+
+  const addComment = useMutation({
+    mutationFn: async ({ sourceType, sourceId, note }: { sourceType: string; sourceId: string; note: string }) => {
+      if (sourceType === "time_entry") {
+        return apiRequest("PATCH", `/api/time-entries/${sourceId}`, { note });
+      }
+      if (sourceType === "clock_in_request") {
+        return apiRequest("PATCH", `/api/clock-in-requests/${sourceId}/note`, { note });
+      }
+      // time_punch: no direct note endpoint — surface an error rather than swallowing it
+      throw new Error(`Comments are not yet supported for exception type: ${sourceType}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/exceptions"] });
+      setCommentItem(null);
+      setCommentText("");
+      toast({ title: "Comment added" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to add comment", variant: "destructive" }),
+  });
+
+  if (isLoading) return <DashletSkeleton />;
+
+  const items = (exceptions || []).slice(0, 5);
+
+  const exceptionStatusColor = (status: string) => {
+    if (status === "pending_approval") return "text-amber-600 dark:text-amber-400";
+    if (status === "action_required") return "text-red-600 dark:text-red-400";
+    return "text-muted-foreground";
+  };
 
   return (
+    <>
     <Card data-testid={testId}>
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
           <AlertTriangle className="h-4 w-4 text-teal-accent" />
           {label}
         </CardTitle>
+        <Link href="/app/attendance">
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" data-testid={`link-${testId}-view-all`}>
+            View All <ExternalLink className="h-3 w-3 ml-1" />
+          </Button>
+        </Link>
       </CardHeader>
       <CardContent>
-        {pendingEntries.length === 0 ? (
+        {items.length === 0 ? (
           <p className="text-sm text-muted-foreground py-4 text-center">No exceptions found</p>
         ) : (
           <div className="space-y-2">
-            {pendingEntries.map((entry) => {
-              const worker = workerMap.get(entry.workerId);
-              const name = worker ? `${worker.firstName} ${worker.lastName}` : "Unknown";
-              return (
-                <div
-                  key={entry.id}
-                  className="flex items-center justify-between gap-2 text-sm"
-                  data-testid={`exception-entry-${entry.id}`}
-                >
-                  <div className="flex flex-col min-w-0">
-                    <span className="truncate font-medium">{name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {entry.date} &middot; {Number(entry.totalHours).toFixed(1)}h
-                    </span>
+            {items.map((item) => (
+              <div
+                key={item.id}
+                className="flex items-start justify-between gap-2 text-sm"
+                data-testid={`exception-entry-${item.id}`}
+              >
+                <Link href={item.actionUrl} className="flex flex-col min-w-0 flex-1 cursor-pointer hover:underline">
+                  <span className="truncate font-medium">{item.workerName}</span>
+                  <span className={`text-xs truncate ${exceptionStatusColor(item.status)}`}>
+                    {item.date && <span>{item.date} · </span>}
+                    {item.exceptionType}
+                  </span>
+                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                    {item.companyName && <span className="text-[10px] text-muted-foreground">{item.companyName}</span>}
+                    {item.costCenterName && <span className="text-[10px] text-muted-foreground">· {item.costCenterName}</span>}
+                    {item.jobName && <span className="text-[10px] text-muted-foreground">· {item.jobName}</span>}
                   </div>
-                  <Badge variant="secondary" className="shrink-0">
-                    {entry.status}
-                  </Badge>
+                </Link>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  {/* clock_in_request: Edit corrected time / Approve / Deny */}
+                  {item.sourceType === "clock_in_request" && (
+                    <>
+                      {item.canEdit && (
+                        editPunchId === item.sourceId ? (
+                          <span className="flex items-center gap-1">
+                            <input
+                              type="datetime-local"
+                              className="text-xs border rounded px-1 h-6 bg-background"
+                              value={editPunchTime}
+                              onChange={(e) => setEditPunchTime(e.target.value)}
+                              data-testid={`input-correct-time-${item.id}`}
+                            />
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 w-6 p-0 text-green-600 hover:bg-green-50 dark:hover:bg-green-950/30"
+                              disabled={correctPunchTime.isPending || !editPunchTime}
+                              onClick={(e) => { e.preventDefault(); correctPunchTime.mutate({ id: item.sourceId, correctedTime: new Date(editPunchTime).toISOString() }); }}
+                              data-testid={`button-save-correct-time-${item.id}`}
+                              title="Save corrected time"
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 w-6 p-0 text-muted-foreground"
+                              onClick={(e) => { e.preventDefault(); setEditPunchId(null); setEditPunchTime(""); }}
+                              data-testid={`button-cancel-correct-time-${item.id}`}
+                              title="Cancel"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </span>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 w-6 p-0 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+                            onClick={(e) => { e.preventDefault(); setEditPunchId(item.sourceId); setEditPunchTime(""); }}
+                            data-testid={`button-exception-edit-${item.id}`}
+                            title="Set corrected clock-in time"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                        )
+                      )}
+                      {item.canApprove && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 w-6 p-0 text-green-600 hover:bg-green-50 dark:hover:bg-green-950/30"
+                            disabled={approvePunch.isPending}
+                            onClick={(e) => { e.preventDefault(); approvePunch.mutate(item.sourceId); }}
+                            data-testid={`button-exception-approve-${item.id}`}
+                            title="Approve punch"
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 w-6 p-0 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                            disabled={denyPunch.isPending}
+                            onClick={(e) => { e.preventDefault(); denyPunch.mutate(item.sourceId); }}
+                            data-testid={`button-exception-deny-${item.id}`}
+                            title="Deny punch"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </>
+                      )}
+                    </>
+                  )}
+                  {/* time_entry: Edit timecard + Authorize + Reject (for pending/action_required items) */}
+                  {item.sourceType === "time_entry" && (
+                    <>
+                      <Link href={item.actionUrl || `/app/attendance`} data-testid={`button-exception-edit-${item.id}`} title="Edit timecard">
+                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30">
+                          <FileText className="h-3.5 w-3.5" />
+                        </Button>
+                      </Link>
+                      {item.canApprove && (item.status === "pending" || item.status === "action_required") && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 w-6 p-0 text-green-600 hover:bg-green-50 dark:hover:bg-green-950/30"
+                            onClick={(e) => { e.preventDefault(); approveTimeEntry.mutate(item.sourceId); }}
+                            disabled={approveTimeEntry.isPending}
+                            data-testid={`button-exception-authorize-${item.id}`}
+                            title="Authorize timesheet"
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 w-6 p-0 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                            onClick={(e) => { e.preventDefault(); rejectTimeEntry.mutate(item.sourceId); }}
+                            disabled={rejectTimeEntry.isPending}
+                            data-testid={`button-exception-reject-${item.id}`}
+                            title="Reject timesheet"
+                          >
+                            <Ban className="h-3.5 w-3.5" />
+                          </Button>
+                        </>
+                      )}
+                    </>
+                  )}
+                  {/* Comment button: visible for all items where canComment is true */}
+                  {item.canComment && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setCommentItem({ id: item.id, sourceType: item.sourceType, sourceId: item.sourceId });
+                        setCommentText("");
+                      }}
+                      data-testid={`button-exception-comment-${item.id}`}
+                      title="Add comment"
+                    >
+                      <MessageSquare className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         )}
       </CardContent>
     </Card>
+
+    {/* Comment dialog */}
+    <Dialog open={!!commentItem} onOpenChange={(open) => { if (!open) { setCommentItem(null); setCommentText(""); } }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add Comment</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <Textarea
+            placeholder="Enter your comment or note..."
+            value={commentText}
+            onChange={(e) => setCommentText(e.target.value)}
+            className="min-h-[80px]"
+            data-testid="input-exception-comment"
+          />
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => { setCommentItem(null); setCommentText(""); }}
+            data-testid="button-exception-comment-cancel"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              if (commentItem && commentText.trim()) {
+                addComment.mutate({ sourceType: commentItem.sourceType, sourceId: commentItem.sourceId, note: commentText.trim() });
+              }
+            }}
+            disabled={addComment.isPending || !commentText.trim()}
+            data-testid="button-exception-comment-submit"
+          >
+            Save Comment
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </>
   );
 }
 
@@ -316,6 +770,11 @@ function ScheduleSummarySubordinatesDashlet() {
           <CalendarDays className="h-4 w-4 text-teal-accent" />
           Schedule Summary (Subordinates)
         </CardTitle>
+        <Link href="/app/schedule">
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" data-testid="link-schedule-subordinates-view-all">
+            View All <ExternalLink className="h-3 w-3 ml-1" />
+          </Button>
+        </Link>
       </CardHeader>
       <CardContent>
         {upcoming.length === 0 ? (
@@ -326,19 +785,20 @@ function ScheduleSummarySubordinatesDashlet() {
               const worker = workerMap.get(sched.workerId);
               const name = worker ? `${worker.firstName} ${worker.lastName}` : "Unknown";
               return (
-                <div
-                  key={sched.id}
-                  className="flex items-center justify-between gap-2 text-sm"
-                  data-testid={`schedule-entry-${sched.id}`}
-                >
-                  <div className="flex flex-col min-w-0">
-                    <span className="truncate font-medium">{name}</span>
-                    <span className="text-xs text-muted-foreground">{sched.date}</span>
+                <Link key={sched.id} href="/app/schedule">
+                  <div
+                    className="flex items-center justify-between gap-2 text-sm cursor-pointer rounded-md hover:bg-muted/50 p-1 -mx-1 transition-colors"
+                    data-testid={`schedule-entry-${sched.id}`}
+                  >
+                    <div className="flex flex-col min-w-0">
+                      <span className="truncate font-medium">{name}</span>
+                      <span className="text-xs text-muted-foreground">{sched.date}</span>
+                    </div>
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      {sched.startTime} - {sched.endTime}
+                    </span>
                   </div>
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    {sched.startTime} - {sched.endTime}
-                  </span>
-                </div>
+                </Link>
               );
             })}
           </div>
@@ -367,6 +827,11 @@ function ScheduleSummaryDashlet() {
           <Clock className="h-4 w-4 text-teal-accent" />
           Schedule Summary
         </CardTitle>
+        <Link href="/app/schedule">
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" data-testid="link-schedule-summary-view-all">
+            View <ExternalLink className="h-3 w-3 ml-1" />
+          </Button>
+        </Link>
       </CardHeader>
       <CardContent>
         <div className="space-y-2">
@@ -427,14 +892,15 @@ function WhosInOutDashlet() {
               const worker = workerMap.get(entry.workerId);
               const name = worker ? `${worker.firstName} ${worker.lastName}` : "Unknown";
               return (
-                <div
-                  key={entry.id}
-                  className="flex items-center justify-between gap-2 text-sm"
-                  data-testid={`whos-in-entry-${entry.id}`}
-                >
-                  <span className="truncate">{name}</span>
-                  <Badge variant="default" className="shrink-0">In</Badge>
-                </div>
+                <Link key={entry.id} href="/app/attendance">
+                  <div
+                    className="flex items-center justify-between gap-2 text-sm cursor-pointer rounded-md hover:bg-muted/50 p-1 -mx-1 transition-colors"
+                    data-testid={`whos-in-entry-${entry.id}`}
+                  >
+                    <span className="truncate">{name}</span>
+                    <Badge variant="default" className="shrink-0">In</Badge>
+                  </div>
+                </Link>
               );
             })}
           </div>
@@ -466,6 +932,11 @@ function TimesheetSummaryDashlet() {
           <FileText className="h-4 w-4 text-teal-accent" />
           Timesheet Summary
         </CardTitle>
+        <Link href="/app/attendance">
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" data-testid="link-timesheet-summary-view-all">
+            View <ExternalLink className="h-3 w-3 ml-1" />
+          </Button>
+        </Link>
       </CardHeader>
       <CardContent>
         <div className="space-y-2">
@@ -494,13 +965,19 @@ function TimesheetSummaryDashlet() {
   );
 }
 
+type ClockState = "clocked_out" | "clocked_in" | "on_break" | "back_from_break" | "pending_punch_approval" | "missing_punch";
+
 function DashboardClockCard() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const [, navigate] = useLocation();
 
   const workersQuery = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
   const entriesQuery = useQuery<TimeEntry[]>({ queryKey: ["/api/time-entries"] });
   const punchesQuery = useQuery<TimePunch[]>({ queryKey: ["/api/time-punches"] });
+  const clockStatusQuery = useQuery<{ pendingApproval: any; missingPunch: any }>({
+    queryKey: ["/api/dashboard/clock-status"],
+  });
 
   const workers = workersQuery.data || [];
   const linkedWorker = workers.find(
@@ -521,25 +998,55 @@ function DashboardClockCard() {
   const isOnBreak = todayPunches.length > 0 && todayPunches[0].punchType === "break_start";
   const isClockedIn = !!openEntry;
 
+  // "Back from break" = most recent punch is break_end within the last 30 min
+  const lastPunch = todayPunches[0];
+  const isBackFromBreak = isClockedIn && !isOnBreak &&
+    lastPunch?.punchType === "break_end" &&
+    (Date.now() - new Date(lastPunch.punchTime).getTime()) < 30 * 60 * 1000;
+
+  // Pending punch approval (worker attempted to clock in but needs supervisor approval)
+  const pendingApproval = clockStatusQuery.data?.pendingApproval;
+  const missingPunch = clockStatusQuery.data?.missingPunch;
+
+  // Determine the effective clock state
+  const clockState: ClockState = (() => {
+    if (pendingApproval) return "pending_punch_approval";
+    if (missingPunch && !isClockedIn) return "missing_punch";
+    if (isClockedIn && isOnBreak) return "on_break";
+    if (isClockedIn && isBackFromBreak) return "back_from_break";
+    if (isClockedIn) return "clocked_in";
+    return "clocked_out";
+  })();
+
   const punchMutation = useMutation({
     mutationFn: async (punchType: string) => {
       if (!linkedWorker) throw new Error("No linked worker found");
-      await apiRequest("POST", "/api/time-punches", {
+      const res = await apiRequest("POST", "/api/time-punches", {
         workerId: linkedWorker.id,
         companyId: linkedWorker.companyId,
         punchType,
       });
+      const body = await res.json().catch(() => ({}));
+      return { status: res.status, body, punchType };
     },
-    onSuccess: (_, punchType) => {
+    onSuccess: ({ status, body, punchType }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/time-punches"] });
       queryClient.invalidateQueries({ queryKey: ["/api/time-entries"] });
-      const labels: Record<string, string> = {
-        clock_in: "Clocked In",
-        clock_out: "Clocked Out",
-        break_start: "Break Started",
-        break_end: "Break Ended",
-      };
-      toast({ title: labels[punchType] || "Punch Recorded" });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/clock-status"] });
+      if (status === 202 && body?.status === "pending_approval") {
+        toast({
+          title: "Approval Required",
+          description: body.message || "Your clock-in request has been sent for manager approval.",
+        });
+      } else {
+        const labels: Record<string, string> = {
+          clock_in: "Clocked In",
+          clock_out: "Clocked Out",
+          break_start: "Break Started",
+          break_end: "Break Ended",
+        };
+        toast({ title: labels[punchType] || "Punch Recorded" });
+      }
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -577,47 +1084,61 @@ function DashboardClockCard() {
       })()
     : 0;
 
+  // State-derived display properties
+  const stateDisplay: Record<ClockState, { label: string; iconClass: string; badgeClass: string; icon: JSX.Element; showLive: boolean }> = {
+    clocked_in:             { label: "Clocked In",           iconClass: "bg-emerald-100 dark:bg-emerald-900/30", badgeClass: "bg-emerald-600 text-white",  icon: <Clock className="h-6 w-6 text-emerald-600" />,  showLive: true  },
+    on_break:               { label: "On Break",             iconClass: "bg-amber-100 dark:bg-amber-900/30",     badgeClass: "bg-amber-500 text-white",     icon: <Coffee className="h-6 w-6 text-amber-600" />,   showLive: false },
+    back_from_break:        { label: "Back from Break",      iconClass: "bg-teal-100 dark:bg-teal-900/30",       badgeClass: "bg-teal-600 text-white",      icon: <Clock className="h-6 w-6 text-teal-600" />,     showLive: true  },
+    pending_punch_approval: { label: "Pending Approval",     iconClass: "bg-yellow-100 dark:bg-yellow-900/30",   badgeClass: "bg-yellow-500 text-white",    icon: <AlertCircle className="h-6 w-6 text-yellow-600" />, showLive: false },
+    missing_punch:          { label: "Missing Clock-Out",    iconClass: "bg-red-100 dark:bg-red-900/30",         badgeClass: "bg-red-600 text-white",       icon: <AlertCircle className="h-6 w-6 text-red-600" />, showLive: false },
+    clocked_out:            { label: "Clocked Out",          iconClass: "bg-slate-100 dark:bg-slate-800",        badgeClass: "",                            icon: <LogIn className="h-6 w-6 text-slate-500" />,    showLive: false },
+  };
+  const stateInfo = stateDisplay[clockState];
+
   return (
     <Card className="border-teal-200 dark:border-teal-800 bg-gradient-to-r from-teal-50/50 to-transparent dark:from-teal-950/20" data-testid="dashlet-clock-actions">
       <CardContent className="p-4 md:p-5">
+        {/* Missing punch alert banner */}
+        {clockState === "missing_punch" && missingPunch && (
+          <div className="flex items-center gap-2 mb-3 rounded-md bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 px-3 py-2 text-xs text-red-700 dark:text-red-300" data-testid="alert-missing-punch">
+            <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+            <span>Missing clock-out on <strong>{missingPunch.date}</strong>. Please correct your timecard.</span>
+            <Link href="/app/attendance" className="ml-auto font-semibold underline whitespace-nowrap">Fix now</Link>
+          </div>
+        )}
+        {/* Pending punch approval banner */}
+        {clockState === "pending_punch_approval" && pendingApproval && (
+          <div className="flex items-center gap-2 mb-3 rounded-md bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 px-3 py-2 text-xs text-yellow-700 dark:text-yellow-300" data-testid="alert-pending-punch-approval">
+            <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+            <span>Your clock-in is awaiting supervisor approval.</span>
+            <Link href="/app/attendance" className="ml-auto font-semibold underline whitespace-nowrap">View</Link>
+          </div>
+        )}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className={`h-12 w-12 rounded-xl flex items-center justify-center shadow-sm ${
-              isClockedIn
-                ? isOnBreak
-                  ? "bg-amber-100 dark:bg-amber-900/30"
-                  : "bg-emerald-100 dark:bg-emerald-900/30"
-                : "bg-slate-100 dark:bg-slate-800"
-            }`}>
-              {isClockedIn ? (
-                isOnBreak ? (
-                  <Coffee className="h-6 w-6 text-amber-600" />
-                ) : (
-                  <Clock className="h-6 w-6 text-emerald-600" />
-                )
-              ) : (
-                <LogIn className="h-6 w-6 text-slate-500" />
-              )}
+            <div
+              className={`h-12 w-12 rounded-xl flex items-center justify-center shadow-sm cursor-pointer transition-opacity hover:opacity-80 ${stateInfo.iconClass}`}
+              onClick={() => navigate("/app/attendance")}
+              title="View live timecard"
+              data-testid="icon-clock-status-link"
+            >
+              {stateInfo.icon}
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-semibold text-sm" data-testid="text-clock-worker-name">
-                  {linkedWorker.firstName} {linkedWorker.lastName}
-                </span>
+                <Link href="/app/attendance">
+                  <span className="font-semibold text-sm hover:underline cursor-pointer" data-testid="text-clock-worker-name">
+                    {linkedWorker.firstName} {linkedWorker.lastName}
+                  </span>
+                </Link>
                 <Badge
-                  variant={isClockedIn ? "default" : "secondary"}
-                  className={`text-[11px] ${
-                    isClockedIn
-                      ? isOnBreak
-                        ? "bg-amber-500 text-white"
-                        : "bg-emerald-600 text-white"
-                      : ""
-                  }`}
+                  variant="secondary"
+                  className={`text-[11px] ${stateInfo.badgeClass}`}
                   data-testid="badge-dashboard-clock-status"
                 >
-                  {isClockedIn ? (isOnBreak ? "On Break" : "Clocked In") : "Clocked Out"}
+                  {stateInfo.label}
                 </Badge>
-                {isClockedIn && !isOnBreak && (
+                {stateInfo.showLive && (
                   <span className="inline-flex items-center rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5" data-testid="badge-dashboard-live">
                     LIVE
                   </span>
@@ -626,13 +1147,20 @@ function DashboardClockCard() {
               <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
                 {clockInTime && <span data-testid="text-clock-in-time">In since {clockInTime}</span>}
                 {totalToday > 0 && <span data-testid="text-hours-today">{totalToday.toFixed(1)}h today</span>}
-                {!isClockedIn && todayPunches.length === 0 && <span data-testid="text-no-punches">No punches today</span>}
+                {clockState === "clocked_out" && todayPunches.length === 0 && <span data-testid="text-no-punches">No punches today</span>}
+                {(clockState === "clocked_in" || clockState === "back_from_break") && (
+                  <Link href="/app/attendance">
+                    <span className="text-teal-600 dark:text-teal-400 hover:underline flex items-center gap-1" data-testid="link-view-timecard">
+                      View timecard <ExternalLink className="h-3 w-3" />
+                    </span>
+                  </Link>
+                )}
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2 w-full sm:w-auto">
-            {!isClockedIn && !isOnBreak ? (
+            {(clockState === "clocked_out" || clockState === "missing_punch") ? (
               <Button
                 onClick={() => punchMutation.mutate("clock_in")}
                 disabled={punchMutation.isPending}
@@ -642,9 +1170,19 @@ function DashboardClockCard() {
                 <Play className="h-4 w-4" />
                 Clock In
               </Button>
+            ) : clockState === "pending_punch_approval" ? (
+              <Button
+                variant="outline"
+                disabled
+                className="flex-1 sm:flex-none gap-2 border-yellow-300 text-yellow-700 dark:border-yellow-700 dark:text-yellow-400 opacity-70"
+                data-testid="button-dashboard-pending"
+              >
+                <AlertCircle className="h-4 w-4" />
+                Awaiting Approval
+              </Button>
             ) : (
               <>
-                {isClockedIn && !isOnBreak && (
+                {(clockState === "clocked_in" || clockState === "back_from_break") && (
                   <Button
                     variant="outline"
                     onClick={() => punchMutation.mutate("break_start")}
@@ -656,7 +1194,7 @@ function DashboardClockCard() {
                     Break
                   </Button>
                 )}
-                {isOnBreak && (
+                {clockState === "on_break" && (
                   <Button
                     variant="outline"
                     onClick={() => punchMutation.mutate("break_end")}

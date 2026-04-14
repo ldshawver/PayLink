@@ -804,19 +804,36 @@ export async function registerRoutes(
   app.get("/api/workers", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const companyId = req.query.companyId as string | undefined;
-      // Employees can only see themselves
-      if (user && user.role === "employee" && user.workerId) {
+      const qCompanyId = req.query.companyId as string | undefined;
+      // Non-manager tenant users (employees, contractors, etc.) can only see themselves
+      if (user && user.workerId && !isManagerRole(user.role)) {
         const allWorkers = await storage.getWorkers();
         const selfWorker = allWorkers.filter(w => w.id === user.workerId);
         return res.json(selfWorker);
       }
-      // Managers are scoped to their company unless admin or explicit companyId query
-      const scopedCompanyId = companyId && companyId !== "all"
-        ? companyId
-        : (user?.role === "manager" && user.companyId ? user.companyId : undefined);
-      const allWorkers = await storage.getWorkers(scopedCompanyId);
-      res.json(allWorkers);
+      // Determine effective company scope:
+      // 1. Explicit query param takes precedence (only honored for platform admins — no companyId)
+      // 2. All tenant users (any role with a companyId) are always scoped to their company
+      // 3. Platform admins (no companyId) see all or query-filtered workers
+      let effectiveCompanyId: string | undefined;
+      if (user?.companyId) {
+        // Tenant user: always force-scope to their company regardless of query param
+        effectiveCompanyId = user.companyId;
+      } else if (qCompanyId && qCompanyId !== "all") {
+        // Platform admin requesting specific company
+        effectiveCompanyId = qCompanyId;
+      }
+      let workers = await storage.getWorkers(effectiveCompanyId);
+      // Pure managers/supervisors: further scope to direct reports + self
+      if (user && !isAdminRole(user.role) && isManagerRole(user.role) && user.workerId) {
+        const subResult = await db.execute(
+          sql`SELECT id FROM workers WHERE manager_id = ${user.workerId} AND company_id = ${user.companyId}`
+        );
+        const subIds = new Set(subResult.rows.map((r) => (r as { id: string }).id));
+        subIds.add(user.workerId);
+        workers = workers.filter((w) => subIds.has((w as { id: string }).id));
+      }
+      res.json(workers);
     } catch (error) {
       console.error("Failed to fetch workers:", error);
       res.status(500).json({ message: "Failed to fetch workers" });
@@ -1250,7 +1267,8 @@ export async function registerRoutes(
       const companyTz = companyObj?.timezone || "America/New_York";
       const now = new Date();
       const today = getLocalDateStr(now, companyTz); // correct local date in company TZ
-      const GRACE_MINUTES = 10;
+      // Use per-company configurable grace period (default 10 min if not set)
+      const GRACE_MINUTES = (companyObj as any)?.clockInGraceMinutes ?? 10;
       let requestType: string | null = null;
       let minutesDiff = 0;
       let matchingSchedule: any = null;
@@ -1273,12 +1291,16 @@ export async function registerRoutes(
           } else if (minutesDiff > GRACE_MINUTES) {
             requestType = "late_clockin";
           }
+          // Within grace period: no approval needed (requestType stays null)
+        } else {
+          // No schedule for today → out-of-schedule (unscheduled) punch requires approval
+          requestType = "unscheduled";
+          minutesDiff = 0;
         }
-        // No schedule for today → allow clock-in directly (no penalty for unscheduled)
       }
 
-      // Only send to pending approval for schedule violations (early/late), not for unscheduled
-      if (requestType && requestType !== "unscheduled") {
+      // All schedule violations (early, late, unscheduled) require manager approval
+      if (requestType) {
         const requestRow = await db.execute(sql`
           INSERT INTO clock_in_requests
             (worker_id, company_id, request_type, minutes_diff, schedule_id, scheduled_start, scheduled_end)
@@ -1291,15 +1313,16 @@ export async function registerRoutes(
         `);
         const requestId = (requestRow.rows[0] as any).id;
 
-        // Notify managers asynchronously
+        // Notify managers asynchronously — in-app + email/SMS (when allowed by company policy)
         (async () => {
           try {
             const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
             const allUsers = await storage.getUsers();
+            // Scope to managers of the same company (or platform-level admins with no companyId)
             const managers = allUsers.filter(u =>
-              (u.role === "admin" || u.role === "manager") &&
+              isManagerRole(u.role) &&
               u.isActive &&
-              (!u.companyId || u.companyId === worker.companyId)
+              (u.companyId === worker.companyId || (!u.companyId && isAdminRole(u.role)))
             );
             const workerName = `${worker.firstName} ${worker.lastName}`;
             const appUrl = getAppBaseUrl(req);
@@ -1311,14 +1334,33 @@ export async function registerRoutes(
             const subject = `Clock-In Approval Required — ${workerName}`;
             const bodyText = `${workerName} is requesting to clock in but is outside their scheduled time.\n\nReason: ${reasonLabel}\n${scheduledStart ? `Scheduled start: ${scheduledStart.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}\n` : ""}Current time: ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}\n\nPlease log in to approve or deny this request:\n${appUrl}/app/attendance?tab=clock-in-approvals`;
             for (const mgr of managers) {
-              const mgrWorker = mgr.workerId ? await storage.getWorker(mgr.workerId) : null;
-              const mgrEmail = mgrWorker?.workEmail || mgrWorker?.homeEmail || mgrWorker?.email || null;
-              const mgrPhone = mgrWorker?.mobilePhone || mgrWorker?.homePhone || null;
-              const mgrName = mgrWorker ? `${mgrWorker.firstName} ${mgrWorker.lastName}` : mgr.username;
-              await Promise.all([
-                sendShiftMarketplaceEmail({ recipientName: mgrName, email: mgrEmail, subject, bodyText }),
-                sendShiftMarketplaceSms({ recipientName: mgrName, phone: mgrPhone, subject, bodyText: `PayLink: ${workerName} needs clock-in approval (${reasonLabel}). Approve at ${appUrl}/app/attendance?tab=clock-in-approvals` }),
-              ]);
+              // 1. In-app notification (always created, visible in notification bell/inbox)
+              if (mgr.companyId === worker.companyId) {
+                await db.execute(sql`
+                  INSERT INTO notifications (company_id, user_id, worker_id, type, title, message, action_url, is_read)
+                  VALUES (
+                    ${worker.companyId},
+                    ${mgr.id},
+                    ${mgr.workerId ?? null},
+                    'clock_in_approval',
+                    ${subject},
+                    ${`${workerName} needs clock-in approval: ${reasonLabel}`},
+                    '/app/attendance?tab=clock-in-approvals',
+                    false
+                  )
+                `).catch(e => console.warn("In-app notification insert failed:", e));
+              }
+              // 2. Email/SMS — gated on company's notifyMgrOnViolations policy (default true)
+              if ((companyObj as any)?.notifyMgrOnViolations !== false) {
+                const mgrWorker = mgr.workerId ? await storage.getWorker(mgr.workerId) : null;
+                const mgrEmail = mgrWorker?.workEmail || mgrWorker?.homeEmail || mgrWorker?.email || null;
+                const mgrPhone = mgrWorker?.mobilePhone || mgrWorker?.homePhone || null;
+                const mgrName = mgrWorker ? `${mgrWorker.firstName} ${mgrWorker.lastName}` : mgr.username;
+                await Promise.all([
+                  sendShiftMarketplaceEmail({ recipientName: mgrName, email: mgrEmail, subject, bodyText }),
+                  sendShiftMarketplaceSms({ recipientName: mgrName, phone: mgrPhone, subject, bodyText: `PayLink: ${workerName} needs clock-in approval (${reasonLabel}). Approve at ${appUrl}/app/attendance?tab=clock-in-approvals` }),
+                ]);
+              }
             }
           } catch (e) { console.warn("Clock-in approval notification failed:", e); }
         })();
@@ -2949,10 +2991,26 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       let punches = await storage.getTimePunches();
-      // Employees and contractors only see their own punches
-      if (user && user.role === "employee" && user.workerId) {
+      // Non-manager tenant users (employees, contractors, etc.): only their own punches
+      if (user && user.workerId && !isManagerRole(user.role)) {
         punches = punches.filter(p => p.workerId === user.workerId);
+      } else if (user?.companyId) {
+        // All tenant users (managers, admins, etc.) are scoped to their own company
+        punches = punches.filter(p => p.companyId === user!.companyId);
+        // Pure managers/supervisors: further scoped to direct reports + self
+        if (!isAdminRole(user.role) && isManagerRole(user.role) && user.workerId) {
+          const subResult = await db.execute(
+            sql`SELECT id FROM workers WHERE manager_id = ${user.workerId} AND company_id = ${user.companyId}`
+          );
+          const subIds = new Set(subResult.rows.map((r) => (r as { id: string }).id));
+          subIds.add(user.workerId);
+          punches = punches.filter(p => subIds.has(p.workerId));
+        }
       }
+      // Platform admins (no companyId): can filter by query param
+      const { companyId: qCompanyId, workerId: qWorkerId } = req.query;
+      if (qCompanyId && !user?.companyId) punches = punches.filter(p => p.companyId === String(qCompanyId));
+      if (qWorkerId) punches = punches.filter(p => p.workerId === String(qWorkerId));
       res.json(punches);
     } catch (error) {
       console.error(error);
@@ -3006,6 +3064,85 @@ export async function registerRoutes(
           }
         }
       }
+
+      // ── Schedule enforcement for clock_in from employee/self-clock ──
+      // Determine if this is a self-clock (employee clocking themselves or user with workerId)
+      if (req.body.punchType === "clock_in" && worker.companyId) {
+        const actingUser2 = req.session.userId ? await storage.getUser(req.session.userId) : null;
+        const isSelfClock = !actingUser2 || actingUser2.role === "employee" ||
+          (actingUser2.workerId && actingUser2.workerId === worker.id);
+        if (isSelfClock) {
+          const companyForClk = await storage.getCompany(worker.companyId);
+          const companyTzForClk = (companyForClk as any)?.timezone || "America/New_York";
+          const GRACE_MIN = (companyForClk as any)?.clockInGraceMinutes ?? 10;
+          const nowForClk = new Date();
+          const todayForClk = getLocalDateStr(nowForClk, companyTzForClk);
+          const todaySchedules = await storage.getSchedulesByDateRange(worker.companyId, todayForClk, todayForClk);
+          const workerSchedule = todaySchedules.find((s: any) => s.workerId === worker.id);
+          let clkRequestType: string | null = null;
+          let clkMinutesDiff = 0;
+          let clkScheduledStart: Date | undefined;
+          let clkScheduledEnd: Date | undefined;
+          if (workerSchedule) {
+            clkScheduledStart = localTimeToUTC(todayForClk, workerSchedule.startTime, companyTzForClk);
+            clkScheduledEnd = localTimeToUTC(todayForClk, workerSchedule.endTime, companyTzForClk);
+            const diffMs = nowForClk.getTime() - clkScheduledStart.getTime();
+            clkMinutesDiff = Math.round(diffMs / 60000);
+            if (clkMinutesDiff < -GRACE_MIN) clkRequestType = "early_clockin";
+            else if (clkMinutesDiff > GRACE_MIN) clkRequestType = "late_clockin";
+          } else {
+            clkRequestType = "unscheduled";
+          }
+          if (clkRequestType) {
+            const clkReqRow = await db.execute(sql`
+              INSERT INTO clock_in_requests
+                (worker_id, company_id, request_type, minutes_diff, schedule_id, scheduled_start, scheduled_end)
+              VALUES
+                (${worker.id}, ${worker.companyId}, ${clkRequestType}, ${clkMinutesDiff},
+                 ${workerSchedule?.id ?? null},
+                 ${clkScheduledStart ? clkScheduledStart.toISOString() : null},
+                 ${clkScheduledEnd ? clkScheduledEnd.toISOString() : null})
+              RETURNING id
+            `);
+            const clkRequestId = (clkReqRow.rows[0] as any).id;
+            // Notify managers asynchronously
+            (async () => {
+              try {
+                const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
+                const allUsers = await storage.getUsers();
+                const managers = allUsers.filter((u) => isManagerRole(u.role) && u.isActive && u.companyId === worker.companyId);
+                const workerNameForClk = `${worker.firstName} ${worker.lastName}`;
+                const appUrlForClk = getAppBaseUrl(req);
+                const reasonLabelForClk = clkRequestType === "early_clockin" ? `Early clock-in (${Math.abs(clkMinutesDiff)} min early)` : clkRequestType === "late_clockin" ? `Late clock-in (${clkMinutesDiff} min late)` : "Unscheduled clock-in";
+                const subjectForClk = `Clock-In Approval Required — ${workerNameForClk}`;
+                const bodyTextForClk = `${workerNameForClk} needs clock-in approval (${reasonLabelForClk}). Approve at ${appUrlForClk}/app/attendance?tab=clock-in-approvals`;
+                for (const mgr of managers) {
+                  await db.execute(sql`
+                    INSERT INTO notifications (company_id, user_id, worker_id, type, title, message, action_url, is_read)
+                    VALUES (${worker.companyId}, ${mgr.id}, ${mgr.workerId ?? null}, 'clock_in_approval', ${subjectForClk}, ${`${workerNameForClk} needs clock-in approval: ${reasonLabelForClk}`}, '/app/attendance?tab=clock-in-approvals', false)
+                  `).catch((e: any) => console.warn("Notification failed:", e));
+                  // Email/SMS gated on company's notifyMgrOnViolations policy (default true)
+                  if ((companyForClk as any)?.notifyMgrOnViolations !== false) {
+                    const mgrWorker = mgr.workerId ? await storage.getWorker(mgr.workerId) : null;
+                    await Promise.all([
+                      sendShiftMarketplaceEmail({ recipientName: mgrWorker ? `${mgrWorker.firstName} ${mgrWorker.lastName}` : mgr.username, email: mgrWorker?.workEmail || mgrWorker?.homeEmail || null, subject: subjectForClk, bodyText: bodyTextForClk }),
+                      sendShiftMarketplaceSms({ recipientName: mgrWorker ? `${mgrWorker.firstName} ${mgrWorker.lastName}` : mgr.username, phone: mgrWorker?.mobilePhone || null, subject: subjectForClk, bodyText: bodyTextForClk }),
+                    ]);
+                  }
+                }
+              } catch (e) { console.warn("Clock-in approval notification (time-punches) failed:", e); }
+            })();
+            return res.status(202).json({
+              status: "pending_approval",
+              requestId: clkRequestId,
+              requestType: clkRequestType,
+              minutesDiff: clkMinutesDiff,
+              message: clkRequestType === "early_clockin" ? `You are ${Math.abs(clkMinutesDiff)} minutes early. Manager approval required.` : clkRequestType === "late_clockin" ? `You are ${clkMinutesDiff} minutes late. Manager approval required.` : "You are not scheduled today. Manager approval required.",
+            });
+          }
+        }
+      }
+
       const punch = await storage.createTimePunch({
         workerId: worker.id,
         companyId: worker.companyId,
@@ -3233,19 +3370,36 @@ export async function registerRoutes(
   });
 
   // PATCH approve — creates the actual punch
-  app.patch("/api/clock-in-requests/:id/approve", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.patch("/api/clock-in-requests/:id/approve", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
+      const actingUser = await storage.getUser(req.session.userId!);
       const requestResult = await db.execute(sql`SELECT * FROM clock_in_requests WHERE id = ${req.params.id}`);
       if (requestResult.rows.length === 0) return res.status(404).json({ message: "Request not found" });
       const request = requestResult.rows[0] as any;
       if (request.status !== "pending") return res.status(409).json({ message: "Request is no longer pending" });
+      // Company ownership: tenant users can only approve requests in their own company
+      if (actingUser?.companyId && request.company_id !== actingUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: request belongs to a different company" });
+      }
+      // Hierarchy check: pure managers/supervisors can only approve direct reports
+      if (actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
+        const subResult = await db.execute(
+          sql`SELECT id FROM workers WHERE id = ${request.worker_id} AND manager_id = ${actingUser.workerId}`
+        );
+        if (subResult.rows.length === 0) {
+          return res.status(403).json({ message: "Forbidden: worker is not your direct report" });
+        }
+      }
+
+      // Determine effective punch time: use corrected_time if manager set one, otherwise now
+      const effectivePunchTime = request.corrected_time ? new Date(request.corrected_time) : new Date();
 
       // Create the actual punch
       const punch = await storage.createTimePunch({
         workerId: request.worker_id,
         companyId: request.company_id,
         punchType: "clock_in",
-        punchTime: new Date(),
+        punchTime: effectivePunchTime,
         approvalStatus: "approved",
         stationId: null,
         scheduleId: request.schedule_id || null,
@@ -3254,12 +3408,11 @@ export async function registerRoutes(
       // Create time entry — use company local date (not UTC)
       const approvalCompanyTzRow = await db.execute(sql`SELECT timezone FROM companies WHERE id = ${request.company_id}`);
       const approvalCompanyTz = (approvalCompanyTzRow.rows[0] as any)?.timezone || "America/New_York";
-      const now = new Date();
       await storage.createTimeEntry({
         workerId: request.worker_id,
         companyId: request.company_id,
-        date: getLocalDateStr(now, approvalCompanyTz),
-        clockIn: now,
+        date: getLocalDateStr(effectivePunchTime, approvalCompanyTz),
+        clockIn: effectivePunchTime,
         status: "pending",
         source: "punches",
         scheduleId: request.schedule_id || undefined,
@@ -3276,6 +3429,27 @@ export async function registerRoutes(
         WHERE id = ${req.params.id}
       `);
 
+      // Notify the employee of the approval outcome
+      try {
+        const empUserResult = await db.execute(
+          sql`SELECT id FROM users WHERE worker_id = ${request.worker_id} LIMIT 1`
+        );
+        if (empUserResult.rows.length > 0) {
+          const empUserId = (empUserResult.rows[0] as any).id;
+          await db.execute(sql`
+            INSERT INTO notifications (company_id, user_id, worker_id, type, title, message, action_url, is_read)
+            VALUES (${request.company_id}, ${empUserId}, ${request.worker_id},
+              'clock_in_approved',
+              'Clock-In Approved',
+              'Your clock-in request has been approved. Your time entry is now active.',
+              '/app/attendance',
+              false)
+          `);
+        }
+      } catch (notifErr) {
+        console.error("Failed to send employee approval notification:", notifErr);
+      }
+
       res.json({ message: "Clock-in approved", punch });
     } catch (error) {
       console.error(error);
@@ -3284,13 +3458,27 @@ export async function registerRoutes(
   });
 
   // PATCH deny
-  app.patch("/api/clock-in-requests/:id/deny", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.patch("/api/clock-in-requests/:id/deny", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
+      const actingUser = await storage.getUser(req.session.userId!);
       const { reason } = req.body;
       const requestResult = await db.execute(sql`SELECT * FROM clock_in_requests WHERE id = ${req.params.id}`);
       if (requestResult.rows.length === 0) return res.status(404).json({ message: "Request not found" });
       const request = requestResult.rows[0] as any;
       if (request.status !== "pending") return res.status(409).json({ message: "Request is no longer pending" });
+      // Company ownership: tenant users can only deny requests in their own company
+      if (actingUser?.companyId && request.company_id !== actingUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: request belongs to a different company" });
+      }
+      // Hierarchy check: pure managers/supervisors can only deny direct reports
+      if (actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
+        const subResult = await db.execute(
+          sql`SELECT id FROM workers WHERE id = ${request.worker_id} AND manager_id = ${actingUser.workerId}`
+        );
+        if (subResult.rows.length === 0) {
+          return res.status(403).json({ message: "Forbidden: worker is not your direct report" });
+        }
+      }
 
       await db.execute(sql`
         UPDATE clock_in_requests
@@ -3298,6 +3486,30 @@ export async function registerRoutes(
             denial_reason = ${reason || "Not approved by manager"}
         WHERE id = ${req.params.id}
       `);
+
+      // Notify the employee of the denial outcome
+      try {
+        const empUserResult = await db.execute(
+          sql`SELECT id FROM users WHERE worker_id = ${request.worker_id} LIMIT 1`
+        );
+        if (empUserResult.rows.length > 0) {
+          const empUserId = (empUserResult.rows[0] as any).id;
+          const denyMsg = reason
+            ? `Your clock-in request was denied: ${reason}`
+            : "Your clock-in request was not approved by your manager.";
+          await db.execute(sql`
+            INSERT INTO notifications (company_id, user_id, worker_id, type, title, message, action_url, is_read)
+            VALUES (${request.company_id}, ${empUserId}, ${request.worker_id},
+              'clock_in_denied',
+              'Clock-In Request Denied',
+              ${denyMsg},
+              '/app/attendance',
+              false)
+          `);
+        }
+      } catch (notifErr) {
+        console.error("Failed to send employee denial notification:", notifErr);
+      }
 
       res.json({ message: "Clock-in denied" });
     } catch (error) {
@@ -3340,11 +3552,23 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       let entries = await storage.getTimeEntries();
-      // Employees and contractors only see their own entries
-      if (user && user.role === "employee" && user.workerId) {
+      // Non-manager tenant users (employees, contractors, etc.) only see their own entries
+      if (user && user.workerId && !isManagerRole(user.role)) {
         entries = entries.filter(e => e.workerId === user.workerId);
+      } else if (user?.companyId) {
+        // All other tenant users (managers, admins) are scoped to their company
+        entries = entries.filter(e => e.companyId === user!.companyId);
+        // Additionally, pure managers/supervisors are further scoped to direct reports
+        if (!isAdminRole(user.role) && isManagerRole(user.role) && user.workerId) {
+          const subordinates = await db.execute(
+            sql`SELECT id FROM workers WHERE manager_id = ${user.workerId} AND company_id = ${user.companyId}`
+          );
+          const subIds = new Set(subordinates.rows.map((r: any) => r.id));
+          subIds.add(user.workerId); // include self
+          entries = entries.filter(e => subIds.has(e.workerId));
+        }
       }
-      // Optional query filters
+      // Optional query filters (platform admins may pass companyId to scope)
       const { startDate, endDate, companyId, workerId } = req.query;
       if (startDate) {
         entries = entries.filter(e => e.date >= String(startDate));
@@ -3352,7 +3576,8 @@ export async function registerRoutes(
       if (endDate) {
         entries = entries.filter(e => e.date <= String(endDate));
       }
-      if (companyId) {
+      if (companyId && !user?.companyId) {
+        // Only allow platform admins (no companyId) to filter by companyId param
         entries = entries.filter(e => e.companyId === String(companyId));
       }
       if (workerId) {
@@ -3380,6 +3605,26 @@ export async function registerRoutes(
 
   app.patch("/api/time-entries/:id", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      // Fetch existing entry to verify ownership
+      const allEntries = await storage.getTimeEntries();
+      const existing = allEntries.find(e => e.id === req.params.id);
+      if (!existing) return res.status(404).json({ message: "Time entry not found" });
+      // Company ownership check: tenant users can only modify entries in their own company
+      if (actingUser?.companyId && existing.companyId !== actingUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: entry belongs to a different company" });
+      }
+      // Hierarchy check: pure managers/supervisors can only modify entries for direct reports (or self)
+      if (actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
+        if (existing.workerId !== actingUser.workerId) {
+          const subResult = await db.execute(
+            sql`SELECT id FROM workers WHERE id = ${existing.workerId} AND manager_id = ${actingUser.workerId}`
+          );
+          if (subResult.rows.length === 0) {
+            return res.status(403).json({ message: "Forbidden: entry belongs to a worker who is not your direct report" });
+          }
+        }
+      }
       const data = { ...req.body };
       if (data.clockIn) data.clockIn = new Date(data.clockIn);
       if (data.clockOut) data.clockOut = new Date(data.clockOut);
@@ -3396,6 +3641,24 @@ export async function registerRoutes(
 
   app.delete("/api/time-entries/:id", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      // Company ownership check: tenant users can only delete entries in their own company
+      const allEntries = await storage.getTimeEntries();
+      const existing = allEntries.find(e => e.id === req.params.id);
+      if (existing && actingUser?.companyId && existing.companyId !== actingUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: entry belongs to a different company" });
+      }
+      // Hierarchy check: pure managers/supervisors can only delete entries for direct reports (or self)
+      if (existing && actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
+        if (existing.workerId !== actingUser.workerId) {
+          const subResult = await db.execute(
+            sql`SELECT id FROM workers WHERE id = ${existing.workerId} AND manager_id = ${actingUser.workerId}`
+          );
+          if (subResult.rows.length === 0) {
+            return res.status(403).json({ message: "Forbidden: entry belongs to a worker who is not your direct report" });
+          }
+        }
+      }
       await storage.deleteTimeEntry(req.params.id);
       res.json({ message: "Time entry deleted" });
     } catch (error) {
@@ -3404,9 +3667,86 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/schedules", async (_req, res) => {
+  // PATCH /api/clock-in-requests/:id/note — add manager note to a clock-in request
+  app.patch("/api/clock-in-requests/:id/note", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
-      const allSchedules = await storage.getSchedules();
+      const actingUser = await storage.getUser(req.session.userId!);
+      const { note } = req.body;
+      if (!note || typeof note !== "string") return res.status(400).json({ message: "Note text is required" });
+      const requestResult = await db.execute(sql`SELECT * FROM clock_in_requests WHERE id = ${req.params.id}`);
+      if (requestResult.rows.length === 0) return res.status(404).json({ message: "Request not found" });
+      const request = requestResult.rows[0] as any;
+      // Company ownership check
+      if (actingUser?.companyId && request.company_id !== actingUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: request belongs to a different company" });
+      }
+      // Hierarchy check: pure managers/supervisors can only comment on requests from direct reports or self
+      if (actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
+        const targetWorkerId = request.worker_id;
+        if (targetWorkerId !== actingUser.workerId) {
+          const subordinateResult = await db.execute(
+            sql`SELECT id FROM workers WHERE id = ${targetWorkerId} AND manager_id = ${actingUser.workerId}`
+          );
+          if (subordinateResult.rows.length === 0) {
+            return res.status(403).json({ message: "Forbidden: you can only comment on requests from your direct reports" });
+          }
+        }
+      }
+      await db.execute(sql`UPDATE clock_in_requests SET manager_notes = ${note} WHERE id = ${req.params.id}`);
+      res.json({ message: "Note saved" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to save note" });
+    }
+  });
+
+  // PATCH /api/clock-in-requests/:id/correct-time — manager sets a corrected punch time before approval
+  app.patch("/api/clock-in-requests/:id/correct-time", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
+    try {
+      const actingUser = await storage.getUser(req.session.userId!);
+      const { correctedTime } = req.body;
+      if (!correctedTime) return res.status(400).json({ message: "correctedTime is required" });
+      const requestResult = await db.execute(sql`SELECT * FROM clock_in_requests WHERE id = ${req.params.id}`);
+      if (requestResult.rows.length === 0) return res.status(404).json({ message: "Request not found" });
+      const request = requestResult.rows[0] as any;
+      // Company ownership check
+      if (actingUser?.companyId && request.company_id !== actingUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: request belongs to a different company" });
+      }
+      // Hierarchy check: pure managers/supervisors can only edit requests from their direct reports
+      if (actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
+        const subResult = await db.execute(
+          sql`SELECT id FROM workers WHERE id = ${request.worker_id} AND manager_id = ${actingUser.workerId}`
+        );
+        if (subResult.rows.length === 0) {
+          return res.status(403).json({ message: "Forbidden: worker is not your direct report" });
+        }
+      }
+      await db.execute(sql`UPDATE clock_in_requests SET corrected_time = ${correctedTime} WHERE id = ${req.params.id}`);
+      res.json({ message: "Corrected time saved" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to save corrected time" });
+    }
+  });
+
+  app.get("/api/schedules", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      let allSchedules = await storage.getSchedules();
+      // Company scope: tenant users only see their own company's schedules
+      if (user?.companyId) {
+        allSchedules = allSchedules.filter((s: any) => s.companyId === user!.companyId);
+      }
+      // Non-manager tenant users (employees, contractors, etc.) only see their own schedules
+      if (user && user.workerId && !isManagerRole(user.role)) {
+        allSchedules = allSchedules.filter((s: any) => s.workerId === user!.workerId);
+      }
+      // Support optional query filters (for platform admins who have no companyId)
+      const { companyId: qCompanyId, workerId: qWorkerId, date: qDate } = req.query;
+      if (qCompanyId && !user?.companyId) allSchedules = allSchedules.filter((s: any) => s.companyId === String(qCompanyId));
+      if (qWorkerId) allSchedules = allSchedules.filter((s: any) => s.workerId === String(qWorkerId));
+      if (qDate) allSchedules = allSchedules.filter((s: any) => s.date === String(qDate));
       res.json(allSchedules);
     } catch (error) {
       console.error(error);
@@ -4468,8 +4808,8 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       let workerId = req.query.workerId as string | undefined;
-      // Employees can only see their own balances
-      if (user?.role === "employee" && user.workerId) {
+      // Non-manager tenant users can only see their own balances
+      if (user && user.workerId && !isManagerRole(user.role)) {
         workerId = user.workerId;
       }
       const balances = await storage.getAccrualBalances(workerId);
@@ -4508,8 +4848,8 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       let workerId = req.query.workerId as string | undefined;
-      // Employees can only see their own contacts
-      if (user?.role === "employee" && user.workerId) {
+      // Non-manager tenant users can only see their own contacts
+      if (user && user.workerId && !isManagerRole(user.role)) {
         workerId = user.workerId;
       }
       const contacts = await storage.getEmployeeContacts(workerId);
@@ -4524,8 +4864,8 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       const data = { ...req.body };
-      // Employees can only create contacts for themselves
-      if (user?.role === "employee" && user.workerId) {
+      // Non-manager tenant users can only create contacts for themselves
+      if (user && user.workerId && !isManagerRole(user.role)) {
         data.workerId = user.workerId;
       }
       const contact = await storage.createEmployeeContact(data);
@@ -4546,8 +4886,8 @@ export async function registerRoutes(
   app.patch("/api/employee-contacts/:id", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      // Employees can only edit their own contacts
-      if (user?.role === "employee" && user.workerId) {
+      // Non-manager tenant users can only edit their own contacts
+      if (user && user.workerId && !isManagerRole(user.role)) {
         const existing = await storage.getEmployeeContacts(user.workerId);
         const isOwned = existing.some(c => c.id === req.params.id);
         if (!isOwned) return res.status(403).json({ message: "Not authorized" });
@@ -4592,8 +4932,8 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       let workerId = req.query.workerId as string | undefined;
-      // Employees can only see their own pay methods
-      if (user?.role === "employee" && user.workerId) {
+      // Non-manager tenant users can only see their own pay methods (contains sensitive banking data)
+      if (user && user.workerId && !isManagerRole(user.role)) {
         workerId = user.workerId;
       }
       const methods = await storage.getPayMethods(workerId);
@@ -4619,8 +4959,8 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       const data = { ...req.body };
-      // Employees can only add pay methods for themselves
-      if (user?.role === "employee" && user.workerId) {
+      // Non-manager tenant users can only add pay methods for themselves
+      if (user && user.workerId && !isManagerRole(user.role)) {
         data.workerId = user.workerId;
       }
       const method = await storage.createPayMethod(data);
@@ -4641,8 +4981,8 @@ export async function registerRoutes(
   app.patch("/api/pay-methods/:id", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      // Employees can only edit their own pay methods
-      if (user?.role === "employee" && user.workerId) {
+      // Non-manager tenant users can only edit their own pay methods
+      if (user && user.workerId && !isManagerRole(user.role)) {
         const owned = await storage.getPayMethods(user.workerId);
         if (!owned.some(m => m.id === req.params.id)) {
           return res.status(403).json({ message: "Not authorized" });
@@ -4669,8 +5009,8 @@ export async function registerRoutes(
   app.delete("/api/pay-methods/:id", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      // Employees can only delete their own pay methods
-      if (user?.role === "employee" && user.workerId) {
+      // Non-manager tenant users can only delete their own pay methods
+      if (user && user.workerId && !isManagerRole(user.role)) {
         const owned = await storage.getPayMethods(user.workerId);
         if (!owned.some(m => m.id === req.params.id)) {
           return res.status(403).json({ message: "Not authorized" });
@@ -7505,11 +7845,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const user = await storage.getUser(req.session.userId!);
       let workerId = req.query.workerId as string;
-      // Employees can only see their own documents
-      if (user?.role === "employee") {
+      // Non-manager tenant users can only see their own documents
+      if (user && !isManagerRole(user.role)) {
         if (!user.workerId) return res.json([]);
         workerId = user.workerId;
-      } else if (user?.role === "manager" && workerId) {
+      } else if (isManagerRole(user?.role) && !isAdminRole(user?.role) && workerId) {
         // Managers can only access workers in their company
         const worker = await storage.getWorker(workerId);
         if (!worker || worker.companyId !== user.companyId) {
@@ -7531,11 +7871,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const fileUrl = `/uploads/${req.file.filename}`;
       const user = await storage.getUser(req.session.userId!);
       let { workerId, name, documentType, notes } = req.body;
-      // Employees can only upload documents for themselves
-      if (user?.role === "employee") {
+      // Non-manager tenant users can only upload documents for themselves
+      if (user && !isManagerRole(user.role)) {
         if (!user.workerId) return res.status(403).json({ message: "No linked worker profile" });
         workerId = user.workerId;
-      } else if (user?.role === "manager" && workerId) {
+      } else if (isManagerRole(user?.role) && !isAdminRole(user?.role) && workerId) {
         const worker = await storage.getWorker(workerId);
         if (!worker || worker.companyId !== user.companyId) {
           return res.status(403).json({ message: "Not authorized" });
@@ -7555,14 +7895,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.delete("/api/worker-documents/:id", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      // Employees can only delete their own documents; managers scoped to company
-      if (user?.role === "employee" || user?.role === "manager") {
+      // Non-manager tenant users can only delete their own documents; managers scoped to company
+      if (user && !isAdminRole(user.role)) {
         const allDocs = user.workerId ? await storage.getWorkerDocuments(user.workerId) : [];
-        if (user?.role === "employee") {
+        if (!isManagerRole(user.role)) {
           if (!allDocs.some(d => d.id === req.params.id)) {
             return res.status(403).json({ message: "Not authorized" });
           }
-        } else if (user?.role === "manager") {
+        } else if (isManagerRole(user.role)) {
           // For managers, get the doc and confirm it belongs to a worker in their company
           const allWorkers = await storage.getWorkers(user.companyId ?? undefined);
           const allWorkerIds = new Set(allWorkers.map(w => w.id));
@@ -8033,8 +8373,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const user = await storage.getUser(req.session.userId!);
       let workerId = req.query.workerId as string | undefined;
-      // Employees can only see their own wage history
-      if (user?.role === "employee" && user.workerId) {
+      // Non-manager tenant users can only see their own wage history
+      if (user && user.workerId && !isManagerRole(user.role)) {
         workerId = user.workerId;
       }
       const entries = await storage.getWageHistory(workerId);
@@ -10260,10 +10600,29 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to update time-off request" }); }
   });
 
-  app.patch("/api/time-off-requests/:id/review", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.patch("/api/time-off-requests/:id/review", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
       const { decision, reviewNote } = req.body;
       if (!decision) return res.status(400).json({ message: "decision is required" });
+      // Pre-fetch to enforce company + hierarchy ownership before mutating
+      const actingUserTOR = await storage.getUser(req.session.userId!);
+      const existingTOR = await storage.getTimeOffRequest(req.params.id);
+      if (!existingTOR) return res.status(404).json({ message: "Not found" });
+      // Company ownership check
+      if (actingUserTOR?.companyId && existingTOR.companyId !== actingUserTOR.companyId) {
+        return res.status(403).json({ message: "Forbidden: request belongs to a different company" });
+      }
+      // Hierarchy check: pure managers/supervisors can only review direct reports or self
+      if (actingUserTOR && !isAdminRole(actingUserTOR.role) && isManagerRole(actingUserTOR.role) && actingUserTOR.workerId) {
+        if (existingTOR.workerId !== actingUserTOR.workerId) {
+          const subTOR = await db.execute(
+            sql`SELECT id FROM workers WHERE id = ${existingTOR.workerId} AND manager_id = ${actingUserTOR.workerId} LIMIT 1`
+          );
+          if (subTOR.rows.length === 0) {
+            return res.status(403).json({ message: "Forbidden: you can only review requests from your direct reports" });
+          }
+        }
+      }
       const item = await storage.updateTimeOffRequest(req.params.id, {
         status: decision,
         reviewNote: reviewNote ?? null,
@@ -17828,6 +18187,701 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.json({ message: "Deleted" });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ── Dashboard: exceptions widget ──────────────────────────────────────────
+  // Scope rules:
+  //   - employee: only their own exceptions (own clock_in_requests + own time_entries)
+  //   - supervisor/manager: their direct subordinates (managerId = supervisor's workerId) + self
+  //   - admin: all workers in company
+  app.get("/api/dashboard/exceptions", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.json([]);
+      const companyId = user.companyId;
+      const isManager = isManagerRole(user.role);
+      const isAdmin = isAdminRole(user.role);
+
+      // Build the set of worker IDs this session user may see
+      let allowedWorkerIds: string[] | null = null; // null = all company workers (admin)
+      if (!isAdmin && !isManager) {
+        // Employee: only themselves
+        if (!user.workerId) return res.json([]);
+        allowedWorkerIds = [user.workerId];
+      } else if (!isAdmin && isManager && user.workerId) {
+        // Manager/Supervisor: self + direct reports
+        const subordinateRows = await db.execute(sql`
+          SELECT id FROM workers WHERE company_id = ${companyId} AND manager_id = ${user.workerId} AND is_active = TRUE
+        `);
+        allowedWorkerIds = [user.workerId, ...subordinateRows.rows.map((r) => (r as { id: string }).id)];
+      }
+      // isAdmin → allowedWorkerIds stays null (no filter = all company)
+
+      const items: any[] = [];
+      const today = new Date().toISOString().split("T")[0];
+
+      // Helper to build SQL worker filter clause value list
+      const workerFilter = allowedWorkerIds ? allowedWorkerIds : null;
+
+      // 1. Pending clock-in approval requests (only managers can act on these)
+      if (isManager) {
+        let clockInRows: any[];
+        if (workerFilter) {
+          const r = await db.execute(sql`
+            SELECT r.id, r.worker_id, r.request_type, r.minutes_diff, r.requested_at,
+                   w.first_name, w.last_name, w.employee_number,
+                   c.name AS company_name,
+                   cc.name AS cost_center_name, j.name AS job_name
+            FROM clock_in_requests r
+            JOIN workers w ON w.id = r.worker_id
+            JOIN companies c ON c.id = r.company_id
+            LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+            LEFT JOIN jobs j ON j.id = w.default_branch_id
+            WHERE r.company_id = ${companyId}
+              AND r.status = 'pending'
+              AND r.worker_id = ANY(${workerFilter}::text[])
+            ORDER BY r.requested_at DESC
+            LIMIT 50
+          `);
+          clockInRows = r.rows as any[];
+        } else {
+          const r = await db.execute(sql`
+            SELECT r.id, r.worker_id, r.request_type, r.minutes_diff, r.requested_at,
+                   w.first_name, w.last_name, w.employee_number,
+                   c.name AS company_name,
+                   cc.name AS cost_center_name, j.name AS job_name
+            FROM clock_in_requests r
+            JOIN workers w ON w.id = r.worker_id
+            JOIN companies c ON c.id = r.company_id
+            LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+            LEFT JOIN jobs j ON j.id = w.default_branch_id
+            WHERE r.company_id = ${companyId} AND r.status = 'pending'
+            ORDER BY r.requested_at DESC
+            LIMIT 50
+          `);
+          clockInRows = r.rows as any[];
+        }
+        for (const row of clockInRows) {
+          const label = row.request_type === "early_clockin"
+            ? `Early clock-in (${Math.abs(row.minutes_diff)} min early)`
+            : row.request_type === "late_clockin"
+            ? `Late clock-in (${row.minutes_diff} min late)`
+            : "Unscheduled clock-in";
+          items.push({
+            id: `cr-${row.id}`,
+            sourceId: row.id,
+            sourceType: "clock_in_request",
+            workerName: `${row.first_name} ${row.last_name}`,
+            employeeNumber: row.employee_number,
+            companyName: row.company_name,
+            costCenterName: row.cost_center_name || null,
+            jobName: row.job_name || null,
+            date: row.requested_at ? new Date(row.requested_at).toISOString().split("T")[0] : null,
+            time: row.requested_at ? new Date(row.requested_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : null,
+            exceptionType: label,
+            status: "pending_approval",
+            actionUrl: `/app/attendance?tab=clock-in-approvals&requestId=${row.id}`,
+            canApprove: true,
+            canEdit: isManager,
+            canComment: true,
+          });
+        }
+      }
+
+      // 2. Missing clock-outs (entries with clockIn but no clockOut, from before today)
+      {
+        let missingRows: any[];
+        if (workerFilter) {
+          const r = await db.execute(sql`
+            SELECT e.id, e.worker_id, e.date, e.clock_in, e.status,
+                   w.first_name, w.last_name, w.employee_number,
+                   cc.name AS cost_center_name, c.name AS company_name
+            FROM time_entries e
+            JOIN workers w ON w.id = e.worker_id
+            JOIN companies c ON c.id = e.company_id
+            LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+            WHERE e.company_id = ${companyId}
+              AND e.clock_in IS NOT NULL
+              AND e.clock_out IS NULL
+              AND e.date < ${today}
+              AND e.worker_id = ANY(${workerFilter}::text[])
+            ORDER BY e.date DESC
+            LIMIT 20
+          `);
+          missingRows = r.rows as any[];
+        } else {
+          const r = await db.execute(sql`
+            SELECT e.id, e.worker_id, e.date, e.clock_in, e.status,
+                   w.first_name, w.last_name, w.employee_number,
+                   cc.name AS cost_center_name, c.name AS company_name
+            FROM time_entries e
+            JOIN workers w ON w.id = e.worker_id
+            JOIN companies c ON c.id = e.company_id
+            LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+            WHERE e.company_id = ${companyId}
+              AND e.clock_in IS NOT NULL
+              AND e.clock_out IS NULL
+              AND e.date < ${today}
+            ORDER BY e.date DESC
+            LIMIT 20
+          `);
+          missingRows = r.rows as any[];
+        }
+        for (const row of missingRows) {
+          items.push({
+            id: `me-${row.id}`,
+            sourceId: row.id,
+            sourceType: "time_entry",
+            workerName: `${row.first_name} ${row.last_name}`,
+            employeeNumber: row.employee_number,
+            companyName: row.company_name || null,
+            costCenterName: row.cost_center_name || null,
+            jobName: null,
+            date: row.date,
+            time: row.clock_in ? new Date(row.clock_in).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : null,
+            exceptionType: "Missing clock-out",
+            status: "action_required",
+            actionUrl: `/app/attendance?tab=timesheet&entryId=${row.id}`,
+            canApprove: isManager,
+            canEdit: isManager,
+            canComment: isManager,
+          });
+        }
+      }
+
+      // 3. Pending timesheet entries (high overtime, unscheduled, or overdue approval)
+      if (isManager) {
+        let pendingRows: any[];
+        if (workerFilter) {
+          const r = await db.execute(sql`
+            SELECT e.id, e.worker_id, e.date, e.total_hours, e.overtime_hours, e.status, e.is_unscheduled,
+                   w.first_name, w.last_name, w.employee_number,
+                   cc.name AS cost_center_name, c.name AS company_name
+            FROM time_entries e
+            JOIN workers w ON w.id = e.worker_id
+            JOIN companies c ON c.id = e.company_id
+            LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+            WHERE e.company_id = ${companyId}
+              AND e.status = 'pending'
+              AND e.worker_id = ANY(${workerFilter}::text[])
+              AND (e.overtime_hours::numeric > 4 OR e.is_unscheduled = TRUE OR e.date < ${today})
+            ORDER BY e.date DESC
+            LIMIT 20
+          `);
+          pendingRows = r.rows as any[];
+        } else {
+          const r = await db.execute(sql`
+            SELECT e.id, e.worker_id, e.date, e.total_hours, e.overtime_hours, e.status, e.is_unscheduled,
+                   w.first_name, w.last_name, w.employee_number,
+                   cc.name AS cost_center_name, c.name AS company_name
+            FROM time_entries e
+            JOIN workers w ON w.id = e.worker_id
+            JOIN companies c ON c.id = e.company_id
+            LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+            WHERE e.company_id = ${companyId}
+              AND e.status = 'pending'
+              AND (e.overtime_hours::numeric > 4 OR e.is_unscheduled = TRUE OR e.date < ${today})
+            ORDER BY e.date DESC
+            LIMIT 20
+          `);
+          pendingRows = r.rows as any[];
+        }
+        for (const row of pendingRows) {
+          const isHighOT = Number(row.overtime_hours) > 4;
+          const exType = row.is_unscheduled
+            ? "Unscheduled shift"
+            : isHighOT
+            ? `High overtime (${Number(row.overtime_hours).toFixed(1)}h)`
+            : "Pending timesheet approval";
+          items.push({
+            id: `pe-${row.id}`,
+            sourceId: row.id,
+            sourceType: "time_entry",
+            workerName: `${row.first_name} ${row.last_name}`,
+            employeeNumber: row.employee_number,
+            companyName: row.company_name || null,
+            costCenterName: row.cost_center_name || null,
+            jobName: null,
+            date: row.date,
+            time: null,
+            exceptionType: exType,
+            status: "pending",
+            actionUrl: `/app/attendance?tab=timesheet&entryId=${row.id}`,
+            canApprove: true,
+            canEdit: isAdmin,
+            canComment: true,
+          });
+        }
+      }
+
+      // 4. Unapproved manual edits (time_entries with source='manual' and status='pending')
+      if (isManager) {
+        let manualRows: any[];
+        if (workerFilter) {
+          const r = await db.execute(sql`
+            SELECT e.id, e.worker_id, e.date, e.total_hours, e.status,
+                   w.first_name, w.last_name, w.employee_number,
+                   cc.name AS cost_center_name, c.name AS company_name
+            FROM time_entries e
+            JOIN workers w ON w.id = e.worker_id
+            JOIN companies c ON c.id = e.company_id
+            LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+            WHERE e.company_id = ${companyId}
+              AND e.status = 'pending'
+              AND e.source = 'manual'
+              AND e.worker_id = ANY(${workerFilter}::text[])
+            ORDER BY e.date DESC
+            LIMIT 20
+          `);
+          manualRows = r.rows as any[];
+        } else {
+          const r = await db.execute(sql`
+            SELECT e.id, e.worker_id, e.date, e.total_hours, e.status,
+                   w.first_name, w.last_name, w.employee_number,
+                   cc.name AS cost_center_name, c.name AS company_name
+            FROM time_entries e
+            JOIN workers w ON w.id = e.worker_id
+            JOIN companies c ON c.id = e.company_id
+            LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+            WHERE e.company_id = ${companyId}
+              AND e.status = 'pending'
+              AND e.source = 'manual'
+            ORDER BY e.date DESC
+            LIMIT 20
+          `);
+          manualRows = r.rows as any[];
+        }
+        for (const row of manualRows) {
+          items.push({
+            id: `manual-${row.id}`,
+            sourceId: row.id,
+            sourceType: "time_entry",
+            workerName: `${row.first_name} ${row.last_name}`,
+            employeeNumber: row.employee_number,
+            companyName: row.company_name || null,
+            costCenterName: row.cost_center_name || null,
+            jobName: null,
+            date: row.date,
+            time: null,
+            exceptionType: "Unapproved manual edit",
+            status: "pending",
+            actionUrl: `/app/attendance?tab=timesheet&entryId=${row.id}`,
+            canApprove: true,
+            canEdit: true,
+            canComment: true,
+          });
+        }
+      }
+
+      // 5. Break violations (break sessions exceeding 60 minutes — still on break with no break_end)
+      if (isManager) {
+        const breakThresholdMinutes = 60;
+        let breakRows: any[];
+        if (workerFilter) {
+          const r = await db.execute(sql`
+            SELECT tp.id, tp.worker_id, tp.punch_time,
+                   w.first_name, w.last_name, w.employee_number,
+                   cc.name AS cost_center_name, c.name AS company_name
+            FROM time_punches tp
+            JOIN workers w ON w.id = tp.worker_id
+            JOIN companies c ON c.id = tp.company_id
+            LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+            WHERE tp.company_id = ${companyId}
+              AND tp.punch_type = 'break_start'
+              AND tp.worker_id = ANY(${workerFilter}::text[])
+              AND NOT EXISTS (
+                SELECT 1 FROM time_punches tp2
+                WHERE tp2.worker_id = tp.worker_id
+                  AND tp2.punch_type = 'break_end'
+                  AND tp2.punch_time > tp.punch_time
+                  AND tp2.punch_time <= tp.punch_time + INTERVAL '${breakThresholdMinutes} minutes'
+              )
+              AND tp.punch_time < NOW() - INTERVAL '${breakThresholdMinutes} minutes'
+            ORDER BY tp.punch_time DESC
+            LIMIT 20
+          `);
+          breakRows = r.rows as any[];
+        } else {
+          const r = await db.execute(sql`
+            SELECT tp.id, tp.worker_id, tp.punch_time,
+                   w.first_name, w.last_name, w.employee_number,
+                   cc.name AS cost_center_name, c.name AS company_name
+            FROM time_punches tp
+            JOIN workers w ON w.id = tp.worker_id
+            JOIN companies c ON c.id = tp.company_id
+            LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+            WHERE tp.company_id = ${companyId}
+              AND tp.punch_type = 'break_start'
+              AND NOT EXISTS (
+                SELECT 1 FROM time_punches tp2
+                WHERE tp2.worker_id = tp.worker_id
+                  AND tp2.punch_type = 'break_end'
+                  AND tp2.punch_time > tp.punch_time
+                  AND tp2.punch_time <= tp.punch_time + INTERVAL '${breakThresholdMinutes} minutes'
+              )
+              AND tp.punch_time < NOW() - INTERVAL '${breakThresholdMinutes} minutes'
+            ORDER BY tp.punch_time DESC
+            LIMIT 20
+          `);
+          breakRows = r.rows as any[];
+        }
+        for (const row of breakRows) {
+          const breakDate = row.punch_time ? new Date(row.punch_time).toISOString().split("T")[0] : null;
+          items.push({
+            id: `bv-${row.id}`,
+            sourceId: row.id,
+            sourceType: "time_punch",
+            workerName: `${row.first_name} ${row.last_name}`,
+            employeeNumber: row.employee_number,
+            companyName: row.company_name || null,
+            costCenterName: row.cost_center_name || null,
+            jobName: null,
+            date: breakDate,
+            time: row.punch_time ? new Date(row.punch_time).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : null,
+            exceptionType: "Break violation (>60 min)",
+            status: "action_required",
+            actionUrl: `/app/attendance?tab=punches&workerId=${row.worker_id}&date=${breakDate}`,
+            canApprove: false,
+            canEdit: isManager,
+            canComment: false,
+          });
+        }
+      }
+
+      // De-dup by sourceType:sourceId
+      const seen = new Set<string>();
+      const deduped = items.filter(item => {
+        const key = `${item.sourceType}:${item.sourceId}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      res.json(deduped.slice(0, 30));
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch dashboard exceptions" });
+    }
+  });
+
+  // ── Dashboard: my requests (employee self-service view) ────────────────────
+  // Strictly scoped to the session user's own workerId — never shows other workers' data.
+  app.get("/api/dashboard/my-requests", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.json([]);
+
+      const items: any[] = [];
+
+      if (user.workerId) {
+        // Fetch worker details for company/cost-center context
+        const workerRow = await db.execute(sql`
+          SELECT w.first_name, w.last_name, w.employee_number, w.department,
+                 cc.name AS cost_center_name, c.name AS company_name
+          FROM workers w
+          JOIN companies c ON c.id = w.company_id
+          LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+          WHERE w.id = ${user.workerId}
+        `);
+        const workerInfo = workerRow.rows[0] as any || {};
+
+        // Time-off requests for the linked worker
+        const torRows = await storage.getTimeOffRequests(user.companyId, user.workerId);
+        for (const r of torRows.slice(0, 10)) {
+          items.push({
+            id: `tor-${r.id}`,
+            sourceId: r.id,
+            requestType: "time_off",
+            label: "Time Off",
+            description: `${r.startDate} – ${r.endDate}${r.reason ? ": " + r.reason : ""}`,
+            status: r.status,
+            submittedAt: r.createdAt,
+            companyName: workerInfo.company_name || null,
+            costCenterName: workerInfo.cost_center_name || null,
+            department: workerInfo.department || null,
+            actionUrl: `/app/attendance?tab=time-off&requestId=${r.id}`,
+          });
+        }
+
+        // Clock-in approval requests for this worker (company-scoped to prevent cross-tenant bleed)
+        const clockRows = await db.execute(sql`
+          SELECT id, request_type, minutes_diff, status, requested_at
+          FROM clock_in_requests
+          WHERE worker_id = ${user.workerId}
+            AND company_id = ${user.companyId}
+          ORDER BY requested_at DESC
+          LIMIT 10
+        `);
+        for (const row of clockRows.rows as { id: string; request_type: string; minutes_diff: number; status: string; requested_at: string }[]) {
+          const label = row.request_type === "early_clockin"
+            ? `Early clock-in (${Math.abs(row.minutes_diff)} min early)`
+            : row.request_type === "late_clockin"
+            ? `Late clock-in (${row.minutes_diff} min late)`
+            : "Unscheduled clock-in";
+          items.push({
+            id: `cir-${row.id}`,
+            sourceId: row.id,
+            requestType: "punch_approval",
+            label: "Punch Approval",
+            description: label,
+            status: row.status,
+            submittedAt: row.requested_at,
+            companyName: workerInfo.company_name || null,
+            costCenterName: workerInfo.cost_center_name || null,
+            department: workerInfo.department || null,
+            actionUrl: `/app/attendance?tab=clock-in-approvals&requestId=${row.id}`,
+          });
+        }
+
+        // Expense requests submitted by this worker (company-scoped)
+        const expRows = await db.execute(sql`
+          SELECT e.id, e.description, e.amount, e.expense_date, e.status, e.created_at, ec.name AS category_name
+          FROM expenses e
+          LEFT JOIN expense_categories ec ON ec.id = e.category_id
+          WHERE e.submitter_id = ${user.workerId}
+            AND e.company_id = ${user.companyId}
+          ORDER BY e.created_at DESC
+          LIMIT 10
+        `);
+        for (const row of expRows.rows as { id: string; description: string; amount: string; expense_date: string; status: string; created_at: string; category_name: string | null }[]) {
+          items.push({
+            id: `exp-${row.id}`,
+            sourceId: row.id,
+            requestType: "expense",
+            label: "Expense",
+            description: `${row.category_name || "Expense"} — $${Number(row.amount).toFixed(2)}${row.description ? ": " + row.description : ""}`,
+            status: row.status,
+            submittedAt: row.created_at,
+            companyName: workerInfo.company_name || null,
+            costCenterName: workerInfo.cost_center_name || null,
+            department: workerInfo.department || null,
+            actionUrl: `/app/expenses?expenseId=${row.id}`,
+          });
+        }
+
+        // Pending punch corrections (manual time entries awaiting approval) — company-scoped
+        const corrRows = await db.execute(sql`
+          SELECT te.id, te.date, te.total_hours, te.status, te.created_at
+          FROM time_entries te
+          WHERE te.worker_id = ${user.workerId}
+            AND te.company_id = ${user.companyId}
+            AND te.source = 'manual'
+            AND te.status = 'pending'
+          ORDER BY te.date DESC
+          LIMIT 10
+        `);
+        for (const row of corrRows.rows as { id: string; date: string; total_hours: string | null; status: string; created_at: string }[]) {
+          items.push({
+            id: `corr-${row.id}`,
+            sourceId: row.id,
+            requestType: "punch_correction",
+            label: "Punch Correction",
+            description: `Manual time entry for ${row.date}${row.total_hours ? " (" + Number(row.total_hours).toFixed(1) + "h)" : ""}`,
+            status: row.status,
+            submittedAt: row.created_at,
+            companyName: workerInfo.company_name || null,
+            costCenterName: workerInfo.cost_center_name || null,
+            department: workerInfo.department || null,
+            actionUrl: `/app/attendance?tab=timesheet&entryId=${row.id}`,
+          });
+        }
+      }
+
+      items.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+      res.json(items.slice(0, 20));
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch my requests" });
+    }
+  });
+
+  // ── Dashboard: pending approvals (manager/admin view) ─────────────────────
+  // Scope: manager sees direct subordinates + company; admin sees full company.
+  // Non-managers always receive empty array.
+  app.get("/api/dashboard/pending-approvals", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.companyId) return res.json([]);
+      if (!isManagerRole(user.role)) return res.json([]);
+
+      const companyId = user.companyId;
+      const isAdmin = isAdminRole(user.role);
+
+      // Build allowed worker scope for manager hierarchy
+      let allowedWorkerIds: string[] | null = null;
+      if (!isAdmin && user.workerId) {
+        const subordinateRows = await db.execute(sql`
+          SELECT id FROM workers WHERE company_id = ${companyId} AND manager_id = ${user.workerId} AND is_active = TRUE
+        `);
+        allowedWorkerIds = [user.workerId, ...subordinateRows.rows.map((r) => (r as { id: string }).id)];
+      }
+
+      const items: any[] = [];
+
+      // 1. Pending clock-in approval requests (scoped by hierarchy)
+      let clockRows: any[];
+      if (allowedWorkerIds) {
+        const r = await db.execute(sql`
+          SELECT r.id, r.request_type, r.minutes_diff, r.requested_at,
+                 w.first_name, w.last_name, w.employee_number,
+                 c.name AS company_name,
+                 cc.name AS cost_center_name, j.name AS job_name
+          FROM clock_in_requests r
+          JOIN workers w ON w.id = r.worker_id
+          JOIN companies c ON c.id = r.company_id
+          LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+          LEFT JOIN jobs j ON j.id = w.default_branch_id
+          WHERE r.company_id = ${companyId}
+            AND r.status = 'pending'
+            AND r.worker_id = ANY(${allowedWorkerIds}::text[])
+          ORDER BY r.requested_at ASC
+          LIMIT 20
+        `);
+        clockRows = r.rows as any[];
+      } else {
+        const r = await db.execute(sql`
+          SELECT r.id, r.request_type, r.minutes_diff, r.requested_at,
+                 w.first_name, w.last_name, w.employee_number,
+                 c.name AS company_name,
+                 cc.name AS cost_center_name, j.name AS job_name
+          FROM clock_in_requests r
+          JOIN workers w ON w.id = r.worker_id
+          JOIN companies c ON c.id = r.company_id
+          LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+          LEFT JOIN jobs j ON j.id = w.default_branch_id
+          WHERE r.company_id = ${companyId} AND r.status = 'pending'
+          ORDER BY r.requested_at ASC
+          LIMIT 20
+        `);
+        clockRows = r.rows as any[];
+      }
+      for (const row of clockRows) {
+        const label = row.request_type === "early_clockin"
+          ? `Early clock-in (${Math.abs(row.minutes_diff)} min early)`
+          : row.request_type === "late_clockin"
+          ? `Late clock-in (${row.minutes_diff} min late)`
+          : "Unscheduled clock-in";
+        items.push({
+          id: `cir-${row.id}`,
+          sourceId: row.id,
+          requestType: "punch_approval",
+          label: "Punch Approval",
+          requesterName: `${row.first_name} ${row.last_name}`,
+          employeeNumber: row.employee_number,
+          companyName: row.company_name || null,
+          costCenterName: row.cost_center_name || null,
+          jobName: row.job_name || null,
+          description: label,
+          status: "pending",
+          submittedAt: row.requested_at,
+          actionUrl: `/app/attendance?tab=clock-in-approvals&requestId=${row.id}`,
+        });
+      }
+
+      // 2. Pending time-off requests (scoped by hierarchy)
+      let torRows: any[];
+      if (allowedWorkerIds) {
+        const r = await db.execute(sql`
+          SELECT r.id, r.start_date, r.end_date, r.reason, r.created_at,
+                 w.first_name, w.last_name, w.employee_number,
+                 c.name AS company_name,
+                 cc.name AS cost_center_name
+          FROM time_off_requests r
+          JOIN workers w ON w.id = r.worker_id
+          JOIN companies c ON c.id = r.company_id
+          LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+          WHERE r.company_id = ${companyId}
+            AND r.status = 'pending'
+            AND r.worker_id = ANY(${allowedWorkerIds}::text[])
+          ORDER BY r.created_at ASC
+          LIMIT 20
+        `);
+        torRows = r.rows as any[];
+      } else {
+        const r = await db.execute(sql`
+          SELECT r.id, r.start_date, r.end_date, r.reason, r.created_at,
+                 w.first_name, w.last_name, w.employee_number,
+                 c.name AS company_name,
+                 cc.name AS cost_center_name
+          FROM time_off_requests r
+          JOIN workers w ON w.id = r.worker_id
+          JOIN companies c ON c.id = r.company_id
+          LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+          WHERE r.company_id = ${companyId} AND r.status = 'pending'
+          ORDER BY r.created_at ASC
+          LIMIT 20
+        `);
+        torRows = r.rows as any[];
+      }
+      for (const row of torRows) {
+        items.push({
+          id: `tor-${row.id}`,
+          sourceId: row.id,
+          requestType: "time_off",
+          label: "Time Off",
+          requesterName: `${row.first_name} ${row.last_name}`,
+          employeeNumber: row.employee_number,
+          companyName: row.company_name || null,
+          costCenterName: row.cost_center_name || null,
+          jobName: null,
+          description: `${row.start_date} – ${row.end_date}${row.reason ? ": " + row.reason : ""}`,
+          status: "pending",
+          submittedAt: row.created_at,
+          actionUrl: `/app/attendance?tab=time-off&requestId=${row.id}`,
+        });
+      }
+
+      items.sort((a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime());
+      res.json(items.slice(0, 20));
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch pending approvals" });
+    }
+  });
+
+  // ── Dashboard: clock status for current worker ─────────────────────────────
+  // Returns pending-punch-approval and missing-punch flags for DashboardClockCard.
+  // Strictly scoped to session user's own workerId.
+  app.get("/api/dashboard/clock-status", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user?.workerId || !user?.companyId) return res.json({ pendingApproval: null, missingPunch: null });
+
+      const workerId = user.workerId;
+      const companyId = user.companyId;
+      const today = new Date().toISOString().split("T")[0];
+
+      // Check for a pending clock-in request for this worker (company-scoped)
+      const pendingRow = await db.execute(sql`
+        SELECT id, request_type, minutes_diff, requested_at, status
+        FROM clock_in_requests
+        WHERE worker_id = ${workerId}
+          AND company_id = ${companyId}
+          AND status = 'pending'
+        ORDER BY requested_at DESC
+        LIMIT 1
+      `);
+      const pendingApproval = pendingRow.rows.length > 0 ? pendingRow.rows[0] : null;
+
+      // Check for a time entry from a prior day with clockIn but no clockOut
+      const missingRow = await db.execute(sql`
+        SELECT id, date, clock_in
+        FROM time_entries
+        WHERE worker_id = ${workerId}
+          AND company_id = ${companyId}
+          AND clock_in IS NOT NULL
+          AND clock_out IS NULL
+          AND date < ${today}
+        ORDER BY date DESC
+        LIMIT 1
+      `);
+      const missingPunch = missingRow.rows.length > 0 ? missingRow.rows[0] : null;
+
+      res.json({ pendingApproval, missingPunch });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch clock status" });
     }
   });
 
