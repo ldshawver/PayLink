@@ -7584,10 +7584,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const user = await storage.getUser(req.session.userId!);
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const isPlatform = (user?.role || "").startsWith("platform_");
       const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
       const sessionWorkerId = (wRes.rows[0] as any)?.id || null;
-      // For non-admins, always use session-derived workerId (never trust body)
-      const workerId = isAdmin ? (req.body.workerId || sessionWorkerId) : sessionWorkerId;
+      let workerId: number | null;
+      if (isAdmin && req.body.workerId) {
+        // Admin may specify a target worker, but must validate they belong to the same company
+        const workerCheck = await db.execute(sql`SELECT id, company_id FROM workers WHERE id = ${req.body.workerId}`);
+        if (!workerCheck.rows[0]) return res.status(404).json({ message: "Worker not found" });
+        const targetWorker = workerCheck.rows[0] as any;
+        if (!isPlatform && user?.companyId && targetWorker.company_id !== user.companyId) return res.status(403).json({ message: "Access denied: worker does not belong to your company" });
+        workerId = targetWorker.id;
+      } else {
+        // Non-admins (and admins without an override) upload for themselves
+        workerId = sessionWorkerId;
+      }
       const { title, description, documentType, tags, linkedEntityType, linkedEntityId, isPublic, ownerType } = req.body;
       const filePath = req.file ? `/uploads/${req.file.filename}` : req.body.filePath;
       if (!filePath) return res.status(400).json({ message: "File or filePath required" });
