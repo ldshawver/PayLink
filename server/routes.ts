@@ -6628,7 +6628,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!worker || worker.workerType !== "contractor") {
         return res.status(403).json({ message: "Only contractors can create proposals" });
       }
-      const { companyId, title, description, issueDate, expirationDate, amount, taxAmount, lineItems, notes, terms, jobId, costCenterId, currency } = req.body;
+      const { companyId, title, description, issueDate, expirationDate, amount, taxAmount, lineItems, notes, terms, jobId, costCenterId, currency,
+              scopeOfWork, estimatorName, clientMessage, internalNotes, paymentTerms,
+              workType, templateId, paymentType, tradeOffered, tradeValue, tradeTerms,
+              estimatedHours, estimatedLaborBudget,
+              costCenter, projectClass, laborMaterialsSplit, urgency, siteNotes,
+              clientRequirements, estimatedStartDate, estimatedEndDate, tradeCategory } = req.body;
       if (!issueDate) return res.status(400).json({ message: "Issue date required" });
 
       // Generate proposal number
@@ -6637,8 +6642,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const proposalNumber = `CP-${workerId.slice(-4).toUpperCase()}-${String(count + 1).padStart(4, "0")}`;
 
       const result = await db.execute(sql`
-        INSERT INTO contractor_proposals (company_id, contractor_id, proposal_number, title, description, issue_date, expiration_date, amount, tax_amount, line_items, notes, terms, job_id, cost_center_id, currency, status)
-        VALUES (${companyId || null}, ${workerId}, ${proposalNumber}, ${title || null}, ${description || null}, ${issueDate}, ${expirationDate || null}, ${amount || null}, ${taxAmount || null}, ${lineItems ? JSON.stringify(lineItems) : null}, ${notes || null}, ${terms || null}, ${jobId || null}, ${costCenterId || null}, ${currency || "USD"}, 'draft')
+        INSERT INTO contractor_proposals (
+          company_id, contractor_id, proposal_number, title, description, issue_date, expiration_date,
+          amount, tax_amount, line_items, notes, terms, job_id, cost_center_id, currency, status,
+          scope_of_work, estimator_name, client_message, internal_notes, payment_terms,
+          work_type, template_id, payment_type, trade_offered, trade_value, trade_terms,
+          estimated_hours, estimated_labor_budget,
+          cost_center, project_class, labor_materials_split, urgency, site_notes,
+          client_requirements, estimated_start_date, estimated_end_date, trade_category
+        ) VALUES (
+          ${companyId || null}, ${workerId}, ${proposalNumber}, ${title || null}, ${description || null},
+          ${issueDate}, ${expirationDate || null}, ${amount || null}, ${taxAmount || null},
+          ${lineItems ? JSON.stringify(lineItems) : null}, ${notes || null}, ${terms || null},
+          ${jobId || null}, ${costCenterId || null}, ${currency || "USD"}, 'draft',
+          ${scopeOfWork || null}, ${estimatorName || null}, ${clientMessage || null}, ${internalNotes || null}, ${paymentTerms || null},
+          ${workType || null}, ${templateId || null}, ${paymentType || null}, ${tradeOffered || null}, ${tradeValue || null}, ${tradeTerms || null},
+          ${estimatedHours != null ? Number(estimatedHours) : null}, ${estimatedLaborBudget != null ? Number(estimatedLaborBudget) : null},
+          ${costCenter || null}, ${projectClass || null}, ${laborMaterialsSplit || null}, ${urgency || null}, ${siteNotes || null},
+          ${clientRequirements || null}, ${estimatedStartDate || null}, ${estimatedEndDate || null}, ${tradeCategory || null}
+        )
         RETURNING *
       `);
       const proposal = (result.rows ?? (result as any))[0];
@@ -6666,7 +6688,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const { title, description, issueDate, expirationDate, amount, taxAmount, lineItems, notes, terms, currency,
               scopeOfWork, assumptions, exclusions, allowances, materials, warrantyNotes, scheduleNotes,
               internalNotes, clientMessage, estimatorName, paymentTerms, changeOrderTerms, discountAmount,
-              isChangeOrder } = req.body;
+              isChangeOrder,
+              workType, templateId, paymentType, tradeOffered, tradeValue, tradeTerms,
+              estimatedHours, estimatedLaborBudget,
+              costCenter, projectClass, laborMaterialsSplit, urgency, siteNotes,
+              clientRequirements, estimatedStartDate, estimatedEndDate, tradeCategory } = req.body;
       await db.execute(sql`
         UPDATE contractor_proposals SET
           title = COALESCE(${title ?? null}, title),
@@ -6692,6 +6718,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           terms = COALESCE(${terms ?? null}, terms),
           currency = COALESCE(${currency ?? null}, currency),
           is_change_order = COALESCE(${isChangeOrder ?? null}, is_change_order),
+          work_type = COALESCE(${workType ?? null}, work_type),
+          template_id = COALESCE(${templateId ?? null}, template_id),
+          payment_type = COALESCE(${paymentType ?? null}, payment_type),
+          trade_offered = COALESCE(${tradeOffered ?? null}, trade_offered),
+          trade_value = COALESCE(${tradeValue ?? null}, trade_value),
+          trade_terms = COALESCE(${tradeTerms ?? null}, trade_terms),
+          estimated_hours = COALESCE(${estimatedHours != null ? Number(estimatedHours) : null}, estimated_hours),
+          estimated_labor_budget = COALESCE(${estimatedLaborBudget != null ? Number(estimatedLaborBudget) : null}, estimated_labor_budget),
+          cost_center = COALESCE(${costCenter ?? null}, cost_center),
+          project_class = COALESCE(${projectClass ?? null}, project_class),
+          labor_materials_split = COALESCE(${laborMaterialsSplit ?? null}, labor_materials_split),
+          urgency = COALESCE(${urgency ?? null}, urgency),
+          site_notes = COALESCE(${siteNotes ?? null}, site_notes),
+          client_requirements = COALESCE(${clientRequirements ?? null}, client_requirements),
+          estimated_start_date = COALESCE(${estimatedStartDate ?? null}, estimated_start_date),
+          estimated_end_date = COALESCE(${estimatedEndDate ?? null}, estimated_end_date),
+          trade_category = COALESCE(${tradeCategory ?? null}, trade_category),
           updated_at = NOW()
         WHERE id = ${req.params.id}
       `);
@@ -6750,11 +6793,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const proposal = (result.rows ?? (result as any))[0];
       if (!proposal) return res.status(404).json({ message: "Not found" });
       if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
-      if (proposal.status !== "submitted") return res.status(400).json({ message: "Proposal must be submitted before accepting" });
+      if (!["submitted", "sent", "viewed", "countered", "negotiated"].includes(proposal.status)) return res.status(400).json({ message: "Proposal cannot be accepted from its current status" });
+      const oldStatus = proposal.status;
       await db.execute(sql`
         UPDATE contractor_proposals SET status = 'approved', reviewed_by_user_id = ${userId}, reviewed_at = NOW(), updated_at = NOW()
         WHERE id = ${req.params.id}
       `);
+      await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, ip_address) VALUES (${req.params.id}, 'approved', ${oldStatus}, 'approved', ${userId}, ${user?.username || null}, ${req.ip || null})`);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       res.json((updated.rows ?? (updated as any))[0]);
     } catch (e) { res.status(500).json({ message: "Failed to accept proposal" }); }
@@ -6769,12 +6814,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const proposal = (result.rows ?? (result as any))[0];
       if (!proposal) return res.status(404).json({ message: "Not found" });
       if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
-      if (!["submitted", "approved"].includes(proposal.status)) return res.status(400).json({ message: "Invalid status for rejection" });
+      if (!["submitted", "sent", "viewed", "countered", "negotiated", "approved"].includes(proposal.status)) return res.status(400).json({ message: "Invalid status for rejection" });
       const { rejectionReason } = req.body;
+      const oldStatus = proposal.status;
       await db.execute(sql`
         UPDATE contractor_proposals SET status = 'rejected', rejection_reason = ${rejectionReason || null}, reviewed_by_user_id = ${userId}, reviewed_at = NOW(), updated_at = NOW()
         WHERE id = ${req.params.id}
       `);
+      await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'rejected', ${oldStatus}, 'rejected', ${userId}, ${user?.username || null}, ${rejectionReason || null}, ${req.ip || null})`);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       res.json((updated.rows ?? (updated as any))[0]);
     } catch (e) { res.status(500).json({ message: "Failed to reject proposal" }); }
@@ -6789,12 +6836,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const proposal = (result.rows ?? (result as any))[0];
       if (!proposal) return res.status(404).json({ message: "Not found" });
       if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
-      if (proposal.status !== "submitted") return res.status(400).json({ message: "Proposal must be submitted to request revision" });
+      if (!["submitted", "sent", "viewed", "countered"].includes(proposal.status)) return res.status(400).json({ message: "Cannot request revision from current status" });
       const { revisionNotes } = req.body;
+      const oldStatus = proposal.status;
       await db.execute(sql`
         UPDATE contractor_proposals SET status = 'revision_requested', rejection_reason = ${revisionNotes || null}, reviewed_by_user_id = ${userId}, reviewed_at = NOW(), updated_at = NOW()
         WHERE id = ${req.params.id}
       `);
+      await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'revision_requested', ${oldStatus}, 'revision_requested', ${userId}, ${user?.username || null}, ${revisionNotes || null}, ${req.ip || null})`);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       res.json((updated.rows ?? (updated as any))[0]);
     } catch (e) { res.status(500).json({ message: "Failed to request revision" }); }
@@ -7235,11 +7284,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const prop = access.prop;
       if (!["countered", "submitted", "sent", "viewed"].includes(prop.status)) return res.status(400).json({ message: "Cannot mark as negotiated from current status" });
 
-      await db.execute(sql`UPDATE contractor_proposals SET status = 'negotiated' WHERE id = ${req.params.id}`);
-      await db.execute(sql`
-        INSERT INTO proposal_events (proposal_id, event_type, old_status, new_status, actor_name, notes)
-        VALUES (${req.params.id}, 'status_change', ${prop.status}, 'negotiated', ${req.session.userId}, 'Marked as negotiated')
-      `);
+      const oldStatus = prop.status;
+      await db.execute(sql`UPDATE contractor_proposals SET status = 'negotiated', updated_at = NOW() WHERE id = ${req.params.id}`);
+      await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'negotiated', ${oldStatus}, 'negotiated', ${req.session.userId}, ${(await storage.getUser(req.session.userId!))?.username || null}, 'Marked as negotiated', ${req.ip || null})`);
       res.json({ status: "negotiated" });
     } catch (e: any) { res.status(500).json({ message: "Failed to mark as negotiated: " + e.message }); }
   });
@@ -7314,26 +7361,28 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         VALUES (${req.params.id}, ${req.session.userId}, ${workerId}, ${dir}, ${proposedAmount || null}, ${proposedTerms || null}, ${counterNotes || null})
         RETURNING *
       `);
-      // Update proposal status to reflect negotiation in progress
-      await db.execute(sql`UPDATE contractor_proposals SET status = 'revision_requested' WHERE id = ${req.params.id} AND status NOT IN ('approved','rejected','void')`);
+      // Update proposal status to 'countered' to reflect negotiation in progress
+      await db.execute(sql`UPDATE contractor_proposals SET status = 'countered', updated_at = NOW() WHERE id = ${req.params.id} AND status NOT IN ('approved','rejected','void','converted_to_contract')`);
+      await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, ip_address) VALUES (${req.params.id}, 'countered', ${access.prop.status}, 'countered', ${req.session.userId}, ${user?.username || null}, ${req.ip || null})`);
       res.status(201).json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to create negotiation: " + e.message }); }
   });
 
-  // Shorthand counter route (admin sends counter offer to contractor)
-  app.post("/api/contractor-proposals/:id/counter", requireAuth, async (req, res) => {
+  // Shorthand counter route (admin sends counter offer to contractor) — admin/manager only
+  app.post("/api/contractor-proposals/:id/counter", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const access = await assertProposalAccess(req.params.id, req.session.userId!);
       if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
+      if (!access.isAdmin) return res.status(403).json({ message: "Only managers can send counter offers on behalf of the company" });
       const { counterAmount, notes } = req.body;
-      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.worker_id || null;
+      const oldStatus = access.prop.status;
       const result = await db.execute(sql`
         INSERT INTO proposal_negotiations (proposal_id, initiated_by_user_id, initiated_by_worker_id, direction, proposed_amount, counter_notes)
-        VALUES (${req.params.id}, ${req.session.userId}, ${workerId}, 'company_to_contractor', ${counterAmount || null}, ${notes || null})
+        VALUES (${req.params.id}, ${req.session.userId}, NULL, 'company_to_contractor', ${counterAmount || null}, ${notes || null})
         RETURNING *
       `);
-      await db.execute(sql`UPDATE contractor_proposals SET status = 'revision_requested' WHERE id = ${req.params.id} AND status NOT IN ('approved','rejected','void')`);
+      await db.execute(sql`UPDATE contractor_proposals SET status = 'countered', updated_at = NOW() WHERE id = ${req.params.id} AND status NOT IN ('approved','rejected','void','converted_to_contract')`);
+      await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'countered', ${oldStatus}, 'countered', ${req.session.userId}, ${(await storage.getUser(req.session.userId!))?.username || null}, ${notes || null}, ${req.ip || null})`);
       res.status(201).json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to send counter: " + e.message }); }
   });
@@ -7345,12 +7394,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
       const { status, responseNotes } = req.body;
       if (!["accepted", "rejected"].includes(status)) return res.status(400).json({ message: "status must be accepted or rejected" });
+      // Fetch negotiation to determine direction for proposal status update
+      const negRes = await db.execute(sql`SELECT * FROM proposal_negotiations WHERE id = ${req.params.negId} AND proposal_id = ${req.params.id} AND status = 'pending'`);
+      const neg = negRes.rows[0] as any;
+      if (!neg) return res.status(404).json({ message: "Negotiation not found, already responded, or access denied" });
       const result = await db.execute(sql`
         UPDATE proposal_negotiations SET status = ${status}, response_notes = ${responseNotes || null}, responded_at = NOW(), responded_by_user_id = ${req.session.userId}
         WHERE id = ${req.params.negId} AND proposal_id = ${req.params.id} AND status = 'pending'
         RETURNING *
       `);
       if (!result.rows[0]) return res.status(404).json({ message: "Negotiation not found, already responded, or access denied" });
+      // Update proposal status based on negotiation acceptance:
+      // company→contractor accepted by contractor → both sides agreed → negotiated
+      // contractor→company accepted by admin → admin counter-accepted → negotiated
+      if (status === "accepted") {
+        const propRes = await db.execute(sql`SELECT status FROM contractor_proposals WHERE id = ${req.params.id}`);
+        const oldPropStatus = (propRes.rows[0] as any)?.status;
+        await db.execute(sql`UPDATE contractor_proposals SET status = 'negotiated', updated_at = NOW() WHERE id = ${req.params.id} AND status NOT IN ('approved','rejected','void','converted_to_contract')`);
+        await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'negotiated', ${oldPropStatus || 'countered'}, 'negotiated', ${req.session.userId}, NULL, 'Negotiation accepted', ${req.ip || null})`);
+      }
       res.json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to respond to negotiation: " + e.message }); }
   });

@@ -1490,11 +1490,6 @@ function ContractorHubTab({ isAdmin }: { isAdmin: boolean }) {
                       {inv.due_date && <p className="text-xs text-muted-foreground">Due {inv.due_date}</p>}
                     </div>
                     <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
-                      {!isAdmin && inv.status === "draft" && (
-                        <Button size="sm" className="h-8 px-2 text-xs" onClick={() => invoiceMutation.mutate({ id: inv.id, action: "submit" })} disabled={invoiceMutation.isPending} data-testid={`btn-submit-invoice-${inv.id}`}>
-                          <Send className="h-3.5 w-3.5 mr-1" /> Submit
-                        </Button>
-                      )}
                       {isAdmin && inv.status === "submitted" && (
                         <Button size="sm" onClick={() => { setPayTarget(inv.id); setPayAmount(inv.amount); setPayRef(""); }} className="h-8 px-2 text-xs" data-testid={`btn-pay-invoice-${inv.id}`}>
                           <DollarSign className="h-3.5 w-3.5 mr-1" /> Mark Paid

@@ -2335,6 +2335,15 @@ Thank you,
     await run("contractor_proposals.trade_terms", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS trade_terms TEXT`);
     await run("contractor_proposals.template_id", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS template_id VARCHAR`);
     await run("contractor_proposals.branding_id", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS branding_id VARCHAR`);
+    await run("contractor_proposals.cost_center", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS cost_center TEXT`);
+    await run("contractor_proposals.project_class", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS project_class TEXT`);
+    await run("contractor_proposals.labor_materials_split", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS labor_materials_split TEXT`);
+    await run("contractor_proposals.urgency", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS urgency TEXT DEFAULT 'normal'`);
+    await run("contractor_proposals.site_notes", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS site_notes TEXT`);
+    await run("contractor_proposals.client_requirements", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS client_requirements TEXT`);
+    await run("contractor_proposals.estimated_start_date", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS estimated_start_date TEXT`);
+    await run("contractor_proposals.estimated_end_date", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS estimated_end_date TEXT`);
+    await run("contractor_proposals.trade_category", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS trade_category TEXT`);
 
     // ── contractor_proposals.converted_to_contract_id ────────────────────────
     await run("contractor_proposals.converted_to_contract_id", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS converted_to_contract_id VARCHAR`);

@@ -46,6 +46,9 @@ interface Proposal {
   workType?: string; paymentType?: string; estimatedHours?: string; estimatedLaborBudget?: string;
   tradeOffered?: string; tradeValue?: string; tradeTerms?: string;
   templateId?: string; brandingId?: string;
+  projectClass?: string; costCenter?: string; laborMaterialsSplit?: string; urgency?: string;
+  siteNotes?: string; clientRequirements?: string; estimatedStartDate?: string; estimatedEndDate?: string;
+  tradeCategory?: string;
 }
 
 interface ContractorBranding {
@@ -148,6 +151,19 @@ function ContractBadge({ status }: { status: string }) {
 function fmt(n: string | number | undefined | null) {
   if (n == null || n === "") return "—";
   return `$${parseFloat(String(n)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function snakeToCamel(obj: any): any {
+  if (Array.isArray(obj)) return obj.map(snakeToCamel);
+  if (obj !== null && typeof obj === "object") {
+    return Object.fromEntries(
+      Object.entries(obj).map(([k, v]) => [
+        k.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase()),
+        v
+      ])
+    );
+  }
+  return obj;
 }
 
 function fmtDate(s?: string | null) {
@@ -651,6 +667,44 @@ function ProposalDetailPanel({
                       </div>
                     )}
                   </div>
+                </div>
+              )}
+
+              {(proposal.projectClass || proposal.costCenter || proposal.urgency || proposal.laborMaterialsSplit) && (
+                <div className="rounded-lg border p-3 space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Project Intake</p>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    {proposal.costCenter && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Cost Center</p>
+                        <p className="font-medium">{proposal.costCenter}</p>
+                      </div>
+                    )}
+                    {proposal.projectClass && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Project Type</p>
+                        <p className="font-medium capitalize">{String(proposal.projectClass).replace(/_/g, " ")}</p>
+                      </div>
+                    )}
+                    {proposal.urgency && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Urgency</p>
+                        <p className="font-medium capitalize">{proposal.urgency}</p>
+                      </div>
+                    )}
+                    {proposal.laborMaterialsSplit && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Labor/Materials</p>
+                        <p className="font-medium capitalize">{String(proposal.laborMaterialsSplit).replace(/_/g, " ")}</p>
+                      </div>
+                    )}
+                  </div>
+                  {proposal.siteNotes && (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Site Notes</p>
+                      <p className="text-sm">{proposal.siteNotes}</p>
+                    </div>
+                  )}
                 </div>
               )}
             </TabsContent>
@@ -1404,8 +1458,8 @@ function ProposalBuilder({
                   <Label className="text-xs font-medium">Cost Center / Job Code</Label>
                   <Input
                     placeholder="e.g. CC-2024-001 or General"
-                    value={(form as any).costCenter || ""}
-                    onChange={e => setForm(f => ({ ...f, costCenter: e.target.value } as any))}
+                    value={form.costCenter || ""}
+                    onChange={e => setForm(f => ({ ...f, costCenter: e.target.value }))}
                     className="mt-1"
                     data-testid="input-cost-center"
                   />
@@ -1413,7 +1467,7 @@ function ProposalBuilder({
                 </div>
                 <div>
                   <Label className="text-xs font-medium">Project Classification</Label>
-                  <Select value={(form as any).projectClass || ""} onValueChange={v => setForm(f => ({ ...f, projectClass: v } as any))}>
+                  <Select value={form.projectClass || ""} onValueChange={v => setForm(f => ({ ...f, projectClass: v }))}>
                     <SelectTrigger className="mt-1" data-testid="select-project-class">
                       <SelectValue placeholder="Select classification" />
                     </SelectTrigger>
@@ -1431,7 +1485,7 @@ function ProposalBuilder({
                 </div>
                 <div>
                   <Label className="text-xs font-medium">Labor vs. Materials Split</Label>
-                  <Select value={(form as any).laborMaterialsSplit || ""} onValueChange={v => setForm(f => ({ ...f, laborMaterialsSplit: v } as any))}>
+                  <Select value={form.laborMaterialsSplit || ""} onValueChange={v => setForm(f => ({ ...f, laborMaterialsSplit: v }))}>
                     <SelectTrigger className="mt-1" data-testid="select-labor-materials-split">
                       <SelectValue placeholder="Estimated split" />
                     </SelectTrigger>
@@ -1446,7 +1500,7 @@ function ProposalBuilder({
                 </div>
                 <div>
                   <Label className="text-xs font-medium">Urgency / Priority</Label>
-                  <Select value={(form as any).urgency || ""} onValueChange={v => setForm(f => ({ ...f, urgency: v } as any))}>
+                  <Select value={form.urgency || ""} onValueChange={v => setForm(f => ({ ...f, urgency: v }))}>
                     <SelectTrigger className="mt-1" data-testid="select-urgency">
                       <SelectValue placeholder="Select urgency" />
                     </SelectTrigger>
@@ -1463,8 +1517,8 @@ function ProposalBuilder({
                   <Label className="text-xs font-medium">Estimated Start Date</Label>
                   <Input
                     type="date"
-                    value={(form as any).estimatedStartDate || ""}
-                    onChange={e => setForm(f => ({ ...f, estimatedStartDate: e.target.value } as any))}
+                    value={form.estimatedStartDate || ""}
+                    onChange={e => setForm(f => ({ ...f, estimatedStartDate: e.target.value }))}
                     className="mt-1"
                     data-testid="input-estimated-start"
                   />
@@ -1473,8 +1527,8 @@ function ProposalBuilder({
                   <Label className="text-xs font-medium">Estimated Completion Date</Label>
                   <Input
                     type="date"
-                    value={(form as any).estimatedEndDate || ""}
-                    onChange={e => setForm(f => ({ ...f, estimatedEndDate: e.target.value } as any))}
+                    value={form.estimatedEndDate || ""}
+                    onChange={e => setForm(f => ({ ...f, estimatedEndDate: e.target.value }))}
                     className="mt-1"
                     data-testid="input-estimated-end"
                   />
@@ -1484,8 +1538,8 @@ function ProposalBuilder({
                 <Label className="text-xs font-medium">Site / Location Notes</Label>
                 <Textarea
                   placeholder="Address, access instructions, safety notes, special conditions..."
-                  value={(form as any).siteNotes || ""}
-                  onChange={e => setForm(f => ({ ...f, siteNotes: e.target.value } as any))}
+                  value={form.siteNotes || ""}
+                  onChange={e => setForm(f => ({ ...f, siteNotes: e.target.value }))}
                   className="mt-1"
                   rows={3}
                   data-testid="textarea-site-notes"
@@ -1495,8 +1549,8 @@ function ProposalBuilder({
                 <Label className="text-xs font-medium">Client Requirements / Special Instructions</Label>
                 <Textarea
                   placeholder="Any specific requirements, certifications needed, union requirements, insurance minimums..."
-                  value={(form as any).clientRequirements || ""}
-                  onChange={e => setForm(f => ({ ...f, clientRequirements: e.target.value } as any))}
+                  value={form.clientRequirements || ""}
+                  onChange={e => setForm(f => ({ ...f, clientRequirements: e.target.value }))}
                   className="mt-1"
                   rows={3}
                   data-testid="textarea-client-requirements"
@@ -2805,6 +2859,7 @@ export default function ContractorHubPage() {
 
   const { data: proposals = [], isLoading: proposalsLoading } = useQuery<Proposal[]>({
     queryKey: ["/api/contractor-proposals"],
+    select: (data: any) => snakeToCamel(data),
   });
 
   const { data: invoices = [], isLoading: invoicesLoading } = useQuery<Invoice[]>({
