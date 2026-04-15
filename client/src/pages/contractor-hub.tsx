@@ -989,7 +989,7 @@ function ProposalDetailPanel({
                     data-testid="textarea-thread-comment"
                   />
                   <div className="flex gap-2">
-                    <Button size="sm" variant="outline" onClick={() => actionMutation.mutate({ action: "request-revision", body: { notes: commentText } })} disabled={actionMutation.isPending || !commentText} data-testid="btn-thread-request-revision">
+                    <Button size="sm" variant="outline" onClick={() => actionMutation.mutate({ action: "request-revision", body: { revisionNotes: commentText } })} disabled={actionMutation.isPending || !commentText} data-testid="btn-thread-request-revision">
                       <RotateCcw className="h-3.5 w-3.5 mr-1" /> Request Revision
                     </Button>
                     <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => actionMutation.mutate({ action: "accept", body: { notes: commentText } })} disabled={actionMutation.isPending} data-testid="btn-thread-approve">
@@ -2292,6 +2292,7 @@ function InvoiceDetailPanel({
   const [payAmount, setPayAmount] = useState("");
   const [payMethod, setPayMethod] = useState("check");
   const [payRef, setPayRef] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   const { data: payments = [], refetch: refetchPayments } = useQuery<Payment[]>({
     queryKey: ["/api/contractor-invoices", invoice.id, "payments"],
@@ -2379,6 +2380,32 @@ function InvoiceDetailPanel({
 
           <ScrollArea className="flex-1">
             <TabsContent value="summary" className="m-0 p-6 space-y-4">
+              {!isAdmin && invoice.status === "draft" && !proposalBlocked && (
+                <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
+                  <p className="text-sm font-medium mb-1">Ready to submit?</p>
+                  <p className="text-xs text-muted-foreground mb-3">Once submitted, the company will review and approve or request changes.</p>
+                  <Button className="w-full" onClick={async () => {
+                    setSubmitting(true);
+                    try {
+                      await apiRequest("POST", `/api/contractor-invoices/${invoice.id}/submit`, {});
+                      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+                      toast({ title: "Invoice submitted for approval" });
+                      onClose();
+                    } catch {
+                      toast({ title: "Failed to submit invoice", variant: "destructive" });
+                    } finally { setSubmitting(false); }
+                  }} disabled={submitting} data-testid="btn-panel-submit-invoice">
+                    {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Send className="h-4 w-4 mr-2" />}
+                    Submit Invoice for Approval
+                  </Button>
+                </div>
+              )}
+              {!isAdmin && invoice.status === "draft" && !!proposalBlocked && (
+                <div className="rounded-lg border border-orange-200 bg-orange-50 dark:bg-orange-950/20 p-4 text-sm">
+                  <p className="font-medium text-orange-700">Submission blocked</p>
+                  <p className="text-xs text-muted-foreground mt-1">This invoice is linked to a proposal that has not been approved yet. Once the proposal is approved, you can submit this invoice.</p>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div><p className="text-muted-foreground text-xs">Invoice Date</p><p className="font-medium">{fmtDate(invoice.invoiceDate)}</p></div>
                 <div><p className="text-muted-foreground text-xs">Due Date</p><p className="font-medium">{fmtDate(invoice.dueDate)}</p></div>
@@ -3252,7 +3279,7 @@ export default function ContractorHubPage() {
             {/* Invoices */}
             {section === "invoices" && (
               <div className="space-y-4">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search invoices..." className="h-8 max-w-xs" data-testid="input-search-invoices" />
                   <Select value={statusFilter} onValueChange={setStatusFilter}>
                     <SelectTrigger className="h-8 w-40" data-testid="select-invoice-status-filter"><SelectValue placeholder="All Status" /></SelectTrigger>
@@ -3261,6 +3288,11 @@ export default function ContractorHubPage() {
                       {Object.entries(INVOICE_STATUS_CONFIG).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
                     </SelectContent>
                   </Select>
+                  {!isAdmin && invoices.some(i => i.status === "draft") && (
+                    <p className="text-xs text-muted-foreground ml-auto">
+                      Draft invoices can be submitted for approval using the Submit button on each row.
+                    </p>
+                  )}
                 </div>
 
                 {invoicesLoading ? (
@@ -3279,10 +3311,10 @@ export default function ContractorHubPage() {
                       const balance = parseFloat(invoice.balanceDue ?? invoice.amount ?? "0");
                       const isOverdue = !["paid", "void"].includes(invoice.status) && invoice.dueDate && new Date(invoice.dueDate) < new Date();
                       return (
-                        <div key={invoice.id} className="border rounded-lg p-4 hover:bg-muted/30 transition-colors cursor-pointer"
-                          onClick={() => setSelectedInvoice(invoice)} data-testid={`row-invoice-${invoice.id}`}>
+                        <div key={invoice.id} className="border rounded-lg p-4 hover:bg-muted/30 transition-colors"
+                          data-testid={`row-invoice-${invoice.id}`}>
                           <div className="flex items-start justify-between gap-4">
-                            <div className="flex-1 min-w-0">
+                            <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setSelectedInvoice(invoice)}>
                               <div className="flex items-center gap-2 flex-wrap">
                                 <p className="font-medium text-sm">Invoice #{invoice.invoiceNumber || invoice.id.slice(0, 8)}</p>
                                 {invoice.title && <p className="text-sm text-muted-foreground truncate">{invoice.title}</p>}
@@ -3303,7 +3335,28 @@ export default function ContractorHubPage() {
                                 {balance <= 0 && <><span>·</span><span className="text-green-600">Paid in full</span></>}
                               </div>
                             </div>
-                            <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 mt-1" />
+                            <div className="flex items-center gap-2 shrink-0">
+                              {!isAdmin && invoice.status === "draft" && !isBlocked && (
+                                <Button size="sm" variant="outline" className="h-7 text-xs border-primary text-primary hover:bg-primary/10"
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    try {
+                                      await apiRequest("POST", `/api/contractor-invoices/${invoice.id}/submit`, {});
+                                      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+                                      toast({ title: "Invoice submitted for approval" });
+                                    } catch {
+                                      toast({ title: "Failed to submit invoice", variant: "destructive" });
+                                    }
+                                  }}
+                                  data-testid={`btn-submit-invoice-${invoice.id}`}>
+                                  <Send className="h-3 w-3 mr-1" /> Submit
+                                </Button>
+                              )}
+                              {!isAdmin && invoice.status === "draft" && isBlocked && (
+                                <span className="text-xs text-muted-foreground italic">Awaiting proposal approval</span>
+                              )}
+                              <ChevronRight className="h-4 w-4 text-muted-foreground mt-0.5 cursor-pointer" onClick={() => setSelectedInvoice(invoice)} />
+                            </div>
                           </div>
                         </div>
                       );
