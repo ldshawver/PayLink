@@ -2348,6 +2348,10 @@ Thank you,
     // ── contractor_proposals.converted_to_contract_id ────────────────────────
     await run("contractor_proposals.converted_to_contract_id", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS converted_to_contract_id VARCHAR`);
 
+    // ── proposal_negotiations extended counter fields ─────────────────────────
+    await run("proposal_negotiations.proposed_hours", sql`ALTER TABLE proposal_negotiations ADD COLUMN IF NOT EXISTS proposed_hours NUMERIC`);
+    await run("proposal_negotiations.proposed_trade_terms", sql`ALTER TABLE proposal_negotiations ADD COLUMN IF NOT EXISTS proposed_trade_terms TEXT`);
+
     // ── contractor_invoices extended columns ──────────────────────────────────
     await run("contractor_invoices.contract_id", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS contract_id VARCHAR`);
     await run("contractor_invoices.approved_budget", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS approved_budget NUMERIC`);

@@ -7396,12 +7396,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const access = await assertProposalAccess(req.params.id, req.session.userId!);
       if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
       if (!access.isAdmin) return res.status(403).json({ message: "Only managers can send counter offers on behalf of the company" });
-      const { counterAmount, notes } = req.body;
+      const { counterAmount, counterHours, counterTerms, counterTradeTerms, notes } = req.body;
       const oldStatus = access.prop.status;
       await autoSnapshot(req.params.id, access.prop, `Counter offer: ${counterAmount ? "$" + counterAmount : "terms"} — ${notes || ""}`, req.session.userId || null);
       const result = await db.execute(sql`
-        INSERT INTO proposal_negotiations (proposal_id, initiated_by_user_id, initiated_by_worker_id, direction, proposed_amount, counter_notes)
-        VALUES (${req.params.id}, ${req.session.userId}, NULL, 'company_to_contractor', ${counterAmount || null}, ${notes || null})
+        INSERT INTO proposal_negotiations (proposal_id, initiated_by_user_id, initiated_by_worker_id, direction, proposed_amount, proposed_hours, proposed_terms, proposed_trade_terms, counter_notes)
+        VALUES (${req.params.id}, ${req.session.userId}, NULL, 'company_to_contractor', ${counterAmount || null}, ${counterHours ? Number(counterHours) : null}, ${counterTerms || null}, ${counterTradeTerms || null}, ${notes || null})
         RETURNING *
       `);
       await db.execute(sql`UPDATE contractor_proposals SET status = 'countered', updated_at = NOW() WHERE id = ${req.params.id} AND status NOT IN ('approved','rejected','void','converted_to_contract')`);

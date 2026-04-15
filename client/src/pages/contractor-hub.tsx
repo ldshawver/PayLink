@@ -87,6 +87,14 @@ interface ProposalEvent {
   newStatus?: string; actorName?: string; actorEmail?: string; notes?: string; createdAt: string;
 }
 
+interface Negotiation {
+  id: string; proposalId: string; direction: "company_to_contractor" | "contractor_to_company";
+  status: "pending" | "accepted" | "rejected";
+  proposedAmount?: string; proposedHours?: string; proposedTerms?: string; proposedTradeTerms?: string;
+  counterNotes?: string; responseNotes?: string; respondedAt?: string; createdAt: string;
+  initiatedByUserId?: string; initiatedByWorkerId?: string;
+}
+
 interface Contract {
   id: string; contractNumber?: string; title?: string; status: string;
   contractorId: string; companyId?: string; proposalId?: string;
@@ -101,7 +109,7 @@ const PROPOSAL_STATUS_CONFIG: Record<string, { label: string; color: string; bg:
   sent:                  { label: "Sent",                 color: "text-indigo-600", bg: "bg-indigo-50 dark:bg-indigo-950/30" },
   viewed:                { label: "Viewed",               color: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-950/30" },
   revision_requested:    { label: "Revision Needed",      color: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950/30" },
-  submitted:             { label: "Submitted",            color: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950/30" },
+  submitted:             { label: "Under Review",          color: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950/30" },
   countered:             { label: "Countered",            color: "text-amber-600",  bg: "bg-amber-50 dark:bg-amber-950/30" },
   negotiated:            { label: "Negotiated",           color: "text-teal-600",   bg: "bg-teal-50 dark:bg-teal-950/30" },
   approved:              { label: "Approved",             color: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30" },
@@ -358,6 +366,9 @@ function ProposalDetailPanel({
   const [revisionNotes, setRevisionNotes] = useState("");
   const [counterOpen, setCounterOpen] = useState(false);
   const [counterAmount, setCounterAmount] = useState("");
+  const [counterHours, setCounterHours] = useState("");
+  const [counterTerms, setCounterTerms] = useState("");
+  const [counterTradeTerms, setCounterTradeTerms] = useState("");
   const [counterNotes, setCounterNotes] = useState("");
   const [commentText, setCommentText] = useState("");
 
@@ -408,11 +419,28 @@ function ProposalDetailPanel({
     },
   });
 
-  const { data: negotiations = [] } = useQuery<any[]>({
+  const { data: negotiations = [] } = useQuery<Negotiation[]>({
     queryKey: ["/api/contractor-proposals", proposal.id, "negotiations"],
     queryFn: async () => {
       const r = await fetch(`/api/contractor-proposals/${proposal.id}/negotiations`, { credentials: "include" });
-      return r.ok ? r.json() : [];
+      if (!r.ok) return [];
+      const rows: Record<string, unknown>[] = await r.json();
+      return rows.map(row => ({
+        id: row.id as string,
+        proposalId: row.proposal_id as string,
+        direction: row.direction as Negotiation["direction"],
+        status: row.status as Negotiation["status"],
+        proposedAmount: row.proposed_amount as string | undefined,
+        proposedHours: row.proposed_hours as string | undefined,
+        proposedTerms: row.proposed_terms as string | undefined,
+        proposedTradeTerms: row.proposed_trade_terms as string | undefined,
+        counterNotes: row.counter_notes as string | undefined,
+        responseNotes: row.response_notes as string | undefined,
+        respondedAt: row.responded_at as string | undefined,
+        createdAt: row.created_at as string,
+        initiatedByUserId: row.initiated_by_user_id as string | undefined,
+        initiatedByWorkerId: row.initiated_by_worker_id as string | undefined,
+      }));
     },
   });
 
@@ -604,30 +632,53 @@ function ProposalDetailPanel({
                   <div className="flex items-center gap-2 mb-3">
                     <ArrowUpDown className="h-5 w-5 text-blue-600" />
                     <p className="font-semibold text-blue-700">Counter Offer Received</p>
-                    <span className="text-xs text-blue-500 ml-auto">{fmtDate(latestCounter.created_at || latestCounter.createdAt)}</span>
+                    <span className="text-xs text-blue-500 ml-auto">{fmtDate(latestCounter.createdAt)}</span>
                   </div>
-                  <div className="grid grid-cols-2 gap-4 mb-3">
-                    <div className="rounded-md bg-white dark:bg-blue-900/20 border border-blue-200 p-3">
-                      <p className="text-xs text-muted-foreground mb-1">Your Original Amount</p>
-                      <p className="text-xl font-bold text-foreground">{fmt(proposal.amount)}</p>
-                    </div>
-                    <div className="rounded-md bg-blue-100 dark:bg-blue-900/40 border border-blue-300 p-3">
-                      <p className="text-xs text-muted-foreground mb-1">Counter Offer Amount</p>
-                      <p className="text-xl font-bold text-blue-700">
-                        {latestCounter.proposed_amount ? fmt(latestCounter.proposed_amount) : "—"}
-                      </p>
+                  {/* Field-by-field comparison table */}
+                  <div className="space-y-2 mb-3">
+                    {(proposal.amount || latestCounter.proposedAmount) && (
+                      <div className="grid grid-cols-3 gap-2 text-xs items-center border-b border-blue-200 pb-1">
+                        <span className="text-muted-foreground font-medium">Budget</span>
+                        <span className="text-foreground">{proposal.amount ? fmt(proposal.amount) : "—"}</span>
+                        <span className={`font-bold ${latestCounter.proposedAmount && proposal.amount && parseFloat(latestCounter.proposedAmount) < parseFloat(proposal.amount) ? "text-red-600" : "text-blue-700"}`}>
+                          {latestCounter.proposedAmount ? fmt(latestCounter.proposedAmount) : "unchanged"}
+                          {latestCounter.proposedAmount && proposal.amount && (
+                            <span className="ml-1 font-normal opacity-70">
+                              ({parseFloat(latestCounter.proposedAmount) < parseFloat(proposal.amount) ? "▼" : "▲"} {fmt(Math.abs(parseFloat(latestCounter.proposedAmount) - parseFloat(proposal.amount)))})
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    )}
+                    {(proposal.estimatedHours || latestCounter.proposedHours) && (
+                      <div className="grid grid-cols-3 gap-2 text-xs items-center border-b border-blue-200 pb-1">
+                        <span className="text-muted-foreground font-medium">Hours</span>
+                        <span className="text-foreground">{proposal.estimatedHours ? `${proposal.estimatedHours}h` : "—"}</span>
+                        <span className="font-bold text-blue-700">{latestCounter.proposedHours ? `${latestCounter.proposedHours}h` : "unchanged"}</span>
+                      </div>
+                    )}
+                    {(proposal.paymentTerms || latestCounter.proposedTerms) && (
+                      <div className="grid grid-cols-3 gap-2 text-xs items-center border-b border-blue-200 pb-1">
+                        <span className="text-muted-foreground font-medium">Payment Terms</span>
+                        <span className="text-foreground truncate">{proposal.paymentTerms || "—"}</span>
+                        <span className="font-bold text-blue-700 truncate">{latestCounter.proposedTerms || "unchanged"}</span>
+                      </div>
+                    )}
+                    {(proposal.tradeTerms || latestCounter.proposedTradeTerms) && (
+                      <div className="grid grid-cols-3 gap-2 text-xs items-center">
+                        <span className="text-muted-foreground font-medium">Trade Terms</span>
+                        <span className="text-foreground truncate">{proposal.tradeTerms || "—"}</span>
+                        <span className="font-bold text-blue-700 truncate">{latestCounter.proposedTradeTerms || "unchanged"}</span>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-3 text-xs text-muted-foreground pt-1">
+                      <span />
+                      <span className="italic">Original</span>
+                      <span className="italic font-medium text-blue-600">Counter</span>
                     </div>
                   </div>
-                  {latestCounter.proposed_amount && proposal.amount && (
-                    <div className="flex items-center gap-2 text-sm mb-3">
-                      <span className={parseFloat(latestCounter.proposed_amount) < parseFloat(proposal.amount) ? "text-red-600" : "text-green-600"}>
-                        {parseFloat(latestCounter.proposed_amount) < parseFloat(proposal.amount) ? "▼" : "▲"}{" "}
-                        {fmt(Math.abs(parseFloat(latestCounter.proposed_amount) - parseFloat(proposal.amount)))} difference
-                      </span>
-                    </div>
-                  )}
-                  {latestCounter.counter_notes && (
-                    <p className="text-sm text-blue-700 italic mb-3">"{latestCounter.counter_notes}"</p>
+                  {latestCounter.counterNotes && (
+                    <p className="text-sm text-blue-700 italic mb-3 border-t border-blue-200 pt-2">"{latestCounter.counterNotes}"</p>
                   )}
                   {!isAdmin && (
                     <div className="flex gap-2">
@@ -645,7 +696,7 @@ function ProposalDetailPanel({
                       </Button>
                       <Button size="sm" variant="outline" onClick={onEdit}
                         data-testid="btn-resubmit-revised">
-                        <Edit className="h-3.5 w-3.5 mr-1" /> Submit Revised Amount
+                        <Edit className="h-3.5 w-3.5 mr-1" /> Submit Revised Proposal
                       </Button>
                     </div>
                   )}
@@ -990,24 +1041,46 @@ function ProposalDetailPanel({
 
       {/* Counter Offer Dialog */}
       <Dialog open={counterOpen} onOpenChange={setCounterOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Counter Offer</DialogTitle></DialogHeader>
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Current amount: <strong>{fmt(proposal.amount)}</strong>
-            </p>
-            <div>
-              <Label>Counter Amount ($)</Label>
-              <Input type="number" value={counterAmount} onChange={e => setCounterAmount(e.target.value)} placeholder="0.00" min="0" step="0.01" data-testid="input-counter-amount" />
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Send Counter Offer</DialogTitle></DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div className="bg-muted/40 rounded p-3 border text-xs">
+              <p className="font-medium mb-1 text-muted-foreground">Original proposal values</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                {proposal.amount && <span>Budget: <strong>{fmt(proposal.amount)}</strong></span>}
+                {proposal.estimatedHours && <span>Hours: <strong>{proposal.estimatedHours}h</strong></span>}
+                {proposal.paymentTerms && <span className="col-span-2">Terms: {proposal.paymentTerms}</span>}
+                {proposal.tradeTerms && <span className="col-span-2">Trade terms: {proposal.tradeTerms}</span>}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Counter Budget ($)</Label>
+                <Input type="number" value={counterAmount} onChange={e => setCounterAmount(e.target.value)} placeholder={proposal.amount || "0.00"} min="0" step="0.01" data-testid="input-counter-amount" />
+              </div>
+              <div>
+                <Label className="text-xs">Counter Hours</Label>
+                <Input type="number" value={counterHours} onChange={e => setCounterHours(e.target.value)} placeholder={proposal.estimatedHours || "e.g. 40"} min="0" step="0.5" data-testid="input-counter-hours" />
+              </div>
             </div>
             <div>
-              <Label>Notes / Explanation</Label>
+              <Label className="text-xs">Counter Payment Terms</Label>
+              <Input value={counterTerms} onChange={e => setCounterTerms(e.target.value)} placeholder={proposal.paymentTerms || "e.g. Net-30, 50% upfront"} data-testid="input-counter-terms" />
+            </div>
+            {proposal.tradeTerms && (
+              <div>
+                <Label className="text-xs">Counter Trade Terms</Label>
+                <Input value={counterTradeTerms} onChange={e => setCounterTradeTerms(e.target.value)} placeholder={proposal.tradeTerms || "e.g. materials at cost"} data-testid="input-counter-trade-terms" />
+              </div>
+            )}
+            <div>
+              <Label className="text-xs">Explanation / Notes</Label>
               <Textarea value={counterNotes} onChange={e => setCounterNotes(e.target.value)} placeholder="Explain your counter offer..." rows={3} data-testid="textarea-counter-notes" />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCounterOpen(false)}>Cancel</Button>
-            <Button onClick={() => actionMutation.mutate({ action: "counter", body: { counterAmount: parseFloat(counterAmount), notes: counterNotes } })} disabled={actionMutation.isPending || !counterAmount} data-testid="btn-confirm-counter">
+            <Button onClick={() => actionMutation.mutate({ action: "counter", body: { counterAmount: counterAmount ? parseFloat(counterAmount) : undefined, counterHours: counterHours ? parseFloat(counterHours) : undefined, counterTerms: counterTerms || undefined, counterTradeTerms: counterTradeTerms || undefined, notes: counterNotes } })} disabled={actionMutation.isPending || (!counterAmount && !counterHours && !counterTerms)} data-testid="btn-confirm-counter">
               {actionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
               Send Counter Offer
             </Button>
