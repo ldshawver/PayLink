@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -22,7 +22,9 @@ import {
   Building2, Calendar, Tag, Shield, Lock, CheckCheck, FilePlus,
   LayoutDashboard, Receipt, FolderOpen, MessageSquare, Palette,
   Settings, FileSignature, CreditCard, Package, ChevronDown, ChevronUp,
-  ExternalLink, Info, AlertCircle, ThumbsUp, ThumbsDown, MessageCircle
+  ExternalLink, Info, AlertCircle, ThumbsUp, ThumbsDown, MessageCircle,
+  Briefcase, Layers, SlidersHorizontal, ArrowUpDown, Globe, Phone, Mail,
+  Image, Paintbrush, CheckSquare
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -40,6 +42,19 @@ interface Proposal {
   version?: number; revisionOfId?: string; isChangeOrder?: boolean;
   approvalName?: string; approvalEmail?: string; approvalAt?: string;
   aiGeneratedSummary?: string; sentAt?: string; viewedAt?: string; createdAt: string;
+  workType?: string; paymentType?: string; estimatedHours?: string; estimatedLaborBudget?: string;
+  tradeOffered?: string; tradeValue?: string; tradeTerms?: string;
+  templateId?: string; brandingId?: string;
+}
+
+interface ContractorBranding {
+  id?: string; companyName?: string; tagline?: string; logoUrl?: string;
+  accentColor?: string; contactEmail?: string; contactPhone?: string; website?: string;
+}
+
+interface ProposalVersion {
+  id: string; proposalId: string; version: number; changeNotes?: string;
+  snapshotJson: any; createdAt: string; createdByUserId?: string;
 }
 
 interface LineItem {
@@ -350,6 +365,26 @@ function ProposalDetailPanel({
     },
   });
 
+  const { data: versions = [] } = useQuery<ProposalVersion[]>({
+    queryKey: ["/api/contractor-proposals", proposal.id, "versions"],
+    queryFn: async () => {
+      const r = await fetch(`/api/contractor-proposals/${proposal.id}/versions`, { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+  });
+
+  const { data: negotiations = [] } = useQuery<any[]>({
+    queryKey: ["/api/contractor-proposals", proposal.id, "negotiations"],
+    queryFn: async () => {
+      const r = await fetch(`/api/contractor-proposals/${proposal.id}/negotiations`, { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+  });
+
+  const [selectedVersion, setSelectedVersion] = useState<ProposalVersion | null>(null);
+
+  const latestCounter = negotiations.filter(n => n.status === "pending" && n.direction === "company_to_contractor").slice(-1)[0];
+
   const actionMutation = useMutation({
     mutationFn: ({ action, body }: { action: string; body?: any }) =>
       apiRequest("POST", `/api/contractor-proposals/${proposal.id}/${action}`, body || {}),
@@ -516,10 +551,89 @@ function ProposalDetailPanel({
                 </div>
               )}
 
+              {latestCounter && (
+                <div className="border-2 border-blue-400 rounded-lg p-4 bg-blue-50 dark:bg-blue-950/20">
+                  <div className="flex items-center gap-2 mb-3">
+                    <ArrowUpDown className="h-5 w-5 text-blue-600" />
+                    <p className="font-semibold text-blue-700">Counter Offer Received</p>
+                    <span className="text-xs text-blue-500 ml-auto">{fmtDate(latestCounter.created_at || latestCounter.createdAt)}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 mb-3">
+                    <div className="rounded-md bg-white dark:bg-blue-900/20 border border-blue-200 p-3">
+                      <p className="text-xs text-muted-foreground mb-1">Your Original Amount</p>
+                      <p className="text-xl font-bold text-foreground">{fmt(proposal.amount)}</p>
+                    </div>
+                    <div className="rounded-md bg-blue-100 dark:bg-blue-900/40 border border-blue-300 p-3">
+                      <p className="text-xs text-muted-foreground mb-1">Counter Offer Amount</p>
+                      <p className="text-xl font-bold text-blue-700">
+                        {latestCounter.proposed_amount ? fmt(latestCounter.proposed_amount) : "—"}
+                      </p>
+                    </div>
+                  </div>
+                  {latestCounter.proposed_amount && proposal.amount && (
+                    <div className="flex items-center gap-2 text-sm mb-3">
+                      <span className={parseFloat(latestCounter.proposed_amount) < parseFloat(proposal.amount) ? "text-red-600" : "text-green-600"}>
+                        {parseFloat(latestCounter.proposed_amount) < parseFloat(proposal.amount) ? "▼" : "▲"}{" "}
+                        {fmt(Math.abs(parseFloat(latestCounter.proposed_amount) - parseFloat(proposal.amount)))} difference
+                      </span>
+                    </div>
+                  )}
+                  {latestCounter.counter_notes && (
+                    <p className="text-sm text-blue-700 italic mb-3">"{latestCounter.counter_notes}"</p>
+                  )}
+                  {!isAdmin && (
+                    <div className="flex gap-2">
+                      <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white"
+                        onClick={async () => {
+                          await apiRequest("PATCH", `/api/contractor-proposals/${proposal.id}/negotiations/${latestCounter.id}`, { status: "accepted" });
+                          queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals", proposal.id, "negotiations"] });
+                          queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
+                          toast({ title: "Counter offer accepted" });
+                          onRefresh();
+                        }}
+                        disabled={actionMutation.isPending}
+                        data-testid="btn-accept-counter">
+                        <CheckCircle className="h-3.5 w-3.5 mr-1" /> Accept Counter
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={onEdit}
+                        data-testid="btn-resubmit-revised">
+                        <Edit className="h-3.5 w-3.5 mr-1" /> Submit Revised Amount
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {proposal.internalNotes && (
                 <div className="bg-yellow-50 dark:bg-yellow-950/20 rounded-lg p-3 border border-yellow-200">
                   <p className="text-xs font-medium text-yellow-700 mb-1">Internal Notes</p>
                   <p className="text-sm text-yellow-800 dark:text-yellow-200">{proposal.internalNotes}</p>
+                </div>
+              )}
+
+              {(proposal.workType || proposal.paymentType || proposal.estimatedHours) && (
+                <div className="rounded-lg border p-3 space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Work Details</p>
+                  <div className="grid grid-cols-3 gap-3 text-sm">
+                    {proposal.workType && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Type</p>
+                        <p className="font-medium capitalize">{proposal.workType.replace(/_/g, " ")}</p>
+                      </div>
+                    )}
+                    {proposal.paymentType && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Structure</p>
+                        <p className="font-medium capitalize">{proposal.paymentType.replace(/_/g, " ")}</p>
+                      </div>
+                    )}
+                    {proposal.estimatedHours && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Est. Hours</p>
+                        <p className="font-medium">{proposal.estimatedHours}h</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </TabsContent>
@@ -631,44 +745,72 @@ function ProposalDetailPanel({
             </TabsContent>
 
             {/* History / Version History */}
-            <TabsContent value="history" className="m-0 p-6">
-              {events.length === 0 ? (
-                <p className="text-center text-muted-foreground text-sm py-8">No history yet.</p>
-              ) : (
-                <div className="space-y-3">
-                  {events.map((ev, i) => (
-                    <div key={ev.id} className="flex gap-3">
-                      <div className="flex flex-col items-center">
-                        <div className={cn(
-                          "h-7 w-7 rounded-full flex items-center justify-center shrink-0",
-                          ev.eventType === "approved" ? "bg-green-100" :
-                          ev.eventType === "rejected" ? "bg-red-100" :
-                          ev.eventType === "submitted" ? "bg-blue-100" :
-                          "bg-primary/10"
-                        )}>
-                          {ev.eventType === "approved" ? <CheckCircle className="h-3.5 w-3.5 text-green-600" /> :
-                           ev.eventType === "rejected" ? <XCircle className="h-3.5 w-3.5 text-red-600" /> :
-                           ev.eventType === "submitted" ? <Send className="h-3.5 w-3.5 text-blue-600" /> :
-                           <History className="h-3.5 w-3.5 text-primary" />}
+            <TabsContent value="history" className="m-0 p-6 space-y-6">
+              {versions.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
+                    <Layers className="h-4 w-4 text-primary" /> Version Snapshots
+                  </h3>
+                  <div className="space-y-2">
+                    {versions.map((v) => (
+                      <div key={v.id} className="flex items-center gap-3 rounded-lg border px-3 py-2">
+                        <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center text-xs font-bold text-primary shrink-0">
+                          v{v.version}
                         </div>
-                        {i < events.length - 1 && <div className="w-0.5 flex-1 bg-border mt-1" />}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium">Version {v.version}</p>
+                          <p className="text-xs text-muted-foreground">{fmtDate(v.createdAt)}</p>
+                          {v.changeNotes && <p className="text-xs text-muted-foreground italic truncate">"{v.changeNotes}"</p>}
+                        </div>
+                        <Button size="sm" variant="outline" onClick={() => setSelectedVersion(v)} data-testid={`btn-view-version-${v.version}`}>
+                          <Eye className="h-3.5 w-3.5 mr-1" /> View
+                        </Button>
                       </div>
-                      <div className="pb-4 flex-1">
-                        <p className="text-sm font-medium capitalize">{ev.eventType.replace(/_/g, " ")}</p>
-                        <p className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} — {ev.actorName || "System"}</p>
-                        {ev.notes && <p className="text-xs text-muted-foreground mt-0.5 italic">"{ev.notes}"</p>}
-                        {ev.oldStatus && ev.newStatus && (
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            <span className="capitalize">{ev.oldStatus.replace(/_/g, " ")}</span>
-                            <ChevronRight className="h-3 w-3 inline mx-0.5" />
-                            <span className="capitalize">{ev.newStatus.replace(/_/g, " ")}</span>
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
+                  <Separator className="mt-4" />
                 </div>
               )}
+              <div>
+                {versions.length > 0 && <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5"><History className="h-4 w-4 text-primary" /> Activity Log</h3>}
+                {events.length === 0 ? (
+                  <p className="text-center text-muted-foreground text-sm py-8">No history yet.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {events.map((ev, i) => (
+                      <div key={ev.id} className="flex gap-3">
+                        <div className="flex flex-col items-center">
+                          <div className={cn(
+                            "h-7 w-7 rounded-full flex items-center justify-center shrink-0",
+                            ev.eventType === "approved" ? "bg-green-100" :
+                            ev.eventType === "rejected" ? "bg-red-100" :
+                            ev.eventType === "submitted" ? "bg-blue-100" :
+                            "bg-primary/10"
+                          )}>
+                            {ev.eventType === "approved" ? <CheckCircle className="h-3.5 w-3.5 text-green-600" /> :
+                             ev.eventType === "rejected" ? <XCircle className="h-3.5 w-3.5 text-red-600" /> :
+                             ev.eventType === "submitted" ? <Send className="h-3.5 w-3.5 text-blue-600" /> :
+                             <History className="h-3.5 w-3.5 text-primary" />}
+                          </div>
+                          {i < events.length - 1 && <div className="w-0.5 flex-1 bg-border mt-1" />}
+                        </div>
+                        <div className="pb-4 flex-1">
+                          <p className="text-sm font-medium capitalize">{ev.eventType.replace(/_/g, " ")}</p>
+                          <p className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} — {ev.actorName || "System"}</p>
+                          {ev.notes && <p className="text-xs text-muted-foreground mt-0.5 italic">"{ev.notes}"</p>}
+                          {ev.oldStatus && ev.newStatus && (
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              <span className="capitalize">{ev.oldStatus.replace(/_/g, " ")}</span>
+                              <ChevronRight className="h-3 w-3 inline mx-0.5" />
+                              <span className="capitalize">{ev.newStatus.replace(/_/g, " ")}</span>
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </TabsContent>
 
             {/* Negotiation Thread */}
@@ -786,6 +928,59 @@ function ProposalDetailPanel({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Version Snapshot Dialog */}
+      {selectedVersion && (
+        <Dialog open={!!selectedVersion} onOpenChange={() => setSelectedVersion(null)}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Layers className="h-5 w-5 text-primary" />
+                Proposal — Version {selectedVersion.version} Snapshot
+              </DialogTitle>
+              <p className="text-xs text-muted-foreground mt-1">{fmtDate(selectedVersion.createdAt)} · Read-only historical view</p>
+            </DialogHeader>
+            <div className="space-y-4 mt-2">
+              {selectedVersion.changeNotes && (
+                <div className="bg-muted/40 rounded p-3 text-sm italic text-muted-foreground border-l-2 border-primary/30">
+                  Change notes: "{selectedVersion.changeNotes}"
+                </div>
+              )}
+              {selectedVersion.snapshotJson && (
+                <div className="space-y-3 text-sm">
+                  {selectedVersion.snapshotJson.title && (
+                    <div><p className="text-xs text-muted-foreground">Title</p><p className="font-medium">{selectedVersion.snapshotJson.title}</p></div>
+                  )}
+                  {selectedVersion.snapshotJson.amount && (
+                    <div><p className="text-xs text-muted-foreground">Total Amount</p><p className="font-bold text-primary text-lg">{fmt(selectedVersion.snapshotJson.amount)}</p></div>
+                  )}
+                  {selectedVersion.snapshotJson.status && (
+                    <div><p className="text-xs text-muted-foreground">Status at this version</p><ProposalBadge status={selectedVersion.snapshotJson.status} /></div>
+                  )}
+                  {selectedVersion.snapshotJson.scope_of_work && (
+                    <div><p className="text-xs text-muted-foreground">Scope of Work</p><p className="whitespace-pre-wrap text-foreground/80">{selectedVersion.snapshotJson.scope_of_work}</p></div>
+                  )}
+                  {selectedVersion.snapshotJson.payment_terms && (
+                    <div><p className="text-xs text-muted-foreground">Payment Terms</p><p className="whitespace-pre-wrap">{selectedVersion.snapshotJson.payment_terms}</p></div>
+                  )}
+                  {selectedVersion.snapshotJson.notes && (
+                    <div><p className="text-xs text-muted-foreground">Notes</p><p>{selectedVersion.snapshotJson.notes}</p></div>
+                  )}
+                  <div className="pt-2 border-t">
+                    <p className="text-xs text-muted-foreground mb-2">Full snapshot data:</p>
+                    <pre className="text-xs bg-muted rounded p-3 overflow-x-auto whitespace-pre-wrap break-all">
+                      {JSON.stringify(selectedVersion.snapshotJson, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setSelectedVersion(null)}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </Sheet>
   );
 }
@@ -808,6 +1003,13 @@ function ProposalBuilder({
   const proposalId = proposal?.id;
 
   const { data: companies = [] } = useQuery<any[]>({ queryKey: ["/api/contractor-proposals/companies"] });
+  const { data: templates = [] } = useQuery<any[]>({
+    queryKey: ["/api/contractor-templates"],
+    queryFn: async () => {
+      const r = await fetch("/api/contractor-templates", { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+  });
   const { data: lineItems = [], refetch: refetchItems } = useQuery<LineItem[]>({
     queryKey: ["/api/contractor-proposals", proposalId, "line-items"],
     queryFn: async () => {
@@ -1001,9 +1203,11 @@ function ProposalBuilder({
         </SheetHeader>
 
         <Tabs value={tab} onValueChange={setTab} className="flex flex-col flex-1 min-h-0">
-          <TabsList className="shrink-0 w-full rounded-none border-b bg-transparent h-auto p-0 justify-start gap-0">
+          <TabsList className="shrink-0 w-full rounded-none border-b bg-transparent h-auto p-0 justify-start gap-0 overflow-x-auto">
             {[
+              { value: "template", label: "Template" },
               { value: "details", label: "Details" },
+              { value: "work", label: "Work Details" },
               { value: "scope", label: "Scope" },
               { value: "pricing", label: "Pricing" },
               { value: "terms", label: "Terms" },
@@ -1013,7 +1217,7 @@ function ProposalBuilder({
               { value: "preview", label: "Preview" },
             ].map(t => (
               <TabsTrigger key={t.value} value={t.value}
-                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2.5 text-sm"
+                className="shrink-0 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2.5 text-sm"
                 data-testid={`tab-proposal-${t.value}`}>
                 {t.label}
               </TabsTrigger>
@@ -1021,6 +1225,64 @@ function ProposalBuilder({
           </TabsList>
 
           <ScrollArea className="flex-1">
+            {/* ── Template Tab ── */}
+            <TabsContent value="template" className="m-0 p-6 space-y-4">
+              <div>
+                <h3 className="font-semibold text-sm mb-1">Start from a Template</h3>
+                <p className="text-xs text-muted-foreground mb-4">Choose a template to pre-fill scope, terms, and pricing structure. You can still edit everything after applying.</p>
+              </div>
+              {templates.length === 0 ? (
+                <div className="text-center py-10 border border-dashed rounded-lg">
+                  <Layers className="h-10 w-10 mx-auto mb-3 text-primary/30" />
+                  <p className="text-sm font-medium">No templates yet</p>
+                  <p className="text-xs text-muted-foreground mt-1">Create reusable proposal templates in Profile & Branding → Templates</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {templates.map((t: any) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => {
+                        setForm(f => ({
+                          ...f,
+                          templateId: t.id,
+                          title: f.title || t.name,
+                          scopeOfWork: f.scopeOfWork || t.scopeTemplate || t.scope_template,
+                          paymentTerms: f.paymentTerms || t.paymentTermsTemplate || t.payment_terms_template,
+                          assumptions: f.assumptions || t.assumptionsTemplate || t.assumptions_template,
+                          exclusions: f.exclusions || t.exclusionsTemplate || t.exclusions_template,
+                          workType: f.workType || t.workType || t.work_type,
+                        }));
+                        toast({ title: `Template "${t.name}" applied` });
+                        setTab("details");
+                      }}
+                      className={cn(
+                        "text-left rounded-lg border p-4 hover:border-primary hover:bg-primary/5 transition-colors",
+                        (form.templateId ?? current.templateId) === t.id ? "border-primary bg-primary/5" : "border-border"
+                      )}
+                      data-testid={`btn-template-${t.id}`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="font-medium text-sm">{t.name}</p>
+                          {t.description && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{t.description}</p>}
+                          {(t.workType || t.work_type) && (
+                            <span className="inline-block mt-1.5 px-2 py-0.5 rounded bg-primary/10 text-primary text-xs">
+                              {t.workType || t.work_type}
+                            </span>
+                          )}
+                        </div>
+                        {(form.templateId ?? current.templateId) === t.id && (
+                          <CheckSquare className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+
             {/* ── Details Tab ── */}
             <TabsContent value="details" className="m-0 p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
@@ -1074,6 +1336,84 @@ function ProposalBuilder({
                       placeholder="Internal notes (not shown to client)..." rows={2} data-testid="textarea-internal-notes" />
                   </div>
                 )}
+              </div>
+            </TabsContent>
+
+            {/* ── Work Details Tab ── */}
+            <TabsContent value="work" className="m-0 p-6 space-y-5">
+              <div>
+                <h3 className="font-semibold text-sm mb-1 flex items-center gap-2"><Briefcase className="h-4 w-4 text-primary" /> Work Classification</h3>
+                <p className="text-xs text-muted-foreground mb-3">Define the nature of the work for accurate quoting, reporting, and compliance.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Work Type</Label>
+                  <Select value={form.workType ?? current.workType ?? ""} onValueChange={v => setForm(f => ({ ...f, workType: v }))} disabled={!canEdit}>
+                    <SelectTrigger data-testid="select-work-type"><SelectValue placeholder="Select type" /></SelectTrigger>
+                    <SelectContent>
+                      {["residential","commercial","industrial","renovation","new_construction","maintenance","consulting","other"].map(v => (
+                        <SelectItem key={v} value={v}>{v.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Payment Structure</Label>
+                  <Select value={form.paymentType ?? current.paymentType ?? ""} onValueChange={v => setForm(f => ({ ...f, paymentType: v }))} disabled={!canEdit}>
+                    <SelectTrigger data-testid="select-payment-type"><SelectValue placeholder="Select structure" /></SelectTrigger>
+                    <SelectContent>
+                      {[
+                        { v: "fixed_price", l: "Fixed Price" },
+                        { v: "hourly", l: "Hourly Rate" },
+                        { v: "milestone", l: "Milestone-Based" },
+                        { v: "time_and_materials", l: "Time & Materials" },
+                        { v: "cost_plus", l: "Cost Plus" },
+                        { v: "trade", l: "Trade / Non-Cash" },
+                      ].map(o => <SelectItem key={o.v} value={o.v}>{o.l}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Estimated Hours</Label>
+                  <Input type="number" min="0" step="0.5"
+                    value={form.estimatedHours ?? current.estimatedHours ?? ""}
+                    onChange={e => setForm(f => ({ ...f, estimatedHours: e.target.value }))}
+                    placeholder="0.0" disabled={!canEdit} data-testid="input-estimated-hours" />
+                </div>
+                <div>
+                  <Label>Estimated Labor Budget ($)</Label>
+                  <Input type="number" min="0" step="0.01"
+                    value={form.estimatedLaborBudget ?? current.estimatedLaborBudget ?? ""}
+                    onChange={e => setForm(f => ({ ...f, estimatedLaborBudget: e.target.value }))}
+                    placeholder="0.00" disabled={!canEdit} data-testid="input-labor-budget" />
+                </div>
+              </div>
+              <Separator />
+              <div>
+                <h3 className="font-semibold text-sm mb-1 flex items-center gap-2"><ArrowUpDown className="h-4 w-4 text-primary" /> Trade / Non-Cash Compensation</h3>
+                <p className="text-xs text-muted-foreground mb-3">If part of the compensation is non-cash (barter, trade, goods), specify it here.</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label>Trade Offered (what client provides)</Label>
+                    <Input value={form.tradeOffered ?? current.tradeOffered ?? ""}
+                      onChange={e => setForm(f => ({ ...f, tradeOffered: e.target.value }))}
+                      placeholder="e.g. Equipment, Materials, Services" disabled={!canEdit} data-testid="input-trade-offered" />
+                  </div>
+                  <div>
+                    <Label>Trade Value ($)</Label>
+                    <Input type="number" min="0" step="0.01"
+                      value={form.tradeValue ?? current.tradeValue ?? ""}
+                      onChange={e => setForm(f => ({ ...f, tradeValue: e.target.value }))}
+                      placeholder="0.00" disabled={!canEdit} data-testid="input-trade-value" />
+                  </div>
+                  <div className="col-span-2">
+                    <Label>Trade Terms & Conditions</Label>
+                    <Textarea value={form.tradeTerms ?? current.tradeTerms ?? ""}
+                      onChange={e => setForm(f => ({ ...f, tradeTerms: e.target.value }))}
+                      placeholder="Describe the trade arrangement, delivery timeline, quality standards..." rows={3}
+                      disabled={!canEdit} data-testid="textarea-trade-terms" />
+                  </div>
+                </div>
               </div>
             </TabsContent>
 
@@ -1928,23 +2268,177 @@ function MessagesSection() {
 // ─── Branding Section ─────────────────────────────────────────────────────────
 
 function BrandingSection() {
+  const { toast } = useToast();
+  const [form, setForm] = useState<Record<string, string>>({});
+  const [dirty, setDirty] = useState(false);
+
+  const { data: currentUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
+  const sectionIsAdmin = currentUser?.role === "admin" || currentUser?.role === "manager" ||
+    (currentUser?.role || "").startsWith("tenant_") || (currentUser?.role || "").startsWith("platform_");
+
+  const { data: branding, isLoading } = useQuery<any>({
+    queryKey: ["/api/contractor-branding"],
+    enabled: !sectionIsAdmin,
+    queryFn: async () => {
+      const r = await fetch("/api/contractor-branding", { credentials: "include" });
+      if (r.status === 404) return null;
+      return r.ok ? r.json() : null;
+    },
+  });
+
+  useEffect(() => {
+    if (branding && !dirty) {
+      setForm({
+        businessName: branding.business_name || "",
+        tagline: branding.tagline || "",
+        primaryColor: branding.primary_color || "#0f766e",
+        secondaryColor: branding.secondary_color || "#64748b",
+        websiteUrl: branding.website_url || "",
+        licenseNumber: branding.license_number || "",
+        signatureText: branding.signature_text || "",
+        coverNote: branding.cover_note || "",
+        footerText: branding.footer_text || "",
+        insuranceInfo: branding.insurance_info || "",
+      });
+    }
+  }, [branding, dirty]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const body = new URLSearchParams();
+      Object.entries(form).forEach(([k, v]) => v && body.append(k, v));
+      const r = await fetch("/api/contractor-branding", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+      });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.message); }
+      return r.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-branding"] });
+      toast({ title: "Branding saved" });
+      setDirty(false);
+    },
+    onError: (e: any) => toast({ title: e?.message || "Save failed", variant: "destructive" }),
+  });
+
+  function upd(k: string, v: string) { setForm(f => ({ ...f, [k]: v })); setDirty(true); }
+
+  if (sectionIsAdmin) return (
+    <div className="flex flex-col items-center justify-center py-16 text-center gap-3" data-testid="branding-admin-notice">
+      <Briefcase className="h-10 w-10 text-muted-foreground/50" />
+      <h3 className="font-medium text-base">Branding is a Contractor Feature</h3>
+      <p className="text-sm text-muted-foreground max-w-sm">Profile & Branding allows contractors to customize how their proposals appear to clients. This section is only available for contractor accounts.</p>
+    </div>
+  );
+
+  if (isLoading) return <div className="flex items-center justify-center py-12"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
+
   return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-lg font-semibold">Profile & Branding</h2>
-        <p className="text-sm text-muted-foreground">Customize how your proposals look to clients</p>
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">Profile & Branding</h2>
+          <p className="text-sm text-muted-foreground">Customize how your proposals look to clients</p>
+        </div>
+        <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !dirty} data-testid="btn-save-branding">
+          {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+          Save Branding
+        </Button>
       </div>
+
       <Card>
-        <CardContent className="p-6 text-center">
-          <Palette className="h-12 w-12 mx-auto mb-3 text-primary/40" />
-          <p className="font-medium mb-1">Proposal Templates & Branding</p>
-          <p className="text-sm text-muted-foreground mb-4">Logo, brand colors, email signature, and proposal templates will be configurable here in the upcoming branding update.</p>
-          <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-            <Info className="h-3.5 w-3.5" />
-            <span>Branding settings coming in Task #34</span>
+        <CardContent className="p-5 space-y-4">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5"><Briefcase className="h-3.5 w-3.5" /> Business Identity</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="col-span-2 sm:col-span-1">
+              <Label>Business Name</Label>
+              <Input value={form.businessName || ""} onChange={e => upd("businessName", e.target.value)} placeholder="Your business or trading name" data-testid="input-brand-name" />
+            </div>
+            <div className="col-span-2 sm:col-span-1">
+              <Label>License Number</Label>
+              <Input value={form.licenseNumber || ""} onChange={e => upd("licenseNumber", e.target.value)} placeholder="Contractor license #" data-testid="input-brand-license" />
+            </div>
+            <div className="col-span-2">
+              <Label>Tagline</Label>
+              <Input value={form.tagline || ""} onChange={e => upd("tagline", e.target.value)} placeholder="Your professional tagline" data-testid="input-brand-tagline" />
+            </div>
+            <div className="col-span-2 sm:col-span-1">
+              <Label>Website</Label>
+              <div className="relative">
+                <Globe className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input className="pl-8" value={form.websiteUrl || ""} onChange={e => upd("websiteUrl", e.target.value)} placeholder="https://yoursite.com" data-testid="input-brand-website" />
+              </div>
+            </div>
+            <div className="col-span-2 sm:col-span-1">
+              <Label>Insurance Info</Label>
+              <Input value={form.insuranceInfo || ""} onChange={e => upd("insuranceInfo", e.target.value)} placeholder="Policy #, carrier, expiry" data-testid="input-brand-insurance" />
+            </div>
           </div>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardContent className="p-5 space-y-4">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5"><Paintbrush className="h-3.5 w-3.5" /> Proposal Appearance</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label>Brand Color (Primary)</Label>
+              <div className="flex items-center gap-2 mt-1">
+                <input type="color" value={form.primaryColor || "#0f766e"} onChange={e => upd("primaryColor", e.target.value)} className="h-9 w-12 rounded border cursor-pointer" data-testid="input-brand-primary-color" />
+                <Input value={form.primaryColor || "#0f766e"} onChange={e => upd("primaryColor", e.target.value)} className="flex-1 font-mono text-sm" data-testid="input-brand-primary-color-hex" />
+              </div>
+            </div>
+            <div>
+              <Label>Accent Color (Secondary)</Label>
+              <div className="flex items-center gap-2 mt-1">
+                <input type="color" value={form.secondaryColor || "#64748b"} onChange={e => upd("secondaryColor", e.target.value)} className="h-9 w-12 rounded border cursor-pointer" data-testid="input-brand-secondary-color" />
+                <Input value={form.secondaryColor || "#64748b"} onChange={e => upd("secondaryColor", e.target.value)} className="flex-1 font-mono text-sm" data-testid="input-brand-secondary-color-hex" />
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="p-5 space-y-4">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5"><FileText className="h-3.5 w-3.5" /> Proposal Text</p>
+          <div className="space-y-4">
+            <div>
+              <Label>Cover Note (opening statement)</Label>
+              <Textarea value={form.coverNote || ""} onChange={e => upd("coverNote", e.target.value)} placeholder="Thank you for the opportunity to submit this proposal..." rows={3} data-testid="textarea-brand-cover" />
+            </div>
+            <div>
+              <Label>Signature / Closing Text</Label>
+              <Textarea value={form.signatureText || ""} onChange={e => upd("signatureText", e.target.value)} placeholder="Respectfully submitted,\nYour Name\nYour Title" rows={3} data-testid="textarea-brand-signature" />
+            </div>
+            <div>
+              <Label>Footer Text</Label>
+              <Input value={form.footerText || ""} onChange={e => upd("footerText", e.target.value)} placeholder="Footer text displayed on proposals & invoices" data-testid="input-brand-footer" />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {branding && (
+        <div className="rounded-lg border p-4 bg-muted/30">
+          <p className="text-xs font-semibold mb-3 flex items-center gap-1.5"><Eye className="h-3.5 w-3.5" /> Preview Applied To Proposals</p>
+          <div className="rounded border p-4 bg-white dark:bg-background space-y-2" style={{ borderColor: form.primaryColor || "#0f766e" }}>
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="font-bold text-sm" style={{ color: form.primaryColor || "#0f766e" }}>{form.businessName || "Your Business Name"}</p>
+                {form.tagline && <p className="text-xs text-muted-foreground">{form.tagline}</p>}
+              </div>
+              <div className="text-right text-xs text-muted-foreground">
+                {form.websiteUrl && <p>{form.websiteUrl}</p>}
+                {form.licenseNumber && <p>Lic. #{form.licenseNumber}</p>}
+              </div>
+            </div>
+            {form.coverNote && <p className="text-xs italic text-muted-foreground border-t pt-2 mt-2">{form.coverNote.slice(0, 100)}...</p>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1992,6 +2486,8 @@ export default function ContractorHubPage() {
   const [section, setSection] = useState<HubSection>("dashboard");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [companyFilter, setCompanyFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("date_desc");
   const [selectedProposal, setSelectedProposal] = useState<Proposal | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [builderOpen, setBuilderOpen] = useState(false);
@@ -2036,11 +2532,23 @@ export default function ContractorHubPage() {
     onError: (e: any) => toast({ title: e?.message || "Action failed", variant: "destructive" }),
   });
 
-  const filteredProposals = proposals.filter(p => {
-    const matchSearch = !search || p.title?.toLowerCase().includes(search.toLowerCase()) || p.proposalNumber?.toLowerCase().includes(search.toLowerCase());
-    const matchStatus = statusFilter === "all" || p.status === statusFilter;
-    return matchSearch && matchStatus;
-  });
+  const allCompanies = Array.from(new Set(proposals.map(p => p.companyId).filter(Boolean)))
+    .map(id => ({ id, name: (proposals.find(p => p.companyId === id) as any)?.companyName || id }));
+
+  const filteredProposals = proposals
+    .filter(p => {
+      const matchSearch = !search || p.title?.toLowerCase().includes(search.toLowerCase()) || p.proposalNumber?.toLowerCase().includes(search.toLowerCase());
+      const matchStatus = statusFilter === "all" || p.status === statusFilter;
+      const matchCompany = companyFilter === "all" || p.companyId === companyFilter;
+      return matchSearch && matchStatus && matchCompany;
+    })
+    .sort((a, b) => {
+      if (sortBy === "date_desc") return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      if (sortBy === "date_asc") return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      if (sortBy === "amount_desc") return parseFloat(b.amount || "0") - parseFloat(a.amount || "0");
+      if (sortBy === "amount_asc") return parseFloat(a.amount || "0") - parseFloat(b.amount || "0");
+      return 0;
+    });
 
   const filteredInvoices = invoices.filter(i => {
     const matchSearch = !search || i.title?.toLowerCase().includes(search.toLowerCase()) || i.invoiceNumber?.toLowerCase().includes(search.toLowerCase()) || i.description?.toLowerCase().includes(search.toLowerCase());
@@ -2062,6 +2570,8 @@ export default function ContractorHubPage() {
     setSection(s);
     setSearch("");
     setStatusFilter("all");
+    setCompanyFilter("all");
+    setSortBy("date_desc");
   }
 
   function openBuilderForNew() {
@@ -2165,7 +2675,7 @@ export default function ContractorHubPage() {
             </p>
           </div>
 
-          {section === "proposals" && !isAdmin && (
+          {section === "proposals" && (
             <Button onClick={openBuilderForNew} data-testid="btn-new-proposal">
               <Plus className="h-4 w-4 mr-1" /> New Proposal
             </Button>
@@ -2186,13 +2696,34 @@ export default function ContractorHubPage() {
             {/* Proposals */}
             {section === "proposals" && (
               <div className="space-y-4">
-                <div className="flex items-center gap-2">
-                  <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search proposals..." className="h-8 max-w-xs" data-testid="input-search-proposals" />
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search proposals..." className="h-8 max-w-xs flex-1 min-w-[160px]" data-testid="input-search-proposals" />
                   <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger className="h-8 w-40" data-testid="select-proposal-status-filter"><SelectValue placeholder="All Status" /></SelectTrigger>
+                    <SelectTrigger className="h-8 w-36" data-testid="select-proposal-status-filter"><SelectValue placeholder="All Status" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All Status</SelectItem>
                       {Object.entries(PROPOSAL_STATUS_CONFIG).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  {isAdmin && allCompanies.length > 0 && (
+                    <Select value={companyFilter} onValueChange={setCompanyFilter}>
+                      <SelectTrigger className="h-8 w-40" data-testid="select-proposal-company-filter"><SelectValue placeholder="All Companies" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Companies</SelectItem>
+                        {allCompanies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  <Select value={sortBy} onValueChange={setSortBy}>
+                    <SelectTrigger className="h-8 w-36" data-testid="select-proposal-sort">
+                      <ArrowUpDown className="h-3.5 w-3.5 mr-1 text-muted-foreground" />
+                      <SelectValue placeholder="Sort" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="date_desc">Newest First</SelectItem>
+                      <SelectItem value="date_asc">Oldest First</SelectItem>
+                      <SelectItem value="amount_desc">Amount: High → Low</SelectItem>
+                      <SelectItem value="amount_asc">Amount: Low → High</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

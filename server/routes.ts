@@ -7242,8 +7242,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!isPlatform && user?.companyId && prop.company_id && prop.company_id !== user.companyId) return null;
     } else {
       // Contractor must own the proposal
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${sessionUserId}`);
-      const wId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${sessionUserId}`);
+      const wId = (wRes.rows[0] as any)?.worker_id;
       if (!wId || prop.contractor_id !== wId) return null;
     }
     return { prop, isAdmin };
@@ -7292,8 +7292,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const { proposedAmount, proposedTerms, counterNotes, direction } = req.body;
       const user = await storage.getUser(req.session.userId!);
       const dir = direction || (access.isAdmin ? "company_to_contractor" : "contractor_to_company");
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id || null;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id || null;
       const result = await db.execute(sql`
         INSERT INTO proposal_negotiations (proposal_id, initiated_by_user_id, initiated_by_worker_id, direction, proposed_amount, proposed_terms, counter_notes)
         VALUES (${req.params.id}, ${req.session.userId}, ${workerId}, ${dir}, ${proposedAmount || null}, ${proposedTerms || null}, ${counterNotes || null})
@@ -7303,6 +7303,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await db.execute(sql`UPDATE contractor_proposals SET status = 'revision_requested' WHERE id = ${req.params.id} AND status NOT IN ('approved','rejected','void')`);
       res.status(201).json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to create negotiation: " + e.message }); }
+  });
+
+  // Shorthand counter route (admin sends counter offer to contractor)
+  app.post("/api/contractor-proposals/:id/counter", requireAuth, async (req, res) => {
+    try {
+      const access = await assertProposalAccess(req.params.id, req.session.userId!);
+      if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
+      const { counterAmount, notes } = req.body;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id || null;
+      const result = await db.execute(sql`
+        INSERT INTO proposal_negotiations (proposal_id, initiated_by_user_id, initiated_by_worker_id, direction, proposed_amount, counter_notes)
+        VALUES (${req.params.id}, ${req.session.userId}, ${workerId}, 'company_to_contractor', ${counterAmount || null}, ${notes || null})
+        RETURNING *
+      `);
+      await db.execute(sql`UPDATE contractor_proposals SET status = 'revision_requested' WHERE id = ${req.params.id} AND status NOT IN ('approved','rejected','void')`);
+      res.status(201).json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to send counter: " + e.message }); }
   });
 
   app.patch("/api/contractor-proposals/:id/negotiations/:negId", requireAuth, async (req, res) => {
@@ -7339,8 +7357,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         rows = result.rows;
       } else {
         // Contractors only see their own — always derived from session, never from query param
-        const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-        const wId = (wRes.rows[0] as any)?.id;
+        const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+        const wId = (wRes.rows[0] as any)?.worker_id;
         if (!wId) return res.json([]);
         const result = await db.execute(sql`SELECT * FROM contractor_contracts WHERE contractor_id = ${wId} ORDER BY created_at DESC`);
         rows = result.rows;
@@ -7352,8 +7370,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/contractor-contracts/:id", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       const result = await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.id = ${req.params.id}`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
@@ -7438,8 +7456,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const { name, signatureData, role } = req.body;
       const user = await storage.getUser(req.session.userId!);
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id || null;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id || null;
 
       const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
       const contract = contractRes.rows[0] as any;
@@ -7507,8 +7525,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       // Reuse GET /:id ownership logic
       const user = await storage.getUser(req.session.userId!);
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       const contractRes = await db.execute(sql`SELECT contractor_id, company_id FROM contractor_contracts WHERE id = ${req.params.id}`);
       if (!contractRes.rows[0]) return res.status(404).json({ message: "Contract not found" });
@@ -7554,8 +7572,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         `);
       } else {
         // Contractors only see their own documents — workerId always from session
-        const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-        const wId = (wRes.rows[0] as any)?.id;
+        const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+        const wId = (wRes.rows[0] as any)?.worker_id;
         if (!wId) return res.json([]);
         result = await db.execute(sql`SELECT * FROM dam_documents WHERE worker_id = ${wId} AND is_archived = FALSE ORDER BY created_at DESC`);
       }
@@ -7566,8 +7584,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/dam-documents/:id", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       const result = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
       if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
@@ -7585,8 +7603,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.getUser(req.session.userId!);
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       const isPlatform = (user?.role || "").startsWith("platform_");
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const sessionWorkerId = (wRes.rows[0] as any)?.id || null;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const sessionWorkerId = (wRes.rows[0] as any)?.worker_id || null;
       let workerId: number | null;
       if (isAdmin && req.body.workerId) {
         // Admin may specify a target worker, but must validate they belong to the same company
@@ -7614,8 +7632,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/dam-documents/:id/download", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       const result = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
       if (!result.rows[0]) return res.status(404).json({ message: "Document not found" });
@@ -7631,8 +7649,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.patch("/api/dam-documents/:id", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       const isPlatform = (user?.role || "").startsWith("platform_");
       const existing = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
@@ -7662,8 +7680,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.delete("/api/dam-documents/:id", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       const isPlatform = (user?.role || "").startsWith("platform_");
       const existing = await db.execute(sql`SELECT * FROM dam_documents WHERE id = ${req.params.id}`);
@@ -7775,8 +7793,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       const isPlatform = (user?.role || "").startsWith("platform_");
       const { workerId: queryWorkerId } = req.query as Record<string, string>;
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const sessionWorkerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const sessionWorkerId = (wRes.rows[0] as any)?.worker_id;
       let wId: number | null;
       if (isAdmin && queryWorkerId) {
         // Verify the requested worker belongs to the caller's company (unless platform)
@@ -7799,8 +7817,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.getUser(req.session.userId!);
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       const isPlatform = (user?.role || "").startsWith("platform_");
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const sessionWorkerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const sessionWorkerId = (wRes.rows[0] as any)?.worker_id;
       let wId: number | null;
       if (isAdmin && req.body.workerId) {
         // Verify the target worker belongs to the caller's company (unless platform)
@@ -7838,8 +7856,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/contractor-notifications", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
       const { unreadOnly } = req.query as Record<string, string>;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_");
       let result;
@@ -7862,8 +7880,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/contractor-notifications/:id/read", requireAuth, async (req, res) => {
     try {
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
       // Only mark read if the notification belongs to this user or their worker record
       const result = await db.execute(sql`
         UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW()
@@ -7877,8 +7895,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/contractor-notifications/mark-all-read", requireAuth, async (req, res) => {
     try {
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
       await db.execute(sql`UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW() WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null}) AND is_read = FALSE`);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to mark all read" }); }
@@ -7898,8 +7916,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/contractor-reminders", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
       const { status, entityType } = req.query as Record<string, string>;
       const result = await db.execute(sql`
         SELECT * FROM contractor_reminders
@@ -7917,8 +7935,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const { entityType, entityId, reminderType, title, notes, scheduledAt, channel } = req.body;
       if (!entityType || !title || !scheduledAt) return res.status(400).json({ message: "entityType, title, and scheduledAt are required" });
       const user = await storage.getUser(req.session.userId!);
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
       const result = await db.execute(sql`
         INSERT INTO contractor_reminders (worker_id, user_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel)
         VALUES (${workerId || null}, ${req.session.userId}, ${user?.companyId || null}, ${entityType}, ${entityId || null}, ${reminderType || "follow_up"}, ${title}, ${notes || null}, ${scheduledAt}, ${channel || "in_app"})
@@ -7930,8 +7948,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/contractor-reminders/:id", requireAuth, async (req, res) => {
     try {
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
       const { title, notes, scheduledAt, channel, status } = req.body;
       const result = await db.execute(sql`
         UPDATE contractor_reminders SET
@@ -7951,8 +7969,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/contractor-reminders/:id", requireAuth, async (req, res) => {
     try {
-      const wRes = await db.execute(sql`SELECT id FROM workers WHERE user_id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.id;
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
       await db.execute(sql`
         UPDATE contractor_reminders SET status = 'dismissed', dismissed_at = NOW(), updated_at = NOW()
         WHERE id = ${req.params.id} AND (user_id = ${req.session.userId} OR worker_id = ${workerId || null})
