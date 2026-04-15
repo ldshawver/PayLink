@@ -189,9 +189,11 @@ const CONTRACT_STATUS_CONFIG: Record<string, { label: string; color: string; bg:
   fully_signed:     { label: "Fully Signed",     color: "text-teal-700",   bg: "bg-teal-50 dark:bg-teal-950/30" },
   active:           { label: "Active",           color: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30" },
   expiring_soon:    { label: "Expiring Soon",    color: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950/30" },
+  renegotiation:    { label: "Renegotiation",    color: "text-violet-600", bg: "bg-violet-50 dark:bg-violet-950/30" },
   completed:        { label: "Completed",        color: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-950/30" },
   cancelled:        { label: "Cancelled",        color: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30" },
   expired:          { label: "Expired",          color: "text-yellow-600", bg: "bg-yellow-50 dark:bg-yellow-950/30" },
+  superseded:       { label: "Superseded",       color: "text-gray-500",   bg: "bg-gray-50 dark:bg-gray-900/30" },
   terminated:       { label: "Terminated",       color: "text-red-700",    bg: "bg-red-50 dark:bg-red-950/30" },
   void:             { label: "Void",             color: "text-gray-400",   bg: "bg-gray-50 dark:bg-gray-900/30" },
 };
