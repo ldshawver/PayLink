@@ -1241,115 +1241,10 @@ function ProposalFormModal({
   );
 }
 
-function ContractorInvoiceFormModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { toast } = useToast();
-  const [form, setForm] = useState({
-    companyId: "",
-    description: "",
-    amount: "",
-    invoiceDate: new Date().toISOString().split("T")[0],
-    dueDate: "",
-    notes: "",
-  });
-  const [items, setItems] = useState<LineItem[]>([]);
-  const [taxRate, setTaxRate] = useState(0);
-
-  const { data: companies = [] } = useQuery<any[]>({ queryKey: ["/api/contractor-proposals/companies"] });
-
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      const subtotal = items.length > 0 ? items.reduce((s, i) => s + Number(i.amount || 0), 0) : Number(form.amount || 0);
-      const taxAmt = subtotal * (taxRate / 100);
-      const total = subtotal + taxAmt;
-      const body: any = {
-        companyId: form.companyId || undefined,
-        description: form.description,
-        invoiceDate: form.invoiceDate,
-        dueDate: form.dueDate || undefined,
-        notes: form.notes || undefined,
-        amount: total.toFixed(2),
-        status: "draft",
-      };
-      if (items.length > 0) body.lineItems = JSON.stringify(items);
-      return apiRequest("POST", "/api/contractor-invoices", body);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
-      toast({ title: "Invoice created", description: "Submit it when ready." });
-      onClose();
-    },
-    onError: (e: any) => toast({ title: e?.message || "Error creating invoice", variant: "destructive" }),
-  });
-
-  return (
-    <Dialog open={open} onOpenChange={v => !v && onClose()}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>New Contractor Invoice</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <Label>Invoice To (Company)</Label>
-              <Select value={form.companyId} onValueChange={v => setForm(p => ({ ...p, companyId: v === "__none__" ? "" : v }))}>
-                <SelectTrigger data-testid="select-invoice-company"><SelectValue placeholder="Select company (optional)" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">None / Self-employed</SelectItem>
-                  {companies.map((c: any) => (
-                    <SelectItem key={c.id} value={c.id}>{c.name || c.legal_name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label>Invoice Date *</Label>
-              <Input type="date" value={form.invoiceDate} onChange={e => setForm(p => ({ ...p, invoiceDate: e.target.value }))} data-testid="input-invoice-date" />
-            </div>
-            <div className="space-y-1">
-              <Label>Due Date</Label>
-              <Input type="date" value={form.dueDate} onChange={e => setForm(p => ({ ...p, dueDate: e.target.value }))} data-testid="input-invoice-due-date" />
-            </div>
-            <div className="space-y-1">
-              <Label>Quick Amount (if no line items)</Label>
-              <Input type="number" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} placeholder="0.00" min="0" step="0.01" disabled={items.length > 0} data-testid="input-invoice-amount" />
-              {items.length > 0 && <p className="text-xs text-muted-foreground">Calculated from line items</p>}
-            </div>
-          </div>
-          <div className="space-y-1">
-            <Label>Description</Label>
-            <Textarea value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} rows={2} placeholder="Services rendered for..." data-testid="textarea-invoice-description" />
-          </div>
-          <Separator />
-          <div>
-            <p className="text-sm font-semibold mb-2">Line Items (optional)</p>
-            <LineItemsEditor items={items} onChange={setItems} taxRate={taxRate} onTaxRateChange={setTaxRate} />
-          </div>
-          <div className="space-y-1">
-            <Label>Notes</Label>
-            <Textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={2} data-testid="textarea-invoice-notes" />
-          </div>
-        </div>
-        <DialogFooter className="mt-4">
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button
-            onClick={() => saveMutation.mutate()}
-            disabled={saveMutation.isPending || (!form.amount && items.length === 0) || !form.invoiceDate}
-            data-testid="btn-save-contractor-invoice"
-          >
-            {saveMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
-            Create Invoice (Draft)
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 function ContractorHubTab({ isAdmin }: { isAdmin: boolean }) {
   const { toast } = useToast();
   const [activeSubTab, setActiveSubTab] = useState("proposals");
   const [createProposalOpen, setCreateProposalOpen] = useState(false);
-  const [createInvoiceOpen, setCreateInvoiceOpen] = useState(false);
   const [editProposal, setEditProposal] = useState<ContractorProposal | null>(null);
   const [viewProposal, setViewProposal] = useState<ContractorProposal | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
@@ -1423,9 +1318,6 @@ function ContractorHubTab({ isAdmin }: { isAdmin: boolean }) {
           <div className="flex items-center gap-2">
             <Button size="sm" onClick={() => setCreateProposalOpen(true)} data-testid="btn-new-proposal">
               <Plus className="h-4 w-4 mr-1" /> New Proposal
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setCreateInvoiceOpen(true)} data-testid="btn-new-contractor-invoice">
-              <Plus className="h-4 w-4 mr-1" /> New Invoice
             </Button>
           </div>
         )}
@@ -1568,8 +1460,8 @@ function ContractorHubTab({ isAdmin }: { isAdmin: boolean }) {
               <DollarSign className="h-12 w-12 text-muted-foreground/40 mb-3" />
               <p className="font-medium text-muted-foreground">{isAdmin ? "No contractor invoices yet" : "No invoices yet"}</p>
               {!isAdmin && (
-                <Button className="mt-4" size="sm" onClick={() => setCreateInvoiceOpen(true)} data-testid="btn-create-first-invoice">
-                  <Plus className="h-4 w-4 mr-1" /> Create Your First Invoice
+                <Button className="mt-4" size="sm" variant="outline" asChild data-testid="btn-go-to-hub-invoices">
+                  <a href="/app/contractor-hub">Go to Contractor Hub</a>
                 </Button>
               )}
             </div>
@@ -1767,13 +1659,6 @@ function ContractorHubTab({ isAdmin }: { isAdmin: boolean }) {
         />
       )}
 
-      {/* Create Contractor Invoice Modal */}
-      {createInvoiceOpen && (
-        <ContractorInvoiceFormModal
-          open={true}
-          onClose={() => setCreateInvoiceOpen(false)}
-        />
-      )}
     </div>
   );
 }
