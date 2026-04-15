@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -92,17 +93,20 @@ interface Contract {
 // ─── Status Helpers ───────────────────────────────────────────────────────────
 
 const PROPOSAL_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  draft:             { label: "Draft",              color: "text-gray-600",   bg: "bg-gray-100 dark:bg-gray-800" },
-  internal_review:   { label: "Internal Review",    color: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950/30" },
-  sent:              { label: "Sent",               color: "text-indigo-600", bg: "bg-indigo-50 dark:bg-indigo-950/30" },
-  viewed:            { label: "Viewed",             color: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-950/30" },
-  revision_requested:{ label: "Revision Needed",    color: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950/30" },
-  submitted:         { label: "Submitted",          color: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950/30" },
-  approved:          { label: "Approved",           color: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30" },
-  declined:          { label: "Declined",           color: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30" },
-  rejected:          { label: "Rejected",           color: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30" },
-  expired:           { label: "Expired",            color: "text-yellow-600", bg: "bg-yellow-50 dark:bg-yellow-950/30" },
-  superseded:        { label: "Superseded",         color: "text-gray-500",   bg: "bg-gray-50 dark:bg-gray-900/30" },
+  draft:                 { label: "Draft",                color: "text-gray-600",   bg: "bg-gray-100 dark:bg-gray-800" },
+  internal_review:       { label: "Internal Review",      color: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950/30" },
+  sent:                  { label: "Sent",                 color: "text-indigo-600", bg: "bg-indigo-50 dark:bg-indigo-950/30" },
+  viewed:                { label: "Viewed",               color: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-950/30" },
+  revision_requested:    { label: "Revision Needed",      color: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950/30" },
+  submitted:             { label: "Submitted",            color: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950/30" },
+  countered:             { label: "Countered",            color: "text-amber-600",  bg: "bg-amber-50 dark:bg-amber-950/30" },
+  negotiated:            { label: "Negotiated",           color: "text-teal-600",   bg: "bg-teal-50 dark:bg-teal-950/30" },
+  approved:              { label: "Approved",             color: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30" },
+  converted_to_contract: { label: "Converted to Contract",color: "text-emerald-700",bg: "bg-emerald-50 dark:bg-emerald-950/30" },
+  declined:              { label: "Declined",             color: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30" },
+  rejected:              { label: "Rejected",             color: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30" },
+  expired:               { label: "Expired",              color: "text-yellow-600", bg: "bg-yellow-50 dark:bg-yellow-950/30" },
+  superseded:            { label: "Superseded",           color: "text-gray-500",   bg: "bg-gray-50 dark:bg-gray-900/30" },
 };
 
 const INVOICE_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
@@ -424,7 +428,10 @@ function ProposalDetailPanel({
 
   const canEdit = ["draft", "revision_requested"].includes(proposal.status);
   const canSubmit = ["draft", "revision_requested"].includes(proposal.status) && !isAdmin;
-  const canAdminAction = isAdmin && ["submitted", "sent", "viewed"].includes(proposal.status);
+  const canAdminAction = isAdmin && ["submitted", "sent", "viewed", "countered"].includes(proposal.status);
+  const canNegotiate = isAdmin && proposal.status === "countered";
+  const canMarkNegotiated = isAdmin && ["countered", "negotiated"].includes(proposal.status);
+  const canConvertToContract = isAdmin && ["approved", "negotiated"].includes(proposal.status);
   const canRevise = !isAdmin && ["draft", "revision_requested"].includes(proposal.status);
   const canCreateRevision = isAdmin && ["approved", "sent", "viewed"].includes(proposal.status);
 
@@ -468,6 +475,16 @@ function ProposalDetailPanel({
                     <XCircle className="h-3.5 w-3.5 mr-1" /> Reject
                   </Button>
                 </>
+              )}
+              {canMarkNegotiated && (
+                <Button size="sm" variant="outline" className="border-teal-300 text-teal-700" onClick={() => actionMutation.mutate({ action: "mark-negotiated" })} disabled={actionMutation.isPending} data-testid="btn-mark-negotiated">
+                  <CheckCheck className="h-3.5 w-3.5 mr-1" /> Mark Negotiated
+                </Button>
+              )}
+              {canConvertToContract && (
+                <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => actionMutation.mutate({ action: "convert-to-contract" })} disabled={actionMutation.isPending} data-testid="btn-convert-to-contract">
+                  <FileSignature className="h-3.5 w-3.5 mr-1" /> Convert to Contract
+                </Button>
               )}
               {proposal.status === "approved" && isAdmin && (
                 <Button size="sm" variant="outline" onClick={() => actionMutation.mutate({ action: "convert-to-invoice" })} disabled={actionMutation.isPending} data-testid="btn-convert-invoice">
@@ -985,6 +1002,149 @@ function ProposalDetailPanel({
   );
 }
 
+// ─── Template Tab with Industry/Trade Filtering ───────────────────────────────
+
+const INDUSTRY_OPTIONS = [
+  { value: "all", label: "All Industries" },
+  { value: "general_construction", label: "General Construction" },
+  { value: "electrical", label: "Electrical" },
+  { value: "plumbing", label: "Plumbing" },
+  { value: "hvac", label: "HVAC" },
+  { value: "landscaping", label: "Landscaping" },
+  { value: "roofing", label: "Roofing" },
+  { value: "painting", label: "Painting" },
+  { value: "flooring", label: "Flooring" },
+  { value: "carpentry", label: "Carpentry" },
+  { value: "masonry", label: "Masonry" },
+  { value: "it_services", label: "IT / Tech Services" },
+  { value: "consulting", label: "Consulting" },
+  { value: "cleaning", label: "Cleaning Services" },
+  { value: "other", label: "Other" },
+];
+
+const TEMPLATE_ACCENT_COLORS = [
+  "bg-teal-100 border-teal-300",
+  "bg-blue-100 border-blue-300",
+  "bg-amber-100 border-amber-300",
+  "bg-emerald-100 border-emerald-300",
+  "bg-purple-100 border-purple-300",
+  "bg-rose-100 border-rose-300",
+];
+
+function TemplateTabContent({
+  templates, selectedTemplateId, onSelect
+}: {
+  templates: any[]; selectedTemplateId?: string; onSelect: (t: any) => void;
+}) {
+  const [industryFilter, setIndustryFilter] = useState("all");
+  const [workTypeFilter, setWorkTypeFilter] = useState("all");
+  const [searchFilter, setSearchFilter] = useState("");
+
+  const allWorkTypes = Array.from(new Set(
+    templates.map(t => t.workType || t.work_type).filter(Boolean)
+  ));
+
+  const filtered = templates.filter(t => {
+    const matchIndustry = industryFilter === "all" || (t.industry || "").toLowerCase().includes(industryFilter.replace("_", " ").toLowerCase()) || (t.industry === industryFilter);
+    const matchWorkType = workTypeFilter === "all" || (t.workType || t.work_type) === workTypeFilter;
+    const matchSearch = !searchFilter || t.name?.toLowerCase().includes(searchFilter.toLowerCase()) || t.description?.toLowerCase().includes(searchFilter.toLowerCase());
+    return matchIndustry && matchWorkType && matchSearch;
+  });
+
+  return (
+    <div className="space-y-4">
+      {/* Filter bar */}
+      <div className="flex flex-wrap gap-2">
+        <Input
+          placeholder="Search templates..."
+          value={searchFilter}
+          onChange={e => setSearchFilter(e.target.value)}
+          className="h-8 text-xs max-w-[180px]"
+          data-testid="input-template-search"
+        />
+        <Select value={industryFilter} onValueChange={setIndustryFilter}>
+          <SelectTrigger className="h-8 text-xs w-[160px]" data-testid="select-template-industry">
+            <SelectValue placeholder="All Industries" />
+          </SelectTrigger>
+          <SelectContent>
+            {INDUSTRY_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        {allWorkTypes.length > 0 && (
+          <Select value={workTypeFilter} onValueChange={setWorkTypeFilter}>
+            <SelectTrigger className="h-8 text-xs w-[160px]" data-testid="select-template-work-type">
+              <SelectValue placeholder="All Work Types" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Work Types</SelectItem>
+              {allWorkTypes.map(wt => <SelectItem key={wt} value={wt}>{wt}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="text-center py-10 border border-dashed rounded-lg">
+          <Layers className="h-10 w-10 mx-auto mb-3 text-primary/30" />
+          {templates.length === 0 ? (
+            <>
+              <p className="text-sm font-medium">No templates yet</p>
+              <p className="text-xs text-muted-foreground mt-1">Create reusable proposal templates in Profile &amp; Branding → Templates</p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-medium">No matching templates</p>
+              <p className="text-xs text-muted-foreground mt-1">Try adjusting your filters</p>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {filtered.map((t: any, idx: number) => {
+            const accentClass = TEMPLATE_ACCENT_COLORS[idx % TEMPLATE_ACCENT_COLORS.length];
+            const isSelected = selectedTemplateId === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => onSelect(t)}
+                className={cn(
+                  "text-left rounded-lg border-2 overflow-hidden hover:shadow-md transition-all",
+                  isSelected ? "border-primary shadow-md" : "border-border hover:border-primary/50"
+                )}
+                data-testid={`btn-template-${t.id}`}
+              >
+                {/* Visual thumbnail header */}
+                <div className={cn("h-12 flex items-center justify-between px-3 border-b", accentClass)}>
+                  <div className="flex items-center gap-2">
+                    <Layers className="h-4 w-4 opacity-60" />
+                    <span className="text-xs font-semibold truncate max-w-[120px]">{t.name}</span>
+                  </div>
+                  {isSelected && <CheckSquare className="h-4 w-4 text-primary shrink-0" />}
+                </div>
+                <div className="p-3 space-y-1.5">
+                  {t.description && <p className="text-xs text-muted-foreground line-clamp-2">{t.description}</p>}
+                  <div className="flex flex-wrap gap-1">
+                    {(t.workType || t.work_type) && (
+                      <span className="px-1.5 py-0.5 rounded-sm bg-primary/10 text-primary text-xs">{t.workType || t.work_type}</span>
+                    )}
+                    {t.industry && (
+                      <span className="px-1.5 py-0.5 rounded-sm bg-secondary/40 text-secondary-foreground text-xs">{t.industry}</span>
+                    )}
+                    {t.template_type && (
+                      <span className="px-1.5 py-0.5 rounded-sm bg-muted text-muted-foreground text-xs">{t.template_type}</span>
+                    )}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Proposal Builder ─────────────────────────────────────────────────────────
 
 function ProposalBuilder({
@@ -993,7 +1153,7 @@ function ProposalBuilder({
   open: boolean; onClose: () => void; proposal?: Proposal | null; isAdmin: boolean;
 }) {
   const { toast } = useToast();
-  const [tab, setTab] = useState("details");
+  const [tab, setTab] = useState(proposal ? "details" : "intake");
   const [form, setForm] = useState<Partial<Proposal>>({});
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
@@ -1036,6 +1196,13 @@ function ProposalBuilder({
       return r.ok ? r.json() : [];
     },
     enabled: !!proposalId,
+  });
+  const { data: contractorBranding } = useQuery<any>({
+    queryKey: ["/api/contractor-branding"],
+    queryFn: async () => {
+      const r = await fetch("/api/contractor-branding", { credentials: "include" });
+      return r.ok ? r.json() : null;
+    },
   });
 
   const current = { ...proposal, ...form };
@@ -1205,6 +1372,7 @@ function ProposalBuilder({
         <Tabs value={tab} onValueChange={setTab} className="flex flex-col flex-1 min-h-0">
           <TabsList className="shrink-0 w-full rounded-none border-b bg-transparent h-auto p-0 justify-start gap-0 overflow-x-auto">
             {[
+              { value: "intake", label: "Intake" },
               { value: "template", label: "Template" },
               { value: "details", label: "Details" },
               { value: "work", label: "Work Details" },
@@ -1225,62 +1393,146 @@ function ProposalBuilder({
           </TabsList>
 
           <ScrollArea className="flex-1">
+            {/* ── Intake Questionnaire Tab ── */}
+            <TabsContent value="intake" className="m-0 p-6 space-y-6">
+              <div>
+                <h3 className="font-semibold text-sm">Proposal Intake Questionnaire</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Answer a few questions to help scope and classify this proposal correctly before building it out.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs font-medium">Cost Center / Job Code</Label>
+                  <Input
+                    placeholder="e.g. CC-2024-001 or General"
+                    value={(form as any).costCenter || ""}
+                    onChange={e => setForm(f => ({ ...f, costCenter: e.target.value } as any))}
+                    className="mt-1"
+                    data-testid="input-cost-center"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">Used for job costing and internal reporting</p>
+                </div>
+                <div>
+                  <Label className="text-xs font-medium">Project Classification</Label>
+                  <Select value={(form as any).projectClass || ""} onValueChange={v => setForm(f => ({ ...f, projectClass: v } as any))}>
+                    <SelectTrigger className="mt-1" data-testid="select-project-class">
+                      <SelectValue placeholder="Select classification" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="new_construction">New Construction</SelectItem>
+                      <SelectItem value="renovation">Renovation / Remodel</SelectItem>
+                      <SelectItem value="maintenance">Maintenance & Repair</SelectItem>
+                      <SelectItem value="service">Service Call</SelectItem>
+                      <SelectItem value="consulting">Consulting / Advisory</SelectItem>
+                      <SelectItem value="inspection">Inspection / Assessment</SelectItem>
+                      <SelectItem value="installation">Installation</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs font-medium">Labor vs. Materials Split</Label>
+                  <Select value={(form as any).laborMaterialsSplit || ""} onValueChange={v => setForm(f => ({ ...f, laborMaterialsSplit: v } as any))}>
+                    <SelectTrigger className="mt-1" data-testid="select-labor-materials-split">
+                      <SelectValue placeholder="Estimated split" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="labor_only">Labor Only (100% / 0%)</SelectItem>
+                      <SelectItem value="labor_heavy">Labor Heavy (70% / 30%)</SelectItem>
+                      <SelectItem value="balanced">Balanced (50% / 50%)</SelectItem>
+                      <SelectItem value="materials_heavy">Materials Heavy (30% / 70%)</SelectItem>
+                      <SelectItem value="materials_only">Materials Only (0% / 100%)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs font-medium">Urgency / Priority</Label>
+                  <Select value={(form as any).urgency || ""} onValueChange={v => setForm(f => ({ ...f, urgency: v } as any))}>
+                    <SelectTrigger className="mt-1" data-testid="select-urgency">
+                      <SelectValue placeholder="Select urgency" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="emergency">Emergency (ASAP)</SelectItem>
+                      <SelectItem value="urgent">Urgent (&lt; 1 week)</SelectItem>
+                      <SelectItem value="standard">Standard (1–4 weeks)</SelectItem>
+                      <SelectItem value="flexible">Flexible (&gt; 1 month)</SelectItem>
+                      <SelectItem value="future">Future / Planning Only</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs font-medium">Estimated Start Date</Label>
+                  <Input
+                    type="date"
+                    value={(form as any).estimatedStartDate || ""}
+                    onChange={e => setForm(f => ({ ...f, estimatedStartDate: e.target.value } as any))}
+                    className="mt-1"
+                    data-testid="input-estimated-start"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs font-medium">Estimated Completion Date</Label>
+                  <Input
+                    type="date"
+                    value={(form as any).estimatedEndDate || ""}
+                    onChange={e => setForm(f => ({ ...f, estimatedEndDate: e.target.value } as any))}
+                    className="mt-1"
+                    data-testid="input-estimated-end"
+                  />
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs font-medium">Site / Location Notes</Label>
+                <Textarea
+                  placeholder="Address, access instructions, safety notes, special conditions..."
+                  value={(form as any).siteNotes || ""}
+                  onChange={e => setForm(f => ({ ...f, siteNotes: e.target.value } as any))}
+                  className="mt-1"
+                  rows={3}
+                  data-testid="textarea-site-notes"
+                />
+              </div>
+              <div>
+                <Label className="text-xs font-medium">Client Requirements / Special Instructions</Label>
+                <Textarea
+                  placeholder="Any specific requirements, certifications needed, union requirements, insurance minimums..."
+                  value={(form as any).clientRequirements || ""}
+                  onChange={e => setForm(f => ({ ...f, clientRequirements: e.target.value } as any))}
+                  className="mt-1"
+                  rows={3}
+                  data-testid="textarea-client-requirements"
+                />
+              </div>
+              <div className="pt-2">
+                <Button onClick={() => setTab("template")} data-testid="btn-intake-next">
+                  Continue to Template Selection <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+              </div>
+            </TabsContent>
+
             {/* ── Template Tab ── */}
             <TabsContent value="template" className="m-0 p-6 space-y-4">
               <div>
                 <h3 className="font-semibold text-sm mb-1">Start from a Template</h3>
-                <p className="text-xs text-muted-foreground mb-4">Choose a template to pre-fill scope, terms, and pricing structure. You can still edit everything after applying.</p>
+                <p className="text-xs text-muted-foreground">Choose a template to pre-fill scope, terms, and pricing structure. You can still edit everything after applying.</p>
               </div>
-              {templates.length === 0 ? (
-                <div className="text-center py-10 border border-dashed rounded-lg">
-                  <Layers className="h-10 w-10 mx-auto mb-3 text-primary/30" />
-                  <p className="text-sm font-medium">No templates yet</p>
-                  <p className="text-xs text-muted-foreground mt-1">Create reusable proposal templates in Profile & Branding → Templates</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {templates.map((t: any) => (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => {
-                        setForm(f => ({
-                          ...f,
-                          templateId: t.id,
-                          title: f.title || t.name,
-                          scopeOfWork: f.scopeOfWork || t.scopeTemplate || t.scope_template,
-                          paymentTerms: f.paymentTerms || t.paymentTermsTemplate || t.payment_terms_template,
-                          assumptions: f.assumptions || t.assumptionsTemplate || t.assumptions_template,
-                          exclusions: f.exclusions || t.exclusionsTemplate || t.exclusions_template,
-                          workType: f.workType || t.workType || t.work_type,
-                        }));
-                        toast({ title: `Template "${t.name}" applied` });
-                        setTab("details");
-                      }}
-                      className={cn(
-                        "text-left rounded-lg border p-4 hover:border-primary hover:bg-primary/5 transition-colors",
-                        (form.templateId ?? current.templateId) === t.id ? "border-primary bg-primary/5" : "border-border"
-                      )}
-                      data-testid={`btn-template-${t.id}`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="font-medium text-sm">{t.name}</p>
-                          {t.description && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{t.description}</p>}
-                          {(t.workType || t.work_type) && (
-                            <span className="inline-block mt-1.5 px-2 py-0.5 rounded bg-primary/10 text-primary text-xs">
-                              {t.workType || t.work_type}
-                            </span>
-                          )}
-                        </div>
-                        {(form.templateId ?? current.templateId) === t.id && (
-                          <CheckSquare className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                        )}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
+              <TemplateTabContent
+                templates={templates}
+                selectedTemplateId={form.templateId ?? current.templateId}
+                onSelect={t => {
+                  setForm(f => ({
+                    ...f,
+                    templateId: t.id,
+                    title: f.title || t.name,
+                    scopeOfWork: f.scopeOfWork || t.scopeTemplate || t.scope_template,
+                    paymentTerms: f.paymentTerms || t.paymentTermsTemplate || t.payment_terms_template,
+                    assumptions: f.assumptions || t.assumptionsTemplate || t.assumptions_template,
+                    exclusions: f.exclusions || t.exclusionsTemplate || t.exclusions_template,
+                    workType: f.workType || t.workType || t.work_type,
+                  }));
+                  toast({ title: `Template "${t.name}" applied` });
+                  setTab("details");
+                }}
+              />
             </TabsContent>
 
             {/* ── Details Tab ── */}
@@ -1670,7 +1922,7 @@ function ProposalBuilder({
 
             {/* ── Preview Tab ── */}
             <TabsContent value="preview" className="m-0">
-              <ProposalPreview proposal={current as Proposal} lineItems={lineItems} subtotal={subtotal} tax={tax} discount={discount} total={total} />
+              <ProposalPreview proposal={current as Proposal} lineItems={lineItems} subtotal={subtotal} tax={tax} discount={discount} total={total} branding={contractorBranding} />
             </TabsContent>
           </ScrollArea>
         </Tabs>
@@ -1748,25 +2000,54 @@ function LineItemRow({ item, canEdit, onDelete, onRefresh }: { item: LineItem; c
 
 // ─── Proposal Preview ─────────────────────────────────────────────────────────
 
-function ProposalPreview({ proposal, lineItems, subtotal, tax, discount, total }: {
-  proposal: Proposal; lineItems: LineItem[]; subtotal: number; tax: number; discount: number; total: number;
+function ProposalPreview({ proposal, lineItems, subtotal, tax, discount, total, branding }: {
+  proposal: Proposal; lineItems: LineItem[]; subtotal: number; tax: number; discount: number; total: number; branding?: any;
 }) {
+  const accentColor = branding?.primary_color || "#0f766e";
+  const businessName = branding?.business_name;
+  const tagline = branding?.tagline;
+  const websiteUrl = branding?.website_url;
+  const licenseNumber = branding?.license_number;
+  const coverNote = branding?.cover_note;
+  const footerText = branding?.footer_text;
+  const signatureText = branding?.signature_text;
+
   return (
-    <div className="p-8 bg-white dark:bg-gray-950 min-h-full">
-      <div className="max-w-3xl mx-auto space-y-8">
-        <div className="flex justify-between items-start">
+    <div className="bg-white dark:bg-gray-950 min-h-full">
+      {/* Branded Header Bar */}
+      <div className="h-2" style={{ backgroundColor: accentColor }} />
+      <div className="px-8 py-6 border-b" style={{ borderColor: accentColor + "30" }}>
+        <div className="max-w-3xl mx-auto flex justify-between items-start">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{proposal.title || "Proposal"}</h1>
+            {businessName ? (
+              <div className="flex items-center gap-3 mb-1">
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-lg" style={{ backgroundColor: accentColor }}>
+                  {businessName.charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <h2 className="font-bold text-lg text-gray-900 dark:text-white leading-tight">{businessName}</h2>
+                  {tagline && <p className="text-xs text-muted-foreground">{tagline}</p>}
+                </div>
+              </div>
+            ) : null}
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white mt-2">{proposal.title || "Proposal"}</h1>
             <p className="text-sm text-muted-foreground mt-1">{proposal.proposalNumber}</p>
           </div>
-          <div className="text-right text-sm text-muted-foreground">
+          <div className="text-right text-sm text-muted-foreground space-y-0.5">
             <p>Date: {fmtDate(proposal.issueDate)}</p>
             {proposal.expirationDate && <p>Expires: {fmtDate(proposal.expirationDate)}</p>}
             {proposal.estimatorName && <p>Prepared by: {proposal.estimatorName}</p>}
+            {websiteUrl && <p className="text-xs">{websiteUrl}</p>}
+            {licenseNumber && <p className="text-xs">Lic. #{licenseNumber}</p>}
           </div>
         </div>
-        {proposal.clientMessage && (
-          <div className="bg-muted/40 rounded-lg p-4 italic text-sm text-muted-foreground">"{proposal.clientMessage}"</div>
+      </div>
+
+      <div className="p-8 max-w-3xl mx-auto space-y-8">
+        {(coverNote || proposal.clientMessage) && (
+          <div className="rounded-lg p-4 italic text-sm text-muted-foreground border-l-4" style={{ borderColor: accentColor, backgroundColor: accentColor + "10" }}>
+            "{coverNote || proposal.clientMessage}"
+          </div>
         )}
         {proposal.scopeOfWork && (
           <div>
@@ -1840,7 +2121,21 @@ function ProposalPreview({ proposal, lineItems, subtotal, tax, discount, total }
             <p className="text-xs text-green-600 mt-1">{fmtDate(proposal.approvalAt)}</p>
           </div>
         )}
+        {signatureText && (
+          <div className="mt-8 pt-4 border-t">
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300">{signatureText}</p>
+            {businessName && <p className="text-xs text-muted-foreground mt-0.5">{businessName}</p>}
+          </div>
+        )}
       </div>
+
+      {/* Branded Footer */}
+      {(footerText || businessName) && (
+        <div className="px-8 py-4 border-t text-center" style={{ borderColor: accentColor + "30", backgroundColor: accentColor + "08" }}>
+          <p className="text-xs text-muted-foreground">{footerText || businessName}</p>
+        </div>
+      )}
+      <div className="h-2" style={{ backgroundColor: accentColor }} />
     </div>
   );
 }
@@ -2483,7 +2778,16 @@ const NAV_ITEMS: { id: HubSection; label: string; icon: React.FC<{ className?: s
 
 export default function ContractorHubPage() {
   const { toast } = useToast();
-  const [section, setSection] = useState<HubSection>("dashboard");
+  const [location] = useLocation();
+  const initialSection = (() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const s = params.get("section") as HubSection | null;
+      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","payments","documents","messages","branding","settings"];
+      return (s && valid.includes(s)) ? s : "dashboard";
+    } catch { return "dashboard"; }
+  })();
+  const [section, setSection] = useState<HubSection>(initialSection);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [companyFilter, setCompanyFilter] = useState("all");

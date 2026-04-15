@@ -1461,7 +1461,7 @@ function ContractorHubTab({ isAdmin }: { isAdmin: boolean }) {
               <p className="font-medium text-muted-foreground">{isAdmin ? "No contractor invoices yet" : "No invoices yet"}</p>
               {!isAdmin && (
                 <Button className="mt-4" size="sm" variant="outline" asChild data-testid="btn-go-to-hub-invoices">
-                  <a href="/app/contractor-hub">Go to Contractor Hub</a>
+                  <a href="/app/contractor-hub?section=invoices">Go to Contractor Invoices</a>
                 </Button>
               )}
             </div>

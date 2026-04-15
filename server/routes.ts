@@ -7207,26 +7207,41 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Proposal: convert to contract ─────────────────────────────────────────
   app.post("/api/contractor-proposals/:id/convert-to-contract", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      // Use assertProposalAccess to enforce company ownership before conversion
       const access = await assertProposalAccess(req.params.id, req.session.userId!);
       if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
       const prop = access.prop;
-      if (!["approved", "accepted"].includes(prop.status)) return res.status(400).json({ message: "Only approved proposals can be converted to contracts" });
+      if (!["approved", "accepted", "negotiated"].includes(prop.status)) return res.status(400).json({ message: "Only approved or negotiated proposals can be converted to contracts" });
 
       const contractNumber = `CON-${Date.now()}`;
 
       const contractRes = await db.execute(sql`
         INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, status, created_by_user_id)
-        VALUES (${prop.company_id}, ${prop.contractor_id}, ${prop.id}, ${contractNumber}, ${prop.title || "Service Contract"}, ${prop.description}, ${prop.scope_of_work}, ${prop.payment_terms}, ${prop.amount}, ${prop.currency || "USD"}, ${prop.payment_type || "monetary"}, ${prop.trade_offered}, ${prop.trade_value}, ${prop.issue_date}, 'draft', ${req.session.userId})
+        VALUES (${prop.company_id}, ${prop.contractor_id}, ${prop.id}, ${contractNumber}, ${prop.title || "Service Contract"}, ${prop.description}, ${prop.scope_of_work}, ${prop.payment_terms}, ${prop.amount}, ${prop.currency || "USD"}, ${prop.payment_type || "monetary"}, ${prop.trade_offered}, ${prop.trade_value}, ${prop.issue_date}, 'pending', ${req.session.userId})
         RETURNING *
       `);
       const contract = contractRes.rows[0] as any;
 
-      // Link proposal to the newly created contract (dedicated column)
-      await db.execute(sql`UPDATE contractor_proposals SET converted_to_contract_id = ${contract.id} WHERE id = ${req.params.id}`);
+      await db.execute(sql`UPDATE contractor_proposals SET status = 'converted_to_contract', converted_to_contract_id = ${contract.id} WHERE id = ${req.params.id}`);
 
       res.status(201).json(contract);
     } catch (e: any) { console.error(e); res.status(500).json({ message: "Failed to convert to contract: " + e.message }); }
+  });
+
+  // POST /api/contractor-proposals/:id/mark-negotiated — admin marks counter as negotiated/agreed
+  app.post("/api/contractor-proposals/:id/mark-negotiated", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const access = await assertProposalAccess(req.params.id, req.session.userId!);
+      if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
+      const prop = access.prop;
+      if (!["countered", "submitted", "sent", "viewed"].includes(prop.status)) return res.status(400).json({ message: "Cannot mark as negotiated from current status" });
+
+      await db.execute(sql`UPDATE contractor_proposals SET status = 'negotiated' WHERE id = ${req.params.id}`);
+      await db.execute(sql`
+        INSERT INTO proposal_events (proposal_id, event_type, old_status, new_status, actor_name, notes)
+        VALUES (${req.params.id}, 'status_change', ${prop.status}, 'negotiated', ${req.session.userId}, 'Marked as negotiated')
+      `);
+      res.json({ status: "negotiated" });
+    } catch (e: any) { res.status(500).json({ message: "Failed to mark as negotiated: " + e.message }); }
   });
 
   // ── Shared helper: verify proposal access (contractor owns it OR admin of company) ──
