@@ -6362,6 +6362,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.getUser(req.session.userId!);
       if (user?.workerId !== inv.contractorId) return res.status(403).json({ message: "Not your invoice" });
 
+      if (inv.proposalId) {
+        const propRes = await db.execute(sql`SELECT status FROM contractor_proposals WHERE id = ${inv.proposalId}`);
+        const proposalRow = propRes.rows[0] as { status: string } | undefined;
+        if (proposalRow && proposalRow.status !== "approved") {
+          return res.status(400).json({ message: "Invoice cannot be submitted until the linked proposal is approved" });
+        }
+      }
+
       const updated = await storage.updateContractorInvoice(req.params.id, { status: "submitted" });
       await storage.createExpenseApprovalAction({
         objectType: "contractor_invoice", objectId: req.params.id, actionType: "submitted",

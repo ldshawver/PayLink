@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useSearch } from "wouter";
+import { useSearch, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -1242,9 +1242,10 @@ function ProposalFormModal({
 }
 
 function ContractorHubTab({ isAdmin }: { isAdmin: boolean }) {
+  const [, navigate] = useLocation();
   useEffect(() => {
-    window.location.href = '/app/contractor-hub';
-  }, []);
+    navigate("/app/contractor-hub");
+  }, [navigate]);
   return (
     <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
       <p className="text-sm text-muted-foreground">Redirecting to Contractor Hub...</p>

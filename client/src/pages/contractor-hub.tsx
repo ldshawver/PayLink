@@ -958,7 +958,12 @@ function ProposalDetailPanel({
                   const items: ThreadItem[] = [
                     ...events.filter(e => e.notes).map(e => ({ id: `evt-${e.id}`, ts: e.createdAt, kind: "event" as const, data: e })),
                     ...negotiations.map(n => ({ id: `neg-${n.id}`, ts: n.createdAt, kind: "negotiation" as const, data: n })),
-                  ].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+                  ].sort((a, b) => {
+                    const diff = new Date(a.ts).getTime() - new Date(b.ts).getTime();
+                    if (diff !== 0) return diff;
+                    if (a.kind !== b.kind) return a.kind === "event" ? -1 : 1;
+                    return a.id.localeCompare(b.id);
+                  });
 
                   if (items.length === 0) return (
                     <div className="text-center py-6 text-muted-foreground">
