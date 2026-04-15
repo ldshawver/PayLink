@@ -10,7 +10,7 @@ import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
 import { db } from "./db";
 import { sql, eq } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
@@ -19823,6 +19823,649 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to fetch clock status" });
+    }
+  });
+
+  // ── Weekly KPI Goals ──────────────────────────────────────────────────────────
+
+  // Labor Goals CRUD
+  const KPI_GOAL_ROLES = ["admin", "manager", "supervisor"] as const;
+  const KPI_HIERARCHY_ROLES = ["supervisor", "manager", "tenant_supervisor", "tenant_manager"];
+
+  // Helper: returns accessible cost-center and job ID sets for a manager/supervisor.
+  // Admins (any admin role variant) get isAdmin=true; managers/supervisors get filtered sets
+  // derived from their direct reports. IDs are kept as strings to match varchar/UUID columns.
+  async function getKpiCallerScope(userId: number, companyId: number): Promise<{ isAdmin: boolean; costCenterIds: Set<string>; jobIds: Set<string> }> {
+    const user = await storage.getUser(userId);
+    if (!user) return { isAdmin: false, costCenterIds: new Set(), jobIds: new Set() };
+    // Use the existing isAdminRole helper which covers all admin role variants
+    if (isAdminRole(user.role)) return { isAdmin: true, costCenterIds: new Set(), jobIds: new Set() };
+    if (!KPI_HIERARCHY_ROLES.includes(user.role || "")) {
+      // Non-hierarchy non-admin — return empty (no goals visible)
+      return { isAdmin: false, costCenterIds: new Set(), jobIds: new Set() };
+    }
+    const workerId = user.workerId;
+    if (!workerId) {
+      // Manager with no worker record — can only access company-wide goals (no scope dimensions)
+      // Return empty sets; goalInScope will still allow company-wide (null/null) goals
+      return { isAdmin: false, costCenterIds: new Set(), jobIds: new Set() };
+    }
+    const ccRows = await db.execute(sql`
+      SELECT DISTINCT cost_center_id::text AS cost_center_id FROM workers
+      WHERE manager_id = ${workerId} AND company_id = ${companyId} AND cost_center_id IS NOT NULL
+    `);
+    const jobRows = await db.execute(sql`
+      SELECT DISTINCT s.job_id::text AS job_id FROM schedules s
+      JOIN workers w ON w.schedule_id = s.id
+      WHERE w.manager_id = ${workerId} AND w.company_id = ${companyId} AND s.job_id IS NOT NULL
+    `);
+    const costCenterIds = new Set<string>(ccRows.rows.map((r: any) => String(r.cost_center_id)));
+    const jobIds = new Set<string>(jobRows.rows.map((r: any) => String(r.job_id)));
+    return { isAdmin: false, costCenterIds, jobIds };
+  }
+
+  // Returns true if a goal is within the caller's accessible scope.
+  // Uses intersection semantics: ALL present dimensions on the goal must be authorized.
+  // IDs are compared as strings to match varchar/UUID column types.
+  function goalInScope(goal: { costCenterId?: any; jobId?: any }, scope: { isAdmin: boolean; costCenterIds: Set<string>; jobIds: Set<string> }): boolean {
+    if (scope.isAdmin) return true;
+    const hasCC = goal.costCenterId != null;
+    const hasJob = goal.jobId != null;
+    // Company-wide goals (no dimension filters) are always visible
+    if (!hasCC && !hasJob) return true;
+    // All present dimensions must be in scope (AND logic)
+    if (hasCC && !scope.costCenterIds.has(String(goal.costCenterId))) return false;
+    if (hasJob && !scope.jobIds.has(String(goal.jobId))) return false;
+    return true;
+  }
+
+  // Validates that a requested costCenterId/jobId is within the caller's scope.
+  // IDs are compared as strings to match varchar/UUID column types.
+  function validateGoalScopeRequest(costCenterId: any, jobId: any, scope: { isAdmin: boolean; costCenterIds: Set<string>; jobIds: Set<string> }): string | null {
+    if (scope.isAdmin) return null;
+    if (costCenterId && !scope.costCenterIds.has(String(costCenterId))) return "Cost center not in your hierarchy scope";
+    if (jobId && !scope.jobIds.has(String(jobId))) return "Job not in your hierarchy scope";
+    return null;
+  }
+
+  app.get("/api/kpi/labor-goals", requireAuth, requireRole(...KPI_GOAL_ROLES), async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const scope = await getKpiCallerScope(req.session!.userId!, companyId);
+      const allGoals = await storage.getWeeklyLaborGoals(companyId);
+      const goals = allGoals.filter((g) => goalInScope(g, scope));
+      res.json(goals);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch labor goals" });
+    }
+  });
+
+  app.post("/api/kpi/labor-goals", requireAuth, requireRole(...KPI_GOAL_ROLES), async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const { costCenterId: reqCcId, jobId: reqJobId } = req.body;
+      // Validate costCenterId/jobId belong to this company
+      if (reqCcId) {
+        const ccCheck = await db.execute(sql`SELECT id FROM cost_centers WHERE id = ${reqCcId} AND company_id = ${companyId} LIMIT 1`);
+        if (ccCheck.rows.length === 0) return res.status(403).json({ message: "Cost center not in scope" });
+      }
+      if (reqJobId) {
+        const jobCheck = await db.execute(sql`SELECT id FROM jobs WHERE id = ${reqJobId} AND company_id = ${companyId} LIMIT 1`);
+        if (jobCheck.rows.length === 0) return res.status(403).json({ message: "Job not in scope" });
+      }
+      // Enforce hierarchy scope for managers/supervisors
+      const scope = await getKpiCallerScope(req.session!.userId!, companyId);
+      const scopeErr = await validateGoalScopeRequest(reqCcId, reqJobId, scope);
+      if (scopeErr) return res.status(403).json({ message: scopeErr });
+      const user = await storage.getUser(req.session!.userId!);
+      const body = { ...req.body, companyId, createdBy: user?.id };
+      if (body.targetAmount !== undefined) body.targetAmount = String(body.targetAmount);
+      const parsed = insertWeeklyLaborGoalSchema.safeParse(body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid data", errors: parsed.error.errors });
+      const goal = await storage.createWeeklyLaborGoal(parsed.data);
+      res.status(201).json(goal);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create labor goal" });
+    }
+  });
+
+  app.patch("/api/kpi/labor-goals/:id", requireAuth, requireRole(...KPI_GOAL_ROLES), async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const goal = await storage.getWeeklyLaborGoal(req.params.id);
+      if (!goal || goal.companyId !== companyId) return res.status(404).json({ message: "Not found" });
+      // Enforce hierarchy scope: caller must have access to this goal
+      const scope = await getKpiCallerScope(req.session!.userId!, companyId);
+      if (!goalInScope(goal, scope)) return res.status(403).json({ message: "Goal not in your hierarchy scope" });
+      const { weekStart, targetAmount, autoRecur, costCenterId, jobId } = req.body;
+      // Validate company scope of proposed costCenterId/jobId
+      if (costCenterId) {
+        const ccCheck = await db.execute(sql`SELECT id FROM cost_centers WHERE id = ${costCenterId} AND company_id = ${companyId} LIMIT 1`);
+        if (ccCheck.rows.length === 0) return res.status(403).json({ message: "Cost center not in scope" });
+        const scopeErr = await validateGoalScopeRequest(costCenterId, null, scope);
+        if (scopeErr) return res.status(403).json({ message: scopeErr });
+      }
+      if (jobId) {
+        const jobCheck = await db.execute(sql`SELECT id FROM jobs WHERE id = ${jobId} AND company_id = ${companyId} LIMIT 1`);
+        if (jobCheck.rows.length === 0) return res.status(403).json({ message: "Job not in scope" });
+        const scopeErr = await validateGoalScopeRequest(null, jobId, scope);
+        if (scopeErr) return res.status(403).json({ message: scopeErr });
+      }
+      const allowedUpdates: Record<string, any> = {};
+      if (weekStart !== undefined) allowedUpdates.weekStart = weekStart;
+      if (targetAmount !== undefined) allowedUpdates.targetAmount = String(targetAmount);
+      if (autoRecur !== undefined) allowedUpdates.autoRecur = autoRecur;
+      if (costCenterId !== undefined) allowedUpdates.costCenterId = costCenterId || null;
+      if (jobId !== undefined) allowedUpdates.jobId = jobId || null;
+      const updated = await storage.updateWeeklyLaborGoal(req.params.id, allowedUpdates);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update labor goal" });
+    }
+  });
+
+  app.delete("/api/kpi/labor-goals/:id", requireAuth, requireRole(...KPI_GOAL_ROLES), async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const goal = await storage.getWeeklyLaborGoal(req.params.id);
+      if (!goal || goal.companyId !== companyId) return res.status(404).json({ message: "Not found" });
+      const scope = await getKpiCallerScope(req.session!.userId!, companyId);
+      if (!goalInScope(goal, scope)) return res.status(403).json({ message: "Goal not in your hierarchy scope" });
+      await storage.deleteWeeklyLaborGoal(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete labor goal" });
+    }
+  });
+
+  // Revenue Goals CRUD
+  app.get("/api/kpi/revenue-goals", requireAuth, requireRole(...KPI_GOAL_ROLES), async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const scope = await getKpiCallerScope(req.session!.userId!, companyId);
+      const allGoals = await storage.getWeeklyRevenueGoals(companyId);
+      const goals = allGoals.filter((g) => goalInScope(g, scope));
+      res.json(goals);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch revenue goals" });
+    }
+  });
+
+  app.post("/api/kpi/revenue-goals", requireAuth, requireRole(...KPI_GOAL_ROLES), async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const { costCenterId: reqCcId, jobId: reqJobId } = req.body;
+      // Validate costCenterId/jobId belong to this company
+      if (reqCcId) {
+        const ccCheck = await db.execute(sql`SELECT id FROM cost_centers WHERE id = ${reqCcId} AND company_id = ${companyId} LIMIT 1`);
+        if (ccCheck.rows.length === 0) return res.status(403).json({ message: "Cost center not in scope" });
+      }
+      if (reqJobId) {
+        const jobCheck = await db.execute(sql`SELECT id FROM jobs WHERE id = ${reqJobId} AND company_id = ${companyId} LIMIT 1`);
+        if (jobCheck.rows.length === 0) return res.status(403).json({ message: "Job not in scope" });
+      }
+      // Enforce hierarchy scope for managers/supervisors
+      const scope = await getKpiCallerScope(req.session!.userId!, companyId);
+      const scopeErr = await validateGoalScopeRequest(reqCcId, reqJobId, scope);
+      if (scopeErr) return res.status(403).json({ message: scopeErr });
+      const user = await storage.getUser(req.session!.userId!);
+      const body = { ...req.body, companyId, createdBy: user?.id };
+      if (body.targetAmount !== undefined) body.targetAmount = String(body.targetAmount);
+      const parsed = insertWeeklyRevenueGoalSchema.safeParse(body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid data", errors: parsed.error.errors });
+      const goal = await storage.createWeeklyRevenueGoal(parsed.data);
+      res.status(201).json(goal);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create revenue goal" });
+    }
+  });
+
+  app.patch("/api/kpi/revenue-goals/:id", requireAuth, requireRole(...KPI_GOAL_ROLES), async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const goal = await storage.getWeeklyRevenueGoal(req.params.id);
+      if (!goal || goal.companyId !== companyId) return res.status(404).json({ message: "Not found" });
+      // Enforce hierarchy scope: caller must have access to this goal
+      const scope = await getKpiCallerScope(req.session!.userId!, companyId);
+      if (!goalInScope(goal, scope)) return res.status(403).json({ message: "Goal not in your hierarchy scope" });
+      const { weekStart, targetAmount, autoRecur, costCenterId, jobId } = req.body;
+      // Validate company + hierarchy scope of proposed costCenterId/jobId
+      if (costCenterId) {
+        const ccCheck = await db.execute(sql`SELECT id FROM cost_centers WHERE id = ${costCenterId} AND company_id = ${companyId} LIMIT 1`);
+        if (ccCheck.rows.length === 0) return res.status(403).json({ message: "Cost center not in scope" });
+        const scopeErr = await validateGoalScopeRequest(costCenterId, null, scope);
+        if (scopeErr) return res.status(403).json({ message: scopeErr });
+      }
+      if (jobId) {
+        const jobCheck = await db.execute(sql`SELECT id FROM jobs WHERE id = ${jobId} AND company_id = ${companyId} LIMIT 1`);
+        if (jobCheck.rows.length === 0) return res.status(403).json({ message: "Job not in scope" });
+        const scopeErr = await validateGoalScopeRequest(null, jobId, scope);
+        if (scopeErr) return res.status(403).json({ message: scopeErr });
+      }
+      const allowedUpdates: Record<string, any> = {};
+      if (weekStart !== undefined) allowedUpdates.weekStart = weekStart;
+      if (targetAmount !== undefined) allowedUpdates.targetAmount = String(targetAmount);
+      if (autoRecur !== undefined) allowedUpdates.autoRecur = autoRecur;
+      if (costCenterId !== undefined) allowedUpdates.costCenterId = costCenterId || null;
+      if (jobId !== undefined) allowedUpdates.jobId = jobId || null;
+      const updated = await storage.updateWeeklyRevenueGoal(req.params.id, allowedUpdates);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update revenue goal" });
+    }
+  });
+
+  app.delete("/api/kpi/revenue-goals/:id", requireAuth, requireRole(...KPI_GOAL_ROLES), async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+      const goal = await storage.getWeeklyRevenueGoal(req.params.id);
+      if (!goal || goal.companyId !== companyId) return res.status(404).json({ message: "Not found" });
+      const scope = await getKpiCallerScope(req.session!.userId!, companyId);
+      if (!goalInScope(goal, scope)) return res.status(403).json({ message: "Goal not in your hierarchy scope" });
+      await storage.deleteWeeklyRevenueGoal(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete revenue goal" });
+    }
+  });
+
+  // Weekly Labor Cost KPI Summary
+  app.get("/api/kpi/labor-cost-summary", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+
+      const { weekStart: weekStartParam, costCenterId, jobId } = req.query as Record<string, string>;
+
+      // Validate costCenterId and jobId belong to this company (prevent cross-tenant data access)
+      if (costCenterId) {
+        const ccCheck = await db.execute(sql`SELECT id FROM cost_centers WHERE id = ${costCenterId} AND company_id = ${companyId} LIMIT 1`);
+        if (ccCheck.rows.length === 0) return res.status(403).json({ message: "Cost center not in scope" });
+      }
+      if (jobId) {
+        const jobCheck = await db.execute(sql`SELECT id FROM jobs WHERE id = ${jobId} AND company_id = ${companyId} LIMIT 1`);
+        if (jobCheck.rows.length === 0) return res.status(403).json({ message: "Job not in scope" });
+      }
+
+      // Hierarchy scope: validate that the requested cost center / job is accessible to the caller
+      const kpiSummaryScope = await getKpiCallerScope(req.session!.userId!, companyId);
+      const kpiSummaryScopeError = validateGoalScopeRequest(costCenterId, jobId, kpiSummaryScope);
+      if (kpiSummaryScopeError) return res.status(403).json({ message: kpiSummaryScopeError });
+
+      // Determine current week start (Sunday)
+      const now = new Date();
+      const day = now.getDay();
+      const weekStart = weekStartParam || (() => {
+        const d = new Date(now);
+        d.setDate(now.getDate() - day);
+        return d.toISOString().split("T")[0];
+      })();
+      const weekEnd = getWeekEnd(weekStart);
+
+      // Prior week
+      const priorWeekStartDate = new Date(weekStart + "T12:00:00");
+      priorWeekStartDate.setDate(priorWeekStartDate.getDate() - 7);
+      const priorWeekStart = priorWeekStartDate.toISOString().split("T")[0];
+      const priorWeekEnd = getWeekEnd(priorWeekStart);
+
+      // Build WHERE clauses
+      let filterCostCenter = costCenterId ? sql` AND w.cost_center_id = ${costCenterId}` : sql``;
+      let filterJob = jobId ? sql` AND te.schedule_id IN (SELECT id FROM schedules WHERE job_id = ${jobId} AND company_id = ${companyId})` : sql``;
+
+      // Hierarchy scope: supervisors/managers (any variant) only see their direct reports.
+      // Least-privilege: hierarchy-scoped users with no worker profile see zero data.
+      const sessionUser = await storage.getUser(req.session!.userId!);
+      const HIERARCHY_SCOPED_ROLES = ["supervisor", "manager", "tenant_supervisor", "tenant_manager"];
+      let filterHierarchy = sql``;
+      if (!isAdminRole(sessionUser?.role) && HIERARCHY_SCOPED_ROLES.includes(sessionUser?.role || "")) {
+        const managerId = sessionUser?.workerId;
+        if (managerId) {
+          filterHierarchy = sql` AND te.worker_id IN (SELECT id FROM workers WHERE manager_id = ${managerId} AND company_id = ${companyId})`;
+        } else {
+          // Hierarchy-scoped user has no worker profile — deny all time_entry data
+          filterHierarchy = sql` AND 1=0`;
+        }
+      }
+
+      // Current week labor cost from time_entries + worker pay_rate
+      const currentRows = await db.execute(sql`
+        SELECT
+          COALESCE(SUM(
+            CASE
+              WHEN w.pay_type = 'salary' THEN (w.pay_rate / 52.0)
+              ELSE (COALESCE(te.total_hours, 0) * COALESCE(w.pay_rate, 0)) +
+                   (COALESCE(te.overtime_hours, 0) * COALESCE(w.pay_rate, 0) * 0.5)
+            END
+          ), 0) AS estimated_labor_cost,
+          COALESCE(SUM(COALESCE(te.total_hours, 0)), 0) AS total_worked_hours,
+          COALESCE(SUM(COALESCE(te.scheduled_hours, 0)), 0) AS total_scheduled_hours,
+          COALESCE(SUM(COALESCE(te.overtime_hours, 0)), 0) AS total_overtime_hours
+        FROM time_entries te
+        JOIN workers w ON w.id = te.worker_id
+        WHERE te.company_id = ${companyId}
+          AND te.date >= ${weekStart}
+          AND te.date <= ${weekEnd}
+          ${filterCostCenter}
+          ${filterJob}
+          ${filterHierarchy}
+      `);
+
+      const priorRows = await db.execute(sql`
+        SELECT
+          COALESCE(SUM(
+            CASE
+              WHEN w.pay_type = 'salary' THEN (w.pay_rate / 52.0)
+              ELSE (COALESCE(te.total_hours, 0) * COALESCE(w.pay_rate, 0)) +
+                   (COALESCE(te.overtime_hours, 0) * COALESCE(w.pay_rate, 0) * 0.5)
+            END
+          ), 0) AS estimated_labor_cost
+        FROM time_entries te
+        JOIN workers w ON w.id = te.worker_id
+        WHERE te.company_id = ${companyId}
+          AND te.date >= ${priorWeekStart}
+          AND te.date <= ${priorWeekEnd}
+          ${filterCostCenter}
+          ${filterJob}
+          ${filterHierarchy}
+      `);
+
+      // Get the goal for this exact week — if not found, fall back to most recent auto-recur goal
+      let goalRows = await db.execute(sql`
+        SELECT target_amount FROM weekly_labor_goals
+        WHERE company_id = ${companyId}
+          AND week_start = ${weekStart}
+          ${costCenterId ? sql`AND cost_center_id = ${costCenterId}` : sql`AND cost_center_id IS NULL`}
+          ${jobId ? sql`AND job_id = ${jobId}` : sql`AND job_id IS NULL`}
+        LIMIT 1
+      `);
+      if (goalRows.rows.length === 0) {
+        goalRows = await db.execute(sql`
+          SELECT target_amount FROM weekly_labor_goals
+          WHERE company_id = ${companyId}
+            AND auto_recur = true
+            ${costCenterId ? sql`AND cost_center_id = ${costCenterId}` : sql`AND cost_center_id IS NULL`}
+            ${jobId ? sql`AND job_id = ${jobId}` : sql`AND job_id IS NULL`}
+          ORDER BY week_start DESC
+          LIMIT 1
+        `);
+      }
+
+      const currentData = currentRows.rows[0] as any;
+      const priorData = priorRows.rows[0] as any;
+      const estimatedLaborCost = parseFloat(currentData?.estimated_labor_cost || "0");
+      const priorLaborCost = parseFloat(priorData?.estimated_labor_cost || "0");
+      const goal = goalRows.rows.length > 0 ? parseFloat((goalRows.rows[0] as any).target_amount || "0") : null;
+      const variance = goal !== null ? estimatedLaborCost - goal : null;
+      const variancePct = goal !== null && goal > 0 ? ((estimatedLaborCost - goal) / goal) * 100 : null;
+      const trendVsPrior = priorLaborCost > 0 ? ((estimatedLaborCost - priorLaborCost) / priorLaborCost) * 100 : null;
+
+      // Cost breakdown by cost center — same scope as headline queries
+      const breakdownRows = await db.execute(sql`
+        SELECT
+          COALESCE(cc.name, 'Unassigned') AS group_name,
+          cc.id AS cost_center_id,
+          COALESCE(SUM(
+            CASE
+              WHEN w.pay_type = 'salary' THEN (w.pay_rate / 52.0)
+              ELSE (COALESCE(te.total_hours, 0) * COALESCE(w.pay_rate, 0)) +
+                   (COALESCE(te.overtime_hours, 0) * COALESCE(w.pay_rate, 0) * 0.5)
+            END
+          ), 0) AS estimated_labor_cost,
+          COALESCE(SUM(COALESCE(te.total_hours, 0)), 0) AS worked_hours,
+          COALESCE(SUM(COALESCE(te.scheduled_hours, 0)), 0) AS scheduled_hours,
+          COALESCE(SUM(COALESCE(te.overtime_hours, 0)), 0) AS overtime_hours
+        FROM time_entries te
+        JOIN workers w ON w.id = te.worker_id
+        LEFT JOIN cost_centers cc ON cc.id = w.cost_center_id
+        WHERE te.company_id = ${companyId}
+          AND te.date >= ${weekStart}
+          AND te.date <= ${weekEnd}
+          ${filterCostCenter}
+          ${filterJob}
+          ${filterHierarchy}
+        GROUP BY cc.id, cc.name
+        ORDER BY estimated_labor_cost DESC
+      `);
+
+      res.json({
+        weekStart,
+        weekEnd,
+        estimatedLaborCost,
+        priorWeekLaborCost: priorLaborCost,
+        goal,
+        variance,
+        variancePct,
+        trendVsPrior,
+        totalWorkedHours: parseFloat(currentData?.total_worked_hours || "0"),
+        totalScheduledHours: parseFloat(currentData?.total_scheduled_hours || "0"),
+        totalOvertimeHours: parseFloat(currentData?.total_overtime_hours || "0"),
+        breakdown: (breakdownRows.rows as any[]).map(r => ({
+          groupName: r.group_name,
+          costCenterId: r.cost_center_id,
+          estimatedLaborCost: parseFloat(r.estimated_labor_cost || "0"),
+          workedHours: parseFloat(r.worked_hours || "0"),
+          scheduledHours: parseFloat(r.scheduled_hours || "0"),
+          overtimeHours: parseFloat(r.overtime_hours || "0"),
+        })),
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch labor cost summary" });
+    }
+  });
+
+  // Weekly Financial KPI Summary (Revenue, AR, AP, Bottom Line)
+  app.get("/api/kpi/financial-summary", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
+    try {
+      const companyId = await getSessionCompanyId(req);
+      if (!companyId) return res.status(401).json({ message: "Not authenticated" });
+
+      const { weekStart: weekStartParam, costCenterId, jobId } = req.query as Record<string, string>;
+
+      // Validate costCenterId and jobId belong to this company (prevent cross-tenant scope bypass)
+      if (costCenterId) {
+        const ccCheck = await db.execute(sql`SELECT id FROM cost_centers WHERE id = ${costCenterId} AND company_id = ${companyId} LIMIT 1`);
+        if (ccCheck.rows.length === 0) return res.status(403).json({ message: "Cost center not in scope" });
+      }
+      if (jobId) {
+        const jobCheck = await db.execute(sql`SELECT id FROM jobs WHERE id = ${jobId} AND company_id = ${companyId} LIMIT 1`);
+        if (jobCheck.rows.length === 0) return res.status(403).json({ message: "Job not in scope" });
+      }
+
+      // Hierarchy scope: validate that the requested cost center / job is within caller's accessible scope
+      const finScope = await getKpiCallerScope(req.session!.userId!, companyId);
+      const finScopeError = validateGoalScopeRequest(costCenterId, jobId, finScope);
+      if (finScopeError) return res.status(403).json({ message: finScopeError });
+
+      const now = new Date();
+      const day = now.getDay();
+      const weekStart = weekStartParam || (() => {
+        const d = new Date(now);
+        d.setDate(now.getDate() - day);
+        return d.toISOString().split("T")[0];
+      })();
+      const weekEnd = getWeekEnd(weekStart);
+
+      // Build consistent scope filters
+      const finCostCenterFilter = costCenterId ? sql` AND cost_center_id = ${costCenterId}` : sql``;
+      const finJobFilter = jobId ? sql` AND job_id = ${jobId}` : sql``;
+      const laborCostCenterFilter = costCenterId ? sql` AND w.cost_center_id = ${costCenterId}` : sql``;
+      const laborJobFilter = jobId ? sql` AND te.schedule_id IN (SELECT id FROM schedules WHERE job_id = ${jobId} AND company_id = ${companyId})` : sql``;
+
+      // Hierarchy scope: supervisors/managers only see their direct reports.
+      // finHierarchyFilter applies to time_entries (labor); finApHierarchyFilter applies to expenses (AP).
+      // Least-privilege: hierarchy-scoped users with no worker profile see zero data.
+      const finSessionUser = await storage.getUser(req.session!.userId!);
+      const FIN_HIERARCHY_ROLES = ["supervisor", "manager", "tenant_supervisor", "tenant_manager"];
+      let finHierarchyFilter = sql``;
+      let finApHierarchyFilter = sql``;
+      if (!isAdminRole(finSessionUser?.role) && FIN_HIERARCHY_ROLES.includes(finSessionUser?.role || "")) {
+        const managerId = finSessionUser?.workerId;
+        if (managerId) {
+          finHierarchyFilter = sql` AND te.worker_id IN (SELECT id FROM workers WHERE manager_id = ${managerId} AND company_id = ${companyId})`;
+          // Scope AP/expenses strictly to cost centers where this manager has direct reports.
+          // Excludes NULL/unassigned expenses to prevent broad data exposure (least-privilege).
+          finApHierarchyFilter = sql` AND cost_center_id IN (SELECT DISTINCT cost_center_id FROM workers WHERE manager_id = ${managerId} AND company_id = ${companyId} AND cost_center_id IS NOT NULL)`;
+        } else {
+          // Hierarchy-scoped user with no worker profile — deny all labor and AP data
+          finHierarchyFilter = sql` AND 1=0`;
+          finApHierarchyFilter = sql` AND 1=0`;
+        }
+      }
+
+      // Revenue: invoices issued this week (company-wide; invoices lack cost_center_id)
+      const revenueRows = await db.execute(sql`
+        SELECT COALESCE(SUM(total_amount), 0) AS total_revenue
+        FROM invoices
+        WHERE company_id = ${companyId}
+          AND issue_date >= ${weekStart}
+          AND issue_date <= ${weekEnd}
+          AND status != 'draft'
+      `);
+
+      // AR: outstanding (sent/overdue) invoices total (company-wide)
+      const arRows = await db.execute(sql`
+        SELECT COALESCE(SUM(amount_due), 0) AS total_ar
+        FROM invoices
+        WHERE company_id = ${companyId}
+          AND status IN ('sent', 'overdue')
+      `);
+
+      // Collections: payments received this week (company-wide)
+      const collectionsRows = await db.execute(sql`
+        SELECT COALESCE(SUM(amount), 0) AS total_collections
+        FROM payments
+        WHERE company_id = ${companyId}
+          AND paid_at::date >= ${weekStart}::date
+          AND paid_at::date <= ${weekEnd}::date
+          AND status = 'succeeded'
+      `);
+
+      // AP/Bills: expenses approved this week — scoped by cost_center + job (if provided) + hierarchy
+      const apRows = await db.execute(sql`
+        SELECT COALESCE(SUM(amount), 0) AS total_ap
+        FROM expenses
+        WHERE company_id = ${companyId}
+          AND status = 'approved'
+          AND expense_date >= ${weekStart}
+          AND expense_date <= ${weekEnd}
+          ${finCostCenterFilter}
+          ${finJobFilter}
+          ${finApHierarchyFilter}
+      `);
+
+      // Labor cost this week — scoped by hierarchy, cost_center, job (consistent with labor-cost-summary)
+      const laborRows = await db.execute(sql`
+        SELECT COALESCE(SUM(
+          CASE
+            WHEN w.pay_type = 'salary' THEN (w.pay_rate / 52.0)
+            ELSE (COALESCE(te.total_hours, 0) * COALESCE(w.pay_rate, 0)) +
+                 (COALESCE(te.overtime_hours, 0) * COALESCE(w.pay_rate, 0) * 0.5)
+          END
+        ), 0) AS labor_cost
+        FROM time_entries te
+        JOIN workers w ON w.id = te.worker_id
+        WHERE te.company_id = ${companyId}
+          AND te.date >= ${weekStart}
+          AND te.date <= ${weekEnd}
+          ${laborCostCenterFilter}
+          ${laborJobFilter}
+          ${finHierarchyFilter}
+      `);
+
+      // Revenue goal: match on selected scope first, fall back to company-wide.
+      // Lookup order: (1) exact week + exact scope, (2) auto-recur + exact scope,
+      //               (3) exact week + company-wide, (4) auto-recur + company-wide.
+      const revCcFilter = costCenterId ? sql`AND cost_center_id = ${costCenterId}` : sql`AND cost_center_id IS NULL`;
+      const revJobFilter = jobId ? sql`AND job_id = ${jobId}` : sql`AND job_id IS NULL`;
+      let revenueGoalRows = await db.execute(sql`
+        SELECT target_amount FROM weekly_revenue_goals
+        WHERE company_id = ${companyId}
+          AND week_start = ${weekStart}
+          ${revCcFilter}
+          ${revJobFilter}
+        LIMIT 1
+      `);
+      if (revenueGoalRows.rows.length === 0) {
+        revenueGoalRows = await db.execute(sql`
+          SELECT target_amount FROM weekly_revenue_goals
+          WHERE company_id = ${companyId}
+            AND auto_recur = true
+            ${revCcFilter}
+            ${revJobFilter}
+          ORDER BY week_start DESC
+          LIMIT 1
+        `);
+      }
+      // Fall back to company-wide goal if no scoped goal found
+      if (revenueGoalRows.rows.length === 0 && (costCenterId || jobId)) {
+        revenueGoalRows = await db.execute(sql`
+          SELECT target_amount FROM weekly_revenue_goals
+          WHERE company_id = ${companyId}
+            AND week_start = ${weekStart}
+            AND cost_center_id IS NULL
+            AND job_id IS NULL
+          LIMIT 1
+        `);
+        if (revenueGoalRows.rows.length === 0) {
+          revenueGoalRows = await db.execute(sql`
+            SELECT target_amount FROM weekly_revenue_goals
+            WHERE company_id = ${companyId}
+              AND auto_recur = true
+              AND cost_center_id IS NULL
+              AND job_id IS NULL
+            ORDER BY week_start DESC
+            LIMIT 1
+          `);
+        }
+      }
+
+      const totalRevenue = parseFloat((revenueRows.rows[0] as any)?.total_revenue || "0");
+      const totalAr = parseFloat((arRows.rows[0] as any)?.total_ar || "0");
+      const totalCollections = parseFloat((collectionsRows.rows[0] as any)?.total_collections || "0");
+      const totalAp = parseFloat((apRows.rows[0] as any)?.total_ap || "0");
+      const laborCost = parseFloat((laborRows.rows[0] as any)?.labor_cost || "0");
+      const revenueGoal = revenueGoalRows.rows.length > 0 ? parseFloat((revenueGoalRows.rows[0] as any).target_amount || "0") : null;
+
+      // Bottom-line: Revenue - LaborCost - AP/Bills = Estimated Margin
+      const estimatedMargin = totalRevenue - laborCost - totalAp;
+
+      res.json({
+        weekStart,
+        weekEnd,
+        revenue: {
+          actual: totalRevenue,
+          goal: revenueGoal,
+          variance: revenueGoal !== null ? totalRevenue - revenueGoal : null,
+          variancePct: revenueGoal !== null && revenueGoal > 0 ? ((totalRevenue - revenueGoal) / revenueGoal) * 100 : null,
+        },
+        ar: {
+          outstanding: totalAr,
+          collectionsThisWeek: totalCollections,
+        },
+        ap: {
+          billsDueThisWeek: totalAp,
+        },
+        laborCost,
+        bottomLine: {
+          revenue: totalRevenue,
+          laborCost,
+          apBills: totalAp,
+          estimatedMargin,
+          formula: "Revenue − Labor Cost − AP/Bills = Estimated Margin",
+        },
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch financial summary" });
     }
   });
 

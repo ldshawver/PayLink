@@ -445,6 +445,7 @@ const TENANT_NAV: NavGroup[] = [
         items: [
           { title: "Company Policies", url: "/app/settings", icon: Shield },
           { title: "Check Print Calibration", url: "/app/settings#calibration", icon: Printer },
+          { title: "KPI Goals", url: "/app/kpi-goals", icon: BarChart3 },
         ],
       },
       {

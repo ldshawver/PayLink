@@ -207,6 +207,9 @@ import {
   type TreasuryOutboundPayment, type InsertTreasuryOutboundPayment,
   inventoryItems,
   type InventoryItem, type InsertInventoryItem,
+  weeklyLaborGoals, weeklyRevenueGoals,
+  type WeeklyLaborGoal, type InsertWeeklyLaborGoal,
+  type WeeklyRevenueGoal, type InsertWeeklyRevenueGoal,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -4342,6 +4345,46 @@ export class DatabaseStorage implements IStorage {
     await db.delete(inventoryItems).where(eq(inventoryItems.companyId, companyId));
     if (!items.length) return [];
     return db.insert(inventoryItems).values(items.map(i => ({ ...i, companyId }))).returning();
+  }
+
+  // ── Weekly Labor Goals ────────────────────────────────────────────────────────
+  async getWeeklyLaborGoals(companyId: string): Promise<WeeklyLaborGoal[]> {
+    return db.select().from(weeklyLaborGoals).where(eq(weeklyLaborGoals.companyId, companyId)).orderBy(desc(weeklyLaborGoals.weekStart));
+  }
+  async getWeeklyLaborGoal(id: string): Promise<WeeklyLaborGoal | undefined> {
+    const [r] = await db.select().from(weeklyLaborGoals).where(eq(weeklyLaborGoals.id, id));
+    return r;
+  }
+  async createWeeklyLaborGoal(data: InsertWeeklyLaborGoal): Promise<WeeklyLaborGoal> {
+    const [r] = await db.insert(weeklyLaborGoals).values(data).returning();
+    return r;
+  }
+  async updateWeeklyLaborGoal(id: string, data: Partial<WeeklyLaborGoal>): Promise<WeeklyLaborGoal | undefined> {
+    const [r] = await db.update(weeklyLaborGoals).set(data).where(eq(weeklyLaborGoals.id, id)).returning();
+    return r;
+  }
+  async deleteWeeklyLaborGoal(id: string): Promise<void> {
+    await db.delete(weeklyLaborGoals).where(eq(weeklyLaborGoals.id, id));
+  }
+
+  // ── Weekly Revenue Goals ──────────────────────────────────────────────────────
+  async getWeeklyRevenueGoals(companyId: string): Promise<WeeklyRevenueGoal[]> {
+    return db.select().from(weeklyRevenueGoals).where(eq(weeklyRevenueGoals.companyId, companyId)).orderBy(desc(weeklyRevenueGoals.weekStart));
+  }
+  async getWeeklyRevenueGoal(id: string): Promise<WeeklyRevenueGoal | undefined> {
+    const [r] = await db.select().from(weeklyRevenueGoals).where(eq(weeklyRevenueGoals.id, id));
+    return r;
+  }
+  async createWeeklyRevenueGoal(data: InsertWeeklyRevenueGoal): Promise<WeeklyRevenueGoal> {
+    const [r] = await db.insert(weeklyRevenueGoals).values(data).returning();
+    return r;
+  }
+  async updateWeeklyRevenueGoal(id: string, data: Partial<WeeklyRevenueGoal>): Promise<WeeklyRevenueGoal | undefined> {
+    const [r] = await db.update(weeklyRevenueGoals).set(data).where(eq(weeklyRevenueGoals.id, id)).returning();
+    return r;
+  }
+  async deleteWeeklyRevenueGoal(id: string): Promise<void> {
+    await db.delete(weeklyRevenueGoals).where(eq(weeklyRevenueGoals.id, id));
   }
 }
 

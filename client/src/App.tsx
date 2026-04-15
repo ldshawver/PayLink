@@ -72,6 +72,7 @@ const FeatureRegistryPage = lazy(() => import("@/pages/feature-registry"));
 const RoleManagementPage = lazy(() => import("@/pages/role-management"));
 const PlatformAuditPage = lazy(() => import("@/pages/platform-audit"));
 const InventoryPage = lazy(() => import("@/pages/inventory"));
+const KpiGoalsPage = lazy(() => import("@/pages/kpi-goals"));
 
 // ─── Shared page-loading fallback ────────────────────────────────────────────
 function PageLoader() {
@@ -158,6 +159,7 @@ function AuthenticatedRouter() {
         <Route path="/app/treasury">{() => <RoleGuard roles={["admin"]}><TreasuryPage /></RoleGuard>}</Route>
         <Route path="/app/settings">{() => <RoleGuard roles={["admin"]}><SettingsPage /></RoleGuard>}</Route>
         <Route path="/app/role-management">{() => <RoleGuard roles={["admin"]}><RoleManagementPage /></RoleGuard>}</Route>
+        <Route path="/app/kpi-goals">{() => <RoleGuard roles={["admin", "manager"]}><KpiGoalsPage /></RoleGuard>}</Route>
         <Route component={NotFound} />
       </Switch>
     </Suspense>

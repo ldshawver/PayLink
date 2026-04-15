@@ -8,6 +8,13 @@
       "when": 1775187433593,
       "tag": "0000_org_hierarchy_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1775400000000,
+      "tag": "0001_kpi_weekly_goals",
+      "breakpoints": true
     }
   ]
 }

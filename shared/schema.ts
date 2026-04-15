@@ -4068,6 +4068,39 @@ export const insertTreasuryOutboundPaymentSchema = createInsertSchema(treasuryOu
 export type TreasuryOutboundPayment = typeof treasuryOutboundPayments.$inferSelect;
 export type InsertTreasuryOutboundPayment = z.infer<typeof insertTreasuryOutboundPaymentSchema>;
 
+// ── Weekly KPI Goals ──────────────────────────────────────────────────────────
+export const weeklyLaborGoals = pgTable("weekly_labor_goals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  costCenterId: varchar("cost_center_id"),
+  jobId: varchar("job_id"),
+  weekStart: date("week_start").notNull(),
+  targetAmount: numeric("target_amount").notNull().default("0"),
+  autoRecur: boolean("auto_recur").default(false),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertWeeklyLaborGoalSchema = createInsertSchema(weeklyLaborGoals).omit({ id: true, createdAt: true });
+export type WeeklyLaborGoal = typeof weeklyLaborGoals.$inferSelect;
+export type InsertWeeklyLaborGoal = z.infer<typeof insertWeeklyLaborGoalSchema>;
+
+export const weeklyRevenueGoals = pgTable("weekly_revenue_goals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  costCenterId: varchar("cost_center_id"),
+  jobId: varchar("job_id"),
+  weekStart: date("week_start").notNull(),
+  targetAmount: numeric("target_amount").notNull().default("0"),
+  autoRecur: boolean("auto_recur").default(false),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertWeeklyRevenueGoalSchema = createInsertSchema(weeklyRevenueGoals).omit({ id: true, createdAt: true });
+export type WeeklyRevenueGoal = typeof weeklyRevenueGoals.$inferSelect;
+export type InsertWeeklyRevenueGoal = z.infer<typeof insertWeeklyRevenueGoalSchema>;
+
 // ── Inventory Items ────────────────────────────────────────────────────────────
 export const inventoryItems = pgTable("inventory_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

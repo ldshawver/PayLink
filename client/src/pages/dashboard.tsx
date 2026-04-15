@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { OnboardingChecklist } from "@/components/onboarding-checklist";
-import type { Worker, TimeEntry, TimePunch, Schedule } from "@shared/schema";
+import type { Worker, TimeEntry, TimePunch, Schedule, CostCenter, Job } from "@shared/schema";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,7 @@ import {
   Users,
   FileText,
   TrendingUp,
+  TrendingDown,
   Newspaper,
   Play,
   Square,
@@ -51,7 +52,23 @@ import {
   MessageSquare,
   Ban,
   Pencil,
+  Target,
+  DollarSign,
+  BarChart3,
+  Receipt,
+  PlusCircle,
+  Trash2,
+  RefreshCw,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 const DASHLET_STORAGE_KEY = "paylink-dashlets";
 
@@ -62,6 +79,13 @@ interface DashletConfig {
 }
 
 const ADMIN_ROLES = [
+  "admin", "manager", "supervisor",
+  "platform_super_admin", "platform_admin", "platform_support", "platform_implementation",
+  "tenant_owner", "tenant_admin", "tenant_hr_admin", "tenant_payroll_admin", "tenant_finance_admin",
+  "tenant_manager", "tenant_supervisor",
+];
+
+const MANAGER_ROLES = [
   "admin", "manager", "supervisor",
   "platform_super_admin", "platform_admin", "platform_support", "platform_implementation",
   "tenant_owner", "tenant_admin", "tenant_hr_admin", "tenant_payroll_admin", "tenant_finance_admin",
@@ -80,6 +104,8 @@ const ALL_DASHLETS: DashletConfig[] = [
   { id: "schedule-summary", label: "Schedule Summary" },
   { id: "whos-in-out", label: "Who's In/Out" },
   { id: "timesheet-summary", label: "Timesheet Summary" },
+  { id: "weekly-labor-cost", label: "Weekly Labor Cost vs Goal", roles: MANAGER_ROLES },
+  { id: "weekly-financial-kpi", label: "Weekly Financial KPIs", roles: MANAGER_ROLES },
 ];
 
 function loadVisibility(): Record<string, boolean> {
@@ -1225,6 +1251,583 @@ function DashboardClockCard() {
   );
 }
 
+// ── Helper utilities ─────────────────────────────────────────────────────────
+function formatCurrency(value: number): string {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+}
+
+function getThisWeekStart(): string {
+  const now = new Date();
+  const day = now.getDay();
+  const d = new Date(now);
+  d.setDate(now.getDate() - day);
+  return d.toISOString().split("T")[0];
+}
+
+// ── Goal Configuration Modal ──────────────────────────────────────────────────
+type GoalType = "labor" | "revenue";
+
+interface GoalConfigModalProps {
+  goalType: GoalType;
+  companyId?: string;
+  onClose: () => void;
+}
+
+function GoalConfigModal({ goalType, onClose }: GoalConfigModalProps) {
+  const { toast } = useToast();
+  const endpoint = goalType === "labor" ? "/api/kpi/labor-goals" : "/api/kpi/revenue-goals";
+  const queryKey = [endpoint];
+
+  const { data: goals, isLoading } = useQuery<any[]>({ queryKey });
+
+  const [weekStart, setWeekStart] = useState(getThisWeekStart());
+  const [targetAmount, setTargetAmount] = useState("");
+  const [autoRecur, setAutoRecur] = useState(false);
+
+  const createMutation = useMutation({
+    mutationFn: () => apiRequest("POST", endpoint, { weekStart, targetAmount: parseFloat(targetAmount || "0"), autoRecur }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: [goalType === "labor" ? "/api/kpi/labor-cost-summary" : "/api/kpi/financial-summary"] });
+      setTargetAmount("");
+      setAutoRecur(false);
+      toast({ title: "Goal saved" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to save goal", variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `${endpoint}/${id}`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      toast({ title: "Goal deleted" });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to delete goal", variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="sm:max-w-lg" data-testid="dialog-goal-config">
+        <DialogHeader>
+          <DialogTitle>
+            {goalType === "labor" ? "Weekly Labor Budget Goals" : "Weekly Revenue Goals"}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Week Starting</label>
+              <Input
+                type="date"
+                value={weekStart}
+                onChange={(e) => setWeekStart(e.target.value)}
+                data-testid="input-goal-week-start"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Target Amount ($)</label>
+              <Input
+                type="number"
+                min="0"
+                step="100"
+                placeholder="e.g. 10000"
+                value={targetAmount}
+                onChange={(e) => setTargetAmount(e.target.value)}
+                data-testid="input-goal-target-amount"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Switch
+              id="auto-recur"
+              checked={autoRecur}
+              onCheckedChange={setAutoRecur}
+              data-testid="switch-goal-auto-recur"
+            />
+            <label htmlFor="auto-recur" className="text-sm cursor-pointer">
+              Auto-recur this goal every week
+            </label>
+          </div>
+          <Button
+            onClick={() => createMutation.mutate()}
+            disabled={createMutation.isPending || !targetAmount}
+            className="w-full"
+            data-testid="button-save-goal"
+          >
+            <PlusCircle className="h-4 w-4 mr-2" />
+            Save Goal
+          </Button>
+
+          <div className="border-t pt-3">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Existing Goals</p>
+            {isLoading ? (
+              <Skeleton className="h-20 w-full" />
+            ) : (goals || []).length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-3">No goals configured</p>
+            ) : (
+              <div className="space-y-2 max-h-56 overflow-y-auto">
+                {(goals || []).map((g: any) => (
+                  <div key={g.id} className="flex items-center justify-between gap-2 px-3 py-2 rounded-md border text-sm" data-testid={`row-goal-${g.id}`}>
+                    <div className="flex flex-col min-w-0">
+                      <span className="font-medium">{formatCurrency(parseFloat(g.targetAmount || g.target_amount || "0"))}</span>
+                      <span className="text-xs text-muted-foreground">
+                        Week of {g.weekStart || g.week_start}
+                        {g.autoRecur || g.auto_recur ? " · Auto-recur" : ""}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 w-6 p-0 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                      onClick={() => deleteMutation.mutate(g.id)}
+                      disabled={deleteMutation.isPending}
+                      data-testid={`button-delete-goal-${g.id}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Weekly Labor Cost KPI Widget ──────────────────────────────────────────────
+function WeeklyLaborCostWidget() {
+  const [showGoalConfig, setShowGoalConfig] = useState(false);
+  const [showDrillthrough, setShowDrillthrough] = useState(false);
+  const [filterCostCenter, setFilterCostCenter] = useState("_all_");
+  const [filterJob, setFilterJob] = useState("_all_");
+  const weekStart = getThisWeekStart();
+
+  const { data: costCenters } = useQuery<CostCenter[]>({ queryKey: ["/api/cost-centers"] });
+  const { data: jobs } = useQuery<Job[]>({ queryKey: ["/api/jobs"] });
+
+  const { data, isLoading, refetch } = useQuery<any>({
+    queryKey: ["/api/kpi/labor-cost-summary", weekStart, filterCostCenter, filterJob],
+    queryFn: async () => {
+      const params = new URLSearchParams({ weekStart });
+      if (filterCostCenter && filterCostCenter !== "_all_") params.set("costCenterId", filterCostCenter);
+      if (filterJob && filterJob !== "_all_") params.set("jobId", filterJob);
+      const r = await fetch(`/api/kpi/labor-cost-summary?${params}`);
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+  });
+
+  const laborCost = data?.estimatedLaborCost ?? 0;
+  const goal = data?.goal ?? null;
+  const variance = data?.variance ?? null;
+  const variancePct = data?.variancePct ?? null;
+  const trendVsPrior = data?.trendVsPrior ?? null;
+  const isOverBudget = variance !== null && variance > 0;
+
+  return (
+    <>
+      <Card className="col-span-1 lg:col-span-2" data-testid="dashlet-weekly-labor-cost">
+        <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+          <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
+            <BarChart3 className="h-4 w-4 text-teal-accent" />
+            Weekly Labor Cost vs Goal
+          </CardTitle>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-0"
+              onClick={() => refetch()}
+              title="Refresh"
+              data-testid="button-labor-cost-refresh"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => setShowGoalConfig(true)}
+              data-testid="button-labor-cost-configure-goal"
+            >
+              <Target className="h-3.5 w-3.5 mr-1" />
+              Set Goal
+            </Button>
+            <Link href="/app/timesheets">
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" data-testid="link-labor-cost-view-all">
+                View <ExternalLink className="h-3 w-3 ml-1" />
+              </Button>
+            </Link>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {/* Cost center / job scope filters */}
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <Select value={filterCostCenter} onValueChange={setFilterCostCenter}>
+              <SelectTrigger className="h-7 text-xs w-36" data-testid="select-labor-cost-center">
+                <SelectValue placeholder="All cost centers" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_all_">All cost centers</SelectItem>
+                {(costCenters || []).map((cc: CostCenter) => (
+                  <SelectItem key={cc.id} value={String(cc.id)} data-testid={`option-labor-cost-center-${cc.id}`}>{cc.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={filterJob} onValueChange={setFilterJob}>
+              <SelectTrigger className="h-7 text-xs w-32" data-testid="select-labor-job">
+                <SelectValue placeholder="All jobs" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_all_">All jobs</SelectItem>
+                {(jobs || []).map((j: Job) => (
+                  <SelectItem key={j.id} value={String(j.id)} data-testid={`option-labor-job-${j.id}`}>{j.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {isLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-8 w-40" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-3/4" />
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-end justify-between gap-4 flex-wrap">
+                <div>
+                  <div className="text-2xl font-bold" data-testid="text-labor-cost-actual">
+                    {formatCurrency(laborCost)}
+                  </div>
+                  <div className="text-xs text-muted-foreground">Estimated Labor Cost</div>
+                </div>
+                {goal !== null && (
+                  <div className="text-right">
+                    <div className="text-lg font-semibold text-muted-foreground" data-testid="text-labor-cost-goal">
+                      {formatCurrency(goal)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">Weekly Budget</div>
+                  </div>
+                )}
+              </div>
+
+              {goal !== null && (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">Budget usage</span>
+                    <span className={isOverBudget ? "text-red-600 dark:text-red-400 font-medium" : "text-green-600 dark:text-green-400 font-medium"}>
+                      {goal > 0 ? Math.min(100, Math.round((laborCost / goal) * 100)) : 0}%
+                    </span>
+                  </div>
+                  <div className="h-2 rounded-full bg-muted overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${isOverBudget ? "bg-red-500" : "bg-green-500"}`}
+                      style={{ width: `${Math.min(100, goal > 0 ? (laborCost / goal) * 100 : 0)}%` }}
+                      data-testid="bar-labor-cost-usage"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 text-sm pt-1">
+                {variance !== null && (
+                  <div className="flex flex-col">
+                    <span className="text-xs text-muted-foreground">Variance</span>
+                    <span className={`font-semibold ${isOverBudget ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`} data-testid="text-labor-cost-variance">
+                      {isOverBudget ? "+" : ""}{formatCurrency(variance)}
+                    </span>
+                  </div>
+                )}
+                {variancePct !== null && (
+                  <div className="flex flex-col">
+                    <span className="text-xs text-muted-foreground">Variance %</span>
+                    <span className={`font-semibold ${isOverBudget ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`} data-testid="text-labor-cost-variance-pct">
+                      {isOverBudget ? "+" : ""}{variancePct.toFixed(1)}%
+                    </span>
+                  </div>
+                )}
+                <div className="flex flex-col">
+                  <span className="text-xs text-muted-foreground">vs Prior Week</span>
+                  <span className={`font-semibold flex items-center gap-1 ${trendVsPrior === null ? "text-muted-foreground" : trendVsPrior > 0 ? "text-amber-600 dark:text-amber-400" : "text-green-600 dark:text-green-400"}`} data-testid="text-labor-cost-trend">
+                    {trendVsPrior === null ? "N/A" : (
+                      <>
+                        {trendVsPrior > 0 ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
+                        {trendVsPrior > 0 ? "+" : ""}{trendVsPrior.toFixed(1)}%
+                      </>
+                    )}
+                  </span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-xs text-muted-foreground">OT Hours</span>
+                  <span className="font-semibold" data-testid="text-labor-cost-ot-hours">{(data?.totalOvertimeHours ?? 0).toFixed(1)}h</span>
+                </div>
+              </div>
+
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full text-xs"
+                onClick={() => setShowDrillthrough(true)}
+                data-testid="button-labor-cost-drillthrough"
+              >
+                View Cost Center Breakdown
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {showGoalConfig && <GoalConfigModal goalType="labor" onClose={() => setShowGoalConfig(false)} />}
+
+      {showDrillthrough && (
+        <Dialog open onOpenChange={(open) => { if (!open) setShowDrillthrough(false); }}>
+          <DialogContent className="sm:max-w-2xl" data-testid="dialog-labor-drillthrough">
+            <DialogHeader>
+              <DialogTitle>Labor Cost Breakdown — Week of {weekStart}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-3 text-sm font-medium text-muted-foreground border-b pb-2">
+                <span>Cost Center</span>
+                <span className="text-right">Worked / Sched Hrs</span>
+                <span className="text-right">Est. Labor Cost</span>
+              </div>
+              {isLoading ? (
+                <Skeleton className="h-32 w-full" />
+              ) : (data?.breakdown || []).length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">No labor data for this week</p>
+              ) : (
+                <div className="space-y-2 max-h-72 overflow-y-auto">
+                  {(data?.breakdown || []).map((row: any, i: number) => (
+                    <Link key={i} href="/app/timesheets">
+                      <div
+                        className="grid grid-cols-3 gap-3 text-sm cursor-pointer rounded-md hover:bg-muted/50 px-1 py-1.5 -mx-1 transition-colors"
+                        data-testid={`row-labor-breakdown-${i}`}
+                      >
+                        <span className="truncate">{row.groupName}</span>
+                        <span className="text-right">{row.workedHours.toFixed(1)}h / {row.scheduledHours.toFixed(1)}h</span>
+                        <span className="text-right font-medium">{formatCurrency(row.estimatedLaborCost)}</span>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
+              <div className="border-t pt-2 grid grid-cols-3 gap-3 text-sm font-semibold">
+                <span>Total</span>
+                <span className="text-right">{(data?.totalWorkedHours ?? 0).toFixed(1)}h / {(data?.totalScheduledHours ?? 0).toFixed(1)}h</span>
+                <span className="text-right">{formatCurrency(laborCost)}</span>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Overtime: {(data?.totalOvertimeHours ?? 0).toFixed(1)}h (projected payroll cost includes 1.5× OT multiplier)
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
+  );
+}
+
+// ── Weekly Financial KPI Widget ───────────────────────────────────────────────
+function WeeklyFinancialKPIWidget() {
+  const [showGoalConfig, setShowGoalConfig] = useState(false);
+  const [filterCostCenter, setFilterCostCenter] = useState("_all_");
+  const [filterJob, setFilterJob] = useState("_all_");
+  const weekStart = getThisWeekStart();
+
+  const { data: costCenters } = useQuery<CostCenter[]>({ queryKey: ["/api/cost-centers"] });
+  const { data: jobs } = useQuery<Job[]>({ queryKey: ["/api/jobs"] });
+
+  const { data, isLoading, refetch } = useQuery<any>({
+    queryKey: ["/api/kpi/financial-summary", weekStart, filterCostCenter, filterJob],
+    queryFn: async () => {
+      const params = new URLSearchParams({ weekStart });
+      if (filterCostCenter && filterCostCenter !== "_all_") params.set("costCenterId", filterCostCenter);
+      if (filterJob && filterJob !== "_all_") params.set("jobId", filterJob);
+      const r = await fetch(`/api/kpi/financial-summary?${params}`);
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+  });
+
+  const revenue = data?.revenue ?? { actual: 0, goal: null, variance: null, variancePct: null };
+  const ar = data?.ar ?? { outstanding: 0, collectionsThisWeek: 0 };
+  const ap = data?.ap ?? { billsDueThisWeek: 0 };
+  const bottomLine = data?.bottomLine ?? { revenue: 0, laborCost: 0, apBills: 0, estimatedMargin: 0, formula: "" };
+  const marginPositive = bottomLine.estimatedMargin >= 0;
+
+  return (
+    <>
+      <Card className="col-span-1 lg:col-span-2" data-testid="dashlet-weekly-financial-kpi">
+        <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+          <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
+            <DollarSign className="h-4 w-4 text-teal-accent" />
+            Weekly Financial KPIs
+          </CardTitle>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-0"
+              onClick={() => refetch()}
+              title="Refresh"
+              data-testid="button-financial-kpi-refresh"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => setShowGoalConfig(true)}
+              data-testid="button-financial-kpi-configure-goal"
+            >
+              <Target className="h-3.5 w-3.5 mr-1" />
+              Set Goal
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {/* Cost center / job scope filters — affects AP/Bills and Labor in bottom-line */}
+          <div className="flex flex-col gap-1.5 mb-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Select value={filterCostCenter} onValueChange={setFilterCostCenter}>
+                <SelectTrigger className="h-7 text-xs w-36" data-testid="select-financial-cost-center">
+                  <SelectValue placeholder="All cost centers" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_all_">All cost centers</SelectItem>
+                  {(costCenters || []).map((cc: CostCenter) => (
+                    <SelectItem key={cc.id} value={String(cc.id)} data-testid={`option-financial-cost-center-${cc.id}`}>{cc.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={filterJob} onValueChange={setFilterJob}>
+                <SelectTrigger className="h-7 text-xs w-32" data-testid="select-financial-job">
+                  <SelectValue placeholder="All jobs" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_all_">All jobs</SelectItem>
+                  {(jobs || []).map((j: Job) => (
+                    <SelectItem key={j.id} value={String(j.id)} data-testid={`option-financial-job-${j.id}`}>{j.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {(filterCostCenter !== "_all_" || filterJob !== "_all_") && (
+              <p className="text-[10px] text-muted-foreground" data-testid="text-financial-scope-note">
+                Filters apply to AP/Bills and Labor. Revenue and AR are company-wide.
+              </p>
+            )}
+          </div>
+
+          {isLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-6 w-full" />
+              <Skeleton className="h-6 w-full" />
+              <Skeleton className="h-6 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Revenue vs Goal */}
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Revenue vs Goal</span>
+                  <Link href="/app/invoices" data-testid="link-revenue-invoices" className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors">
+                    Invoices <ExternalLink className="h-2.5 w-2.5 ml-0.5" />
+                  </Link>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <Link href="/app/invoices" className="font-semibold text-base hover:underline" data-testid="text-revenue-actual">{formatCurrency(revenue.actual)}</Link>
+                  {revenue.goal !== null ? (
+                    <span className={`text-sm font-medium ${revenue.variance !== null && revenue.variance >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`} data-testid="text-revenue-variance">
+                      {revenue.variance !== null && revenue.variance >= 0 ? "+" : ""}{formatCurrency(revenue.variance ?? 0)} vs {formatCurrency(revenue.goal)} goal
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">No goal set</span>
+                  )}
+                </div>
+              </div>
+
+              {/* AR/Collections */}
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">AR / Collections</span>
+                  <Link href="/app/invoices" data-testid="link-ar-aging" className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors">
+                    AR Aging <ExternalLink className="h-2.5 w-2.5 ml-0.5" />
+                  </Link>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <Link href="/app/invoices" className="font-medium hover:underline" data-testid="text-ar-outstanding">{formatCurrency(ar.outstanding)}</Link>
+                    <div className="text-xs text-muted-foreground">Outstanding AR</div>
+                  </div>
+                  <div>
+                    <Link href="/app/invoices" className="font-medium text-green-600 dark:text-green-400 hover:underline" data-testid="text-ar-collections">{formatCurrency(ar.collectionsThisWeek)}</Link>
+                    <div className="text-xs text-muted-foreground">Collected This Week</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* AP/Bills */}
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">AP / Bills</span>
+                  <Link href="/app/expenses" data-testid="link-ap-bills" className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors">
+                    Bills Queue <ExternalLink className="h-2.5 w-2.5 ml-0.5" />
+                  </Link>
+                </div>
+                <div className="flex items-center justify-between gap-2 text-sm">
+                  <Link href="/app/expenses" className="font-medium text-amber-600 dark:text-amber-400 hover:underline" data-testid="text-ap-bills">{formatCurrency(ap.billsDueThisWeek)}</Link>
+                  <span className="text-xs text-muted-foreground">Approved expenses this week</span>
+                </div>
+              </div>
+
+              {/* Bottom Line */}
+              <div className="border-t pt-3">
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Bottom-Line KPI</span>
+                  <Link href="/app/timesheets" data-testid="link-bottom-line-labor" className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors">
+                    Labor Cost <ExternalLink className="h-2.5 w-2.5 ml-0.5" />
+                  </Link>
+                </div>
+                <div className="rounded-md bg-muted/50 p-3 space-y-1.5 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">Revenue</span>
+                    <Link href="/app/invoices" className="font-medium hover:underline" data-testid="text-bottom-line-revenue">{formatCurrency(bottomLine.revenue)}</Link>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">− Labor Cost</span>
+                    <Link href="/app/timesheets" className="font-medium text-red-600 dark:text-red-400 hover:underline" data-testid="text-bottom-line-labor">{formatCurrency(bottomLine.laborCost)}</Link>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">− AP/Bills</span>
+                    <Link href="/app/expenses" className="font-medium text-red-600 dark:text-red-400 hover:underline" data-testid="text-bottom-line-ap">{formatCurrency(bottomLine.apBills)}</Link>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 border-t pt-1.5">
+                    <span className="font-semibold">= Est. Margin</span>
+                    <span className={`font-bold text-base ${marginPositive ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`} data-testid="text-bottom-line-margin">
+                      {marginPositive ? "" : "−"}{formatCurrency(Math.abs(bottomLine.estimatedMargin))}
+                    </span>
+                  </div>
+                </div>
+                {bottomLine.formula && (
+                  <p className="text-[10px] text-muted-foreground mt-1.5 italic">{bottomLine.formula}</p>
+                )}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {showGoalConfig && <GoalConfigModal goalType="revenue" onClose={() => setShowGoalConfig(false)} />}
+    </>
+  );
+}
+
 const LIFECYCLE_STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
   active_paid: { label: "Active (Paid)", color: "text-green-600 dark:text-green-400", icon: CheckCircle2 },
   trial_active: { label: "Trial Active", color: "text-blue-600 dark:text-blue-400", icon: Activity },
@@ -1374,6 +1977,8 @@ export default function Dashboard() {
     "schedule-summary": <ScheduleSummaryDashlet />,
     "whos-in-out": <WhosInOutDashlet />,
     "timesheet-summary": <TimesheetSummaryDashlet />,
+    "weekly-labor-cost": <WeeklyLaborCostWidget />,
+    "weekly-financial-kpi": <WeeklyFinancialKPIWidget />,
   };
 
   return (
