@@ -7292,10 +7292,31 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!["approved", "accepted", "negotiated"].includes(prop.status)) return res.status(400).json({ message: "Only approved or negotiated proposals can be converted to contracts" });
 
       const contractNumber = `CON-${Date.now()}`;
+      // Allow caller to override any field; fall back to proposal values
+      const {
+        title, description, scopeOfWork, paymentTerms, totalValue, startDate, endDate,
+        contractType, specialTerms, bodyMarkdown
+      } = req.body;
 
       const contractRes = await db.execute(sql`
-        INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, status, created_by_user_id)
-        VALUES (${prop.company_id}, ${prop.contractor_id}, ${prop.id}, ${contractNumber}, ${prop.title || "Service Contract"}, ${prop.description}, ${prop.scope_of_work}, ${prop.payment_terms}, ${prop.amount}, ${prop.currency || "USD"}, ${prop.payment_type || "monetary"}, ${prop.trade_offered}, ${prop.trade_value}, ${prop.issue_date}, 'pending', ${req.session.userId})
+        INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, end_date, contract_type, special_terms, body_markdown, status, created_by_user_id)
+        VALUES (
+          ${prop.company_id}, ${prop.contractor_id}, ${prop.id}, ${contractNumber},
+          ${title || prop.title || "Service Contract"},
+          ${description || prop.description},
+          ${scopeOfWork || prop.scope_of_work},
+          ${paymentTerms || prop.payment_terms},
+          ${totalValue || prop.amount},
+          ${prop.currency || "USD"},
+          ${prop.payment_type || "monetary"},
+          ${prop.trade_offered}, ${prop.trade_value},
+          ${startDate || prop.issue_date},
+          ${endDate || null},
+          ${contractType || "service"},
+          ${specialTerms || null},
+          ${bodyMarkdown || null},
+          'draft', ${req.session.userId}
+        )
         RETURNING *
       `);
       const contract = contractRes.rows[0] as any;
@@ -7659,6 +7680,65 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
       res.status(201).json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to create contract snapshot: " + e.message }); }
+  });
+
+  // ── Contract: Activate ────────────────────────────────────────────────────
+  app.post("/api/contractor-contracts/:id/activate", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      if (!["pending", "sent", "partially_signed", "fully_signed"].includes(contract.status)) {
+        return res.status(400).json({ message: "Contract cannot be activated from current status" });
+      }
+      const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'active', updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to activate contract: " + e.message }); }
+  });
+
+  // ── Contract: Add Signer ─────────────────────────────────────────────────
+  app.post("/api/contractor-contracts/:id/add-signer", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
+      if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
+      if (["void", "fully_signed"].includes(contract.status)) return res.status(400).json({ message: "Cannot add signer to void or fully-signed contract" });
+      const { name, email, role, workerId, userId } = req.body;
+      if (!name) return res.status(400).json({ message: "Signer name is required" });
+      const count = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${req.params.id}`);
+      const order = parseInt((count.rows[0] as any).count) + 1;
+      const result = await db.execute(sql`
+        INSERT INTO contract_signers (contract_id, worker_id, user_id, name, email, role, status, "order")
+        VALUES (${req.params.id}, ${workerId || null}, ${userId || null}, ${name}, ${email || null}, ${role || "reviewer"}, 'pending', ${order})
+        RETURNING *
+      `);
+      res.status(201).json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to add signer: " + e.message }); }
+  });
+
+  // ── Invoice: Request Override ─────────────────────────────────────────────
+  app.post("/api/contractor-invoices/:id/request-override", requireAuth, async (req, res) => {
+    try {
+      const inv = await storage.getContractorInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.workerId !== inv.contractorId) return res.status(403).json({ message: "Not your invoice" });
+      const { overrideReason, overrideAmount } = req.body;
+      if (!overrideReason) return res.status(400).json({ message: "Override reason is required" });
+      await db.execute(sql`
+        UPDATE contractor_invoices SET
+          override_requested = TRUE,
+          override_reason = ${overrideReason},
+          override_amount = ${overrideAmount || null},
+          override_requested_at = NOW(),
+          updated_at = NOW()
+        WHERE id = ${req.params.id}
+      `);
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_invoice", objectId: req.params.id, actionType: "override_requested",
+        actorUserId: req.session.userId, companyId: inv.companyId,
+        note: overrideReason,
+      });
+      res.json({ message: "Override request submitted" });
+    } catch (e: any) { res.status(500).json({ message: "Failed to submit override request: " + e.message }); }
   });
 
   // ── DAM Documents ─────────────────────────────────────────────────────────

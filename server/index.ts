@@ -2358,6 +2358,12 @@ Thank you,
     await run("contractor_invoices.approved_hours", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS approved_hours NUMERIC`);
     await run("contractor_invoices.approved_terms", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS approved_terms TEXT`);
     await run("contractor_invoices.trade_component", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS trade_component TEXT`);
+    await run("contractor_invoices.override_requested", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS override_requested BOOLEAN DEFAULT FALSE`);
+    await run("contractor_invoices.override_reason", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS override_reason TEXT`);
+    await run("contractor_invoices.override_amount", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS override_amount NUMERIC`);
+    await run("contractor_invoices.override_requested_at", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS override_requested_at TIMESTAMP`);
+    await run("contractor_invoices.override_approved", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS override_approved BOOLEAN`);
+    await run("contractor_invoices.override_approved_by", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS override_approved_by VARCHAR`);
 
     // ── proposal_versions table ───────────────────────────────────────────────
     await run("proposal_versions table", sql`CREATE TABLE IF NOT EXISTS proposal_versions (

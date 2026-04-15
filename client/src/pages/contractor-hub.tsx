@@ -95,10 +95,52 @@ interface Negotiation {
   initiatedByUserId?: string; initiatedByWorkerId?: string;
 }
 
+interface Signer {
+  id: string;
+  contractId: string;
+  name: string;
+  email?: string;
+  role?: string;
+  signerType?: string;
+  workerId?: string;
+  userId?: string;
+  order?: number;
+  status: "pending" | "signed" | "declined";
+  signedAt?: string;
+  signatureData?: string;
+  createdAt?: string;
+}
+
 interface Contract {
-  id: string; contractNumber?: string; title?: string; status: string;
-  contractorId: string; companyId?: string; proposalId?: string;
-  startDate?: string; endDate?: string; value?: string; createdAt: string;
+  id: string;
+  contractNumber?: string;
+  title?: string;
+  status: string;
+  contractType?: string;
+  contractorId: string;
+  contractorName?: string;
+  companyId?: string;
+  proposalId?: string;
+  startDate?: string;
+  endDate?: string;
+  totalValue?: string;
+  value?: string;
+  currency?: string;
+  paymentType?: string;
+  paymentTerms?: string;
+  scopeOfWork?: string;
+  description?: string;
+  specialTerms?: string;
+  bodyMarkdown?: string;
+  tradeDetails?: string;
+  tradeValue?: string;
+  sentAt?: string;
+  fullySignedAt?: string;
+  voidedAt?: string;
+  voidReason?: string;
+  createdAt: string;
+  updatedAt?: string;
+  signers?: Signer[];
 }
 
 // ─── Status Helpers ───────────────────────────────────────────────────────────
@@ -124,21 +166,34 @@ const INVOICE_STATUS_CONFIG: Record<string, { label: string; color: string; bg: 
   draft:            { label: "Draft",           color: "text-gray-600",   bg: "bg-gray-100 dark:bg-gray-800" },
   pending_approval: { label: "Pending Approval",color: "text-yellow-600", bg: "bg-yellow-50 dark:bg-yellow-950/30" },
   submitted:        { label: "Submitted",       color: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950/30" },
+  under_review:     { label: "Under Review",    color: "text-indigo-600", bg: "bg-indigo-50 dark:bg-indigo-950/30" },
+  needs_correction: { label: "Needs Correction",color: "text-orange-700", bg: "bg-orange-50 dark:bg-orange-950/30" },
+  approved:         { label: "Approved",        color: "text-teal-700",   bg: "bg-teal-50 dark:bg-teal-950/30" },
+  rejected:         { label: "Rejected",        color: "text-red-700",    bg: "bg-red-50 dark:bg-red-950/30" },
   sent:             { label: "Sent",            color: "text-indigo-600", bg: "bg-indigo-50 dark:bg-indigo-950/30" },
   viewed:           { label: "Viewed",          color: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-950/30" },
+  disputed:         { label: "Disputed",        color: "text-rose-700",   bg: "bg-rose-50 dark:bg-rose-950/30" },
   partially_paid:   { label: "Partial",         color: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950/30" },
   paid:             { label: "Paid",            color: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30" },
   overdue:          { label: "Overdue",         color: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30" },
+  closed:           { label: "Closed",          color: "text-gray-500",   bg: "bg-gray-50 dark:bg-gray-900/30" },
   void:             { label: "Void",            color: "text-gray-400",   bg: "bg-gray-50 dark:bg-gray-900/30" },
+  cancelled:        { label: "Cancelled",       color: "text-gray-400",   bg: "bg-gray-50 dark:bg-gray-900/30" },
 };
 
 const CONTRACT_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  draft:     { label: "Draft",     color: "text-gray-600",  bg: "bg-gray-100 dark:bg-gray-800" },
-  active:    { label: "Active",    color: "text-green-600", bg: "bg-green-50 dark:bg-green-950/30" },
-  pending:   { label: "Pending",   color: "text-blue-600",  bg: "bg-blue-50 dark:bg-blue-950/30" },
-  completed: { label: "Completed", color: "text-purple-600",bg: "bg-purple-50 dark:bg-purple-950/30" },
-  cancelled: { label: "Cancelled", color: "text-red-600",   bg: "bg-red-50 dark:bg-red-950/30" },
-  expired:   { label: "Expired",   color: "text-yellow-600",bg: "bg-yellow-50 dark:bg-yellow-950/30" },
+  draft:            { label: "Draft",            color: "text-gray-600",   bg: "bg-gray-100 dark:bg-gray-800" },
+  pending:          { label: "Pending",          color: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950/30" },
+  sent:             { label: "Sent",             color: "text-indigo-600", bg: "bg-indigo-50 dark:bg-indigo-950/30" },
+  partially_signed: { label: "Partially Signed", color: "text-amber-700",  bg: "bg-amber-50 dark:bg-amber-950/30" },
+  fully_signed:     { label: "Fully Signed",     color: "text-teal-700",   bg: "bg-teal-50 dark:bg-teal-950/30" },
+  active:           { label: "Active",           color: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30" },
+  expiring_soon:    { label: "Expiring Soon",    color: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950/30" },
+  completed:        { label: "Completed",        color: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-950/30" },
+  cancelled:        { label: "Cancelled",        color: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30" },
+  expired:          { label: "Expired",          color: "text-yellow-600", bg: "bg-yellow-50 dark:bg-yellow-950/30" },
+  terminated:       { label: "Terminated",       color: "text-red-700",    bg: "bg-red-50 dark:bg-red-950/30" },
+  void:             { label: "Void",             color: "text-gray-400",   bg: "bg-gray-50 dark:bg-gray-900/30" },
 };
 
 function ProposalBadge({ status }: { status: string }) {
@@ -350,6 +405,103 @@ function DashboardSection({ proposals, invoices, contracts, isAdmin, onNavigate 
   );
 }
 
+// ─── Convert to Contract Dialog ───────────────────────────────────────────────
+
+function ConvertToContractDialog({
+  open, onClose, proposal, onSuccess
+}: { open: boolean; onClose: () => void; proposal: Proposal; onSuccess: () => void }) {
+  const { toast } = useToast();
+  const [title, setTitle] = useState(proposal.title || "Service Contract");
+  const [scopeOfWork, setScopeOfWork] = useState(proposal.scopeOfWork || "");
+  const [paymentTerms, setPaymentTerms] = useState(proposal.paymentTerms || "");
+  const [totalValue, setTotalValue] = useState(proposal.amount || "");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [contractType, setContractType] = useState("service");
+  const [specialTerms, setSpecialTerms] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/contractor-proposals/${proposal.id}/convert-to-contract`, {
+      title, scopeOfWork, paymentTerms,
+      totalValue: totalValue || undefined,
+      startDate: startDate || undefined,
+      endDate: endDate || undefined,
+      contractType, specialTerms: specialTerms || undefined,
+    }),
+    onSuccess: () => onSuccess(),
+    onError: (e: any) => toast({ title: e?.message || "Failed to convert", variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={v => !v && onClose()}>
+      <DialogContent className="max-w-lg" data-testid="dialog-convert-to-contract">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <FileSignature className="h-5 w-5 text-emerald-600" /> Convert to Contract
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg text-sm text-emerald-700 dark:text-emerald-400">
+            Review and adjust the contract details below. The approved proposal values are pre-filled.
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ctc-title">Contract Title</Label>
+            <Input id="ctc-title" value={title} onChange={e => setTitle(e.target.value)} placeholder="Service Contract" data-testid="input-ctc-title" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="ctc-type">Contract Type</Label>
+              <Select value={contractType} onValueChange={setContractType}>
+                <SelectTrigger id="ctc-type" data-testid="select-ctc-type"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="service">Service</SelectItem>
+                  <SelectItem value="project">Project</SelectItem>
+                  <SelectItem value="retainer">Retainer</SelectItem>
+                  <SelectItem value="milestone">Milestone</SelectItem>
+                  <SelectItem value="trade">Trade/Non-Cash</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ctc-value">Total Value ($)</Label>
+              <Input id="ctc-value" type="number" value={totalValue} onChange={e => setTotalValue(e.target.value)} placeholder="0.00" data-testid="input-ctc-value" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="ctc-start">Start Date</Label>
+              <Input id="ctc-start" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} data-testid="input-ctc-start-date" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ctc-end">End Date</Label>
+              <Input id="ctc-end" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} data-testid="input-ctc-end-date" />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ctc-scope">Scope of Work</Label>
+            <Textarea id="ctc-scope" value={scopeOfWork} onChange={e => setScopeOfWork(e.target.value)} rows={3} placeholder="Describe the scope of work..." data-testid="textarea-ctc-scope" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ctc-terms">Payment Terms</Label>
+            <Input id="ctc-terms" value={paymentTerms} onChange={e => setPaymentTerms(e.target.value)} placeholder="e.g. Net 30" data-testid="input-ctc-payment-terms" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ctc-special">Special Terms / Notes</Label>
+            <Textarea id="ctc-special" value={specialTerms} onChange={e => setSpecialTerms(e.target.value)} rows={2} placeholder="Any special clauses or conditions..." data-testid="textarea-ctc-special-terms" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
+          <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => mutation.mutate()} disabled={mutation.isPending || !title.trim()} data-testid="btn-confirm-convert-to-contract">
+            {mutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <FileSignature className="h-4 w-4 mr-1" />}
+            Create Contract (Draft)
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Proposal Detail Panel ─────────────────────────────────────────────────────
 
 function ProposalDetailPanel({
@@ -371,6 +523,7 @@ function ProposalDetailPanel({
   const [counterTradeTerms, setCounterTradeTerms] = useState("");
   const [counterNotes, setCounterNotes] = useState("");
   const [commentText, setCommentText] = useState("");
+  const [convertToContractOpen, setConvertToContractOpen] = useState(false);
 
   const { data: lineItems = [] } = useQuery<LineItem[]>({
     queryKey: ["/api/contractor-proposals", proposal.id, "line-items"],
@@ -541,7 +694,7 @@ function ProposalDetailPanel({
                 </Button>
               )}
               {canConvertToContract && (
-                <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => actionMutation.mutate({ action: "convert-to-contract" })} disabled={actionMutation.isPending} data-testid="btn-convert-to-contract">
+                <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setConvertToContractOpen(true)} data-testid="btn-convert-to-contract">
                   <FileSignature className="h-3.5 w-3.5 mr-1" /> Convert to Contract
                 </Button>
               )}
@@ -1185,6 +1338,19 @@ function ProposalDetailPanel({
           </DialogContent>
         </Dialog>
       )}
+
+      <ConvertToContractDialog
+        open={convertToContractOpen}
+        onClose={() => setConvertToContractOpen(false)}
+        proposal={proposal}
+        onSuccess={() => {
+          setConvertToContractOpen(false);
+          queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/contractor-contracts"] });
+          onRefresh();
+          toast({ title: "Contract created successfully" });
+        }}
+      />
     </Sheet>
   );
 }
@@ -2587,13 +2753,530 @@ function InvoiceDetailPanel({
   );
 }
 
+// ─── Contract Detail Panel ─────────────────────────────────────────────────────
+
+function ContractDetailPanel({
+  contract: initialContract, onClose, isAdmin, onRefresh
+}: { contract: Contract; onClose: () => void; isAdmin: boolean; onRefresh: () => void }) {
+  const { toast } = useToast();
+  const [tab, setTab] = useState("overview");
+  const [signOpen, setSignOpen] = useState(false);
+  const [signerName, setSignerName] = useState("");
+  const [voidOpen, setVoidOpen] = useState(false);
+  const [voidReason, setVoidReason] = useState("");
+  const [addSignerOpen, setAddSignerOpen] = useState(false);
+  const [newSignerName, setNewSignerName] = useState("");
+  const [newSignerEmail, setNewSignerEmail] = useState("");
+  const [newSignerRole, setNewSignerRole] = useState("reviewer");
+  const [createInvoiceOpen, setCreateInvoiceOpen] = useState(false);
+
+  const { data: contract, refetch } = useQuery<Contract>({
+    queryKey: ["/api/contractor-contracts", initialContract.id],
+    queryFn: async () => {
+      const r = await fetch(`/api/contractor-contracts/${initialContract.id}`, { credentials: "include" });
+      if (!r.ok) return initialContract;
+      const raw = await r.json();
+      return snakeToCamel(raw) as Contract;
+    },
+    initialData: initialContract,
+    staleTime: 0,
+  });
+
+  const signers: Signer[] = (contract?.signers || []).map(snakeToCamel) as Signer[];
+  const totalValue = contract?.totalValue || (contract as any)?.total_value;
+
+  const daysUntilExpiry = contract?.endDate
+    ? Math.round((new Date(contract.endDate).getTime() - Date.now()) / 86400000)
+    : null;
+  const isExpiringSoon = daysUntilExpiry !== null && daysUntilExpiry >= 0 && daysUntilExpiry <= 30;
+  const hasUnsignedSigners = signers.some(s => s.status === "pending");
+
+  const signMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/sign`, { name: signerName, role: isAdmin ? "company_rep" : "contractor" }),
+    onSuccess: () => { refetch(); setSignOpen(false); toast({ title: "Contract signed" }); onRefresh(); },
+    onError: (e: any) => toast({ title: e?.message || "Failed to sign", variant: "destructive" }),
+  });
+
+  const sendMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/send`, {}),
+    onSuccess: () => { refetch(); toast({ title: "Contract sent for signing" }); onRefresh(); },
+    onError: (e: any) => toast({ title: e?.message || "Failed to send", variant: "destructive" }),
+  });
+
+  const activateMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/activate`, {}),
+    onSuccess: () => { refetch(); toast({ title: "Contract activated" }); onRefresh(); },
+    onError: (e: any) => toast({ title: e?.message || "Failed to activate", variant: "destructive" }),
+  });
+
+  const voidMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/void`, { reason: voidReason }),
+    onSuccess: () => { refetch(); setVoidOpen(false); toast({ title: "Contract voided" }); onRefresh(); },
+    onError: (e: any) => toast({ title: e?.message || "Failed to void", variant: "destructive" }),
+  });
+
+  const addSignerMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/contractor-contracts/${contract.id}/add-signer`, { name: newSignerName, email: newSignerEmail, role: newSignerRole }),
+    onSuccess: () => { refetch(); setAddSignerOpen(false); setNewSignerName(""); setNewSignerEmail(""); toast({ title: "Signer added" }); },
+    onError: (e: any) => toast({ title: e?.message || "Failed to add signer", variant: "destructive" }),
+  });
+
+  const canSend = isAdmin && contract.status === "draft";
+  const canActivate = isAdmin && ["pending", "sent", "partially_signed", "fully_signed"].includes(contract.status);
+  const canVoid = isAdmin && !["void", "terminated"].includes(contract.status);
+  const canSign = ["sent", "partially_signed"].includes(contract.status);
+  const canCreateInvoice = ["active", "fully_signed"].includes(contract.status);
+
+  return (
+    <Sheet open onOpenChange={v => !v && onClose()}>
+      <SheetContent side="right" className="w-full sm:max-w-2xl p-0 flex flex-col" data-testid="sheet-contract-detail">
+        <SheetHeader className="shrink-0 px-6 py-4 border-b">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <SheetTitle className="text-base leading-tight">{contract.title || "Contract"}</SheetTitle>
+              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                {contract.contractNumber && <span className="text-xs text-muted-foreground font-mono">{contract.contractNumber}</span>}
+                <ContractBadge status={contract.status} />
+                {isExpiringSoon && <span className="text-xs bg-orange-100 text-orange-700 rounded px-1.5 py-0.5">Expiring in {daysUntilExpiry}d</span>}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+              {canSign && (
+                <Button size="sm" className="bg-teal-600 hover:bg-teal-700 text-white" onClick={() => setSignOpen(true)} data-testid="btn-sign-contract">
+                  <CheckSquare className="h-3.5 w-3.5 mr-1" /> Sign
+                </Button>
+              )}
+              {canSend && (
+                <Button size="sm" onClick={() => sendMutation.mutate()} disabled={sendMutation.isPending} data-testid="btn-send-contract">
+                  <Send className="h-3.5 w-3.5 mr-1" /> Send for Signing
+                </Button>
+              )}
+              {canActivate && (
+                <Button size="sm" variant="outline" className="border-green-300 text-green-700" onClick={() => activateMutation.mutate()} disabled={activateMutation.isPending} data-testid="btn-activate-contract">
+                  <CheckCircle className="h-3.5 w-3.5 mr-1" /> Activate
+                </Button>
+              )}
+              {canCreateInvoice && (
+                <Button size="sm" variant="outline" onClick={() => setCreateInvoiceOpen(true)} data-testid="btn-create-invoice-from-contract">
+                  <FilePlus className="h-3.5 w-3.5 mr-1" /> Create Invoice
+                </Button>
+              )}
+              {canVoid && (
+                <Button size="sm" variant="outline" className="border-red-300 text-red-700" onClick={() => setVoidOpen(true)} data-testid="btn-void-contract">
+                  <XCircle className="h-3.5 w-3.5 mr-1" /> Void
+                </Button>
+              )}
+            </div>
+          </div>
+        </SheetHeader>
+
+        <Tabs value={tab} onValueChange={setTab} className="flex flex-col flex-1 min-h-0">
+          <TabsList className="shrink-0 w-full rounded-none border-b bg-transparent h-auto p-0 justify-start gap-0">
+            {[["overview","Overview"],["signers","Signers"],["terms","Terms"]].map(([v, l]) => (
+              <TabsTrigger key={v} value={v} className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-4 py-2.5 text-sm font-medium">{l}</TabsTrigger>
+            ))}
+          </TabsList>
+          <ScrollArea className="flex-1">
+            <TabsContent value="overview" className="m-0 p-6 space-y-5">
+              {/* Reminders */}
+              {isExpiringSoon && (
+                <div className="p-3 bg-orange-50 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-800 rounded-lg flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-orange-600 shrink-0" />
+                  <p className="text-sm text-orange-700 dark:text-orange-400">This contract expires in <strong>{daysUntilExpiry} day{daysUntilExpiry !== 1 ? "s" : ""}</strong>.</p>
+                </div>
+              )}
+              {hasUnsignedSigners && ["sent","partially_signed"].includes(contract.status) && (
+                <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-amber-600 shrink-0" />
+                  <p className="text-sm text-amber-700 dark:text-amber-400">Awaiting signatures from {signers.filter(s => s.status === "pending").length} signer(s).</p>
+                </div>
+              )}
+
+              {/* Key fields */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs text-muted-foreground">Contract Value</p>
+                  <p className="font-semibold text-lg">{fmt(totalValue)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Type</p>
+                  <p className="text-sm capitalize">{contract.contractType || "Service"}</p>
+                </div>
+                {contract.startDate && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Start Date</p>
+                    <p className="text-sm">{fmtDate(contract.startDate)}</p>
+                  </div>
+                )}
+                {contract.endDate && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">End Date</p>
+                    <p className="text-sm">{fmtDate(contract.endDate)}</p>
+                  </div>
+                )}
+                {contract.paymentTerms && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Payment Terms</p>
+                    <p className="text-sm">{contract.paymentTerms}</p>
+                  </div>
+                )}
+                {contract.currency && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Currency</p>
+                    <p className="text-sm">{contract.currency}</p>
+                  </div>
+                )}
+                {contract.sentAt && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Sent At</p>
+                    <p className="text-sm">{fmtDate(contract.sentAt)}</p>
+                  </div>
+                )}
+                {contract.fullySignedAt && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Fully Signed</p>
+                    <p className="text-sm">{fmtDate(contract.fullySignedAt)}</p>
+                  </div>
+                )}
+              </div>
+
+              {contract.description && (
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Description</p>
+                  <p className="text-sm whitespace-pre-wrap">{contract.description}</p>
+                </div>
+              )}
+              {contract.scopeOfWork && (
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Scope of Work</p>
+                  <div className="p-3 bg-muted/30 rounded-lg text-sm whitespace-pre-wrap">{contract.scopeOfWork}</div>
+                </div>
+              )}
+              {contract.tradeDetails && (
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Trade / Non-Cash Details</p>
+                  <p className="text-sm whitespace-pre-wrap">{contract.tradeDetails}</p>
+                </div>
+              )}
+              {contract.voidReason && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/30 rounded-lg border border-red-200 dark:border-red-800">
+                  <p className="text-xs font-medium text-red-700 dark:text-red-400 mb-1">Void Reason</p>
+                  <p className="text-sm text-red-700 dark:text-red-400">{contract.voidReason}</p>
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="signers" className="m-0 p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold">Signers</h3>
+                  <p className="text-xs text-muted-foreground">{signers.filter(s => s.status === "signed").length} of {signers.length} signed</p>
+                </div>
+                {isAdmin && !["void","fully_signed","terminated"].includes(contract.status) && (
+                  <Button size="sm" variant="outline" onClick={() => setAddSignerOpen(true)} data-testid="btn-add-signer">
+                    <Plus className="h-3.5 w-3.5 mr-1" /> Add Signer
+                  </Button>
+                )}
+              </div>
+
+              {signers.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground border border-dashed rounded-lg">
+                  <Users className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                  <p className="text-sm">No signers registered yet</p>
+                  {isAdmin && <p className="text-xs mt-1">Add signers or send the contract for signing</p>}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {signers.map((signer, idx) => (
+                    <div key={signer.id} className="flex items-start gap-3 p-3 rounded-lg border bg-muted/20" data-testid={`row-signer-${signer.id}`}>
+                      <div className={cn(
+                        "h-8 w-8 rounded-full flex items-center justify-center shrink-0 text-xs font-bold",
+                        signer.status === "signed" ? "bg-green-100 text-green-700" :
+                        signer.status === "declined" ? "bg-red-100 text-red-700" :
+                        "bg-gray-100 text-gray-500"
+                      )}>
+                        {signer.status === "signed" ? "✓" : signer.status === "declined" ? "✗" : idx + 1}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium">{signer.name}</p>
+                        {signer.email && <p className="text-xs text-muted-foreground">{signer.email}</p>}
+                        <p className="text-xs text-muted-foreground capitalize">{signer.role?.replace(/_/g, " ") || "Reviewer"}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className={cn(
+                          "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium",
+                          signer.status === "signed" ? "bg-green-100 text-green-700" :
+                          signer.status === "declined" ? "bg-red-100 text-red-700" :
+                          "bg-yellow-100 text-yellow-700"
+                        )}>
+                          {signer.status === "signed" ? "Signed" : signer.status === "declined" ? "Declined" : "Pending"}
+                        </span>
+                        {signer.signedAt && <p className="text-xs text-muted-foreground mt-1">{fmtDate(signer.signedAt)}</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {canSign && (
+                <div className="pt-2 border-t">
+                  <Button onClick={() => setSignOpen(true)} className="w-full bg-teal-600 hover:bg-teal-700 text-white" data-testid="btn-sign-contract-tab">
+                    <CheckSquare className="h-4 w-4 mr-2" /> Sign This Contract
+                  </Button>
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="terms" className="m-0 p-6 space-y-4">
+              {contract.specialTerms && (
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Special Terms</p>
+                  <div className="p-3 bg-muted/30 rounded-lg text-sm whitespace-pre-wrap">{contract.specialTerms}</div>
+                </div>
+              )}
+              {contract.bodyMarkdown && (
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Contract Body</p>
+                  <div className="p-3 bg-muted/30 rounded-lg text-sm whitespace-pre-wrap font-mono text-xs">{contract.bodyMarkdown}</div>
+                </div>
+              )}
+              {!contract.specialTerms && !contract.bodyMarkdown && (
+                <div className="text-center py-8 text-muted-foreground">
+                  <FileText className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                  <p className="text-sm">No additional terms added</p>
+                </div>
+              )}
+            </TabsContent>
+          </ScrollArea>
+        </Tabs>
+
+        {/* Sign Dialog */}
+        <Dialog open={signOpen} onOpenChange={v => !v && setSignOpen(false)}>
+          <DialogContent data-testid="dialog-sign-contract">
+            <DialogHeader><DialogTitle>Sign Contract</DialogTitle></DialogHeader>
+            <div className="space-y-4 py-2">
+              <p className="text-sm text-muted-foreground">By signing, you agree to the terms of this contract.</p>
+              <div className="p-4 border-2 border-dashed rounded-lg bg-muted/20">
+                <p className="text-xs text-muted-foreground mb-2">Type your full legal name to sign</p>
+                <Input
+                  value={signerName}
+                  onChange={e => setSignerName(e.target.value)}
+                  placeholder="Your full name"
+                  className="font-cursive text-lg"
+                  data-testid="input-signer-name"
+                />
+                {signerName && (
+                  <p className="mt-2 text-lg italic text-muted-foreground font-serif">{signerName}</p>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">Signed electronically on {new Date().toLocaleDateString()}</p>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setSignOpen(false)}>Cancel</Button>
+              <Button className="bg-teal-600 hover:bg-teal-700 text-white" onClick={() => signMutation.mutate()} disabled={signMutation.isPending || !signerName.trim()} data-testid="btn-confirm-sign">
+                {signMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <CheckSquare className="h-4 w-4 mr-1" />}
+                Confirm Signature
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Void Dialog */}
+        <Dialog open={voidOpen} onOpenChange={v => !v && setVoidOpen(false)}>
+          <DialogContent data-testid="dialog-void-contract">
+            <DialogHeader><DialogTitle>Void Contract</DialogTitle></DialogHeader>
+            <div className="space-y-3 py-2">
+              <p className="text-sm text-muted-foreground">This action cannot be undone. Please provide a reason for voiding this contract.</p>
+              <Textarea value={voidReason} onChange={e => setVoidReason(e.target.value)} placeholder="Reason for voiding..." rows={3} data-testid="textarea-void-reason" />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setVoidOpen(false)}>Cancel</Button>
+              <Button variant="destructive" onClick={() => voidMutation.mutate()} disabled={voidMutation.isPending || !voidReason.trim()} data-testid="btn-confirm-void">
+                {voidMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+                Void Contract
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Add Signer Dialog */}
+        <Dialog open={addSignerOpen} onOpenChange={v => !v && setAddSignerOpen(false)}>
+          <DialogContent data-testid="dialog-add-signer">
+            <DialogHeader><DialogTitle>Add Signer</DialogTitle></DialogHeader>
+            <div className="space-y-3 py-2">
+              <div className="space-y-1.5">
+                <Label>Full Name</Label>
+                <Input value={newSignerName} onChange={e => setNewSignerName(e.target.value)} placeholder="John Doe" data-testid="input-new-signer-name" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Email</Label>
+                <Input type="email" value={newSignerEmail} onChange={e => setNewSignerEmail(e.target.value)} placeholder="john@example.com" data-testid="input-new-signer-email" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Role</Label>
+                <Select value={newSignerRole} onValueChange={setNewSignerRole}>
+                  <SelectTrigger data-testid="select-new-signer-role"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="contractor">Contractor</SelectItem>
+                    <SelectItem value="company_rep">Company Representative</SelectItem>
+                    <SelectItem value="reviewer">Reviewer</SelectItem>
+                    <SelectItem value="witness">Witness</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAddSignerOpen(false)}>Cancel</Button>
+              <Button onClick={() => addSignerMutation.mutate()} disabled={addSignerMutation.isPending || !newSignerName.trim()} data-testid="btn-confirm-add-signer">
+                {addSignerMutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+                Add Signer
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Create Invoice from Contract */}
+        {createInvoiceOpen && (
+          <CreateInvoiceFromContractDialog
+            contract={contract}
+            isAdmin={isAdmin}
+            onClose={() => setCreateInvoiceOpen(false)}
+            onSuccess={() => {
+              setCreateInvoiceOpen(false);
+              queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+              toast({ title: "Invoice created" });
+            }}
+          />
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+// ─── Create Invoice from Contract Dialog ──────────────────────────────────────
+
+function CreateInvoiceFromContractDialog({
+  contract, isAdmin, onClose, onSuccess
+}: { contract: Contract; isAdmin: boolean; onClose: () => void; onSuccess: () => void }) {
+  const { toast } = useToast();
+  const totalValue = parseFloat(String(contract.totalValue || (contract as any)?.total_value || "0"));
+  const [invoiceTitle, setInvoiceTitle] = useState(`Invoice — ${contract.title || ""}`);
+  const [amount, setAmount] = useState(String(totalValue || ""));
+  const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
+  const [dueDate, setDueDate] = useState("");
+  const [notes, setNotes] = useState("");
+  const [overrideMode, setOverrideMode] = useState(false);
+  const [overrideReason, setOverrideReason] = useState("");
+
+  const amountNum = parseFloat(amount || "0");
+  const exceedsBudget = totalValue > 0 && amountNum > totalValue;
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (isAdmin) {
+        return apiRequest("POST", "/api/contractor-invoices/from-proposal", {
+          contractId: contract.id,
+          dueDate: dueDate || undefined,
+          notes: notes || undefined,
+        });
+      } else {
+        return apiRequest("POST", "/api/contractor-invoices", {
+          contractId: contract.id,
+          title: invoiceTitle,
+          amount,
+          invoiceDate,
+          dueDate: dueDate || undefined,
+          notes: notes || undefined,
+          companyId: contract.companyId,
+        });
+      }
+    },
+    onSuccess: () => onSuccess(),
+    onError: (e: any) => toast({ title: e?.message || "Failed to create invoice", variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open onOpenChange={v => !v && onClose()}>
+      <DialogContent className="max-w-md" data-testid="dialog-create-invoice-from-contract">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Receipt className="h-5 w-5" /> Create Invoice from Contract
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          {totalValue > 0 && (
+            <div className="p-3 bg-blue-50 dark:bg-blue-950/30 rounded-lg text-sm">
+              <p className="text-blue-700 dark:text-blue-400 font-medium">Contract value: {fmt(totalValue)}</p>
+              <p className="text-xs text-blue-600 dark:text-blue-500 mt-0.5">Invoice amount should not exceed the contract value.</p>
+            </div>
+          )}
+          {exceedsBudget && !overrideMode && (
+            <div className="p-3 bg-red-50 dark:bg-red-950/30 rounded-lg border border-red-200 dark:border-red-800">
+              <p className="text-sm text-red-700 dark:text-red-400 font-medium flex items-center gap-1.5">
+                <AlertTriangle className="h-4 w-4" /> Amount exceeds contract value
+              </p>
+              <p className="text-xs text-red-600 dark:text-red-500 mt-1">You are requesting {fmt(amountNum)} against an approved value of {fmt(totalValue)}.</p>
+              <Button size="sm" variant="outline" className="mt-2 border-red-300 text-red-700 text-xs" onClick={() => setOverrideMode(true)}>
+                Request Override
+              </Button>
+            </div>
+          )}
+          {overrideMode && (
+            <div className="space-y-2 p-3 bg-orange-50 dark:bg-orange-950/30 rounded-lg border border-orange-200 dark:border-orange-800">
+              <p className="text-xs font-medium text-orange-700">Override Reason (required)</p>
+              <Textarea value={overrideReason} onChange={e => setOverrideReason(e.target.value)} placeholder="Explain why the invoice exceeds the contract value..." rows={2} data-testid="textarea-override-reason" />
+              <Button size="sm" variant="ghost" className="text-xs" onClick={() => { setOverrideMode(false); setAmount(String(totalValue)); }}>
+                Reset to contract value
+              </Button>
+            </div>
+          )}
+          <div className="space-y-1.5">
+            <Label>Invoice Title</Label>
+            <Input value={invoiceTitle} onChange={e => setInvoiceTitle(e.target.value)} data-testid="input-invoice-title" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Amount ($)</Label>
+              <Input type="number" value={amount} onChange={e => setAmount(e.target.value)} data-testid="input-invoice-amount" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Invoice Date</Label>
+              <Input type="date" value={invoiceDate} onChange={e => setInvoiceDate(e.target.value)} data-testid="input-invoice-date" />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Due Date</Label>
+            <Input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} data-testid="input-invoice-due-date" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Notes</Label>
+            <Textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Any notes for this invoice..." data-testid="textarea-invoice-notes" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending || !amount || parseFloat(amount) <= 0 || (exceedsBudget && overrideMode && !overrideReason.trim()) || (exceedsBudget && !overrideMode)}
+            data-testid="btn-confirm-create-invoice"
+          >
+            {mutation.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <FilePlus className="h-4 w-4 mr-1" />}
+            Create Invoice
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Contracts Section ────────────────────────────────────────────────────────
 
 function ContractsSection({ isAdmin }: { isAdmin: boolean }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
 
-  const { data: contracts = [], isLoading } = useQuery<Contract[]>({
+  const { data: rawContracts = [], isLoading, refetch } = useQuery<any[]>({
     queryKey: ["/api/contractor-contracts"],
     queryFn: async () => {
       const r = await fetch("/api/contractor-contracts", { credentials: "include" });
@@ -2601,8 +3284,18 @@ function ContractsSection({ isAdmin }: { isAdmin: boolean }) {
     },
   });
 
+  const contracts: Contract[] = rawContracts.map(c => snakeToCamel(c) as Contract);
+
+  const now = Date.now();
+  const reminders = contracts.filter(c => {
+    const daysLeft = c.endDate ? Math.round((new Date(c.endDate).getTime() - now) / 86400000) : null;
+    const expiring = daysLeft !== null && daysLeft >= 0 && daysLeft <= 30 && ["active"].includes(c.status);
+    const awaitingSig = ["sent","partially_signed"].includes(c.status);
+    return expiring || awaitingSig;
+  });
+
   const filtered = contracts.filter(c => {
-    const matchSearch = !search || c.title?.toLowerCase().includes(search.toLowerCase()) || c.contractNumber?.toLowerCase().includes(search.toLowerCase());
+    const matchSearch = !search || c.title?.toLowerCase().includes(search.toLowerCase()) || c.contractNumber?.toLowerCase().includes(search.toLowerCase()) || (c.contractorName as any)?.toLowerCase().includes(search.toLowerCase());
     const matchStatus = statusFilter === "all" || c.status === statusFilter;
     return matchSearch && matchStatus;
   });
@@ -2615,10 +3308,40 @@ function ContractsSection({ isAdmin }: { isAdmin: boolean }) {
           <p className="text-sm text-muted-foreground">Active and historical contracts</p>
         </div>
       </div>
+
+      {/* Reminder banners */}
+      {reminders.length > 0 && (
+        <div className="space-y-2">
+          {reminders.map(c => {
+            const daysLeft = c.endDate ? Math.round((new Date(c.endDate).getTime() - now) / 86400000) : null;
+            const isExpiring = daysLeft !== null && daysLeft >= 0 && daysLeft <= 30;
+            return (
+              <button
+                key={c.id}
+                className="w-full text-left p-3 rounded-lg border flex items-center gap-3 hover:bg-muted/30 transition-colors"
+                style={{ borderColor: isExpiring ? "#f97316" : "#f59e0b", background: isExpiring ? "rgb(255,247,237)" : "rgb(255,251,235)" }}
+                onClick={() => setSelectedContract(c)}
+                data-testid={`banner-contract-${c.id}`}
+              >
+                {isExpiring
+                  ? <AlertTriangle className="h-4 w-4 text-orange-600 shrink-0" />
+                  : <Clock className="h-4 w-4 text-amber-600 shrink-0" />
+                }
+                <span className="text-sm text-foreground">
+                  <strong>{c.title}</strong> —{" "}
+                  {isExpiring ? `expires in ${daysLeft} day${daysLeft !== 1 ? "s" : ""}` : "awaiting signature"}
+                </span>
+                <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 ml-auto" />
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div className="flex items-center gap-2">
         <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search contracts..." className="h-8 max-w-xs" data-testid="input-contract-search" />
         <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="h-8 w-36" data-testid="select-contract-status"><SelectValue placeholder="All Status" /></SelectTrigger>
+          <SelectTrigger className="h-8 w-40" data-testid="select-contract-status"><SelectValue placeholder="All Status" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Status</SelectItem>
             {Object.entries(CONTRACT_STATUS_CONFIG).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
@@ -2632,30 +3355,51 @@ function ContractsSection({ isAdmin }: { isAdmin: boolean }) {
         <div className="text-center py-12 text-muted-foreground border border-dashed rounded-lg">
           <FileSignature className="h-10 w-10 mx-auto mb-3 opacity-30" />
           <p className="font-medium">{contracts.length === 0 ? "No contracts yet" : "No contracts match your filter"}</p>
-          <p className="text-xs mt-1">Contracts are created when proposals are approved and converted</p>
+          <p className="text-xs mt-1">Contracts are created when proposals are approved and converted to contracts</p>
         </div>
       ) : (
         <div className="space-y-2">
-          {filtered.map(c => (
-            <div key={c.id} className="border rounded-lg p-4 hover:bg-muted/30 transition-colors" data-testid={`row-contract-${c.id}`}>
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-sm">{c.title || c.contractNumber || "Contract"}</p>
-                    <ContractBadge status={c.status} />
+          {filtered.map(c => {
+            const totalVal = c.totalValue || (c as any).total_value;
+            const daysLeft = c.endDate ? Math.round((new Date(c.endDate).getTime() - now) / 86400000) : null;
+            const isExpiring = daysLeft !== null && daysLeft >= 0 && daysLeft <= 30 && ["active"].includes(c.status);
+            return (
+              <button
+                key={c.id}
+                className="w-full text-left border rounded-lg p-4 hover:bg-muted/30 transition-colors"
+                onClick={() => setSelectedContract(c)}
+                data-testid={`row-contract-${c.id}`}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-medium text-sm">{c.title || c.contractNumber || "Contract"}</p>
+                      <ContractBadge status={c.status} />
+                      {isExpiring && <span className="text-xs bg-orange-100 text-orange-700 rounded px-1.5 py-0.5">Exp. {daysLeft}d</span>}
+                    </div>
+                    <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
+                      {c.contractNumber && <span className="font-mono">{c.contractNumber}</span>}
+                      {(c as any).contractorName && <><span>·</span><span>{(c as any).contractorName}</span></>}
+                      {c.startDate && <><span>·</span><span>Start {fmtDate(c.startDate)}</span></>}
+                      {c.endDate && <><span>·</span><span>End {fmtDate(c.endDate)}</span></>}
+                      {totalVal && <><span>·</span><span className="font-semibold text-foreground">{fmt(totalVal)}</span></>}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-                    {c.contractNumber && <span>{c.contractNumber}</span>}
-                    {c.startDate && <><span>·</span><span>Start {fmtDate(c.startDate)}</span></>}
-                    {c.endDate && <><span>·</span><span>End {fmtDate(c.endDate)}</span></>}
-                    {c.value && <><span>·</span><span className="font-semibold text-foreground">{fmt(c.value)}</span></>}
-                  </div>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 mt-1" />
                 </div>
-                <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 mt-1" />
-              </div>
-            </div>
-          ))}
+              </button>
+            );
+          })}
         </div>
+      )}
+
+      {selectedContract && (
+        <ContractDetailPanel
+          contract={selectedContract}
+          onClose={() => setSelectedContract(null)}
+          isAdmin={isAdmin}
+          onRefresh={() => { refetch(); setSelectedContract(null); }}
+        />
       )}
     </div>
   );
@@ -2664,12 +3408,27 @@ function ContractsSection({ isAdmin }: { isAdmin: boolean }) {
 // ─── Payments Section ─────────────────────────────────────────────────────────
 
 function PaymentsSection({ invoices }: { invoices: Invoice[] }) {
-  const paidInvoices = invoices.filter(i => ["paid", "partially_paid"].includes(i.status));
-  const outstandingInvoices = invoices.filter(i => !["paid", "void", "cancelled"].includes(i.status));
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [dateRange, setDateRange] = useState("all");
+
+  const now = new Date();
+  const filterDate = dateRange === "30d" ? new Date(now.getTime() - 30 * 86400000)
+    : dateRange === "90d" ? new Date(now.getTime() - 90 * 86400000)
+    : dateRange === "ytd" ? new Date(now.getFullYear(), 0, 1)
+    : null;
+
+  const filtered = invoices.filter(i => {
+    const matchStatus = statusFilter === "all" || i.status === statusFilter;
+    const matchDate = !filterDate || !i.createdAt || new Date(i.createdAt) >= filterDate;
+    return matchStatus && matchDate;
+  });
+
+  const paidInvoices = filtered.filter(i => ["paid", "partially_paid"].includes(i.status));
+  const outstandingInvoices = filtered.filter(i => !["paid", "void", "cancelled", "closed"].includes(i.status));
+  const overdueInvoices = filtered.filter(i => i.status === "overdue");
   const totalPaid = paidInvoices.reduce((s, i) => s + parseFloat(i.amountPaid ?? "0"), 0);
   const totalOutstanding = outstandingInvoices.reduce((s, i) => s + parseFloat(i.balanceDue ?? i.amount ?? "0"), 0);
-  const isLoading = false;
-  const allPayments: any[] = [];
+  const totalOverdue = overdueInvoices.reduce((s, i) => s + parseFloat(i.balanceDue ?? i.amount ?? "0"), 0);
 
   return (
     <div className="space-y-4">
@@ -2678,42 +3437,89 @@ function PaymentsSection({ invoices }: { invoices: Invoice[] }) {
         <p className="text-sm text-muted-foreground">Track incoming and outgoing payments</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      {/* Filters */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Select value={dateRange} onValueChange={setDateRange}>
+          <SelectTrigger className="h-8 w-36" data-testid="select-payment-date"><SelectValue placeholder="All Time" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Time</SelectItem>
+            <SelectItem value="30d">Last 30 Days</SelectItem>
+            <SelectItem value="90d">Last 90 Days</SelectItem>
+            <SelectItem value="ytd">Year to Date</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="h-8 w-44" data-testid="select-payment-status"><SelectValue placeholder="All Status" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Status</SelectItem>
+            <SelectItem value="submitted">Submitted</SelectItem>
+            <SelectItem value="under_review">Under Review</SelectItem>
+            <SelectItem value="approved">Approved</SelectItem>
+            <SelectItem value="partially_paid">Partially Paid</SelectItem>
+            <SelectItem value="paid">Paid</SelectItem>
+            <SelectItem value="overdue">Overdue</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-3 gap-3">
         <Card>
           <CardContent className="p-4">
-            <p className="text-2xl font-bold text-green-600">{fmt(totalPaid)}</p>
-            <p className="text-xs text-muted-foreground mt-1">Total Payments Received</p>
+            <p className="text-xl font-bold text-green-600">{fmt(totalPaid)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Received</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
-            <p className="text-2xl font-bold text-orange-600">{fmt(totalOutstanding)}</p>
-            <p className="text-xs text-muted-foreground mt-1">Outstanding Balance</p>
+            <p className="text-xl font-bold text-orange-600">{fmt(totalOutstanding)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Outstanding</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-xl font-bold text-red-600">{fmt(totalOverdue)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Overdue</p>
           </CardContent>
         </Card>
       </div>
 
-      {isLoading ? (
-        <div className="flex items-center justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
-      ) : allPayments.length === 0 ? (
+      {/* Invoice list grouped by status */}
+      {filtered.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground border border-dashed rounded-lg">
           <CreditCard className="h-10 w-10 mx-auto mb-3 opacity-30" />
-          <p className="font-medium">No payments recorded yet</p>
-          <p className="text-xs mt-1">Payments appear here when invoices are paid</p>
+          <p className="font-medium">No payments match your filter</p>
+          <p className="text-xs mt-1">Try changing the date range or status filter</p>
         </div>
       ) : (
         <div className="space-y-2">
-          <h3 className="text-sm font-medium">Payment History</h3>
-          {allPayments.map((p: any) => (
-            <div key={p.id} className="border rounded-lg p-3 flex items-center justify-between" data-testid={`row-payment-${p.id}`}>
-              <div>
-                <p className="text-sm font-semibold text-green-600">+{fmt(p.amount)}</p>
-                <p className="text-xs text-muted-foreground capitalize">{p.payment_method?.replace(/_/g, " ")} · {fmtDate(p.paid_at)}</p>
-                {p.reference_number && <p className="text-xs text-muted-foreground">Ref: {p.reference_number}</p>}
+          <h3 className="text-sm font-medium text-muted-foreground">Invoice Breakdown ({filtered.length})</h3>
+          {filtered.map(inv => {
+            const balance = parseFloat(inv.balanceDue ?? inv.amount ?? "0");
+            const paid = parseFloat(inv.amountPaid ?? "0");
+            return (
+              <div key={inv.id} className="border rounded-lg p-3" data-testid={`row-payment-inv-${inv.id}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-medium truncate">{inv.title || inv.invoiceNumber || "Invoice"}</p>
+                      <InvoiceBadge status={inv.status} />
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {inv.invoiceNumber && <span>{inv.invoiceNumber} · </span>}
+                      {inv.invoiceDate && <span>{fmtDate(inv.invoiceDate)}</span>}
+                      {inv.dueDate && <span> · Due {fmtDate(inv.dueDate)}</span>}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-sm font-semibold">{fmt(inv.amount)}</p>
+                    {paid > 0 && <p className="text-xs text-green-600">Paid: {fmt(paid)}</p>}
+                    {balance > 0 && paid > 0 && <p className="text-xs text-orange-600">Bal: {fmt(balance)}</p>}
+                  </div>
+                </div>
               </div>
-              <Badge variant="outline" className="text-green-600">Received</Badge>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
