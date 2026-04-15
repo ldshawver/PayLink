@@ -953,29 +953,69 @@ function ProposalDetailPanel({
             {/* Negotiation Thread */}
             <TabsContent value="thread" className="m-0 p-6 space-y-4">
               <div className="space-y-3">
-                {events.filter(e => e.notes).map(ev => (
-                  <div key={ev.id} className={cn(
-                    "rounded-lg p-3 text-sm border",
-                    ev.eventType === "approved" ? "bg-green-50 border-green-200 dark:bg-green-950/20" :
-                    ev.eventType === "rejected" ? "bg-red-50 border-red-200 dark:bg-red-950/20" :
-                    ev.eventType === "revision_requested" ? "bg-orange-50 border-orange-200 dark:bg-orange-950/20" :
-                    ev.eventType === "counter" ? "bg-blue-50 border-blue-200 dark:bg-blue-950/20" :
-                    "bg-muted/40"
-                  )}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-semibold capitalize text-muted-foreground">{ev.eventType.replace(/_/g, " ")}</span>
-                      <span className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} · {ev.actorName || "System"}</span>
+                {(() => {
+                  type ThreadItem = { id: string; ts: string; kind: "event" | "negotiation"; data: ProposalEvent | Negotiation };
+                  const items: ThreadItem[] = [
+                    ...events.filter(e => e.notes).map(e => ({ id: `evt-${e.id}`, ts: e.createdAt, kind: "event" as const, data: e })),
+                    ...negotiations.map(n => ({ id: `neg-${n.id}`, ts: n.createdAt, kind: "negotiation" as const, data: n })),
+                  ].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+
+                  if (items.length === 0) return (
+                    <div className="text-center py-6 text-muted-foreground">
+                      <MessageCircle className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                      <p className="text-sm">No messages yet</p>
+                      <p className="text-xs">Notes from actions and counter-offers will appear here</p>
                     </div>
-                    <p className="italic">"{ev.notes}"</p>
-                  </div>
-                ))}
-                {events.filter(e => e.notes).length === 0 && (
-                  <div className="text-center py-6 text-muted-foreground">
-                    <MessageCircle className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                    <p className="text-sm">No messages yet</p>
-                    <p className="text-xs">Notes from approve/reject/revision actions will appear here</p>
-                  </div>
-                )}
+                  );
+
+                  return items.map(item => {
+                    if (item.kind === "event") {
+                      const ev = item.data as ProposalEvent;
+                      return (
+                        <div key={item.id} className={cn(
+                          "rounded-lg p-3 text-sm border",
+                          ev.eventType === "approved" ? "bg-green-50 border-green-200 dark:bg-green-950/20" :
+                          ev.eventType === "rejected" ? "bg-red-50 border-red-200 dark:bg-red-950/20" :
+                          ev.eventType === "revision_requested" ? "bg-orange-50 border-orange-200 dark:bg-orange-950/20" :
+                          ev.eventType === "counter" ? "bg-blue-50 border-blue-200 dark:bg-blue-950/20" :
+                          "bg-muted/40"
+                        )}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-semibold capitalize text-muted-foreground">{ev.eventType.replace(/_/g, " ")}</span>
+                            <span className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} · {ev.actorName || "System"}</span>
+                          </div>
+                          <p className="italic">"{ev.notes}"</p>
+                        </div>
+                      );
+                    } else {
+                      const neg = item.data as Negotiation;
+                      const fromLabel = neg.direction === "company_to_contractor" ? "Company → Contractor" : "Contractor → Company";
+                      const statusColor = neg.status === "accepted" ? "bg-green-50 border-green-200 dark:bg-green-950/20" : neg.status === "rejected" ? "bg-red-50 border-red-200 dark:bg-red-950/20" : "bg-blue-50 border-blue-200 dark:bg-blue-950/20";
+                      return (
+                        <div key={item.id} className={cn("rounded-lg p-3 text-sm border", statusColor)}>
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs font-semibold text-blue-700 dark:text-blue-300">Counter Offer · {fromLabel}</span>
+                            <span className="text-xs text-muted-foreground">{fmtDate(neg.createdAt)} · {neg.status}</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-2">
+                            {neg.proposedAmount && <><span className="text-muted-foreground">Budget:</span><span className="font-medium">{fmt(neg.proposedAmount)}</span></>}
+                            {neg.proposedHours && <><span className="text-muted-foreground">Hours:</span><span className="font-medium">{neg.proposedHours} hrs</span></>}
+                            {neg.proposedTerms && <><span className="text-muted-foreground">Terms:</span><span className="font-medium">{neg.proposedTerms}</span></>}
+                            {neg.proposedTradeTerms && <><span className="text-muted-foreground">Trade:</span><span className="font-medium">{neg.proposedTradeTerms}</span></>}
+                          </div>
+                          {neg.counterNotes && <p className="italic text-muted-foreground">"{neg.counterNotes}"</p>}
+                          {neg.responseNotes && (
+                            <div className="mt-2 pt-2 border-t border-current/10">
+                              <span className="text-xs text-muted-foreground">Response: </span>
+                              <span className="text-xs italic">"{neg.responseNotes}"</span>
+                              {neg.respondedAt && <span className="text-xs text-muted-foreground ml-2">· {fmtDate(neg.respondedAt)}</span>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                  });
+                })()}
               </div>
 
               {canAdminAction && (
