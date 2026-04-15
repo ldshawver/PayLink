@@ -389,7 +389,22 @@ function ProposalDetailPanel({
     queryKey: ["/api/contractor-proposals", proposal.id, "versions"],
     queryFn: async () => {
       const r = await fetch(`/api/contractor-proposals/${proposal.id}/versions`, { credentials: "include" });
-      return r.ok ? r.json() : [];
+      if (!r.ok) return [];
+      const rows: any[] = await r.json();
+      return rows.map(row => ({
+        id: row.id,
+        proposalId: row.proposal_id,
+        version: row.version,
+        changeNotes: row.change_notes,
+        createdAt: row.created_at,
+        createdByUserId: row.created_by_user_id,
+        snapshotJson: (() => {
+          try {
+            const parsed = typeof row.snapshot_json === "string" ? JSON.parse(row.snapshot_json) : row.snapshot_json;
+            return parsed?.proposal ?? parsed ?? {};
+          } catch { return {}; }
+        })(),
+      }));
     },
   });
 
@@ -947,7 +962,7 @@ function ProposalDetailPanel({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRejectOpen(false)}>Cancel</Button>
-            <Button variant="destructive" onClick={() => actionMutation.mutate({ action: "reject", body: { reason: rejectReason } })} disabled={actionMutation.isPending} data-testid="btn-confirm-reject">
+            <Button variant="destructive" onClick={() => actionMutation.mutate({ action: "reject", body: { rejectionReason: rejectReason } })} disabled={actionMutation.isPending} data-testid="btn-confirm-reject">
               {actionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
               Reject Proposal
             </Button>
@@ -965,7 +980,7 @@ function ProposalDetailPanel({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRevisionOpen(false)}>Cancel</Button>
-            <Button variant="outline" className="border-orange-300 text-orange-700" onClick={() => actionMutation.mutate({ action: "request-revision", body: { notes: revisionNotes } })} disabled={actionMutation.isPending} data-testid="btn-confirm-revision">
+            <Button variant="outline" className="border-orange-300 text-orange-700" onClick={() => actionMutation.mutate({ action: "request-revision", body: { revisionNotes: revisionNotes } })} disabled={actionMutation.isPending} data-testid="btn-confirm-revision">
               {actionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
               Request Revision
             </Button>
@@ -2504,17 +2519,12 @@ function ContractsSection({ isAdmin }: { isAdmin: boolean }) {
 // ─── Payments Section ─────────────────────────────────────────────────────────
 
 function PaymentsSection({ invoices }: { invoices: Invoice[] }) {
-  const { data: allPayments = [], isLoading } = useQuery<any[]>({
-    queryKey: ["/api/contractor-payments"],
-    queryFn: async () => {
-      const r = await fetch("/api/contractor-payments", { credentials: "include" });
-      return r.ok ? r.json() : [];
-    },
-  });
-
-  const totalPaid = allPayments.reduce((s: number, p: any) => s + parseFloat(p.amount ?? "0"), 0);
-  const outstandingInvoices = invoices.filter(i => !["paid", "void"].includes(i.status));
+  const paidInvoices = invoices.filter(i => ["paid", "partially_paid"].includes(i.status));
+  const outstandingInvoices = invoices.filter(i => !["paid", "void", "cancelled"].includes(i.status));
+  const totalPaid = paidInvoices.reduce((s, i) => s + parseFloat(i.amountPaid ?? "0"), 0);
   const totalOutstanding = outstandingInvoices.reduce((s, i) => s + parseFloat(i.balanceDue ?? i.amount ?? "0"), 0);
+  const isLoading = false;
+  const allPayments: any[] = [];
 
   return (
     <div className="space-y-4">
@@ -2864,6 +2874,7 @@ export default function ContractorHubPage() {
 
   const { data: invoices = [], isLoading: invoicesLoading } = useQuery<Invoice[]>({
     queryKey: ["/api/contractor-invoices"],
+    select: (data: any) => snakeToCamel(data),
   });
 
   const { data: contracts = [] } = useQuery<Contract[]>({

@@ -430,6 +430,18 @@ async function logProposalEvent(proposalId: string, eventType: string, oldStatus
   } catch (e) { console.warn("Failed to log proposal event:", e); }
 }
 
+// Helper: auto-create an immutable version snapshot on key proposal transitions
+async function autoSnapshot(proposalId: string, prop: any, changeNotes: string, userId: string | null) {
+  try {
+    const lineItemsRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${proposalId}`);
+    const snapshot = JSON.stringify({ proposal: prop, lineItems: lineItemsRes.rows });
+    await db.execute(sql`
+      INSERT INTO proposal_versions (proposal_id, version, snapshot_json, change_notes, created_by_user_id)
+      VALUES (${proposalId}, ${prop.version || 1}, ${snapshot}, ${changeNotes}, ${userId ?? null})
+    `);
+  } catch (e) { console.warn("autoSnapshot failed:", e); }
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -6775,6 +6787,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(400).json({ message: "Proposal cannot be submitted from current status" });
       }
       if (!proposal.company_id) return res.status(400).json({ message: "Proposal must be addressed to a company before submitting" });
+      await autoSnapshot(req.params.id, proposal, `Submitted (v${proposal.version || 1})`, userId);
       await db.execute(sql`
         UPDATE contractor_proposals SET status = 'submitted', submitted_at = NOW(), updated_at = NOW()
         WHERE id = ${req.params.id}
@@ -6795,6 +6808,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
       if (!["submitted", "sent", "viewed", "countered", "negotiated"].includes(proposal.status)) return res.status(400).json({ message: "Proposal cannot be accepted from its current status" });
       const oldStatus = proposal.status;
+      await autoSnapshot(req.params.id, proposal, `Approved by ${user?.username || "reviewer"}`, userId);
       await db.execute(sql`
         UPDATE contractor_proposals SET status = 'approved', reviewed_by_user_id = ${userId}, reviewed_at = NOW(), updated_at = NOW()
         WHERE id = ${req.params.id}
@@ -6817,6 +6831,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!["submitted", "sent", "viewed", "countered", "negotiated", "approved"].includes(proposal.status)) return res.status(400).json({ message: "Invalid status for rejection" });
       const { rejectionReason } = req.body;
       const oldStatus = proposal.status;
+      await autoSnapshot(req.params.id, proposal, `Rejected: ${rejectionReason || "no reason provided"}`, userId);
       await db.execute(sql`
         UPDATE contractor_proposals SET status = 'rejected', rejection_reason = ${rejectionReason || null}, reviewed_by_user_id = ${userId}, reviewed_at = NOW(), updated_at = NOW()
         WHERE id = ${req.params.id}
@@ -6839,6 +6854,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!["submitted", "sent", "viewed", "countered"].includes(proposal.status)) return res.status(400).json({ message: "Cannot request revision from current status" });
       const { revisionNotes } = req.body;
       const oldStatus = proposal.status;
+      await autoSnapshot(req.params.id, proposal, `Revision requested: ${revisionNotes || "no notes"}`, userId);
       await db.execute(sql`
         UPDATE contractor_proposals SET status = 'revision_requested', rejection_reason = ${revisionNotes || null}, reviewed_by_user_id = ${userId}, reviewed_at = NOW(), updated_at = NOW()
         WHERE id = ${req.params.id}
@@ -7051,9 +7067,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // POST /api/contractor-proposals/:id/create-revision — create a new version
   app.post("/api/contractor-proposals/:id/create-revision", requireAuth, async (req, res) => {
     try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
       const proposalRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       if (!proposalRes.rows.length) return res.status(404).json({ message: "Not found" });
       const p = proposalRes.rows[0] as any;
+      // Authorization: only the owning contractor or an admin/manager of the same company may create revisions
+      const isAdmin = isAdminRole(user?.role) && (!user?.companyId || user.companyId === p.company_id);
+      const isOwner = user?.workerId && p.contractor_id === user.workerId;
+      if (!isAdmin && !isOwner) return res.status(403).json({ message: "Forbidden" });
       // Mark original as superseded
       await db.execute(sql`UPDATE contractor_proposals SET status = 'superseded', updated_at = NOW() WHERE id = ${req.params.id}`);
       await logProposalEvent(req.params.id, "superseded", p.status, "superseded", req);
@@ -7376,6 +7398,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!access.isAdmin) return res.status(403).json({ message: "Only managers can send counter offers on behalf of the company" });
       const { counterAmount, notes } = req.body;
       const oldStatus = access.prop.status;
+      await autoSnapshot(req.params.id, access.prop, `Counter offer: ${counterAmount ? "$" + counterAmount : "terms"} — ${notes || ""}`, req.session.userId || null);
       const result = await db.execute(sql`
         INSERT INTO proposal_negotiations (proposal_id, initiated_by_user_id, initiated_by_worker_id, direction, proposed_amount, counter_notes)
         VALUES (${req.params.id}, ${req.session.userId}, NULL, 'company_to_contractor', ${counterAmount || null}, ${notes || null})
