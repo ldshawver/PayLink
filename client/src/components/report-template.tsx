@@ -50,17 +50,49 @@ interface ReportShellProps {
 
 export function ReportShell({ children, onExportCSV, csvLabel = "Export CSV", printTitle }: ReportShellProps) {
   const handlePrint = () => {
-    const prev = document.title;
-    if (printTitle) {
-      document.title = printTitle;
-      // afterprint restores the title whether the user prints or cancels
-      const restore = () => {
-        document.title = prev;
-        window.removeEventListener("afterprint", restore);
-      };
-      window.addEventListener("afterprint", restore);
-    }
-    window.print();
+    // Grab the rendered report HTML
+    const container = document.querySelector(".report-print-container") as HTMLElement | null;
+    if (!container) { window.print(); return; }
+
+    // Collect all stylesheets (Tailwind + custom CSS) from the current page
+    const styles = [
+      ...Array.from(document.querySelectorAll('link[rel="stylesheet"]')).map(l => l.outerHTML),
+      ...Array.from(document.querySelectorAll("style")).map(s => s.outerHTML),
+    ].join("\n");
+
+    const title = printTitle || document.title;
+
+    // Open a blank window — no dialog, no sidebar, no overflow constraints
+    const win = window.open("", "_blank");
+    if (!win) { window.print(); return; } // fallback if popup blocked
+
+    win.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>${title.replace(/</g, "&lt;")}</title>
+  ${styles}
+  <style>
+    /* In the print window the container flows naturally — no dialog clipping */
+    @media screen { body { padding: 1rem; background: white; } }
+    @media print  { body { margin: 0; } }
+    /* Suppress the visibility:hidden / position:absolute tricks from the main app print CSS */
+    .report-print-container { position: static !important; visibility: visible !important; padding: 0.75in !important; }
+    body { visibility: visible !important; position: static !important; }
+  </style>
+</head>
+<body>
+  ${container.outerHTML}
+  <script>
+    // Hide the Print/CSV toolbar buttons that were cloned with the HTML
+    document.querySelectorAll('.report-no-print').forEach(function(el) { el.style.display = 'none'; });
+    window.addEventListener('load', function() {
+      setTimeout(function() { window.print(); }, 400);
+    });
+  </script>
+</body>
+</html>`);
+    win.document.close();
   };
 
   return (
