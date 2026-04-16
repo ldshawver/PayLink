@@ -466,12 +466,29 @@ export async function registerRoutes(
   // ── Feature gate middleware — applied to entire path groups ──────────────────
   // requireFeature() is a hoisted function declaration defined later in this file.
   // Using app.use() ensures ALL methods/routes under each prefix are gated.
+
+  // Stripe Treasury
   app.use("/api/treasury", requireAuth, (req, res, next) => requireFeature("tenant.finance.treasury")(req, res, next));
-  app.use("/api/contractor-invoices", requireAuth, (req, res, next) => requireFeature("tenant.finance.contractor-hub")(req, res, next));
-  app.use("/api/contractor-proposals", requireAuth, (req, res, next) => requireFeature("tenant.finance.contractor-hub")(req, res, next));
-  app.use("/api/contractor-workflow-settings", requireAuth, (req, res, next) => requireFeature("tenant.finance.contractor-hub")(req, res, next));
+
+  // Contractor Hub — all route families
+  const contractorHubGate = (req: Request, res: Response, next: NextFunction) => requireFeature("tenant.finance.contractor-hub")(req, res, next);
+  app.use("/api/contractor-invoices", requireAuth, contractorHubGate);
+  app.use("/api/contractor-proposals", requireAuth, contractorHubGate);
+  app.use("/api/contractor-contracts", requireAuth, contractorHubGate);
+  app.use("/api/contractor-payments", requireAuth, contractorHubGate);
+  app.use("/api/contractor-templates", requireAuth, contractorHubGate);
+  app.use("/api/contractor-branding", requireAuth, contractorHubGate);
+  app.use("/api/contractor-notifications", requireAuth, contractorHubGate);
+  app.use("/api/contractor-reminders", requireAuth, contractorHubGate);
+  app.use("/api/contractor-workflow-settings", requireAuth, contractorHubGate);
+
+  // Trade Compensation
   app.use("/api/trade-transactions", requireAuth, (req, res, next) => requireFeature("tenant.finance.trade-compensation")(req, res, next));
-  app.use("/api/marketplace", requireAuth, (req, res, next) => requireFeature("tenant.schedule.marketplace")(req, res, next));
+
+  // Shift Marketplace — both /api/marketplace and /api/shift-offers (legacy)
+  const marketplaceGate = (req: Request, res: Response, next: NextFunction) => requireFeature("tenant.schedule.marketplace")(req, res, next);
+  app.use("/api/marketplace", requireAuth, marketplaceGate);
+  app.use("/api/shift-offers", requireAuth, marketplaceGate);
 
   app.post("/api/auth/login", async (req, res) => {
     try {
