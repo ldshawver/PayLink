@@ -136,11 +136,11 @@ export default function FeatureRegistryPage() {
   });
 
   // Activation log
-  const [logCompany, setLogCompany] = useState("");
+  const [logCompany, setLogCompany] = useState("__all__");
   const { data: activationLog = [], isLoading: logLoading, refetch: refetchLog } = useQuery<ActivationLogEntry[]>({
     queryKey: ["/api/feature-registry/log", logCompany],
     queryFn: () => {
-      const url = logCompany
+      const url = (logCompany && logCompany !== "__all__")
         ? `/api/feature-registry/log?companyId=${logCompany}`
         : "/api/feature-registry/log";
       return fetch(url, { credentials: "include" }).then(r => r.json());
@@ -580,7 +580,7 @@ export default function FeatureRegistryPage() {
                       <SelectValue placeholder="All tenants" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">All tenants</SelectItem>
+                      <SelectItem value="__all__">All tenants</SelectItem>
                       {companies.map(c => (
                         <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                       ))}
