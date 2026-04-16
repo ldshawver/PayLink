@@ -4457,6 +4457,7 @@ function SettingsSection() {
   const isAdmin = currentUser?.role === "admin" || currentUser?.role === "manager" ||
     (currentUser?.role || "").startsWith("tenant_") || (currentUser?.role || "").startsWith("platform_");
   const isPlatformUser = (currentUser?.role || "").startsWith("platform_");
+  const isPlatformAdmin = currentUser?.role === "platform_super_admin" || currentUser?.role === "platform_admin";
 
   const { data: smtpConfig } = useQuery<{host?: string; enabled?: boolean} | null>({
     queryKey: ["/api/admin/smtp-config"],
@@ -4645,14 +4646,24 @@ function SettingsSection() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {(tpl.is_global || !tpl.company_id) && !isPlatformUser ? (
+                    {(tpl.is_global || !tpl.company_id) && !isPlatformAdmin ? (
                       <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground" title="Global template — read-only for tenant admins">Global</span>
                     ) : (
                       <>
                         {!tpl.is_default && tpl.is_active && (
                           <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setDefaultTplMutation.mutate(tpl.id)} data-testid={`btn-set-default-${tpl.id}`}>Set Default</Button>
                         )}
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setTplForm({ ...tpl, templateType: tpl.template_type }); setTplDialog({ open: true, tpl }); }} data-testid={`btn-edit-tpl-${tpl.id}`}>
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => {
+                          setTplForm({
+                            ...tpl,
+                            templateType: tpl.template_type || tpl.templateType,
+                            isActive: tpl.is_active ?? tpl.isActive ?? true,
+                            isDefault: tpl.is_default ?? tpl.isDefault ?? false,
+                            layoutVariant: tpl.layout_variant || tpl.layoutVariant || "standard",
+                            workTypeTags: tpl.work_type_tags || tpl.workTypeTags || "",
+                          });
+                          setTplDialog({ open: true, tpl });
+                        }} data-testid={`btn-edit-tpl-${tpl.id}`}>
                           <Edit className="h-3.5 w-3.5" />
                         </Button>
                         <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground"
