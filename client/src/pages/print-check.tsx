@@ -2078,7 +2078,11 @@ export default function PrintCheckPage() {
   // Batch checks mode (no ?worker=): filter to check-payment workers only
   const checkWorkerItems = workerFilter
     ? items.filter(item => item.workerId === workerFilter)
-    : items.filter(item => !item.paymentMethod || item.paymentMethod === "check");
+    : items.filter(item => (!item.paymentMethod || item.paymentMethod === "check") && Number(item.netPay || 0) > 0);
+  // Track how many zero-pay employees were skipped (for the full run only)
+  const zeroPaySkippedCount = !workerFilter
+    ? items.filter(item => (!item.paymentMethod || item.paymentMethod === "check") && Number(item.netPay || 0) <= 0).length
+    : 0;
 
   // ── Duplicate check number detection ──
   const checkNumbersSeen = new Set<string>();
@@ -2168,6 +2172,14 @@ export default function PrintCheckPage() {
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>
             <strong>Printing is blocked.</strong> {checkItemsWithValidation.filter(c => c.issues.some(i => i.severity === "blocking")).length} check(s) have blocking issues. Expand the diagnostics panel below to see fix paths.
+          </span>
+        </div>
+      )}
+
+      {zeroPaySkippedCount > 0 && fontReady && !isPacketMode && (
+        <div className="mx-4 mb-3 rounded-md border border-blue-300 bg-blue-50 dark:bg-blue-950/20 p-3 text-sm text-blue-700 dark:text-blue-300 flex items-center gap-2 print-hide" data-testid="banner-zero-pay-skipped">
+          <span>
+            <strong>{zeroPaySkippedCount} employee{zeroPaySkippedCount > 1 ? "s" : ""} skipped</strong> — {zeroPaySkippedCount > 1 ? "their" : "their"} net pay is $0.00 so no check will be printed.
           </span>
         </div>
       )}

@@ -2979,10 +2979,18 @@ export async function registerRoutes(
       // 6. Delete ach_batches (references payroll_runs)
       await db.delete(abTable).where(eq(abTable.payrollRunId, run.id));
       // 6b. Clear payroll_run_id on reimbursement items so they return to "pending" pool
-      const { payrollReimbursementItems: priTable } = await import("../shared/schema.js");
+      const { payrollReimbursementItems: priTable, checkPrintAuditLogs: cpalTable, treasuryOutboundPayments: topTable } = await import("../shared/schema.js");
       await db.update(priTable)
         .set({ payrollRunId: null, status: "pending", includedInPayrollAt: null } as any)
         .where(eq(priTable.payrollRunId, run.id));
+      // 6c. Null-out payroll_run_id on check_print_audit_logs (preserve audit history)
+      await db.update(cpalTable)
+        .set({ payrollRunId: null } as any)
+        .where(eq(cpalTable.payrollRunId, run.id));
+      // 6d. Null-out payroll_run_id on treasury_outbound_payments (preserve disbursement records)
+      await db.update(topTable)
+        .set({ payrollRunId: null } as any)
+        .where(eq(topTable.payrollRunId, run.id));
       // 7. Delete the payroll run
       await storage.deletePayrollRun(run.id);
       res.json({ message: "Payroll run deleted" });
