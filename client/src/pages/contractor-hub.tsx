@@ -3640,6 +3640,7 @@ function DocumentsSection() {
   const [contractorFilter, setContractorFilter] = useState("all");
   const [costCenterFilter, setCostCenterFilter] = useState("all");
   const [jobFilter, setJobFilter] = useState("all");
+  const [companyFilter, setCompanyFilter] = useState("all");
   const [emailSending, setEmailSending] = useState<string | null>(null);
   const [expandedAudit, setExpandedAudit] = useState<string | null>(null);
 
@@ -3647,6 +3648,7 @@ function DocumentsSection() {
     id: string; type: string; title: string; status: string; date: string;
     amount?: string; immutable: boolean; hasVersions: boolean;
     contractorId?: string; contractorName?: string; costCenter?: string; workType?: string;
+    companyId?: string; companyName?: string; versionNum?: number;
     signers?: Array<{name?: string; email?: string; signedAt?: string; role?: string}>;
   };
 
@@ -3659,12 +3661,18 @@ function DocumentsSection() {
       contractorName: (p as any).contractorName,
       costCenter: (p as any).costCenter,
       workType: (p as any).workType || (p as any).work_type,
+      companyId: p.companyId,
+      companyName: (p as any).companyName,
+      versionNum: (p as any).version || (p as any).versionNumber || 1,
     })),
     ...contracts.map(c => ({
       id: c.id, type: "contract", title: c.title || c.contractNumber || "Contract",
       status: c.status, date: c.createdAt, amount: c.totalValue || c.value,
       immutable: isImmutable("contract", c.status), hasVersions: true,
       contractorId: c.contractorId, contractorName: c.contractorName,
+      companyId: (c as any).companyId,
+      companyName: (c as any).companyName,
+      versionNum: (c as any).version || (c as any).versionNumber || 1,
       signers: c.signers?.map(s => ({
         name: (s as any).signerName || (s as any).name,
         email: (s as any).signerEmail || (s as any).email,
@@ -3677,6 +3685,8 @@ function DocumentsSection() {
       status: i.status, date: i.createdAt, amount: i.amount,
       immutable: isImmutable("invoice", i.status), hasVersions: false,
       contractorId: i.contractorId,
+      companyId: (i as any).companyId,
+      companyName: (i as any).companyName,
     })),
     ...payments.map(p => ({
       id: p.id, type: "payment", title: `Payment — ${fmtDate(p.paidAt)}`,
@@ -3690,6 +3700,9 @@ function DocumentsSection() {
   }));
   const costCenterOptions = [...new Set(allDocs.map(d => d.costCenter).filter(Boolean))];
   const jobOptions = [...new Set(allDocs.map(d => d.workType).filter(Boolean))];
+  const companyOptions = [...new Set(allDocs.map(d => d.companyId).filter(Boolean))].map(id => ({
+    id: id!, name: allDocs.find(d => d.companyId === id)?.companyName || id!.slice(0, 8),
+  }));
 
   const filtered = allDocs.filter(d => {
     if (typeFilter !== "all" && d.type !== typeFilter) return false;
@@ -3697,6 +3710,7 @@ function DocumentsSection() {
     if (contractorFilter !== "all" && d.contractorId !== contractorFilter) return false;
     if (costCenterFilter !== "all" && d.costCenter !== costCenterFilter) return false;
     if (jobFilter !== "all" && d.workType !== jobFilter) return false;
+    if (companyFilter !== "all" && d.companyId !== companyFilter) return false;
     if (search && !d.title.toLowerCase().includes(search.toLowerCase())) return false;
     if (dateFrom && new Date(d.date) < new Date(dateFrom)) return false;
     if (dateTo && new Date(d.date) > new Date(dateTo + "T23:59:59")) return false;
@@ -3836,6 +3850,17 @@ function DocumentsSection() {
               </SelectContent>
             </Select>
           )}
+          {companyOptions.length > 1 && (
+            <Select value={companyFilter} onValueChange={setCompanyFilter}>
+              <SelectTrigger className="h-8 w-36 text-xs" data-testid="select-doc-company">
+                <SelectValue placeholder="All Companies" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Companies</SelectItem>
+                {companyOptions.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
           <Button size="sm" variant={showDateFilter ? "secondary" : "ghost"} className="h-8 text-xs" onClick={() => setShowDateFilter(v => !v)} data-testid="btn-toggle-date-filter">
             <Calendar className="h-3 w-3 mr-1" /> Date
           </Button>
@@ -3896,9 +3921,13 @@ function DocumentsSection() {
                   </div>
                   <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground flex-wrap">
                     <span className="capitalize">{doc.type}</span>
+                    {doc.versionNum && doc.versionNum > 0 && (
+                      <span className="inline-flex items-center px-1 py-0 rounded bg-muted text-muted-foreground text-[10px] font-mono">v{doc.versionNum}</span>
+                    )}
                     <span>·</span>
                     <span>{fmtDate(doc.date)}</span>
                     {doc.amount && <><span>·</span><span className="font-medium text-foreground">{fmt(doc.amount)}</span></>}
+                    {doc.companyName && <><span>·</span><span className="text-muted-foreground">{doc.companyName}</span></>}
                     {doc.contractorName && <><span>·</span><span>{doc.contractorName}</span></>}
                     {doc.costCenter && <><span>·</span><span>CC: {doc.costCenter}</span></>}
                     {doc.signers && doc.signers.length > 0 && (
@@ -4604,24 +4633,35 @@ function SettingsSection() {
               </div>
               <Separator />
               <div>
-                <Label>Reviewer Pool — Authorized Approver Emails</Label>
-                <p className="text-xs text-muted-foreground mb-2">Comma-separated list of email addresses authorized to review and approve proposals and contracts</p>
-                <Textarea
-                  value={wfForm.reviewerPool || ""}
-                  onChange={e => updWf("reviewerPool", e.target.value)}
-                  placeholder="reviewer@company.com, manager@company.com, ..."
-                  rows={3}
-                  className="text-sm font-mono"
-                  data-testid="textarea-reviewer-pool"
-                />
+                <Label>Reviewer Pool — Authorized Approver Roles</Label>
+                <p className="text-xs text-muted-foreground mb-2">Select the roles that are authorized to review and approve proposals and contracts. Users with these roles will be eligible reviewers.</p>
+                <div className="flex flex-wrap gap-1.5" data-testid="reviewer-roles-multiselect">
+                  {[
+                    { value: "tenant_owner", label: "Owner" },
+                    { value: "tenant_admin", label: "Admin" },
+                    { value: "tenant_hr_admin", label: "HR Admin" },
+                    { value: "tenant_payroll_admin", label: "Payroll Admin" },
+                    { value: "tenant_finance_admin", label: "Finance Admin" },
+                    { value: "tenant_manager", label: "Manager" },
+                    { value: "tenant_supervisor", label: "Supervisor" },
+                  ].map(role => {
+                    const currentRoles = String(wfForm.reviewerPool || "").split(",").map(r => r.trim()).filter(Boolean);
+                    const selected = currentRoles.includes(role.value);
+                    return (
+                      <button key={role.value} type="button"
+                        onClick={() => {
+                          const next = selected ? currentRoles.filter(r => r !== role.value) : [...currentRoles, role.value];
+                          updWf("reviewerPool", next.join(", "));
+                        }}
+                        className={cn("text-xs px-2.5 py-1 rounded-full border transition-colors", selected ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground border-border hover:border-primary/50 hover:text-foreground")}
+                        data-testid={`role-reviewer-${role.value}`}>
+                        <Users className="h-2.5 w-2.5 inline mr-1" />{role.label}
+                      </button>
+                    );
+                  })}
+                </div>
                 {wfForm.reviewerPool && (
-                  <div className="flex flex-wrap gap-1 mt-2">
-                    {String(wfForm.reviewerPool).split(",").map(email => email.trim()).filter(Boolean).map(email => (
-                      <span key={email} className="inline-flex items-center gap-1 text-xs bg-primary/10 text-primary rounded-full px-2 py-0.5">
-                        <Users className="h-2.5 w-2.5" /> {email}
-                      </span>
-                    ))}
-                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">Selected: {String(wfForm.reviewerPool).split(",").map(r => r.trim()).filter(Boolean).join(", ") || "None"}</p>
                 )}
               </div>
               <Separator />
@@ -4862,21 +4902,45 @@ function SettingsSection() {
             </div>
             <div>
               <Label>Industry / Category Tags</Label>
-              <Input value={tplForm.industry || ""} onChange={e => setTplForm(f => ({ ...f, industry: e.target.value }))} placeholder="e.g. construction, electrical, landscaping" data-testid="input-tpl-industry" />
+              <p className="text-xs text-muted-foreground mb-2">Select all that apply</p>
+              <div className="flex flex-wrap gap-1.5" data-testid="industry-tags-multiselect">
+                {["construction","electrical","plumbing","landscaping","hvac","roofing","painting","flooring","consulting","technology","design","marketing","finance","legal","healthcare","retail","food_service","manufacturing","transportation","education","other"].map(tag => {
+                  const selected = String(tplForm.industry || "").split(",").map(t => t.trim()).filter(Boolean).includes(tag);
+                  return (
+                    <button key={tag} type="button"
+                      onClick={() => {
+                        const current = String(tplForm.industry || "").split(",").map(t => t.trim()).filter(Boolean);
+                        const next = selected ? current.filter(t => t !== tag) : [...current, tag];
+                        setTplForm(f => ({ ...f, industry: next.join(", ") }));
+                      }}
+                      className={cn("text-xs px-2.5 py-1 rounded-full border transition-colors", selected ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground border-border hover:border-primary/50 hover:text-foreground")}
+                      data-testid={`tag-industry-${tag}`}>
+                      {tag.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             <div>
               <Label>Work Type Tags</Label>
-              <p className="text-xs text-muted-foreground mb-1">Separate tags with commas — e.g. hourly, fixed-price, retainer</p>
-              <Input value={tplForm.workTypeTags || ""} onChange={e => setTplForm(f => ({ ...f, workTypeTags: e.target.value }))} placeholder="hourly, fixed-price, retainer" data-testid="input-tpl-work-types" />
-              {tplForm.workTypeTags && (
-                <div className="flex flex-wrap gap-1 mt-2">
-                  {String(tplForm.workTypeTags).split(",").map(tag => tag.trim()).filter(Boolean).map(tag => (
-                    <span key={tag} className="inline-flex items-center gap-1 text-xs bg-primary/10 text-primary rounded-full px-2.5 py-0.5 font-medium">
-                      <Tag className="h-2.5 w-2.5" /> {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
+              <p className="text-xs text-muted-foreground mb-2">Select the work structures this template supports</p>
+              <div className="flex flex-wrap gap-1.5" data-testid="work-type-tags-multiselect">
+                {["hourly","fixed_price","milestone","time_and_materials","cost_plus","retainer","trade","subscription","project_based","ongoing"].map(tag => {
+                  const selected = String(tplForm.workTypeTags || "").split(",").map(t => t.trim()).filter(Boolean).includes(tag);
+                  return (
+                    <button key={tag} type="button"
+                      onClick={() => {
+                        const current = String(tplForm.workTypeTags || "").split(",").map(t => t.trim()).filter(Boolean);
+                        const next = selected ? current.filter(t => t !== tag) : [...current, tag];
+                        setTplForm(f => ({ ...f, workTypeTags: next.join(", ") }));
+                      }}
+                      className={cn("text-xs px-2.5 py-1 rounded-full border transition-colors", selected ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground border-border hover:border-primary/50 hover:text-foreground")}
+                      data-testid={`tag-worktype-${tag}`}>
+                      {tag.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             <div>
               <Label>Description</Label>

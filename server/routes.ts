@@ -6701,7 +6701,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       let rows: any[];
       const showArchived = req.query.showArchived === "true";
-      if (["admin", "manager", "supervisor"].includes(userRole)) {
+      const isAdminRole = ["admin", "manager", "supervisor"].includes(userRole) || userRole.startsWith("tenant_") || userRole.startsWith("platform_");
+      if (isAdminRole) {
         // Admins see all proposals targeted at their company
         const result = showArchived
           ? await db.execute(sql`
@@ -6741,6 +6742,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               ORDER BY cp.created_at DESC
             `);
         rows = result.rows ?? (result as any);
+      }
+      // Enrich rows with company_name via per-id lookup
+      const companyIdSet = [...new Set((rows as any[]).map((r: any) => r.company_id).filter(Boolean))];
+      const nameMap: Record<string, string> = {};
+      for (const cid of companyIdSet) {
+        try {
+          const coRes = await db.execute(sql`SELECT id, name FROM companies WHERE id = ${cid}`);
+          if (coRes.rows[0]) nameMap[(coRes.rows[0] as any).id] = (coRes.rows[0] as any).name;
+        } catch {}
+      }
+      if (Object.keys(nameMap).length > 0) {
+        rows = (rows as any[]).map((r: any) => ({ ...r, company_name: nameMap[r.company_id] || r.company_name || null }));
       }
       res.json(rows);
     } catch (e) { res.status(500).json({ message: "Failed to fetch proposals" }); }
@@ -7631,6 +7644,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           ? await db.execute(sql`SELECT * FROM contractor_contracts WHERE contractor_id = ${wId} ORDER BY created_at DESC`)
           : await db.execute(sql`SELECT * FROM contractor_contracts WHERE contractor_id = ${wId} AND is_archived IS NOT TRUE ORDER BY created_at DESC`);
         rows = result.rows;
+      }
+      // Enrich rows with company_name via per-id lookup
+      const cidSet = [...new Set((rows as any[]).filter((r: any) => r.company_id && !r.company_name).map((r: any) => r.company_id))];
+      const nm: Record<string, string> = {};
+      for (const cid of cidSet) {
+        try {
+          const coRes = await db.execute(sql`SELECT id, name FROM companies WHERE id = ${cid}`);
+          if (coRes.rows[0]) nm[(coRes.rows[0] as any).id] = (coRes.rows[0] as any).name;
+        } catch {}
+      }
+      if (Object.keys(nm).length > 0) {
+        rows = (rows as any[]).map((r: any) => ({ ...r, company_name: r.company_name || nm[r.company_id] || null }));
       }
       res.json(rows);
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch contracts" }); }
@@ -8701,8 +8726,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!isPlatform && user?.companyId && prop.company_id !== user.companyId) {
         return res.status(403).json({ message: "Access denied: proposal belongs to another company" });
       }
-      if (["active", "signed", "fully_signed"].includes(prop.status)) {
-        return res.status(400).json({ message: "Cannot archive an active/signed proposal" });
+      if (["approved", "converted_to_contract", "active", "signed", "fully_signed"].includes(prop.status)) {
+        return res.status(400).json({ message: "Cannot archive a final/signed proposal — it is immutable" });
       }
       await db.execute(sql`UPDATE contractor_proposals SET is_archived = TRUE, archived_at = NOW() WHERE id = ${req.params.id}`);
       res.json({ success: true, id: req.params.id });
@@ -8720,8 +8745,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!isPlatform && user?.companyId && cont.company_id !== user.companyId) {
         return res.status(403).json({ message: "Access denied: contract belongs to another company" });
       }
-      if (["active", "signed", "fully_signed"].includes(cont.status)) {
-        return res.status(400).json({ message: "Cannot archive an active/signed contract — void it first" });
+      if (["fully_signed", "active", "completed", "signed"].includes(cont.status)) {
+        return res.status(400).json({ message: "Cannot archive a final/active/completed contract — it is immutable" });
       }
       await db.execute(sql`UPDATE contractor_contracts SET is_archived = TRUE, archived_at = NOW() WHERE id = ${req.params.id}`);
       res.json({ success: true, id: req.params.id });
