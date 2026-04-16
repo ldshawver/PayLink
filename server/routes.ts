@@ -6415,7 +6415,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         actorUserId: req.session.userId, companyId: inv.companyId,
         previousStatus: "draft", newStatus: "submitted",
       });
-      createContractorNotification({ companyId: inv.companyId, notificationType: "invoice_submitted", title: `Invoice Submitted: #${(inv as any).invoiceNumber || req.params.id.slice(0, 8)}`, body: "A contractor invoice has been submitted for your review.", entityType: "invoice", entityId: req.params.id, actionUrl: "/app/contractor-hub?section=invoices" }).catch(() => {});
+      createContractorNotification({ companyId: inv.companyId, notificationType: "invoice_submitted", title: `Invoice Submitted: #${(inv as any).invoiceNumber || req.params.id.slice(0, 8)}`, body: "A contractor invoice has been submitted for your review.", entityType: "invoice", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=invoices&id=${req.params.id}` }).catch(() => {});
       // Notify admin/manager that an invoice was submitted
       try {
         const { sendContractEventEmail } = await import("./notifications.js");
@@ -6453,7 +6453,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       });
 
       // Notify contractor of approval
-      createContractorNotification({ workerId: inv.contractorId, notificationType: "invoice_approved", title: `Invoice Approved: #${(inv as any).invoiceNumber || req.params.id.slice(0, 8)}`, body: "Your invoice has been approved.", entityType: "invoice", entityId: req.params.id, actionUrl: "/app/contractor-hub?section=invoices" }).catch(() => {});
+      createContractorNotification({ workerId: inv.contractorId, notificationType: "invoice_approved", title: `Invoice Approved: #${(inv as any).invoiceNumber || req.params.id.slice(0, 8)}`, body: "Your invoice has been approved.", entityType: "invoice", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=invoices&id=${req.params.id}` }).catch(() => {});
       try {
         const { sendContractEventEmail } = await import("./notifications.js");
         const baseUrl = process.env.APP_BASE_URL || "";
@@ -6489,7 +6489,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       });
 
       // Notify contractor of rejection
-      createContractorNotification({ workerId: inv.contractorId, notificationType: "invoice_rejected", title: `Invoice Rejected: #${(inv as any).invoiceNumber || req.params.id.slice(0, 8)}`, body: req.body.reason || "Your invoice has been rejected.", entityType: "invoice", entityId: req.params.id, actionUrl: "/app/contractor-hub?section=invoices" }).catch(() => {});
+      createContractorNotification({ workerId: inv.contractorId, notificationType: "invoice_rejected", title: `Invoice Rejected: #${(inv as any).invoiceNumber || req.params.id.slice(0, 8)}`, body: req.body.reason || "Your invoice has been rejected.", entityType: "invoice", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=invoices&id=${req.params.id}` }).catch(() => {});
       try {
         const { sendContractEventEmail } = await import("./notifications.js");
         const baseUrl = process.env.APP_BASE_URL || "";
@@ -6525,7 +6525,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       });
 
       // Notify contractor of payment
-      createContractorNotification({ workerId: inv.contractorId, notificationType: "invoice_paid", title: `Invoice Paid: #${(inv as any).invoiceNumber || req.params.id.slice(0, 8)}`, body: "Your invoice has been marked as paid.", entityType: "invoice", entityId: req.params.id, actionUrl: "/app/contractor-hub?section=payments" }).catch(() => {});
+      createContractorNotification({ workerId: inv.contractorId, notificationType: "invoice_paid", title: `Invoice Paid: #${(inv as any).invoiceNumber || req.params.id.slice(0, 8)}`, body: "Your invoice has been marked as paid.", entityType: "invoice", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=payments&id=${req.params.id}` }).catch(() => {});
       try {
         const { sendContractEventEmail } = await import("./notifications.js");
         const baseUrl = process.env.APP_BASE_URL || "";
@@ -6927,7 +6927,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         WHERE id = ${req.params.id}
       `);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      createContractorNotification({ companyId: proposal.company_id, notificationType: "proposal_submitted", title: `Proposal Submitted: ${proposal.title || proposal.proposal_number}`, body: "A contractor has submitted a proposal for your review.", entityType: "proposal", entityId: req.params.id, actionUrl: "/app/contractor-hub?section=proposals" }).catch(() => {});
+      createContractorNotification({ companyId: proposal.company_id, notificationType: "proposal_submitted", title: `Proposal Submitted: ${proposal.title || proposal.proposal_number}`, body: "A contractor has submitted a proposal for your review.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
       res.json((updated.rows ?? (updated as any))[0]);
     } catch (e) { res.status(500).json({ message: "Failed to submit proposal" }); }
   });
@@ -6950,7 +6950,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
       await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, ip_address) VALUES (${req.params.id}, 'approved', ${oldStatus}, 'approved', ${userId}, ${user?.username || null}, ${req.ip || null})`);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      createContractorNotification({ workerId: proposal.contractor_id, notificationType: "proposal_approved", title: `Proposal Approved: ${proposal.title || proposal.proposal_number}`, body: "Your proposal has been approved.", entityType: "proposal", entityId: req.params.id, actionUrl: "/app/contractor-hub?section=proposals" }).catch(() => {});
+      createContractorNotification({ workerId: proposal.contractor_id, notificationType: "proposal_approved", title: `Proposal Approved: ${proposal.title || proposal.proposal_number}`, body: "Your proposal has been approved.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
       res.json((updated.rows ?? (updated as any))[0]);
     } catch (e) { res.status(500).json({ message: "Failed to accept proposal" }); }
   });
@@ -6974,7 +6974,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
       await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'rejected', ${oldStatus}, 'rejected', ${userId}, ${user?.username || null}, ${rejectionReason || null}, ${req.ip || null})`);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      createContractorNotification({ workerId: proposal.contractor_id, notificationType: "proposal_rejected", title: `Proposal Rejected: ${proposal.title || proposal.proposal_number}`, body: rejectionReason || "Your proposal has been declined.", entityType: "proposal", entityId: req.params.id, actionUrl: "/app/contractor-hub?section=proposals" }).catch(() => {});
+      createContractorNotification({ workerId: proposal.contractor_id, notificationType: "proposal_rejected", title: `Proposal Rejected: ${proposal.title || proposal.proposal_number}`, body: rejectionReason || "Your proposal has been declined.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
       res.json((updated.rows ?? (updated as any))[0]);
     } catch (e) { res.status(500).json({ message: "Failed to reject proposal" }); }
   });
@@ -6998,7 +6998,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
       await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'revision_requested', ${oldStatus}, 'revision_requested', ${userId}, ${user?.username || null}, ${revisionNotes || null}, ${req.ip || null})`);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      createContractorNotification({ workerId: proposal.contractor_id, notificationType: "proposal_revision_requested", title: `Revision Requested: ${proposal.title || proposal.proposal_number}`, body: revisionNotes || "Please revise and resubmit your proposal.", entityType: "proposal", entityId: req.params.id, actionUrl: "/app/contractor-hub?section=proposals" }).catch(() => {});
+      createContractorNotification({ workerId: proposal.contractor_id, notificationType: "proposal_revision_requested", title: `Revision Requested: ${proposal.title || proposal.proposal_number}`, body: revisionNotes || "Please revise and resubmit your proposal.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
       res.json((updated.rows ?? (updated as any))[0]);
     } catch (e) { res.status(500).json({ message: "Failed to request revision" }); }
   });
@@ -7310,7 +7310,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const newStatus = newBalance <= 0.01 ? "paid" : "partially_paid";
       const paidAt = newBalance <= 0.01 ? sql`NOW()` : sql`${invoice.paid_at ?? null}`;
       await db.execute(sql`UPDATE contractor_invoices SET amount_paid = ${newAmountPaid}, balance_due = ${newBalance}, status = ${newStatus}, paid_at = ${paidAt}, updated_at = NOW() WHERE id = ${req.params.id}`);
-      createContractorNotification({ workerId: invoice.contractor_id, notificationType: "payment_received", title: `Payment Recorded: $${parseFloat(amount).toFixed(2)}`, body: `A payment of $${parseFloat(amount).toFixed(2)} has been recorded for your invoice.`, entityType: "invoice", entityId: req.params.id, actionUrl: "/app/contractor-hub?section=payments" }).catch(() => {});
+      createContractorNotification({ workerId: invoice.contractor_id, notificationType: "payment_received", title: `Payment Recorded: $${parseFloat(amount).toFixed(2)}`, body: `A payment of $${parseFloat(amount).toFixed(2)} has been recorded for your invoice.`, entityType: "invoice", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=payments&id=${req.params.id}` }).catch(() => {});
 
       res.status(201).json(result.rows[0]);
     } catch (e) { console.error(e); res.status(500).json({ message: "Failed to record payment" }); }
@@ -7587,7 +7587,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
       await db.execute(sql`UPDATE contractor_proposals SET status = 'countered', updated_at = NOW() WHERE id = ${req.params.id} AND status NOT IN ('approved','rejected','void','converted_to_contract')`);
       await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'countered', ${oldStatus}, 'countered', ${req.session.userId}, ${(await storage.getUser(req.session.userId!))?.username || null}, ${notes || null}, ${req.ip || null})`);
-      createContractorNotification({ workerId: access.prop.contractor_id, notificationType: "proposal_countered", title: `Counter Offer: ${access.prop.title || access.prop.proposal_number}`, body: notes || "A counter offer has been submitted for your consideration.", entityType: "proposal", entityId: req.params.id, actionUrl: "/app/contractor-hub?section=proposals" }).catch(() => {});
+      createContractorNotification({ workerId: access.prop.contractor_id, notificationType: "proposal_countered", title: `Counter Offer: ${access.prop.title || access.prop.proposal_number}`, body: notes || "A counter offer has been submitted for your consideration.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
       res.status(201).json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to send counter: " + e.message }); }
   });
@@ -7809,7 +7809,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await autoSnapshotContract(req.params.id, req.session.userId!, "pre-send snapshot");
       const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'sent', sent_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
-      createContractorNotification({ workerId: contract.contractor_id, notificationType: "contract_sent", title: `Contract Ready for Signature: ${contract.title || req.params.id}`, body: "A contract has been sent to you for review and signature.", entityType: "contract", entityId: req.params.id, actionUrl: "/app/contractor-hub?section=contracts" }).catch(() => {});
+      createContractorNotification({ workerId: contract.contractor_id, notificationType: "contract_sent", title: `Contract Ready for Signature: ${contract.title || req.params.id}`, body: "A contract has been sent to you for review and signature.", entityType: "contract", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=contracts&id=${req.params.id}` }).catch(() => {});
       // Notify contractor
       try {
         const { sendContractEventEmail, sendContractEventSms } = await import("./notifications.js");
@@ -7885,8 +7885,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Notify on fully signed: alert admin/managers of the company
       if (newStatus === "fully_signed") {
-        createContractorNotification({ companyId: contractData?.company_id, notificationType: "contract_signed", title: `Contract Fully Signed: ${contractData?.title || req.params.id}`, body: "All parties have signed. The contract is ready to be activated.", entityType: "contract", entityId: req.params.id, actionUrl: "/app/contractor-hub?section=contracts" }).catch(() => {});
-        createContractorNotification({ workerId: contractData?.contractor_id, notificationType: "contract_signed", title: `Contract Fully Signed: ${contractData?.title || req.params.id}`, body: "All parties have signed the contract.", entityType: "contract", entityId: req.params.id, actionUrl: "/app/contractor-hub?section=contracts" }).catch(() => {});
+        createContractorNotification({ companyId: contractData?.company_id, notificationType: "contract_signed", title: `Contract Fully Signed: ${contractData?.title || req.params.id}`, body: "All parties have signed. The contract is ready to be activated.", entityType: "contract", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=contracts&id=${req.params.id}` }).catch(() => {});
+        createContractorNotification({ workerId: contractData?.contractor_id, notificationType: "contract_signed", title: `Contract Fully Signed: ${contractData?.title || req.params.id}`, body: "All parties have signed the contract.", entityType: "contract", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=contracts&id=${req.params.id}` }).catch(() => {});
         try {
           const { sendContractEventEmail, sendContractEventSms } = await import("./notifications.js");
           const baseUrl = process.env.APP_BASE_URL || "";
@@ -8546,12 +8546,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/contractor-notifications/:id/read", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
-      // Only mark read if the notification belongs to this user or their worker record
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_");
       const result = await db.execute(sql`
         UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW()
-        WHERE id = ${req.params.id} AND (user_id = ${req.session.userId} OR worker_id = ${workerId || null})
+        WHERE id = ${req.params.id} AND (
+          user_id = ${req.session.userId}
+          OR worker_id = ${workerId || null}
+          ${isAdmin ? sql`OR company_id = ${user?.companyId || null}` : sql``}
+        )
         RETURNING *
       `);
       if (!result.rows[0]) return res.status(404).json({ message: "Notification not found or access denied" });
@@ -8561,9 +8566,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/contractor-notifications/mark-all-read", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
-      await db.execute(sql`UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW() WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null}) AND is_read = FALSE`);
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_");
+      if (isAdmin) {
+        await db.execute(sql`UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW() WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null} OR company_id = ${user?.companyId || null}) AND is_read = FALSE`);
+      } else {
+        await db.execute(sql`UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW() WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null}) AND is_read = FALSE`);
+      }
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to mark all read" }); }
   });
@@ -8585,13 +8596,27 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
       const { status, entityType } = req.query as Record<string, string>;
-      const result = await db.execute(sql`
-        SELECT * FROM contractor_reminders
-        WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null} OR company_id = ${user?.companyId || null})
-        ${status ? sql`AND status = ${status}` : sql``}
-        ${entityType ? sql`AND entity_type = ${entityType}` : sql``}
-        ORDER BY scheduled_at ASC
-      `);
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_");
+      let result;
+      if (isAdmin) {
+        // Admins see all company reminders (company-scoped) + their own
+        result = await db.execute(sql`
+          SELECT * FROM contractor_reminders
+          WHERE (user_id = ${req.session.userId} OR company_id = ${user?.companyId || null})
+          ${status ? sql`AND status = ${status}` : sql``}
+          ${entityType ? sql`AND entity_type = ${entityType}` : sql``}
+          ORDER BY scheduled_at ASC
+        `);
+      } else {
+        // Workers only see their own reminders (never other workers' reminders)
+        result = await db.execute(sql`
+          SELECT * FROM contractor_reminders
+          WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null})
+          ${status ? sql`AND status = ${status}` : sql``}
+          ${entityType ? sql`AND entity_type = ${entityType}` : sql``}
+          ORDER BY scheduled_at ASC
+        `);
+      }
       res.json(result.rows);
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch reminders" }); }
   });
@@ -8635,12 +8660,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.delete("/api/contractor-reminders/:id", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
-      await db.execute(sql`
-        UPDATE contractor_reminders SET status = 'dismissed', dismissed_at = NOW(), updated_at = NOW()
-        WHERE id = ${req.params.id} AND (user_id = ${req.session.userId} OR worker_id = ${workerId || null})
-      `);
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_");
+      if (isAdmin) {
+        await db.execute(sql`
+          UPDATE contractor_reminders SET status = 'dismissed', dismissed_at = NOW(), updated_at = NOW()
+          WHERE id = ${req.params.id} AND (user_id = ${req.session.userId} OR worker_id = ${workerId || null} OR company_id = ${user?.companyId || null})
+        `);
+      } else {
+        await db.execute(sql`
+          UPDATE contractor_reminders SET status = 'dismissed', dismissed_at = NOW(), updated_at = NOW()
+          WHERE id = ${req.params.id} AND (user_id = ${req.session.userId} OR worker_id = ${workerId || null})
+        `);
+      }
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to dismiss reminder: " + e.message }); }
   });

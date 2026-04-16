@@ -4356,7 +4356,7 @@ function DocumentsSection() {
 
 // ─── Messages Section ─────────────────────────────────────────────────────────
 
-function MessagesSection() {
+function MessagesSection({ onNavigate }: { onNavigate: (s: HubSection) => void }) {
   const [typeFilter, setTypeFilter] = useState("all");
   const [readFilter, setReadFilter] = useState("all");
 
@@ -4452,10 +4452,18 @@ function MessagesSection() {
               <div
                 key={n.id}
                 className={cn(
-                  "flex items-start gap-3 p-3 rounded-lg border transition-colors",
+                  "flex items-start gap-3 p-3 rounded-lg border transition-colors cursor-pointer hover:bg-muted/30",
                   !n.isRead ? "bg-primary/5 border-primary/20" : "bg-background"
                 )}
                 data-testid={`notification-row-${n.id}`}
+                onClick={() => {
+                  if (!n.isRead) markReadMutation.mutate(n.id);
+                  if (n.actionUrl) {
+                    const url = new URL(n.actionUrl, window.location.href);
+                    const section = url.searchParams.get("section") as HubSection | null;
+                    if (section) onNavigate(section);
+                  }
+                }}
               >
                 <div className={cn("mt-0.5 h-8 w-8 shrink-0 rounded-full flex items-center justify-center", !n.isRead ? "bg-primary/10" : "bg-muted")}>
                   <Icon className={cn("h-4 w-4", color)} />
@@ -4475,7 +4483,7 @@ function MessagesSection() {
                 </div>
                 {!n.isRead && (
                   <button
-                    onClick={() => markReadMutation.mutate(n.id)}
+                    onClick={(e) => { e.stopPropagation(); markReadMutation.mutate(n.id); }}
                     className="text-xs text-primary hover:underline shrink-0 mt-0.5"
                     data-testid={`btn-mark-read-${n.id}`}
                   >
@@ -5858,7 +5866,7 @@ export default function ContractorHubPage() {
             {section === "documents" && <DocumentsSection />}
 
             {/* Messages */}
-            {section === "messages" && <MessagesSection />}
+            {section === "messages" && <MessagesSection onNavigate={handleSectionChange} />}
 
             {/* Branding */}
             {section === "branding" && <BrandingSection />}
