@@ -272,6 +272,109 @@ export async function sendApprovalReminderSms(payload: ApprovalReminderPayload):
   }
 }
 
+// ── Contract & Invoice lifecycle email notifications ──────────────────────────
+
+export type ContractEventType =
+  | "contract_sent"
+  | "signature_requested"
+  | "signature_complete"
+  | "contract_activated"
+  | "invoice_submitted"
+  | "invoice_approved"
+  | "invoice_rejected"
+  | "invoice_paid"
+  | "override_requested"
+  | "override_approved"
+  | "payment_due"
+  | "payment_received";
+
+const CONTRACT_EVENT_LABELS: Record<ContractEventType, string> = {
+  contract_sent: "Contract Sent for Review",
+  signature_requested: "Signature Requested",
+  signature_complete: "Contract Fully Signed",
+  contract_activated: "Contract Activated",
+  invoice_submitted: "Invoice Submitted for Review",
+  invoice_approved: "Invoice Approved",
+  invoice_rejected: "Invoice Rejected",
+  invoice_paid: "Invoice Marked Paid",
+  override_requested: "Invoice Override Requested",
+  override_approved: "Invoice Override Approved",
+  payment_due: "Payment Due Reminder",
+  payment_received: "Payment Received",
+};
+
+export interface ContractEventPayload {
+  event: ContractEventType;
+  recipientName: string;
+  email?: string | null;
+  phone?: string | null;
+  contractTitle: string;
+  entityId: string;
+  entityType: "contract" | "invoice";
+  companyName?: string;
+  amount?: number | null;
+  note?: string | null;
+  actionUrl?: string;
+}
+
+export async function sendContractEventEmail(payload: ContractEventPayload): Promise<{ sent: boolean; error?: string }> {
+  if (!payload.email) return { sent: false, error: "No email address" };
+  const smtp = getTransporter();
+  if (!smtp) return { sent: false, error: "SMTP not configured" };
+
+  const label = CONTRACT_EVENT_LABELS[payload.event] || payload.event;
+  const subject = `${label} — ${payload.contractTitle}`;
+  const amountLine = payload.amount != null ? `<p style="color:#374151;">Amount: <strong>$${Number(payload.amount).toLocaleString("en-US", { minimumFractionDigits: 2 })}</strong></p>` : "";
+  const noteLine = payload.note ? `<p style="color:#374151; background:#f3f4f6; padding:10px; border-radius:4px; font-style:italic;">${payload.note}</p>` : "";
+  const actionBtn = payload.actionUrl ? `<a href="${payload.actionUrl}" style="display:inline-block;background:linear-gradient(135deg,#0d9488,#2563eb);color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;margin-top:12px;">View in PayLink</a>` : "";
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+      <div style="background:linear-gradient(135deg,#0d9488,#2563eb);padding:20px;border-radius:8px 8px 0 0;">
+        <h1 style="color:white;margin:0;font-size:20px;">${label}</h1>
+        ${payload.companyName ? `<p style="color:rgba(255,255,255,0.85);margin:4px 0 0;">${payload.companyName}</p>` : ""}
+      </div>
+      <div style="background:#f9fafb;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;">
+        <p style="font-size:15px;color:#111827;">Hi <strong>${payload.recipientName}</strong>,</p>
+        <p style="color:#374151;">There has been an update regarding your contract: <strong>${payload.contractTitle}</strong></p>
+        ${amountLine}
+        ${noteLine}
+        ${actionBtn}
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This notification was sent via PayLink. If you have questions, contact your administrator.</p>
+      </div>
+    </div>
+  `;
+  const text = `Hi ${payload.recipientName},\n\n${label}\n\nContract: ${payload.contractTitle}${payload.amount != null ? `\nAmount: $${Number(payload.amount).toFixed(2)}` : ""}${payload.note ? `\nNote: ${payload.note}` : ""}${payload.actionUrl ? `\n\nView: ${payload.actionUrl}` : ""}\n\nPayLink`;
+
+  try {
+    await smtp.transporter.sendMail({ from: smtp.fromAddress, to: payload.email, subject, text, html });
+    console.log(`[Email] Contract event "${payload.event}" sent to ${payload.email}`);
+    return { sent: true };
+  } catch (err: any) {
+    console.error(`[Email] Failed contract event email to ${payload.email}:`, err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
+export async function sendContractEventSms(payload: ContractEventPayload): Promise<{ sent: boolean; error?: string }> {
+  if (!payload.phone) return { sent: false, error: "No phone number" };
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+  if (!accountSid || !authToken || !fromNumber) return { sent: false, error: "Twilio not configured" };
+  const label = CONTRACT_EVENT_LABELS[payload.event] || payload.event;
+  const message = `PayLink: ${label} — ${payload.contractTitle}${payload.amount != null ? ` ($${Number(payload.amount).toFixed(2)})` : ""}${payload.note ? `. ${payload.note}` : ""}${payload.actionUrl ? ` View: ${payload.actionUrl}` : ""}`;
+  try {
+    const twilio = (await import("twilio")).default;
+    const client = twilio(accountSid, authToken);
+    await client.messages.create({ body: message, from: normalizePhone(fromNumber), to: normalizePhone(payload.phone) });
+    return { sent: true };
+  } catch (err: any) {
+    console.error(`[SMS] Failed contract event SMS to ${payload.phone}:`, err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
 export async function sendScheduleSmsNotification(payload: ScheduleNotificationPayload): Promise<{ sent: boolean; error?: string }> {
   const phone = payload.phone;
   if (!phone) return { sent: false, error: "No phone number" };

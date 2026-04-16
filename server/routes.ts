@@ -6370,12 +6370,58 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         }
       }
 
+      // ── Budget guardrail: enforce contract budget cap ────────────────────
+      if ((inv as any).contractId || (inv as any).contract_id) {
+        const contractId = (inv as any).contractId || (inv as any).contract_id;
+        const contractRes = await db.execute(sql`SELECT total_value FROM contractor_contracts WHERE id = ${contractId}`);
+        const contractRow = contractRes.rows[0] as any;
+        if (contractRow?.total_value != null) {
+          const totalBudget = parseFloat(contractRow.total_value);
+          // Sum all approved/paid invoices against this contract (excluding current)
+          const usedRes = await db.execute(sql`
+            SELECT COALESCE(SUM(amount), 0) AS used FROM contractor_invoices
+            WHERE (contract_id = ${contractId} OR contract_reference = ${contractId})
+            AND status IN ('submitted','approved','paid')
+            AND id != ${req.params.id}
+          `);
+          const usedAmount = parseFloat((usedRes.rows[0] as any)?.used || "0");
+          const invoiceAmount = parseFloat(String((inv as any).amount || "0"));
+          if (usedAmount + invoiceAmount > totalBudget) {
+            // Check if override is approved
+            const overrideApproved = (inv as any).overrideApproved || (inv as any).override_approved;
+            if (!overrideApproved) {
+              const remaining = totalBudget - usedAmount;
+              return res.status(400).json({
+                message: `Invoice amount ($${invoiceAmount.toFixed(2)}) exceeds remaining contract budget ($${remaining.toFixed(2)} of $${totalBudget.toFixed(2)}). Please submit an override request first.`,
+                code: "BUDGET_EXCEEDED",
+                totalBudget,
+                usedAmount,
+                invoiceAmount,
+                remaining,
+              });
+            }
+          }
+        }
+      }
+
       const updated = await storage.updateContractorInvoice(req.params.id, { status: "submitted" });
       await storage.createExpenseApprovalAction({
         objectType: "contractor_invoice", objectId: req.params.id, actionType: "submitted",
         actorUserId: req.session.userId, companyId: inv.companyId,
         previousStatus: "draft", newStatus: "submitted",
       });
+      // Notify admin/manager that an invoice was submitted
+      try {
+        const { sendContractEventEmail } = await import("./notifications.js");
+        const baseUrl = process.env.APP_BASE_URL || "";
+        const invRef = (inv as any).invoiceNumber || req.params.id;
+        await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${inv.companyId}, u.id, 'invoice_submitted', ${"Invoice Submitted: " + invRef}, ${"A contractor invoice has been submitted for your review."}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.company_id = ${inv.companyId} AND u.role IN ('admin','manager','tenant_admin','tenant_owner') LIMIT 5`);
+        const adminsRes = await db.execute(sql`SELECT u.email, u.username AS name FROM users u WHERE u.company_id = ${inv.companyId} AND u.role IN ('admin','manager','tenant_admin') LIMIT 3`);
+        const amount = parseFloat(String((inv as any).amount || "0"));
+        for (const admin of adminsRes.rows as any[]) {
+          sendContractEventEmail({ event: "invoice_submitted", recipientName: admin.name || "Admin", email: admin.email, contractTitle: invRef, entityId: req.params.id, entityType: "invoice", amount }).catch(() => {});
+        }
+      } catch (notifErr) { console.error("[Invoice] Notify submit failed:", notifErr); }
       res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to submit invoice" }); }
   });
@@ -6400,6 +6446,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         previousStatus: "submitted", newStatus: "approved",
       });
 
+      // Notify contractor of approval
+      try {
+        const { sendContractEventEmail } = await import("./notifications.js");
+        const baseUrl = process.env.APP_BASE_URL || "";
+        const invRef = (inv as any).invoiceNumber || req.params.id;
+        const wRes = await db.execute(sql`SELECT u.email, u.username AS name FROM users u WHERE u.worker_id = ${inv.contractorId} LIMIT 1`);
+        const recipient = wRes.rows[0] as any;
+        if (recipient?.email) {
+          sendContractEventEmail({ event: "invoice_approved", recipientName: recipient.name || "Contractor", email: recipient.email, contractTitle: invRef, entityId: req.params.id, entityType: "invoice", amount: parseFloat(String((inv as any).amount || "0")), actionUrl: `${baseUrl}/app/contractor-hub` }).catch(() => {});
+        }
+        await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${inv.companyId}, u.id, 'invoice_approved', ${"Invoice Approved: " + invRef}, ${"Your invoice has been approved."}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.worker_id = ${inv.contractorId} LIMIT 1`);
+      } catch (notifErr) { console.error("[Invoice] Notify approve failed:", notifErr); }
+
       res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to approve invoice" }); }
   });
@@ -6422,6 +6481,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         notes: req.body.reason,
       });
 
+      // Notify contractor of rejection
+      try {
+        const { sendContractEventEmail } = await import("./notifications.js");
+        const baseUrl = process.env.APP_BASE_URL || "";
+        const invRef = (inv as any).invoiceNumber || req.params.id;
+        const wRes = await db.execute(sql`SELECT u.email, u.username AS name FROM users u WHERE u.worker_id = ${inv.contractorId} LIMIT 1`);
+        const recipient = wRes.rows[0] as any;
+        if (recipient?.email) {
+          sendContractEventEmail({ event: "invoice_rejected", recipientName: recipient.name || "Contractor", email: recipient.email, contractTitle: invRef, entityId: req.params.id, entityType: "invoice", note: req.body.reason || null, actionUrl: `${baseUrl}/app/contractor-hub` }).catch(() => {});
+        }
+        await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${inv.companyId}, u.id, 'invoice_rejected', ${"Invoice Rejected: " + invRef}, ${req.body.reason || "Your invoice has been rejected."}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.worker_id = ${inv.contractorId} LIMIT 1`);
+      } catch (notifErr) { console.error("[Invoice] Notify reject failed:", notifErr); }
+
       res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to reject invoice" }); }
   });
@@ -6443,6 +6515,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         previousStatus: "approved", newStatus: "paid",
         metadataJson: JSON.stringify({ paymentReference: req.body.paymentReference }),
       });
+
+      // Notify contractor of payment
+      try {
+        const { sendContractEventEmail } = await import("./notifications.js");
+        const baseUrl = process.env.APP_BASE_URL || "";
+        const invRef = (inv as any).invoiceNumber || req.params.id;
+        const paidAmount = req.body.paidAmount || (inv as any).amount;
+        const wRes = await db.execute(sql`SELECT u.email, u.username AS name FROM users u WHERE u.worker_id = ${inv.contractorId} LIMIT 1`);
+        const recipient = wRes.rows[0] as any;
+        if (recipient?.email) {
+          sendContractEventEmail({ event: "invoice_paid", recipientName: recipient.name || "Contractor", email: recipient.email, contractTitle: invRef, entityId: req.params.id, entityType: "invoice", amount: parseFloat(String(paidAmount || "0")), note: req.body.paymentReference ? `Reference: ${req.body.paymentReference}` : null, actionUrl: `${baseUrl}/app/contractor-hub` }).catch(() => {});
+        }
+        await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${inv.companyId}, u.id, 'invoice_paid', ${"Invoice Paid: " + invRef}, ${"Your invoice has been marked as paid."}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.worker_id = ${inv.contractorId} LIMIT 1`);
+      } catch (notifErr) { console.error("[Invoice] Notify paid failed:", notifErr); }
 
       res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to mark invoice paid" }); }
@@ -7519,13 +7605,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!contractorId || !title) return res.status(400).json({ message: "contractorId and title are required" });
       const contractNumber = `CON-${Date.now()}`;
       const user = await storage.getUser(req.session.userId!);
+      const effectiveCompanyId = companyId || user?.companyId;
+      // Validate contractor exists and belongs to the company
+      const workerCheck = await db.execute(sql`SELECT id FROM workers WHERE id = ${contractorId}`);
+      if (!workerCheck.rows[0]) return res.status(400).json({ message: "Contractor not found" });
       const result = await db.execute(sql`
         INSERT INTO contractor_contracts (company_id, contractor_id, proposal_id, contract_number, title, description, scope_of_work, payment_terms, total_value, currency, payment_type, trade_details, trade_value, start_date, end_date, contract_type, special_terms, body_html, body_markdown, template_id, status, created_by_user_id)
-        VALUES (${companyId || user?.companyId}, ${contractorId}, ${proposalId || null}, ${contractNumber}, ${title}, ${description || null}, ${scopeOfWork || null}, ${paymentTerms || null}, ${totalValue || null}, ${currency || "USD"}, ${paymentType || "monetary"}, ${tradeDetails || null}, ${tradeValue || null}, ${startDate || null}, ${endDate || null}, ${contractType || "service"}, ${specialTerms || null}, ${bodyHtml || null}, ${bodyMarkdown || null}, ${templateId || null}, 'draft', ${req.session.userId})
+        VALUES (${effectiveCompanyId}, ${contractorId}, ${proposalId || null}, ${contractNumber}, ${title}, ${description || null}, ${scopeOfWork || null}, ${paymentTerms || null}, ${totalValue || null}, ${currency || "USD"}, ${paymentType || "monetary"}, ${tradeDetails || null}, ${tradeValue || null}, ${startDate || null}, ${endDate || null}, ${contractType || "service"}, ${specialTerms || null}, ${bodyHtml || null}, ${bodyMarkdown || null}, ${templateId || null}, 'draft', ${req.session.userId})
         RETURNING *
       `);
       res.status(201).json(result.rows[0]);
-    } catch (e: any) { res.status(500).json({ message: "Failed to create contract: " + e.message }); }
+    } catch (e: any) {
+      // Handle foreign key constraint violations as 400 errors
+      if (e.message?.includes("violates foreign key constraint")) {
+        return res.status(400).json({ message: "Invalid contractor or company reference. Ensure the contractor and company exist." });
+      }
+      res.status(500).json({ message: "Failed to create contract: " + e.message });
+    }
   });
 
   // ── Shared helper: verify contract belongs to caller's company (or is platform) ──
@@ -7542,12 +7638,70 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return contract;
   }
 
+  // Auto-snapshot the current contract state into contract_versions before a mutation.
+  // Returns the version number created.
+  async function autoSnapshotContract(contractId: string, sessionUserId: string | null, reason: string): Promise<number> {
+    try {
+      const contractRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${contractId}`);
+      const contract = contractRes.rows[0];
+      if (!contract) return 0;
+      const versionCount = await db.execute(sql`SELECT COUNT(*) FROM contract_versions WHERE contract_id = ${contractId}`);
+      const version = parseInt((versionCount.rows[0] as any).count) + 1;
+      await db.execute(sql`
+        INSERT INTO contract_versions (contract_id, version, snapshot_json, reason, created_by_user_id)
+        VALUES (${contractId}, ${version}, ${JSON.stringify(contract)}, ${reason}, ${sessionUserId || null})
+      `);
+      return version;
+    } catch (e) {
+      console.error("[Contract] Auto-snapshot failed:", e);
+      return 0;
+    }
+  }
+
+  // Immutable statuses: key fields cannot be edited once a contract reaches these states.
+  const CONTRACT_IMMUTABLE_STATUSES = ["sent", "partially_signed", "fully_signed", "active", "void", "terminated"];
+
+  // Valid transitions map: [fromStatus] → allowed toStatuses (admin/manager only unless noted)
+  const VALID_CONTRACT_TRANSITIONS: Record<string, string[]> = {
+    draft:            ["sent", "void"],
+    sent:             ["partially_signed", "fully_signed", "active", "void"],
+    partially_signed: ["fully_signed", "void"],
+    fully_signed:     ["active", "void"],
+    active:           ["completed", "terminated", "void", "renegotiation"],
+    renegotiation:    ["draft", "active", "void"],
+    completed:        [],
+    terminated:       [],
+    void:             [],
+    expired:          [],
+    superseded:       [],
+  };
+
   app.patch("/api/contractor-contracts/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
-      if (["void", "fully_signed"].includes(contract.status)) return res.status(400).json({ message: "Cannot modify a void or fully-signed contract" });
+
+      // Block key-field edits once contract is in an immutable state
+      if (CONTRACT_IMMUTABLE_STATUSES.includes(contract.status)) {
+        const immutableFields = ["title", "totalValue", "scopeOfWork", "paymentTerms", "startDate", "endDate"];
+        const attemptedImmutable = immutableFields.filter(f => req.body[f] !== undefined);
+        if (attemptedImmutable.length > 0) {
+          return res.status(409).json({ message: `Cannot edit ${attemptedImmutable.join(", ")} on a ${contract.status} contract. Create a new version or void this contract first.` });
+        }
+      }
+      if (["void", "terminated"].includes(contract.status)) {
+        return res.status(400).json({ message: "Cannot modify a void or terminated contract" });
+      }
+
+      // Validate status transition if status is changing
+      if (req.body.status && req.body.status !== contract.status) {
+        const allowed = VALID_CONTRACT_TRANSITIONS[contract.status] || [];
+        if (!allowed.includes(req.body.status)) {
+          return res.status(400).json({ message: `Invalid transition: ${contract.status} → ${req.body.status}. Allowed: ${allowed.join(", ") || "none"}` });
+        }
+      }
       const { title, description, scopeOfWork, paymentTerms, totalValue, startDate, endDate, specialTerms, bodyHtml, bodyMarkdown, status } = req.body;
+      await autoSnapshotContract(req.params.id, req.session.userId!, `pre-edit (${status ? "status: " + status : "field update"})`);
       const result = await db.execute(sql`
         UPDATE contractor_contracts SET
           title = COALESCE(${title || null}, title),
@@ -7575,8 +7729,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
       if (contract.status !== "draft") return res.status(400).json({ message: "Only draft contracts can be sent" });
+      await autoSnapshotContract(req.params.id, req.session.userId!, "pre-send snapshot");
       const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'sent', sent_at = NOW(), updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      // Notify contractor
+      try {
+        const { sendContractEventEmail, sendContractEventSms } = await import("./notifications.js");
+        const wRes = await db.execute(sql`SELECT u.email, u.phone, w.first_name || ' ' || w.last_name AS name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${contract.contractor_id} LIMIT 1`);
+        const recipient = wRes.rows[0] as any;
+        const baseUrl = process.env.APP_BASE_URL || "";
+        const payload = { event: "contract_sent" as const, recipientName: recipient?.name || "Contractor", email: recipient?.email, phone: recipient?.phone, contractTitle: contract.title, entityId: req.params.id, entityType: "contract" as const, actionUrl: `${baseUrl}/app/contractor-hub` };
+        sendContractEventEmail(payload).catch(() => {});
+        sendContractEventSms(payload).catch(() => {});
+        await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${contract.company_id}, u.id, 'contract_sent', ${"Contract Sent: " + contract.title}, ${"A contract has been sent to the contractor for review."}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.worker_id = ${contract.contractor_id} LIMIT 1`);
+      } catch (notifErr) { console.error("[Contract] Notify send failed:", notifErr); }
       res.json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to send contract: " + e.message }); }
   });
@@ -7632,7 +7798,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const pendingSigners = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${req.params.id} AND status = 'pending'`);
       const pendingCount = parseInt((pendingSigners.rows[0] as any).count);
       const newStatus = pendingCount === 0 ? "fully_signed" : "partially_signed";
+      const contractBeforeSign = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
+      const contractData = contractBeforeSign.rows[0] as any;
       await db.execute(sql`UPDATE contractor_contracts SET status = ${newStatus}, fully_signed_at = ${newStatus === "fully_signed" ? new Date() : null}, updated_at = NOW() WHERE id = ${req.params.id}`);
+
+      // Auto-snapshot on signing
+      await autoSnapshotContract(req.params.id, req.session.userId!, `signed by ${name || "user"} — status: ${newStatus}`);
+
+      // Notify on fully signed: alert admin/managers of the company
+      if (newStatus === "fully_signed") {
+        try {
+          const { sendContractEventEmail, sendContractEventSms } = await import("./notifications.js");
+          const baseUrl = process.env.APP_BASE_URL || "";
+          const adminsRes = await db.execute(sql`SELECT u.email, u.phone, u.username AS name FROM users u WHERE u.company_id = ${contractData?.company_id} AND (u.role IN ('admin','manager','tenant_admin','tenant_hr_admin','tenant_payroll_admin','tenant_owner')) LIMIT 5`);
+          for (const admin of adminsRes.rows as any[]) {
+            const payload = { event: "signature_complete" as const, recipientName: admin.name || "Admin", email: admin.email, phone: admin.phone, contractTitle: contractData?.title || req.params.id, entityId: req.params.id, entityType: "contract" as const, actionUrl: `${baseUrl}/app/contractor-hub` };
+            sendContractEventEmail(payload).catch(() => {});
+          }
+          await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${contractData?.company_id}, u.id, 'signature_complete', ${"Contract Fully Signed: " + (contractData?.title || "")}, ${"All parties have signed. The contract is ready to be activated."}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.company_id = ${contractData?.company_id} AND u.role IN ('admin','manager','tenant_admin','tenant_owner') LIMIT 5`);
+        } catch (notifErr) { console.error("[Contract] Notify fully signed failed:", notifErr); }
+      }
 
       res.json({ signer, contractStatus: newStatus });
     } catch (e: any) { res.status(500).json({ message: "Failed to sign contract: " + e.message }); }
@@ -7642,8 +7827,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
-      if (contract.status === "void") return res.status(400).json({ message: "Contract is already void" });
+      if (["void", "terminated", "completed"].includes(contract.status)) return res.status(400).json({ message: `Contract is already ${contract.status}` });
       const { reason } = req.body;
+      await autoSnapshotContract(req.params.id, req.session.userId!, `pre-void snapshot${reason ? ": " + reason : ""}`);
       const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'void', voided_at = NOW(), void_reason = ${reason || null}, updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
       res.json(result.rows[0]);
@@ -7690,7 +7876,28 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!["pending", "sent", "partially_signed", "fully_signed"].includes(contract.status)) {
         return res.status(400).json({ message: "Contract cannot be activated from current status" });
       }
+      await autoSnapshotContract(req.params.id, req.session.userId!, "pre-activate snapshot");
       const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'active', updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
+      if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      // Create DAM document record for the activated contract
+      try {
+        const baseUrl = process.env.APP_BASE_URL || "";
+        await db.execute(sql`
+          INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id)
+          VALUES (${contract.company_id}, ${contract.contractor_id}, 'worker', 'contract', ${"Contract: " + contract.title}, ${"Activated contract document — " + contract.title}, ${"/api/contractor-contracts/" + req.params.id + "/download"}, ${(contract.title || "contract").replace(/[^a-z0-9]/gi, "_") + ".json"}, 'json', 'application/json', 'contractor_contract', ${req.params.id}, ${req.session.userId})
+          ON CONFLICT DO NOTHING
+        `);
+      } catch (damErr) { console.error("[Contract] DAM record creation failed:", damErr); }
+      // Notify contractor of activation
+      try {
+        const { sendContractEventEmail, sendContractEventSms } = await import("./notifications.js");
+        const wRes = await db.execute(sql`SELECT u.email, u.phone, w.first_name || ' ' || w.last_name AS name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${contract.contractor_id} LIMIT 1`);
+        const recipient = wRes.rows[0] as any;
+        const payload = { event: "contract_activated" as const, recipientName: recipient?.name || "Contractor", email: recipient?.email, phone: recipient?.phone, contractTitle: contract.title, entityId: req.params.id, entityType: "contract" as const, actionUrl: `${baseUrl}/app/contractor-hub` };
+        sendContractEventEmail(payload).catch(() => {});
+        sendContractEventSms(payload).catch(() => {});
+        await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${contract.company_id}, u.id, 'contract_activated', ${"Contract Activated: " + contract.title}, ${"Your contract has been activated and is now in effect."}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.worker_id = ${contract.contractor_id} LIMIT 1`);
+      } catch (notifErr) { console.error("[Contract] Notify activate failed:", notifErr); }
       res.json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to activate contract: " + e.message }); }
   });
@@ -7700,18 +7907,72 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const contract = await assertContractCompanyAccess(req.params.id, req.session.userId!);
       if (!contract) return res.status(403).json({ message: "Access denied or contract not found" });
-      if (["void", "fully_signed"].includes(contract.status)) return res.status(400).json({ message: "Cannot add signer to void or fully-signed contract" });
+      if (["void", "fully_signed", "terminated", "completed"].includes(contract.status)) return res.status(400).json({ message: "Cannot add signer to a contract in " + contract.status + " status" });
       const { name, email, role, workerId, userId } = req.body;
       if (!name) return res.status(400).json({ message: "Signer name is required" });
+      // Validate role: must be one of the accepted signer roles
+      const validRoles = ["contractor", "company_rep", "reviewer", "witness"];
+      const signerRole = validRoles.includes(role) ? role : "contractor";
       const count = await db.execute(sql`SELECT COUNT(*) FROM contract_signers WHERE contract_id = ${req.params.id}`);
       const order = parseInt((count.rows[0] as any).count) + 1;
       const result = await db.execute(sql`
         INSERT INTO contract_signers (contract_id, worker_id, user_id, name, email, role, status, "order")
-        VALUES (${req.params.id}, ${workerId || null}, ${userId || null}, ${name}, ${email || null}, ${role || "reviewer"}, 'pending', ${order})
+        VALUES (${req.params.id}, ${workerId || null}, ${userId || null}, ${name}, ${email || null}, ${signerRole}, 'pending', ${order})
         RETURNING *
       `);
+      // Send signature request notification to the signer if email is provided
+      if (email) {
+        try {
+          const { sendContractEventEmail } = await import("./notifications.js");
+          const baseUrl = process.env.APP_BASE_URL || "";
+          sendContractEventEmail({ event: "signature_requested", recipientName: name, email, contractTitle: contract.title, entityId: req.params.id, entityType: "contract", note: "You have been requested to sign this contract.", actionUrl: `${baseUrl}/app/contractor-hub` }).catch(() => {});
+        } catch (notifErr) { console.error("[Contract] Notify add-signer failed:", notifErr); }
+      }
       res.status(201).json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to add signer: " + e.message }); }
+  });
+
+  // ── Contract: Download (JSON export) ─────────────────────────────────────
+  app.get("/api/contractor-contracts/:id/download", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const contractRes = await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.id = ${req.params.id}`);
+      if (!contractRes.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      const contract = contractRes.rows[0] as any;
+      if (!isAdmin && contract.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && user?.companyId && contract.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
+      const signers = await db.execute(sql`SELECT * FROM contract_signers WHERE contract_id = ${req.params.id} ORDER BY "order" ASC`);
+      const versions = await db.execute(sql`SELECT version, reason, created_at FROM contract_versions WHERE contract_id = ${req.params.id} ORDER BY version DESC`);
+      const exportData = { ...contract, signers: signers.rows, versionHistory: versions.rows, exportedAt: new Date().toISOString() };
+      const filename = `contract-${(contract.title || req.params.id).replace(/[^a-z0-9]/gi, "_")}.json`;
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader("Content-Type", "application/json");
+      res.json(exportData);
+      // Log access in DAM
+      db.execute(sql`INSERT INTO dam_document_access_logs (document_id, accessed_by_user_id, accessed_by_worker_id, action, ip_address) SELECT id, ${req.session.userId || null}, ${workerId || null}, 'download', ${req.ip || null} FROM dam_documents WHERE linked_entity_type = 'contractor_contract' AND linked_entity_id = ${req.params.id} LIMIT 1`).catch(() => {});
+    } catch (e: any) { res.status(500).json({ message: "Failed to download contract: " + e.message }); }
+  });
+
+  // ── Invoice: Download (JSON export) ──────────────────────────────────────
+  app.get("/api/contractor-invoices/:id/download", requireAuth, async (req, res) => {
+    try {
+      const inv = await storage.getContractorInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      if (!isAdmin && inv.contractorId !== workerId) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && user?.companyId && inv.companyId !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
+      const exportData = { ...inv, exportedAt: new Date().toISOString() };
+      const filename = `invoice-${(inv.invoiceNumber || req.params.id).replace(/[^a-z0-9]/gi, "_")}.json`;
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader("Content-Type", "application/json");
+      res.json(exportData);
+    } catch (e: any) { res.status(500).json({ message: "Failed to download invoice: " + e.message }); }
   });
 
   // ── Invoice: Request Override ─────────────────────────────────────────────
@@ -7721,6 +7982,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!inv) return res.status(404).json({ message: "Not found" });
       const user = await storage.getUser(req.session.userId!);
       if (user?.workerId !== inv.contractorId) return res.status(403).json({ message: "Not your invoice" });
+      if (["paid", "rejected", "cancelled"].includes(inv.status || "")) return res.status(400).json({ message: `Cannot request override on a ${inv.status} invoice` });
       const { overrideReason, overrideAmount } = req.body;
       if (!overrideReason) return res.status(400).json({ message: "Override reason is required" });
       await db.execute(sql`
@@ -7737,6 +7999,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         actorUserId: req.session.userId, companyId: inv.companyId,
         note: overrideReason,
       });
+      // Notify admin/manager of override request
+      try {
+        const { sendContractEventEmail } = await import("./notifications.js");
+        const baseUrl = process.env.APP_BASE_URL || "";
+        const invRef = (inv as any).invoiceNumber || req.params.id;
+        await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${inv.companyId}, u.id, 'override_requested', ${"Override Requested: " + invRef}, ${overrideReason}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.company_id = ${inv.companyId} AND u.role IN ('admin','manager','tenant_admin','tenant_owner') LIMIT 5`);
+        const adminsRes = await db.execute(sql`SELECT u.email, u.username AS name FROM users u WHERE u.company_id = ${inv.companyId} AND u.role IN ('admin','manager','tenant_admin') LIMIT 3`);
+        const overrideAmt = overrideAmount ? parseFloat(String(overrideAmount)) : null;
+        for (const admin of adminsRes.rows as any[]) {
+          sendContractEventEmail({ event: "override_requested", recipientName: admin.name || "Admin", email: admin.email, contractTitle: invRef, entityId: req.params.id, entityType: "invoice", amount: overrideAmt, note: overrideReason, actionUrl: `${baseUrl}/app/contractor-hub` }).catch(() => {});
+        }
+      } catch (notifErr) { console.error("[Invoice] Notify override failed:", notifErr); }
       res.json({ message: "Override request submitted" });
     } catch (e: any) { res.status(500).json({ message: "Failed to submit override request: " + e.message }); }
   });

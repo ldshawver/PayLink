@@ -2868,6 +2868,11 @@ function ContractDetailPanel({
                   <XCircle className="h-3.5 w-3.5 mr-1" /> Void
                 </Button>
               )}
+              <a href={`/api/contractor-contracts/${contract.id}/download`} target="_blank" rel="noreferrer" data-testid="btn-download-contract">
+                <Button size="sm" variant="ghost" title="Download contract as JSON">
+                  <Download className="h-3.5 w-3.5 mr-1" /> Download
+                </Button>
+              </a>
             </div>
           </div>
         </SheetHeader>
@@ -4208,6 +4213,11 @@ export default function ContractorHubPage() {
                               {!isAdmin && invoice.status === "draft" && isBlocked && (
                                 <span className="text-xs text-muted-foreground italic">Awaiting proposal approval</span>
                               )}
+                              <a href={`/api/contractor-invoices/${invoice.id}/download`} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} data-testid={`btn-download-invoice-${invoice.id}`}>
+                                <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Download invoice">
+                                  <Download className="h-3.5 w-3.5 text-muted-foreground" />
+                                </Button>
+                              </a>
                               <ChevronRight className="h-4 w-4 text-muted-foreground mt-0.5 cursor-pointer" onClick={() => setSelectedInvoice(invoice)} />
                             </div>
                           </div>
