@@ -8569,7 +8569,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.getUser(req.session.userId!);
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
-      await db.execute(sql`UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW() WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null}) AND is_read = FALSE`);
+      const isAdminMar = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_");
+      if (isAdminMar && user?.companyId) {
+        // Also clear legacy company-scoped rows (user_id IS NULL) so unread count matches what GET returns
+        await db.execute(sql`UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW() WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null} OR (company_id = ${user.companyId} AND user_id IS NULL)) AND is_read = FALSE`);
+      } else {
+        await db.execute(sql`UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW() WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null}) AND is_read = FALSE`);
+      }
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to mark all read" }); }
   });
@@ -8777,6 +8783,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         `);
         if (!existing.rows.length) {
           await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at) VALUES (${c.contractor_id}, ${cid}, 'contract', ${c.id}, 'signature', ${"Signature overdue: " + (c.title || c.contract_number || c.id)}, 'Contract signature is overdue. Follow up with the contractor.', ${now.toISOString()}, 'in_app', 'pending', NOW())`);
+          // Also create a contractor notification for this overdue signature (high-priority)
+          createContractorNotification({ companyId: cid, notificationType: "signature_overdue", title: `Signature Overdue: ${c.title || c.contract_number}`, body: "A contract has not been signed and is now overdue. Follow up with the contractor.", entityType: "contract", entityId: c.id, actionUrl: `/app/contractor-hub?section=contracts&id=${c.id}` }).catch(() => {});
           created++;
         }
       }
@@ -8795,6 +8803,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         `);
         if (!existing.rows.length) {
           await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at) VALUES (${c.contractor_id}, ${cid}, 'contract', ${c.id}, 'expiry', ${"Contract expiring soon: " + (c.title || c.contract_number || c.id)}, ${"Contract expires on " + c.end_date}, ${now.toISOString()}, 'in_app', 'pending', NOW())`);
+          createContractorNotification({ companyId: cid, notificationType: "contract_expiring", title: `Contract Expiring Soon: ${c.title || c.contract_number}`, body: `Contract expires on ${c.end_date}. Review renewal or termination options.`, entityType: "contract", entityId: c.id, actionUrl: `/app/contractor-hub?section=contracts&id=${c.id}` }).catch(() => {});
           created++;
         }
       }
@@ -8813,6 +8822,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         `);
         if (!existing.rows.length) {
           await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at) VALUES (${inv.contractor_id}, ${cid}, 'invoice', ${inv.id}, 'payment', ${"Invoice due soon: #" + (inv.invoice_number || inv.id.slice(0,8))}, ${"Due on " + inv.due_date}, ${now.toISOString()}, 'in_app', 'pending', NOW())`);
+          createContractorNotification({ workerId: inv.contractor_id, companyId: cid, notificationType: "invoice_due", title: `Invoice Due Soon: #${inv.invoice_number || inv.id.slice(0, 8)}`, body: `Invoice is due on ${inv.due_date}. Please ensure payment is arranged.`, entityType: "invoice", entityId: inv.id, actionUrl: `/app/contractor-hub?section=invoices&id=${inv.id}` }).catch(() => {});
           created++;
         }
       }
@@ -8831,6 +8841,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         `);
         if (!existing.rows.length) {
           await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at) VALUES (${inv.contractor_id}, ${cid}, 'invoice', ${inv.id}, 'follow_up', ${"Invoice overdue: #" + (inv.invoice_number || inv.id.slice(0,8))}, ${"Was due on " + inv.due_date}, ${now.toISOString()}, 'in_app', 'pending', NOW())`);
+          createContractorNotification({ workerId: inv.contractor_id, companyId: cid, notificationType: "invoice_overdue", title: `Invoice Overdue: #${inv.invoice_number || inv.id.slice(0, 8)}`, body: `Invoice was due on ${inv.due_date} and remains unpaid. Immediate follow-up required.`, entityType: "invoice", entityId: inv.id, actionUrl: `/app/contractor-hub?section=invoices&id=${inv.id}` }).catch(() => {});
           created++;
         }
       }
