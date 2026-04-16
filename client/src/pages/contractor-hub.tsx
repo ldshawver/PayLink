@@ -25,7 +25,8 @@ import {
   Settings, FileSignature, CreditCard, Package, ChevronDown, ChevronUp,
   ExternalLink, Info, AlertCircle, ThumbsUp, ThumbsDown, MessageCircle,
   Briefcase, Layers, SlidersHorizontal, ArrowUpDown, Globe, Phone, Mail,
-  Image, Paintbrush, CheckSquare, Search, Archive
+  Image, Paintbrush, CheckSquare, Search, Archive, X, Filter, BellOff,
+  FileCheck, Banknote
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -143,6 +144,198 @@ interface Contract {
   signers?: Signer[];
 }
 
+interface ContractorNotification {
+  id: string;
+  workerId?: string | null;
+  userId?: string | null;
+  companyId?: string | null;
+  notificationType: string;
+  title: string;
+  body?: string | null;
+  entityType?: string | null;
+  entityId?: string | null;
+  isRead: boolean;
+  readAt?: string | null;
+  actionUrl?: string | null;
+  createdAt: string;
+}
+
+interface ContractorReminder {
+  id: string;
+  workerId?: string | null;
+  userId?: string | null;
+  companyId?: string | null;
+  entityType: string;
+  entityId?: string | null;
+  reminderType: string;
+  title: string;
+  notes?: string | null;
+  scheduledAt: string;
+  channel: string;
+  status: string;
+  sentAt?: string | null;
+  dismissedAt?: string | null;
+  createdAt: string;
+}
+
+// ─── Notification Helpers ─────────────────────────────────────────────────────
+
+function getNotificationIcon(type: string) {
+  if (type.startsWith("proposal")) return FileText;
+  if (type.startsWith("contract")) return FileSignature;
+  if (type.startsWith("invoice")) return Receipt;
+  if (type.startsWith("payment")) return Banknote;
+  if (type === "reminder") return Clock;
+  return Bell;
+}
+
+function getNotificationColor(type: string): string {
+  if (type === "proposal_approved" || type === "contract_signed" || type === "invoice_paid" || type === "payment_received") return "text-green-600";
+  if (type === "proposal_rejected" || type === "invoice_rejected") return "text-red-600";
+  if (type === "proposal_revision_requested" || type === "proposal_countered") return "text-amber-600";
+  if (type === "proposal_submitted" || type === "invoice_submitted" || type === "contract_sent") return "text-blue-600";
+  return "text-muted-foreground";
+}
+
+function fmtRelativeTime(dateStr: string): string {
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return "just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHrs = Math.floor(diffMins / 60);
+  if (diffHrs < 24) return `${diffHrs}h ago`;
+  const diffDays = Math.floor(diffHrs / 24);
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return fmtDate(dateStr);
+}
+
+// ─── Notification Bell ────────────────────────────────────────────────────────
+
+function NotificationBell({ onNavigate }: { onNavigate: (section: HubSection) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const { data: notifications = [], refetch } = useQuery<ContractorNotification[]>({
+    queryKey: ["/api/contractor-notifications"],
+    select: (data: any) => snakeToCamel(data) as ContractorNotification[],
+    refetchInterval: 30000,
+  });
+
+  const unreadCount = notifications.filter(n => !n.isRead).length;
+
+  const markReadMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("PATCH", `/api/contractor-notifications/${id}/read`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/contractor-notifications"] }),
+  });
+
+  const markAllReadMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/contractor-notifications/mark-all-read", {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/contractor-notifications"] }),
+  });
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  const recent = notifications.slice(0, 12);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="relative h-8 w-8 flex items-center justify-center rounded-md hover:bg-muted transition-colors"
+        data-testid="btn-notification-bell"
+        title="Notifications"
+      >
+        <Bell className="h-4 w-4" />
+        {unreadCount > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 h-4 min-w-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-0.5" data-testid="notification-unread-count">
+            {unreadCount > 99 ? "99+" : unreadCount}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-80 bg-background border rounded-lg shadow-lg z-50" data-testid="notification-dropdown">
+          <div className="flex items-center justify-between px-3 py-2 border-b">
+            <span className="text-sm font-semibold">Notifications</span>
+            <div className="flex items-center gap-1">
+              {unreadCount > 0 && (
+                <button
+                  onClick={() => markAllReadMutation.mutate()}
+                  disabled={markAllReadMutation.isPending}
+                  className="text-xs text-primary hover:underline disabled:opacity-50"
+                  data-testid="btn-mark-all-read"
+                >
+                  Mark all read
+                </button>
+              )}
+              <button
+                onClick={() => { setOpen(false); onNavigate("messages"); }}
+                className="text-xs text-muted-foreground hover:text-foreground ml-2"
+                data-testid="btn-view-all-notifications"
+              >
+                View all
+              </button>
+            </div>
+          </div>
+
+          <ScrollArea className="max-h-96">
+            {recent.length === 0 ? (
+              <div className="py-8 text-center">
+                <BellOff className="h-8 w-8 mx-auto mb-2 text-muted-foreground/40" />
+                <p className="text-sm text-muted-foreground">No notifications yet</p>
+              </div>
+            ) : (
+              <div>
+                {recent.map(n => {
+                  const Icon = getNotificationIcon(n.notificationType);
+                  const color = getNotificationColor(n.notificationType);
+                  return (
+                    <div
+                      key={n.id}
+                      className={cn(
+                        "flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted/40 cursor-pointer border-b last:border-b-0 transition-colors",
+                        !n.isRead && "bg-primary/5"
+                      )}
+                      onClick={() => {
+                        if (!n.isRead) markReadMutation.mutate(n.id);
+                        if (n.actionUrl) {
+                          const url = new URL(n.actionUrl, window.location.href);
+                          const section = url.searchParams.get("section") as HubSection | null;
+                          if (section) onNavigate(section);
+                        }
+                        setOpen(false);
+                      }}
+                      data-testid={`notification-item-${n.id}`}
+                    >
+                      <div className={cn("mt-0.5 h-6 w-6 shrink-0 rounded-full flex items-center justify-center", color.replace("text-", "bg-").replace("600", "100").replace("muted-foreground", "muted"))}>
+                        <Icon className={cn("h-3.5 w-3.5", color)} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className={cn("text-xs font-medium leading-tight", !n.isRead && "font-semibold")}>{n.title}</p>
+                        {n.body && <p className="text-xs text-muted-foreground mt-0.5 truncate">{n.body}</p>}
+                        <p className="text-[10px] text-muted-foreground mt-0.5">{fmtRelativeTime(n.createdAt)}</p>
+                      </div>
+                      {!n.isRead && <span className="h-2 w-2 rounded-full bg-primary shrink-0 mt-1.5" />}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </ScrollArea>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Status Helpers ───────────────────────────────────────────────────────────
 
 const PROPOSAL_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
@@ -242,6 +435,20 @@ function DashboardSection({ proposals, invoices, contracts, isAdmin, onNavigate 
   proposals: Proposal[]; invoices: Invoice[]; contracts: Contract[];
   isAdmin: boolean; onNavigate: (s: HubSection) => void;
 }) {
+  const { data: reminders = [] } = useQuery<ContractorReminder[]>({
+    queryKey: ["/api/contractor-reminders", "pending"],
+    queryFn: async () => {
+      const r = await fetch("/api/contractor-reminders?status=pending", { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+    select: (data: any) => snakeToCamel(data) as ContractorReminder[],
+  });
+  const dismissReminderMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/contractor-reminders/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/contractor-reminders"] }),
+  });
+  const activeReminders = reminders.filter(r => r.status === "pending");
+
   const awaitingApproval = proposals.filter(p => ["submitted", "sent", "viewed"].includes(p.status));
   const revisionNeeded = proposals.filter(p => p.status === "revision_requested");
   const approvedProposals = proposals.filter(p => p.status === "approved");
@@ -362,13 +569,16 @@ function DashboardSection({ proposals, invoices, contracts, isAdmin, onNavigate 
         </Card>
       </div>
 
-      {/* Action items */}
-      {(revisionNeeded.length > 0 || awaitingApproval.length > 0) && (
+      {/* Needs Attention — reminders + action items */}
+      {(activeReminders.length > 0 || revisionNeeded.length > 0 || awaitingApproval.length > 0) && (
         <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20">
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-3">
               <AlertCircle className="h-4 w-4 text-amber-600" />
-              <p className="text-sm font-semibold text-amber-700">Action Required</p>
+              <p className="text-sm font-semibold text-amber-700">Needs Attention</p>
+              {activeReminders.length > 0 && (
+                <span className="ml-auto text-xs text-amber-600 font-medium">{activeReminders.length} reminder{activeReminders.length !== 1 ? "s" : ""}</span>
+              )}
             </div>
             <div className="space-y-2">
               {revisionNeeded.length > 0 && (
@@ -383,6 +593,33 @@ function DashboardSection({ proposals, invoices, contracts, isAdmin, onNavigate 
                   <Button size="sm" variant="outline" className="h-7 text-xs border-amber-300" onClick={() => onNavigate("proposals")} data-testid="btn-action-review">Review</Button>
                 </div>
               )}
+              {activeReminders.slice(0, 5).map(r => (
+                <div key={r.id} className="flex items-center justify-between gap-2 py-1 border-t border-amber-200 first:border-t-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Clock className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-sm text-amber-800 font-medium truncate">{r.title}</p>
+                      {r.notes && <p className="text-xs text-amber-600 truncate">{r.notes}</p>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {r.entityType === "contract" && (
+                      <Button size="sm" variant="ghost" className="h-6 text-xs text-amber-700 px-1.5" onClick={() => onNavigate("contracts")} data-testid={`btn-reminder-view-${r.id}`}>View</Button>
+                    )}
+                    {r.entityType === "invoice" && (
+                      <Button size="sm" variant="ghost" className="h-6 text-xs text-amber-700 px-1.5" onClick={() => onNavigate("invoices")} data-testid={`btn-reminder-view-${r.id}`}>View</Button>
+                    )}
+                    <button
+                      onClick={() => dismissReminderMutation.mutate(r.id)}
+                      className="h-5 w-5 flex items-center justify-center text-amber-500 hover:text-amber-700"
+                      title="Dismiss"
+                      data-testid={`btn-dismiss-reminder-${r.id}`}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           </CardContent>
         </Card>
@@ -4120,23 +4357,136 @@ function DocumentsSection() {
 // ─── Messages Section ─────────────────────────────────────────────────────────
 
 function MessagesSection() {
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [readFilter, setReadFilter] = useState("all");
+
+  const { data: notifications = [], isLoading } = useQuery<ContractorNotification[]>({
+    queryKey: ["/api/contractor-notifications"],
+    select: (data: any) => snakeToCamel(data) as ContractorNotification[],
+  });
+
+  const markReadMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("PATCH", `/api/contractor-notifications/${id}/read`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/contractor-notifications"] }),
+  });
+
+  const markAllReadMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/contractor-notifications/mark-all-read", {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/contractor-notifications"] }),
+  });
+
+  const filtered = notifications.filter(n => {
+    const matchType = typeFilter === "all" ||
+      (typeFilter === "proposal" && n.notificationType.startsWith("proposal")) ||
+      (typeFilter === "contract" && n.notificationType.startsWith("contract")) ||
+      (typeFilter === "invoice" && n.notificationType.startsWith("invoice")) ||
+      (typeFilter === "payment" && n.notificationType.startsWith("payment"));
+    const matchRead = readFilter === "all" ||
+      (readFilter === "unread" && !n.isRead) ||
+      (readFilter === "read" && n.isRead);
+    return matchType && matchRead;
+  });
+
+  const unreadCount = notifications.filter(n => !n.isRead).length;
+
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-lg font-semibold">Messages</h2>
-        <p className="text-sm text-muted-foreground">Negotiations and communication threads</p>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 className="text-lg font-semibold">Messages & Notifications</h2>
+          <p className="text-sm text-muted-foreground">All activity notifications for your workflow events</p>
+        </div>
+        {unreadCount > 0 && (
+          <Button size="sm" variant="outline" onClick={() => markAllReadMutation.mutate()} disabled={markAllReadMutation.isPending} data-testid="btn-mark-all-read-messages">
+            {markAllReadMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <CheckCheck className="h-3.5 w-3.5 mr-1" />}
+            Mark all read ({unreadCount})
+          </Button>
+        )}
       </div>
-      <Card>
-        <CardContent className="p-6 text-center">
-          <MessageSquare className="h-12 w-12 mx-auto mb-3 text-primary/40" />
-          <p className="font-medium mb-1">Proposal Threads</p>
-          <p className="text-sm text-muted-foreground">Messages and negotiation notes are embedded within each proposal. Open a proposal and go to the Thread tab to view and reply.</p>
-          <div className="mt-4 flex items-center justify-center gap-2 text-xs text-muted-foreground">
-            <Info className="h-3.5 w-3.5" />
-            <span>Full standalone messaging coming in a future update</span>
-          </div>
-        </CardContent>
-      </Card>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <SelectTrigger className="h-8 w-40" data-testid="select-notification-type">
+            <Filter className="h-3.5 w-3.5 mr-1 text-muted-foreground" />
+            <SelectValue placeholder="Event Type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Events</SelectItem>
+            <SelectItem value="proposal">Proposals</SelectItem>
+            <SelectItem value="contract">Contracts</SelectItem>
+            <SelectItem value="invoice">Invoices</SelectItem>
+            <SelectItem value="payment">Payments</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={readFilter} onValueChange={setReadFilter}>
+          <SelectTrigger className="h-8 w-36" data-testid="select-notification-read-status">
+            <SelectValue placeholder="All" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All</SelectItem>
+            <SelectItem value="unread">Unread only</SelectItem>
+            <SelectItem value="read">Read only</SelectItem>
+          </SelectContent>
+        </Select>
+        {(typeFilter !== "all" || readFilter !== "all") && (
+          <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => { setTypeFilter("all"); setReadFilter("all"); }}>
+            <X className="h-3.5 w-3.5 mr-1" /> Clear filters
+          </Button>
+        )}
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-12 border border-dashed rounded-lg text-muted-foreground">
+          <BellOff className="h-10 w-10 mx-auto mb-3 opacity-30" />
+          <p className="font-medium">{notifications.length === 0 ? "No notifications yet" : "No notifications match your filter"}</p>
+          <p className="text-xs mt-1">Notifications are generated as you interact with proposals, contracts, and invoices</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map(n => {
+            const Icon = getNotificationIcon(n.notificationType);
+            const color = getNotificationColor(n.notificationType);
+            return (
+              <div
+                key={n.id}
+                className={cn(
+                  "flex items-start gap-3 p-3 rounded-lg border transition-colors",
+                  !n.isRead ? "bg-primary/5 border-primary/20" : "bg-background"
+                )}
+                data-testid={`notification-row-${n.id}`}
+              >
+                <div className={cn("mt-0.5 h-8 w-8 shrink-0 rounded-full flex items-center justify-center", !n.isRead ? "bg-primary/10" : "bg-muted")}>
+                  <Icon className={cn("h-4 w-4", color)} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className={cn("text-sm leading-tight", !n.isRead && "font-semibold")}>{n.title}</p>
+                    <span className="text-[10px] text-muted-foreground shrink-0">{fmtRelativeTime(n.createdAt)}</span>
+                  </div>
+                  {n.body && <p className="text-xs text-muted-foreground mt-0.5">{n.body}</p>}
+                  <div className="flex items-center gap-2 mt-1.5">
+                    {n.entityType && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground capitalize">{n.entityType}</span>
+                    )}
+                    <span className="text-[10px] text-muted-foreground capitalize">{n.notificationType.replace(/_/g, " ")}</span>
+                  </div>
+                </div>
+                {!n.isRead && (
+                  <button
+                    onClick={() => markReadMutation.mutate(n.id)}
+                    className="text-xs text-primary hover:underline shrink-0 mt-0.5"
+                    data-testid={`btn-mark-read-${n.id}`}
+                  >
+                    Mark read
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -5155,6 +5505,12 @@ export default function ContractorHubPage() {
   const pendingProposals = proposals.filter(p => ["submitted", "sent", "viewed"].includes(p.status)).length;
   const overdueInvoices = invoices.filter(i => !["paid", "void"].includes(i.status) && i.dueDate && new Date(i.dueDate) < new Date()).length;
   const revisionNeeded = proposals.filter(p => p.status === "revision_requested").length;
+  const { data: navNotifications = [] } = useQuery<ContractorNotification[]>({
+    queryKey: ["/api/contractor-notifications"],
+    select: (data: any) => snakeToCamel(data) as ContractorNotification[],
+    refetchInterval: 30000,
+  });
+  const unreadMessages = navNotifications.filter((n: ContractorNotification) => !n.isRead).length;
 
   function handleSectionChange(s: HubSection) {
     setSection(s);
@@ -5208,6 +5564,7 @@ export default function ContractorHubPage() {
               const badge =
                 item.id === "proposals" ? (isAdmin ? pendingProposals : revisionNeeded) :
                 item.id === "invoices" ? overdueInvoices :
+                item.id === "messages" ? unreadMessages :
                 0;
               return (
                 <button
@@ -5259,17 +5616,20 @@ export default function ContractorHubPage() {
               {section === "invoices" && `${invoices.length} invoice${invoices.length !== 1 ? "s" : ""} · ${overdueInvoices} overdue`}
               {section === "payments" && "Payment history and remittance"}
               {section === "documents" && "Document management"}
-              {section === "messages" && "Negotiation threads"}
+              {section === "messages" && "Activity notifications and workflow events"}
               {section === "branding" && "Profile and proposal templates"}
               {section === "settings" && "Hub configuration"}
             </p>
           </div>
 
-          {section === "proposals" && (
-            <Button onClick={openBuilderForNew} data-testid="btn-new-proposal">
-              <Plus className="h-4 w-4 mr-1" /> New Proposal
-            </Button>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            <NotificationBell onNavigate={handleSectionChange} />
+            {section === "proposals" && (
+              <Button onClick={openBuilderForNew} data-testid="btn-new-proposal">
+                <Plus className="h-4 w-4 mr-1" /> New Proposal
+              </Button>
+            )}
+          </div>
         </div>
 
         {/* Content Area */}
