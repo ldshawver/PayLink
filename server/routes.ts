@@ -7198,6 +7198,27 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // CONTRACTOR PAYMENTS
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // GET /api/contractor-payments — all payments scoped to user (contractor sees own; admin sees company's)
+  app.get("/api/contractor-payments", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      let result;
+      if (isPlatform) {
+        result = await db.execute(sql`SELECT * FROM contractor_payments ORDER BY paid_at DESC LIMIT 500`);
+      } else if (isAdmin) {
+        result = await db.execute(sql`SELECT * FROM contractor_payments WHERE company_id = ${user?.companyId} ORDER BY paid_at DESC LIMIT 200`);
+      } else {
+        const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+        const workerId = (wRes.rows[0] as any)?.worker_id;
+        if (!workerId) return res.json([]);
+        result = await db.execute(sql`SELECT * FROM contractor_payments WHERE contractor_id = ${workerId} ORDER BY paid_at DESC LIMIT 200`);
+      }
+      res.json(result.rows);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch payments: " + e.message }); }
+  });
+
   // GET /api/contractor-invoices/:id/payments
   app.get("/api/contractor-invoices/:id/payments", requireAuth, async (req, res) => {
     try {
@@ -8217,12 +8238,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/contractor-templates", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
-      const { name, description, templateType, industry, bodyJson, defaultPaymentTerms, defaultScopeTemplate, defaultAssumptions, defaultExclusions, defaultWarranty, isGlobal } = req.body;
+      const { name, description, templateType, industry, bodyJson, defaultPaymentTerms, defaultScopeTemplate, defaultAssumptions, defaultExclusions, defaultWarranty, isGlobal, isDefault, layoutVariant, workTypeTags, isActive } = req.body;
       if (!name) return res.status(400).json({ message: "name is required" });
       const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      // Only platform roles can create global templates
+      const globalFlag = isPlatform && isGlobal === true;
       const result = await db.execute(sql`
-        INSERT INTO contractor_templates (company_id, template_type, name, description, industry, body_json, default_payment_terms, default_scope_template, default_assumptions, default_exclusions, default_warranty, is_global, created_by_user_id)
-        VALUES (${user?.companyId || null}, ${templateType || "proposal"}, ${name}, ${description || null}, ${industry || null}, ${bodyJson || null}, ${defaultPaymentTerms || null}, ${defaultScopeTemplate || null}, ${defaultAssumptions || null}, ${defaultExclusions || null}, ${defaultWarranty || null}, ${isGlobal || false}, ${req.session.userId})
+        INSERT INTO contractor_templates (company_id, template_type, name, description, industry, body_json, default_payment_terms, default_scope_template, default_assumptions, default_exclusions, default_warranty, is_global, is_default, layout_variant, work_type_tags, is_active, created_by_user_id)
+        VALUES (${user?.companyId || null}, ${templateType || "proposal"}, ${name}, ${description || null}, ${industry || null}, ${bodyJson || null}, ${defaultPaymentTerms || null}, ${defaultScopeTemplate || null}, ${defaultAssumptions || null}, ${defaultExclusions || null}, ${defaultWarranty || null}, ${globalFlag}, ${isDefault || false}, ${layoutVariant || "standard"}, ${workTypeTags || null}, ${isActive !== false}, ${req.session.userId})
         RETURNING *
       `);
       res.status(201).json(result.rows[0]);
@@ -8237,21 +8261,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const tplRes = await db.execute(sql`SELECT id, company_id, is_global FROM contractor_templates WHERE id = ${req.params.id}`);
       if (!tplRes.rows[0]) return res.status(404).json({ message: "Template not found" });
       const tpl = tplRes.rows[0] as any;
-      // Non-platform admins can only edit their own company's templates (not other companies' or global templates they don't own)
+      // Non-platform admins can only edit their own company's templates
       if (!isPlatform && tpl.company_id && tpl.company_id !== user?.companyId) return res.status(403).json({ message: "Access denied" });
-      const { name, description, industry, bodyJson, defaultPaymentTerms, defaultScopeTemplate, defaultAssumptions, defaultExclusions, defaultWarranty, isActive } = req.body;
+      const { name, description, templateType, industry, bodyJson, defaultPaymentTerms, defaultScopeTemplate, defaultAssumptions, defaultExclusions, defaultWarranty, isActive, isDefault, layoutVariant, workTypeTags } = req.body;
       const result = await db.execute(sql`
         UPDATE contractor_templates SET
-          name = COALESCE(${name || null}, name),
-          description = COALESCE(${description || null}, description),
-          industry = COALESCE(${industry || null}, industry),
-          body_json = COALESCE(${bodyJson || null}, body_json),
-          default_payment_terms = COALESCE(${defaultPaymentTerms || null}, default_payment_terms),
-          default_scope_template = COALESCE(${defaultScopeTemplate || null}, default_scope_template),
-          default_assumptions = COALESCE(${defaultAssumptions || null}, default_assumptions),
-          default_exclusions = COALESCE(${defaultExclusions || null}, default_exclusions),
-          default_warranty = COALESCE(${defaultWarranty || null}, default_warranty),
+          name = COALESCE(${name ?? null}, name),
+          description = COALESCE(${description ?? null}, description),
+          template_type = COALESCE(${templateType ?? null}, template_type),
+          industry = COALESCE(${industry ?? null}, industry),
+          body_json = COALESCE(${bodyJson ?? null}, body_json),
+          default_payment_terms = COALESCE(${defaultPaymentTerms ?? null}, default_payment_terms),
+          default_scope_template = COALESCE(${defaultScopeTemplate ?? null}, default_scope_template),
+          default_assumptions = COALESCE(${defaultAssumptions ?? null}, default_assumptions),
+          default_exclusions = COALESCE(${defaultExclusions ?? null}, default_exclusions),
+          default_warranty = COALESCE(${defaultWarranty ?? null}, default_warranty),
           is_active = COALESCE(${isActive != null ? isActive : null}, is_active),
+          is_default = COALESCE(${isDefault != null ? isDefault : null}, is_default),
+          layout_variant = COALESCE(${layoutVariant ?? null}, layout_variant),
+          work_type_tags = COALESCE(${workTypeTags ?? null}, work_type_tags),
           updated_at = NOW()
         WHERE id = ${req.params.id}
         RETURNING *
@@ -8321,20 +8349,27 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         wId = sessionWorkerId;
       }
       if (!wId) return res.status(400).json({ message: "Worker not found" });
-      const { businessName, tagline, primaryColor, secondaryColor, fontFamily, coverNote, signatureText, websiteUrl, licenseNumber, insuranceInfo, footerText, showLogo, showLicenseNumber } = req.body;
-      const logoPath = req.file ? `/uploads/${req.file.filename}` : req.body.logoPath || null;
+      const { businessName, tagline, primaryColor, secondaryColor, fontFamily, coverNote, signatureText, websiteUrl, licenseNumber, insuranceInfo, footerText, showLogo, showLicenseNumber, contactName, address, phone, contactEmail } = req.body;
+      // Support both file upload (multipart) and logoPath reference
+      const logoUploadPath = req.file ? `/uploads/${req.file.filename}` : null;
+      // logoUrl: prefer new upload, fallback to submitted url, keep existing if neither
+      const logoUrlValue = logoUploadPath || req.body.logoUrl || null;
       const result = await db.execute(sql`
-        INSERT INTO contractor_branding (worker_id, business_name, tagline, logo_path, primary_color, secondary_color, font_family, cover_note, signature_text, website_url, license_number, insurance_info, footer_text, show_logo, show_license_number)
-        VALUES (${wId}, ${businessName || null}, ${tagline || null}, ${logoPath}, ${primaryColor || "#0f766e"}, ${secondaryColor || "#64748b"}, ${fontFamily || "Inter"}, ${coverNote || null}, ${signatureText || null}, ${websiteUrl || null}, ${licenseNumber || null}, ${insuranceInfo || null}, ${footerText || null}, ${showLogo !== "false"}, ${showLicenseNumber !== "false"})
+        INSERT INTO contractor_branding (worker_id, business_name, tagline, logo_path, logo_url, primary_color, secondary_color, font_family, cover_note, signature_text, website_url, license_number, insurance_info, footer_text, show_logo, show_license_number, contact_name, address, phone, contact_email)
+        VALUES (${wId}, ${businessName || null}, ${tagline || null}, ${logoUploadPath}, ${logoUrlValue}, ${primaryColor || "#0f766e"}, ${secondaryColor || "#64748b"}, ${fontFamily || "Inter"}, ${coverNote || null}, ${signatureText || null}, ${websiteUrl || null}, ${licenseNumber || null}, ${insuranceInfo || null}, ${footerText || null}, ${showLogo !== "false"}, ${showLicenseNumber !== "false"}, ${contactName || null}, ${address || null}, ${phone || null}, ${contactEmail || null})
         ON CONFLICT (worker_id) DO UPDATE SET
           business_name = EXCLUDED.business_name, tagline = EXCLUDED.tagline,
           logo_path = COALESCE(EXCLUDED.logo_path, contractor_branding.logo_path),
+          logo_url = COALESCE(EXCLUDED.logo_url, contractor_branding.logo_url),
           primary_color = EXCLUDED.primary_color, secondary_color = EXCLUDED.secondary_color,
           font_family = EXCLUDED.font_family, cover_note = EXCLUDED.cover_note,
           signature_text = EXCLUDED.signature_text, website_url = EXCLUDED.website_url,
           license_number = EXCLUDED.license_number, insurance_info = EXCLUDED.insurance_info,
           footer_text = EXCLUDED.footer_text, show_logo = EXCLUDED.show_logo,
-          show_license_number = EXCLUDED.show_license_number, updated_at = NOW()
+          show_license_number = EXCLUDED.show_license_number,
+          contact_name = EXCLUDED.contact_name, address = EXCLUDED.address,
+          phone = EXCLUDED.phone, contact_email = EXCLUDED.contact_email,
+          updated_at = NOW()
         RETURNING *
       `);
       res.json(result.rows[0]);
@@ -8529,11 +8564,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const user = await storage.getUser(req.session.userId!);
       const cid = user?.companyId;
+      const isPlatform = (user?.role || "").startsWith("platform_");
       const tplRes = await db.execute(sql`SELECT * FROM contractor_templates WHERE id = ${req.params.id}`);
       if (!tplRes.rows[0]) return res.status(404).json({ message: "Template not found" });
       const tpl = tplRes.rows[0] as any;
-      // Clear existing defaults for same type + company
-      await db.execute(sql`UPDATE contractor_templates SET is_default = FALSE WHERE template_type = ${tpl.template_type} AND (company_id = ${cid} OR is_global = TRUE)`);
+      // Tenant boundary check: non-platform users can only set defaults for their own company's templates OR global templates
+      if (!isPlatform && tpl.company_id && tpl.company_id !== cid) {
+        return res.status(403).json({ message: "Access denied: cannot set default for another company's template" });
+      }
+      // Clear existing defaults for same type scoped to this company (not touching other companies)
+      await db.execute(sql`UPDATE contractor_templates SET is_default = FALSE WHERE template_type = ${tpl.template_type} AND (company_id = ${cid} ${isPlatform ? sql`OR is_global = TRUE` : sql``})`);
       const result = await db.execute(sql`UPDATE contractor_templates SET is_default = TRUE WHERE id = ${req.params.id} RETURNING *`);
       res.json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to set default template: " + e.message }); }

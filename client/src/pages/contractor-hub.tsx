@@ -3607,7 +3607,11 @@ function DocumentsSection() {
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [showDateFilter, setShowDateFilter] = useState(false);
   const [versionDrawer, setVersionDrawer] = useState<{type: "contract"|"proposal"; id: string; title: string} | null>(null);
+  const [archiveConfirm, setArchiveConfirm] = useState<{id: string; type: string; title: string} | null>(null);
 
   const { data: proposals = [] } = useQuery<Proposal[]>({
     queryKey: ["/api/contractor-proposals"],
@@ -3620,6 +3624,10 @@ function DocumentsSection() {
   const { data: invoices = [] } = useQuery<Invoice[]>({
     queryKey: ["/api/contractor-invoices"],
     select: (d: any) => snakeToCamel(d),
+  });
+  const { data: payments = [] } = useQuery<Payment[]>({
+    queryKey: ["/api/contractor-payments"],
+    queryFn: async () => { const r = await fetch("/api/contractor-payments", { credentials: "include" }); return r.ok ? r.json() : []; },
   });
 
   type DocRow = {
@@ -3635,8 +3643,8 @@ function DocumentsSection() {
       contractorId: p.contractorId,
     })),
     ...contracts.map(c => ({
-      id: c.id, type: "contract", title: c.title || c.contractNumber || "Contract",
-      status: c.status, date: c.createdAt, amount: c.totalValue || c.value,
+      id: c.id, type: "contract", title: c.title || (c as any).contractNumber || "Contract",
+      status: c.status, date: c.createdAt, amount: (c as any).totalValue || (c as any).value,
       immutable: isImmutable("contract", c.status), hasVersions: true,
       contractorId: c.contractorId,
     })),
@@ -3646,12 +3654,19 @@ function DocumentsSection() {
       immutable: isImmutable("invoice", i.status), hasVersions: false,
       contractorId: i.contractorId,
     })),
+    ...payments.map(p => ({
+      id: p.id, type: "payment", title: `Payment — ${fmtDate(p.paidAt)}`,
+      status: p.status || "completed", date: p.paidAt, amount: p.amount,
+      immutable: true, hasVersions: false, contractorId: undefined,
+    })),
   ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   const filtered = allDocs.filter(d => {
     if (typeFilter !== "all" && d.type !== typeFilter) return false;
     if (statusFilter !== "all" && d.status !== statusFilter) return false;
     if (search && !d.title.toLowerCase().includes(search.toLowerCase())) return false;
+    if (dateFrom && new Date(d.date) < new Date(dateFrom)) return false;
+    if (dateTo && new Date(d.date) > new Date(dateTo + "T23:59:59")) return false;
     return true;
   });
 
@@ -3673,40 +3688,76 @@ function DocumentsSection() {
     } catch { toast({ title: "Download failed", variant: "destructive" }); }
   }
 
-  const statusOptions = [
-    ...new Set(allDocs.map(d => d.status))
-  ].sort();
+  const archiveMutation = useMutation({
+    mutationFn: async (doc: {id: string; type: string}) => {
+      const endpoint = doc.type === "contract"
+        ? `/api/contractor-contracts/${doc.id}`
+        : doc.type === "proposal"
+        ? `/api/contractor-proposals/${doc.id}`
+        : null;
+      if (!endpoint) throw new Error("Archive not available");
+      const r = await fetch(endpoint, { method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ isArchived: true }) });
+      if (!r.ok) throw new Error("Archive failed");
+      return r.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Document archived" });
+      setArchiveConfirm(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-contracts"] });
+    },
+    onError: (e: any) => toast({ title: e?.message || "Archive failed", variant: "destructive" }),
+  });
+
+  const statusOptions = [...new Set(allDocs.map(d => d.status))].sort();
+  const DOC_TYPES = ["all", "proposal", "contract", "invoice", "payment"] as const;
 
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-lg font-semibold">Documents</h2>
-        <p className="text-sm text-muted-foreground">{allDocs.length} total workflow artifacts</p>
+        <p className="text-sm text-muted-foreground">{allDocs.length} total artifacts · {filtered.length} showing</p>
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[180px] max-w-xs">
-          <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
-          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search documents..." className="h-8 pl-8" data-testid="input-search-docs" />
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-[160px] max-w-xs">
+            <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
+            <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search documents..." className="h-8 pl-8" data-testid="input-search-docs" />
+          </div>
+          <div className="flex gap-1 flex-wrap">
+            {DOC_TYPES.map(t => (
+              <Button key={t} size="sm" variant={typeFilter === t ? "default" : "ghost"} className="h-8 text-xs"
+                onClick={() => setTypeFilter(t)} data-testid={`btn-filter-type-${t}`}>
+                {t === "all" ? "All" : t.charAt(0).toUpperCase() + t.slice(1) + "s"}
+              </Button>
+            ))}
+          </div>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="h-8 w-32 text-xs" data-testid="select-doc-status">
+              <SelectValue placeholder="All Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Status</SelectItem>
+              {statusOptions.map(s => <SelectItem key={s} value={s}>{s.replace(/_/g, " ")}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button size="sm" variant={showDateFilter ? "secondary" : "ghost"} className="h-8 text-xs" onClick={() => setShowDateFilter(v => !v)} data-testid="btn-toggle-date-filter">
+            <Calendar className="h-3 w-3 mr-1" /> Date
+          </Button>
         </div>
-        <div className="flex gap-1">
-          {(["all","proposal","contract","invoice"] as const).map(t => (
-            <Button key={t} size="sm" variant={typeFilter === t ? "default" : "ghost"} className="h-8 text-xs"
-              onClick={() => setTypeFilter(t)} data-testid={`btn-filter-type-${t}`}>
-              {t === "all" ? "All" : t.charAt(0).toUpperCase() + t.slice(1) + "s"}
+        {showDateFilter && (
+          <div className="flex items-center gap-2 px-1">
+            <Label className="text-xs text-muted-foreground shrink-0">From</Label>
+            <Input type="date" className="h-7 text-xs w-36" value={dateFrom} onChange={e => setDateFrom(e.target.value)} data-testid="input-date-from" />
+            <Label className="text-xs text-muted-foreground shrink-0">To</Label>
+            <Input type="date" className="h-7 text-xs w-36" value={dateTo} onChange={e => setDateTo(e.target.value)} data-testid="input-date-to" />
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setDateFrom(""); setDateTo(""); }} data-testid="btn-clear-dates">
+              Clear
             </Button>
-          ))}
-        </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="h-8 w-36 text-xs" data-testid="select-doc-status">
-            <SelectValue placeholder="All Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Status</SelectItem>
-            {statusOptions.map(s => <SelectItem key={s} value={s}>{s.replace(/_/g, " ")}</SelectItem>)}
-          </SelectContent>
-        </Select>
+          </div>
+        )}
       </div>
 
       {/* Document list */}
@@ -3727,17 +3778,20 @@ function DocumentsSection() {
               <div key={`${doc.type}-${doc.id}`} className="border rounded-lg p-3 flex items-center gap-3 hover:bg-muted/30 transition-colors group" data-testid={`row-doc-${doc.id}`}>
                 <div className={cn("h-9 w-9 rounded-lg flex items-center justify-center shrink-0",
                   doc.type === "proposal" ? "bg-blue-50 dark:bg-blue-950/30" :
-                  doc.type === "contract" ? "bg-purple-50 dark:bg-purple-950/30" : "bg-green-50 dark:bg-green-950/30")}>
+                  doc.type === "contract" ? "bg-purple-50 dark:bg-purple-950/30" :
+                  doc.type === "payment" ? "bg-teal-50 dark:bg-teal-950/30" :
+                  "bg-green-50 dark:bg-green-950/30")}>
                   <Icon className={cn("h-4 w-4",
                     doc.type === "proposal" ? "text-blue-600" :
-                    doc.type === "contract" ? "text-purple-600" : "text-green-600")} />
+                    doc.type === "contract" ? "text-purple-600" :
+                    doc.type === "payment" ? "text-teal-600" : "text-green-600")} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-sm font-medium truncate">{doc.title}</p>
                     {doc.immutable && (
-                      <span className="inline-flex items-center gap-1 text-xs bg-amber-50 dark:bg-amber-950/30 text-amber-700 rounded px-1.5 py-0.5">
-                        <Lock className="h-3 w-3" /> Final
+                      <span className="inline-flex items-center gap-1 text-xs bg-amber-50 dark:bg-amber-950/30 text-amber-700 rounded px-1.5 py-0.5" title="Final — Immutable. Key fields locked to preserve audit integrity.">
+                        <Lock className="h-3 w-3" /> Final — Immutable
                       </span>
                     )}
                     {statusCfg && (
@@ -3767,16 +3821,40 @@ function DocumentsSection() {
                       <Download className="h-3.5 w-3.5" />
                     </Button>
                   )}
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Print"
-                    onClick={() => window.print()} data-testid={`btn-print-doc-${doc.id}`}>
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </Button>
+                  {!doc.immutable && (doc.type === "proposal" || doc.type === "contract") && (
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground" title="Archive"
+                      onClick={() => setArchiveConfirm({ id: doc.id, type: doc.type, title: doc.title })}
+                      data-testid={`btn-archive-doc-${doc.id}`}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  {doc.immutable && (
+                    <span className="h-7 w-7 flex items-center justify-center text-muted-foreground/40" title="Final — cannot be archived">
+                      <Lock className="h-3.5 w-3.5" />
+                    </span>
+                  )}
                 </div>
               </div>
             );
           })}
         </div>
       )}
+
+      {/* Archive confirm dialog */}
+      <Dialog open={!!archiveConfirm} onOpenChange={v => !v && setArchiveConfirm(null)}>
+        <DialogContent data-testid="dialog-archive-confirm">
+          <DialogHeader>
+            <DialogTitle>Archive Document?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">This will archive <strong>{archiveConfirm?.title}</strong>. Archived documents are hidden from the active list but remain in the audit trail.</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setArchiveConfirm(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => archiveConfirm && archiveMutation.mutate(archiveConfirm)} disabled={archiveMutation.isPending} data-testid="btn-confirm-archive">
+              {archiveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} Archive
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Version history drawer */}
       {versionDrawer && (
