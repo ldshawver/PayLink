@@ -463,6 +463,16 @@ export async function registerRoutes(
     requireActiveSubscription(req, res, next);
   });
 
+  // ── Feature gate middleware — applied to entire path groups ──────────────────
+  // requireFeature() is a hoisted function declaration defined later in this file.
+  // Using app.use() ensures ALL methods/routes under each prefix are gated.
+  app.use("/api/treasury", requireAuth, (req, res, next) => requireFeature("tenant.finance.treasury")(req, res, next));
+  app.use("/api/contractor-invoices", requireAuth, (req, res, next) => requireFeature("tenant.finance.contractor-hub")(req, res, next));
+  app.use("/api/contractor-proposals", requireAuth, (req, res, next) => requireFeature("tenant.finance.contractor-hub")(req, res, next));
+  app.use("/api/contractor-workflow-settings", requireAuth, (req, res, next) => requireFeature("tenant.finance.contractor-hub")(req, res, next));
+  app.use("/api/trade-transactions", requireAuth, (req, res, next) => requireFeature("tenant.finance.trade-compensation")(req, res, next));
+  app.use("/api/marketplace", requireAuth, (req, res, next) => requireFeature("tenant.schedule.marketplace")(req, res, next));
+
   app.post("/api/auth/login", async (req, res) => {
     try {
       const { username, password } = req.body;

@@ -22,6 +22,7 @@ import { useBiometricAuth } from "@/hooks/use-biometric-auth";
 import { useKeyboardManager, usePageTransition, useAppLifecycle } from "@/hooks/use-native-platform";
 import { canAccessPlatformConsole } from "@/lib/roles";
 import { AccountBlocked } from "@/components/account-blocked";
+import { FeatureGate } from "@/components/feature-gate";
 
 // ─── Lazy page imports (code-split by route) ──────────────────────────────────
 const NotFound = lazy(() => import("@/pages/not-found"));
@@ -166,7 +167,7 @@ function AuthenticatedRouter() {
         <Route path="/app/notification-settings" component={NotificationSettingsPage} />
         <Route path="/app/notification-templates" component={NotificationTemplatesPage} />
         <Route path="/app/messages" component={MessagesPage} />
-        <Route path="/app/trade-compensation">{() => <RoleGuard roles={["admin", "manager"]}><TradeCompensationPage /></RoleGuard>}</Route>
+        <Route path="/app/trade-compensation">{() => <RoleGuard roles={["admin", "manager"]}><FeatureGate featureKey="tenant.finance.trade-compensation" featureName="Trade Compensation"><TradeCompensationPage /></FeatureGate></RoleGuard>}</Route>
         <Route path="/app/inventory" component={InventoryPage} />
         <Route path="/app/agreements">{() => <PlatformRedirect to="/platform/agreements" />}</Route>
         <Route path="/app/contractor-onboarding">{() => <PlatformRedirect to="/platform/contractor-onboarding" />}</Route>
@@ -174,8 +175,8 @@ function AuthenticatedRouter() {
         <Route path="/app/provisioning">{() => <PlatformRedirect to="/platform/provisioning" />}</Route>
         <Route path="/app/audit-log">{() => <PlatformRedirect to="/platform/audit-log" />}</Route>
         <Route path="/app/biz-docs" component={BizDocsPage} />
-        <Route path="/app/contractor-hub" component={ContractorHubPage} />
-        <Route path="/app/treasury">{() => <RoleGuard roles={["admin"]}><TreasuryPage /></RoleGuard>}</Route>
+        <Route path="/app/contractor-hub">{() => <FeatureGate featureKey="tenant.finance.contractor-hub" featureName="Contractor Hub"><ContractorHubPage /></FeatureGate>}</Route>
+        <Route path="/app/treasury">{() => <RoleGuard roles={["admin"]}><FeatureGate featureKey="tenant.finance.treasury" featureName="Stripe Treasury"><TreasuryPage /></FeatureGate></RoleGuard>}</Route>
         <Route path="/app/settings">{() => <RoleGuard roles={["admin"]}><SettingsPage /></RoleGuard>}</Route>
         <Route path="/app/settings/email">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"]}><EmailSettingsPage /></StrictRoleGuard>}</Route>
         <Route path="/app/settings/sms">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"]}><SmsSettingsPage /></StrictRoleGuard>}</Route>
