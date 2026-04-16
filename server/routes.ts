@@ -21682,7 +21682,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/feature-registry", requireAuth, requirePlatformRole(), async (req, res) => {
     try {
       const features = await db.execute(sql`
-        SELECT * FROM feature_registry ORDER BY sort_order ASC, module ASC, feature_name ASC
+        SELECT
+          id,
+          feature_key AS "featureKey",
+          module,
+          feature_name AS "featureName",
+          layer,
+          tier,
+          description,
+          default_on AS "defaultOn",
+          is_beta AS "isBeta",
+          billing_impact AS "billingImpact",
+          sort_order AS "sortOrder",
+          created_at AS "createdAt"
+        FROM feature_registry
+        ORDER BY sort_order ASC, module ASC, feature_name ASC
       `);
       res.json(features.rows ?? features);
     } catch (e: any) {
@@ -21695,16 +21709,27 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const { companyId } = req.params;
       const result = await db.execute(sql`
-        SELECT fr.*,
-               fo.enabled AS override_enabled,
-               fo.expires_at AS override_expires_at,
-               fo.notes AS override_notes,
-               fo.id AS override_id,
-               CASE
-                 WHEN fo.id IS NULL THEN fr.default_on
-                 WHEN fo.expires_at IS NOT NULL AND fo.expires_at < NOW() THEN fr.default_on
-                 ELSE fo.enabled
-               END AS effective_enabled
+        SELECT
+          fr.id,
+          fr.feature_key AS "featureKey",
+          fr.module,
+          fr.feature_name AS "featureName",
+          fr.layer,
+          fr.tier,
+          fr.description,
+          fr.default_on AS "defaultOn",
+          fr.is_beta AS "isBeta",
+          fr.billing_impact AS "billingImpact",
+          fr.sort_order AS "sortOrder",
+          fo.enabled AS "overrideEnabled",
+          fo.expires_at AS "overrideExpiresAt",
+          fo.notes AS "overrideNotes",
+          fo.id AS "overrideId",
+          CASE
+            WHEN fo.id IS NULL THEN fr.default_on
+            WHEN fo.expires_at IS NOT NULL AND fo.expires_at < NOW() THEN fr.default_on
+            ELSE fo.enabled
+          END AS "effectiveEnabled"
         FROM feature_registry fr
         LEFT JOIN feature_overrides fo ON fo.feature_key = fr.feature_key AND fo.company_id = ${companyId}
         WHERE fr.layer = 'tenant'
@@ -21752,7 +21777,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const companyId = req.query.companyId as string | undefined;
       const featureKey = req.query.featureKey as string | undefined;
-      let q = sql`SELECT * FROM feature_activation_log WHERE 1=1`;
+      let q = sql`
+        SELECT
+          id,
+          company_id AS "companyId",
+          company_name AS "companyName",
+          feature_key AS "featureKey",
+          action,
+          performed_by AS "performedBy",
+          performed_by_name AS "performedByName",
+          notes,
+          expires_at AS "expiresAt",
+          created_at AS "createdAt"
+        FROM feature_activation_log
+        WHERE 1=1
+      `;
       if (companyId) q = sql`${q} AND company_id = ${companyId}`;
       if (featureKey) q = sql`${q} AND feature_key = ${featureKey}`;
       q = sql`${q} ORDER BY created_at DESC LIMIT 200`;
