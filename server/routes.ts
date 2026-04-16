@@ -889,6 +889,12 @@ export async function registerRoutes(
       if (!req.body.companyId) return res.status(400).json({ message: "Company is required" });
       if (!req.body.firstName) return res.status(400).json({ message: "First name is required" });
       if (!req.body.lastName) return res.status(400).json({ message: "Last name is required" });
+      // Tenant users may only create workers in their own company
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && req.body.companyId !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: cannot create a worker in a different company" });
+      }
       if (req.body.contractorType && !["hourly", "invoice"].includes(req.body.contractorType)) {
         return res.status(400).json({ message: "Contractor type must be 'hourly' or 'invoice'" });
       }
@@ -917,6 +923,16 @@ export async function registerRoutes(
 
   app.patch("/api/workers/:id", requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
+      // Company ownership guard: tenant users may only update workers in their own company
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant) {
+        const existing = await storage.getWorker(req.params.id as string);
+        if (!existing) return res.status(404).json({ message: "Worker not found" });
+        if (existing.companyId !== actingUser!.companyId) {
+          return res.status(403).json({ message: "Forbidden: worker belongs to a different company" });
+        }
+      }
       const worker = await storage.updateWorker(req.params.id as string, req.body);
       if (!worker) {
         return res.status(404).json({ message: "Worker not found" });
@@ -933,6 +949,12 @@ export async function registerRoutes(
       const worker = await storage.getWorker(req.params.id as string);
       if (!worker) {
         return res.status(404).json({ message: "Worker not found" });
+      }
+      // Company ownership guard: tenant users may only delete workers in their own company
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && worker.companyId !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: worker belongs to a different company" });
       }
       await storage.deleteWorker(req.params.id as string);
       res.json({ message: "Worker deleted successfully" });
@@ -1854,6 +1876,10 @@ export async function registerRoutes(
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const processUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(processUser?.role) && processUser?.companyId && run.companyId !== processUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
+      }
 
       if (run.lockedAt || run.isLocked) {
         return res.status(409).json({ message: "Cannot reprocess a locked payroll run." });
@@ -2318,6 +2344,10 @@ export async function registerRoutes(
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const approveUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(approveUser?.role) && approveUser?.companyId && run.companyId !== approveUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
+      }
       if (run.status !== "processed") return res.status(400).json({ message: "Payroll run must be processed before approving" });
       if (run.lockedAt || run.isLocked) return res.status(400).json({ message: "Payroll run is locked and cannot be modified" });
       const updated = await storage.updatePayrollRun(run.id, {
@@ -2386,6 +2416,10 @@ export async function registerRoutes(
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const lockUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(lockUser?.role) && lockUser?.companyId && run.companyId !== lockUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
+      }
       if (run.status === "draft") return res.status(400).json({ message: "Cannot lock a draft payroll run. Process it first." });
       if (!run.approvedAt) return res.status(400).json({ message: "Payroll run must be approved before locking" });
       if (run.lockedAt || run.isLocked) return res.status(400).json({ message: "Payroll run is already locked" });
@@ -2911,6 +2945,11 @@ export async function registerRoutes(
     try {
       const run = await storage.getPayrollRun(req.params.id as string);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      // Company ownership guard
+      const delUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(delUser?.role) && delUser?.companyId && run.companyId !== delUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
+      }
       // Block deletion of ACH-submitted or ACH-settled runs — real money has moved
       if (run.achStatus === "submitted" || run.achStatus === "settled") {
         return res.status(409).json({ message: "Cannot delete a payroll run with submitted or settled ACH payments. Contact your bank to reverse the transaction." });
@@ -2958,6 +2997,10 @@ export async function registerRoutes(
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const unlockUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(unlockUser?.role) && unlockUser?.companyId && run.companyId !== unlockUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
+      }
       if (run.achStatus === "submitted" || run.achStatus === "settled") {
         return res.status(409).json({ message: "Cannot unlock a payroll run with submitted or settled ACH payments." });
       }
@@ -3280,6 +3323,17 @@ export async function registerRoutes(
 
   app.patch("/api/time-punches/:id", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
+      // Company ownership guard
+      const punchUser = await storage.getUser(req.session.userId!);
+      const isTenantPunch = !isPlatformUser(punchUser?.role) && !!punchUser?.companyId;
+      if (isTenantPunch) {
+        const allPunches = await storage.getTimePunches();
+        const existing = allPunches.find(p => p.id === req.params.id);
+        if (!existing) return res.status(404).json({ message: "Time punch not found" });
+        if (existing.companyId !== punchUser!.companyId) {
+          return res.status(403).json({ message: "Forbidden: time punch belongs to a different company" });
+        }
+      }
       const data = { ...req.body };
       if (data.punchTime) data.punchTime = new Date(data.punchTime);
       const punch = await storage.updateTimePunch(req.params.id, data);
@@ -3295,6 +3349,16 @@ export async function registerRoutes(
 
   app.delete("/api/time-punches/:id", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
+      // Company ownership guard
+      const punchDelUser = await storage.getUser(req.session.userId!);
+      const isTenantPunchDel = !isPlatformUser(punchDelUser?.role) && !!punchDelUser?.companyId;
+      if (isTenantPunchDel) {
+        const allPunches = await storage.getTimePunches();
+        const existing = allPunches.find(p => p.id === req.params.id);
+        if (existing && existing.companyId !== punchDelUser!.companyId) {
+          return res.status(403).json({ message: "Forbidden: time punch belongs to a different company" });
+        }
+      }
       await storage.deleteTimePunch(req.params.id);
       res.json({ message: "Time punch deleted" });
     } catch (error) {
@@ -3637,7 +3701,7 @@ export async function registerRoutes(
       const existing = allEntries.find(e => e.id === req.params.id);
       if (!existing) return res.status(404).json({ message: "Time entry not found" });
       // Company ownership check: tenant users can only modify entries in their own company
-      if (actingUser?.companyId && existing.companyId !== actingUser.companyId) {
+      if (!isPlatformUser(actingUser?.role) && actingUser?.companyId && existing.companyId !== actingUser.companyId) {
         return res.status(403).json({ message: "Forbidden: entry belongs to a different company" });
       }
       // Hierarchy check: pure managers/supervisors can only modify entries for direct reports (or self)
@@ -3671,7 +3735,7 @@ export async function registerRoutes(
       // Company ownership check: tenant users can only delete entries in their own company
       const allEntries = await storage.getTimeEntries();
       const existing = allEntries.find(e => e.id === req.params.id);
-      if (existing && actingUser?.companyId && existing.companyId !== actingUser.companyId) {
+      if (existing && !isPlatformUser(actingUser?.role) && actingUser?.companyId && existing.companyId !== actingUser.companyId) {
         return res.status(403).json({ message: "Forbidden: entry belongs to a different company" });
       }
       // Hierarchy check: pure managers/supervisors can only delete entries for direct reports (or self)
@@ -3811,6 +3875,17 @@ export async function registerRoutes(
 
   app.patch("/api/schedules/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
+      // Company ownership guard
+      const schedUser = await storage.getUser(req.session.userId!);
+      const isTenantSched = !isPlatformUser(schedUser?.role) && !!schedUser?.companyId;
+      if (isTenantSched) {
+        const allSchedules = await storage.getSchedules();
+        const existing = allSchedules.find((s: any) => s.id === req.params.id);
+        if (!existing) return res.status(404).json({ message: "Schedule not found" });
+        if ((existing as any).companyId !== schedUser!.companyId) {
+          return res.status(403).json({ message: "Forbidden: schedule belongs to a different company" });
+        }
+      }
       const { startTime, endTime, department, jobId, positionId, costCenterId, note, status } = req.body;
       const updateData: any = {};
       if (startTime !== undefined) updateData.startTime = startTime;
@@ -3834,6 +3909,16 @@ export async function registerRoutes(
 
   app.delete("/api/schedules/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
+      // Company ownership guard
+      const schedDelUser = await storage.getUser(req.session.userId!);
+      const isTenantSchedDel = !isPlatformUser(schedDelUser?.role) && !!schedDelUser?.companyId;
+      if (isTenantSchedDel) {
+        const allSchedules = await storage.getSchedules();
+        const existing = allSchedules.find((s: any) => s.id === req.params.id);
+        if (existing && (existing as any).companyId !== schedDelUser!.companyId) {
+          return res.status(403).json({ message: "Forbidden: schedule belongs to a different company" });
+        }
+      }
       await storage.deleteSchedule(req.params.id);
       res.json({ message: "Schedule deleted" });
     } catch (error) {
@@ -4371,6 +4456,12 @@ export async function registerRoutes(
     try {
       const existing = await storage.getPayrollRun(req.params.id as string);
       if (!existing) return res.status(404).json({ message: "Payroll run not found" });
+      // Company ownership guard
+      const actingUser = await storage.getUser(req.session.userId!);
+      const isTenant = !isPlatformUser(actingUser?.role) && !!actingUser?.companyId;
+      if (isTenant && existing.companyId !== actingUser!.companyId) {
+        return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
+      }
       const lockedCheck = existing.lockedAt || existing.isLocked;
       if (lockedCheck) {
         const allowed = ["achStatus", "achBatchId", "achSubmittedAt", "achSettledAt", "fundingAccountId"];
