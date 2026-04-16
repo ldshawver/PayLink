@@ -441,6 +441,34 @@ export async function sendContractEventSms(payload: ContractEventPayload): Promi
   }
 }
 
+export async function sendGenericNotificationEmail({ recipientName, email, title, body, actionUrl }: { recipientName: string; email: string; title: string; body: string; actionUrl?: string }): Promise<{ sent: boolean; error?: string }> {
+  const smtp = getTransporter();
+  if (!smtp) return { sent: false, error: "SMTP not configured" };
+  const actionBtn = actionUrl ? `<a href="${actionUrl}" style="display:inline-block;background:linear-gradient(135deg,#0d9488,#2563eb);color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;margin-top:12px;">View in PayLink</a>` : "";
+  const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;"><div style="background:linear-gradient(135deg,#0d9488,#2563eb);padding:20px;border-radius:8px 8px 0 0;"><h1 style="color:white;margin:0;font-size:20px;">${title}</h1></div><div style="background:#f9fafb;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;"><p style="font-size:15px;color:#111827;">Hi <strong>${recipientName}</strong>,</p><p style="color:#374151;">${body}</p>${actionBtn}<p style="color:#9ca3af;font-size:12px;margin-top:24px;">This notification was sent via PayLink.</p></div></div>`;
+  const text = `Hi ${recipientName},\n\n${body}${actionUrl ? `\n\nView: ${actionUrl}` : ""}\n\nPayLink`;
+  try {
+    await smtp.transporter.sendMail({ from: smtp.fromAddress, to: email, subject: title, text, html });
+    console.log(`[Email] Generic notification sent to ${email}`);
+    return { sent: true };
+  } catch (err: any) {
+    console.error(`[Email] Failed generic notification to ${email}:`, err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
+export async function sendGenericNotificationSms({ phone, title, body }: { phone: string; title: string; body: string }): Promise<{ sent: boolean; error?: string }> {
+  if (!phone) return { sent: false, error: "No phone number" };
+  const message = `${title}: ${body}`;
+  try {
+    await sendViaTwilio(phone, message);
+    return { sent: true };
+  } catch (err: any) {
+    if (err.message === "Twilio not configured") return { sent: false, error: "Twilio not configured" };
+    return { sent: false, error: err.message };
+  }
+}
+
 export async function sendScheduleSmsNotification(payload: ScheduleNotificationPayload): Promise<{ sent: boolean; error?: string }> {
   const phone = payload.phone;
   if (!phone) return { sent: false, error: "No phone number" };

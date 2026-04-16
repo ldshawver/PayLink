@@ -7036,6 +7036,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         WHERE id = ${req.params.id}
       `);
 
+      // Notify contractor that their proposal has been converted to an invoice
+      createContractorNotification({ workerId: proposal.contractor_id, companyId: proposal.company_id, notificationType: "proposal_converted_invoice", title: `Proposal Approved: Invoice ${invoiceNumber} Created`, body: `Your proposal "${proposal.title || proposal.proposal_number}" has been approved and an invoice has been generated.`, entityType: "invoice", entityId: invoice.id, actionUrl: `/app/contractor-hub?section=invoices&id=${invoice.id}` }).catch(() => {});
       res.json({ proposal: { ...proposal, status: "approved", converted_to_invoice_id: invoice.id }, invoice });
     } catch (e) { console.error("[ContractorProposals] convert-to-invoice error:", e); res.status(500).json({ message: "Failed to convert proposal to invoice" }); }
   });
@@ -7230,6 +7232,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Copy line items to new version
       await db.execute(sql`INSERT INTO proposal_line_items (proposal_id, sort_order, category, name, description, quantity, unit, unit_price, cost, markup_percent, taxable, optional, selected, line_total) SELECT ${newId}, sort_order, category, name, description, quantity, unit, unit_price, cost, markup_percent, taxable, optional, selected, line_total FROM proposal_line_items WHERE proposal_id = ${req.params.id}`);
       await logProposalEvent(newId, "created", null, "draft", req);
+      // Notify admin/company that a revised proposal was submitted
+      createContractorNotification({ companyId: p.company_id, notificationType: "proposal_revised", title: `Revised Proposal Submitted: ${p.title || p.proposal_number || p.id}`, body: `Version ${newVersion} of this proposal has been submitted for review.`, entityType: "proposal", entityId: newId, actionUrl: `/app/contractor-hub?section=proposals&id=${newId}` }).catch(() => {});
       res.status(201).json(newProposal.rows[0]);
     } catch (e) { console.error(e); res.status(500).json({ message: "Failed to create revision" }); }
   });
@@ -7475,6 +7479,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       await db.execute(sql`UPDATE contractor_proposals SET status = 'converted_to_contract', converted_to_contract_id = ${contract.id} WHERE id = ${req.params.id}`);
 
+      // Notify contractor that their proposal has been converted to a contract
+      createContractorNotification({ workerId: prop.contractor_id, companyId: prop.company_id, notificationType: "proposal_converted_contract", title: `Contract Created from Proposal: ${contract.title}`, body: `Your proposal has been converted to a contract (${contractNumber}). Please review and sign.`, entityType: "contract", entityId: contract.id, actionUrl: `/app/contractor-hub?section=contracts&id=${contract.id}` }).catch(() => {});
       res.status(201).json(contract);
     } catch (e: any) { console.error(e); res.status(500).json({ message: "Failed to convert to contract: " + e.message }); }
   });
@@ -7989,6 +7995,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         sendContractEventSms(payload).catch(() => {});
         await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${contract.company_id}, u.id, 'contract_activated', ${"Contract Activated: " + contract.title}, ${"Your contract has been activated and is now in effect."}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.worker_id = ${contract.contractor_id} LIMIT 1`);
       } catch (notifErr) { console.error("[Contract] Notify activate failed:", notifErr); }
+      createContractorNotification({ workerId: contract.contractor_id, companyId: contract.company_id, notificationType: "contract_activated", title: `Contract Activated: ${contract.title}`, body: "Your contract is now active and in effect.", entityType: "contract", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=contracts&id=${req.params.id}` }).catch(() => {});
       res.json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to activate contract: " + e.message }); }
   });
@@ -8527,21 +8534,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
       const { unreadOnly } = req.query as Record<string, string>;
-      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_");
-      let result;
-      if (isAdmin) {
-        result = await db.execute(sql`
-          SELECT * FROM contractor_notifications WHERE (user_id = ${req.session.userId} OR company_id = ${user?.companyId})
-          ${unreadOnly === "true" ? sql`AND is_read = FALSE` : sql``}
-          ORDER BY created_at DESC LIMIT 100
-        `);
-      } else {
-        result = await db.execute(sql`
-          SELECT * FROM contractor_notifications WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null})
-          ${unreadOnly === "true" ? sql`AND is_read = FALSE` : sql``}
-          ORDER BY created_at DESC LIMIT 100
-        `);
-      }
+      // Per-recipient scoping: each user only sees their own notification rows
+      const result = await db.execute(sql`
+        SELECT * FROM contractor_notifications WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null})
+        ${unreadOnly === "true" ? sql`AND is_read = FALSE` : sql``}
+        ORDER BY created_at DESC LIMIT 100
+      `);
       res.json(result.rows);
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch notifications" }); }
   });
@@ -8551,14 +8549,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.getUser(req.session.userId!);
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
-      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_");
       const result = await db.execute(sql`
         UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW()
-        WHERE id = ${req.params.id} AND (
-          user_id = ${req.session.userId}
-          OR worker_id = ${workerId || null}
-          ${isAdmin ? sql`OR company_id = ${user?.companyId || null}` : sql``}
-        )
+        WHERE id = ${req.params.id} AND (user_id = ${req.session.userId} OR worker_id = ${workerId || null})
         RETURNING *
       `);
       if (!result.rows[0]) return res.status(404).json({ message: "Notification not found or access denied" });
@@ -8571,23 +8564,75 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.getUser(req.session.userId!);
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
-      const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_");
-      if (isAdmin) {
-        await db.execute(sql`UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW() WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null} OR company_id = ${user?.companyId || null}) AND is_read = FALSE`);
-      } else {
-        await db.execute(sql`UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW() WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null}) AND is_read = FALSE`);
-      }
+      await db.execute(sql`UPDATE contractor_notifications SET is_read = TRUE, read_at = NOW() WHERE (user_id = ${req.session.userId} OR worker_id = ${workerId || null}) AND is_read = FALSE`);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to mark all read" }); }
   });
 
-  // Internal helper: create a contractor notification
+  // Internal helper: create a contractor notification with per-recipient isolation
+  // Also dispatches email/SMS when enabled in company notification_rules
   async function createContractorNotification({ workerId, userId, companyId, notificationType, title, body, entityType, entityId, actionUrl }: { workerId?: string | null; userId?: string | null; companyId?: string | null; notificationType: string; title: string; body?: string; entityType?: string; entityId?: string; actionUrl?: string; }) {
     try {
-      await db.execute(sql`
-        INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
-        VALUES (${workerId || null}, ${userId || null}, ${companyId || null}, ${notificationType}, ${title}, ${body || null}, ${entityType || null}, ${entityId || null}, ${actionUrl || null})
-      `);
+      // Resolve notification rules from workflow settings
+      let emailEnabled = false;
+      let smsEnabled = false;
+      if (companyId) {
+        try {
+          const settingsRes = await db.execute(sql`SELECT notification_rules FROM contractor_workflow_settings WHERE company_id = ${companyId} LIMIT 1`);
+          const rules = (settingsRes.rows[0] as any)?.notification_rules || {};
+          const eventRules = rules[notificationType] || {};
+          emailEnabled = eventRules.email === true;
+          smsEnabled = eventRules.sms === true;
+        } catch (_) {}
+      }
+
+      if (userId) {
+        // Targeted at a specific user
+        await db.execute(sql`
+          INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
+          VALUES (${workerId || null}, ${userId}, ${companyId || null}, ${notificationType}, ${title}, ${body || null}, ${entityType || null}, ${entityId || null}, ${actionUrl || null})
+        `);
+      } else if (workerId) {
+        // Targeted at a specific worker (lookup their user record and contact info)
+        const uRes = await db.execute(sql`SELECT u.id, u.email, u.phone, u.company_id, w.first_name || ' ' || w.last_name AS worker_name FROM users u LEFT JOIN workers w ON w.id = u.worker_id WHERE u.worker_id = ${workerId} LIMIT 1`);
+        const targetUser = uRes.rows[0] as any;
+        const effectiveCompanyId = targetUser?.company_id || companyId || null;
+        await db.execute(sql`
+          INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
+          VALUES (${workerId}, ${targetUser?.id || null}, ${effectiveCompanyId}, ${notificationType}, ${title}, ${body || null}, ${entityType || null}, ${entityId || null}, ${actionUrl || null})
+        `);
+        // Dispatch email/SMS if enabled
+        if ((emailEnabled || smsEnabled) && (targetUser?.email || targetUser?.phone)) {
+          try {
+            const { sendGenericNotificationEmail, sendGenericNotificationSms } = await import("./notifications.js");
+            if (emailEnabled && targetUser?.email) sendGenericNotificationEmail({ recipientName: targetUser.worker_name || "Contractor", email: targetUser.email, title, body: body || "", actionUrl: actionUrl || "" }).catch(() => {});
+            if (smsEnabled && targetUser?.phone) sendGenericNotificationSms({ phone: targetUser.phone, title, body: body || "" }).catch(() => {});
+          } catch (_) {}
+        }
+      } else if (companyId) {
+        // Company-scoped (admin/manager targeted): create one row per recipient for isolation
+        const admins = await db.execute(sql`
+          SELECT u.id, u.email, u.phone, u.username AS name FROM users u
+          WHERE u.company_id = ${companyId}
+          AND u.role IN ('admin','manager','tenant_admin','tenant_owner') LIMIT 10
+        `);
+        if (admins.rows.length > 0) {
+          for (const admin of admins.rows as any[]) {
+            await db.execute(sql`
+              INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
+              VALUES (${workerId || null}, ${admin.id}, ${companyId}, ${notificationType}, ${title}, ${body || null}, ${entityType || null}, ${entityId || null}, ${actionUrl || null})
+            `);
+            // Dispatch email/SMS if enabled
+            if ((emailEnabled || smsEnabled) && (admin.email || admin.phone)) {
+              try {
+                const { sendGenericNotificationEmail, sendGenericNotificationSms } = await import("./notifications.js");
+                if (emailEnabled && admin.email) sendGenericNotificationEmail({ recipientName: admin.name || "Admin", email: admin.email, title, body: body || "", actionUrl: actionUrl || "" }).catch(() => {});
+                if (smsEnabled && admin.phone) sendGenericNotificationSms({ phone: admin.phone, title, body: body || "" }).catch(() => {});
+              } catch (_) {}
+            }
+          }
+        }
+      }
     } catch (e) { console.error("Failed to create contractor notification:", e); }
   }
 
