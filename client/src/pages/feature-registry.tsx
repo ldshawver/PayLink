@@ -221,12 +221,12 @@ export default function FeatureRegistryPage() {
 
   const [tenantSearch, setTenantSearch] = useState("");
   const [tenantModFilter, setTenantModFilter] = useState("all");
-  const [tenantTierFilter, setTenantTierFilter] = useState("all");
+  const [tenantTierFilter, setTenantTierFilter] = useState("__all__");
 
   const filteredTenantFeatures = useMemo(() => {
     return tenantFeatures.filter(f => {
       if (tenantModFilter !== "all" && f.module !== tenantModFilter) return false;
-      if (tenantTierFilter !== "all" && f.tier !== tenantTierFilter) return false;
+      if (tenantTierFilter !== "__all__" && f.tier !== tenantTierFilter) return false;
       if (tenantSearch) {
         const q = tenantSearch.toLowerCase();
         return f.featureName?.toLowerCase().includes(q) ||
@@ -415,7 +415,7 @@ export default function FeatureRegistryPage() {
               <div className="flex flex-wrap gap-3 mb-4">
                 <Select
                   value={selectedCompanyId}
-                  onValueChange={v => { setSelectedCompanyId(v); setTenantSearch(""); setTenantModFilter("all"); setTenantTierFilter("all"); }}
+                  onValueChange={v => { setSelectedCompanyId(v); setTenantSearch(""); setTenantModFilter("all"); setTenantTierFilter("__all__"); }}
                 >
                   <SelectTrigger className="w-64" data-testid="select-company">
                     <Building2 className="h-4 w-4 mr-2 text-muted-foreground" />
@@ -454,7 +454,7 @@ export default function FeatureRegistryPage() {
                         <SelectValue placeholder="Tier" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="all">All tiers</SelectItem>
+                        <SelectItem value="__all__">All tiers</SelectItem>
                         <SelectItem value="starter">Starter</SelectItem>
                         <SelectItem value="professional">Professional</SelectItem>
                         <SelectItem value="enterprise">Enterprise</SelectItem>
