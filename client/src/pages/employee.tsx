@@ -94,7 +94,13 @@ function EmployeeTab() {
 
   const companiesQuery = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const workersQuery = useQuery<Worker[]>({
-    queryKey: ["/api/workers", companyFilter !== "all" ? `?companyId=${companyFilter}` : ""],
+    queryKey: ["/api/workers", companyFilter],
+    queryFn: async () => {
+      const url = companyFilter !== "all" ? `/api/workers?companyId=${companyFilter}` : "/api/workers";
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json();
+    },
   });
   const branchesQuery = useQuery<Branch[]>({ queryKey: ["/api/branches"] });
   const departmentsQuery = useQuery<Department[]>({ queryKey: ["/api/departments"] });
@@ -1057,7 +1063,13 @@ function DocumentsTab() {
 
   const companiesQuery = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const workersQuery = useQuery<Worker[]>({
-    queryKey: ["/api/workers", companyFilter !== "all" ? `?companyId=${companyFilter}` : ""],
+    queryKey: ["/api/workers", companyFilter],
+    queryFn: async () => {
+      const url = companyFilter !== "all" ? `/api/workers?companyId=${companyFilter}` : "/api/workers";
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json();
+    },
   });
   const documentsQuery = useQuery<WorkerDocument[]>({
     queryKey: ["/api/worker-documents", `?workerId=${workerFilter}`],
