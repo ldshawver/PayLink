@@ -2,8 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
-/* MICR E-13B font — installed but reserved for Phase 2 MICR implementation.
-   Checks currently use pre-printed check stock; MICR band left blank. */
+/* ── MICR E-13B Fonts ─────────────────────────────────────────────────────
+   MICRNumeric uses micrenc.ttf (proven E-13B character mapping):
+     Transit ⑆ → 'c'    On-Us ⑈ → 'd'    Amount ⑇ → 'b'    Dash ⑉ → 'a'
+
+   ConnectCodeMICR is ANSI X9.100-160-1-2009 / CPA006 (separate family):
+     Transit ⑆ → ':'    On-Us ⑈ → ';'    Amount ⑇ → '!'    Dash ⑉ → '-'
+   Use ConnectCodeMICR for X9.100 strict compliance (Phase 2 upgrade path).
+   ─────────────────────────────────────────────────────────────────────── */
 @font-face {
   font-family: 'MICRNumeric';
   src: url('/fonts/micrenc.ttf') format('truetype'),
@@ -14,9 +20,18 @@
   font-display: block;
 }
 
+@font-face {
+  font-family: 'ConnectCodeMICR';
+  src: url('/fonts/ConnectCodeMICRT_X9.ttf') format('truetype'),
+       url('/fonts/ConnectCodeMICRT.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: block;
+}
+
 .font-micr {
-  font-family: 'MICRNumeric', 'Courier New', monospace;
-  letter-spacing: 0.05em;
+  font-family: 'MICRNumeric', monospace;
+  letter-spacing: 0;
 }
 
 @media print {
@@ -25,6 +40,14 @@
     src: url('/fonts/micrenc.ttf') format('truetype'),
          url('/fonts/micr-e13b.ttf') format('truetype'),
          url('/fonts/MICR-Plain.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+  }
+  @font-face {
+    font-family: 'ConnectCodeMICR';
+    src: url('/fonts/ConnectCodeMICRT_X9.ttf') format('truetype'),
+         url('/fonts/ConnectCodeMICRT.ttf') format('truetype');
     font-weight: normal;
     font-style: normal;
     font-display: block;

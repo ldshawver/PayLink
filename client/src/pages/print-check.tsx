@@ -39,8 +39,8 @@ const DEFAULT_CONFIG = {
   showCompanyName: true,
   showCompanyAddress: true,
   showCheckNumber: true,
-  showMicrLine: false,          // Phase 1: MICR band left blank for pre-printed check stock
-  showBankReference: true,       // Shows Routing/Account/Check# in a labeled section (non-MICR position)
+  showMicrLine: true,            // Render E-13B MICR line (micrenc.ttf, ANSI X9.100 compliant)
+  showBankReference: false,      // Non-MICR labeled section — disabled now that MICR line is active
   showEarningsDetail: true,
   showDeductionsDetail: true,
   showYtdTotals: true,
@@ -86,13 +86,59 @@ function CompanyHeader({ company, config }: { company: Company; config: Record<s
 }
 
 // ── MICR E-13B Line ──
-// Phase 1: MICR line intentionally removed. Checks use pre-printed check stock.
-// The 0.625in MICR clear band is preserved as blank space so layout aligns with
-// standard check stock (ANSI X9.27). Bank routing/account is shown as a small
-// labeled "Bank Reference" section inside the content area (non-MICR position).
+// ANSI X9.100-160-1-2009 / CPA006 compliant US check MICR line.
+// Font: micrenc.ttf (installed at /fonts/micrenc.ttf, served by Express static middleware).
+// Character mapping for micrenc.ttf (E-13B):
+//   Transit ⑆ → 'c'    On-Us ⑈ → 'd'    Amount ⑇ → 'b'    Dash ⑉ → 'a'
 //
-// Phase 2 (future): render proper E-13B MICR using /fonts/micrenc.ttf once
-// magnetic-compatible toner workflow and printing equipment are confirmed.
+// To switch to ConnectCodeMICRT_X9 (X9.100 strict), change font to 'ConnectCodeMICR'
+// and update T=':' O=';' accordingly.
+//
+// US check MICR line layout (left to right, ANSI X9.27 / X9.100-160):
+//   Positions 45–58 (AuxONUS):  d + check# right-just(10) + d
+//   Position 44 (EPC):          space
+//   Positions 33–43 (Transit):  c + routing(9 digits) + c
+//   space separator
+//   Positions 13–32 (ON-US):    account(up to 17 chars) + d
+//   Positions 1–12 (Amount):    12-char clear zone — bank fills this field
+
+function buildMicrString(routing: string, account: string, checkNum: string): string {
+  const T = "c"; // Transit symbol ⑆ in micrenc.ttf
+  const O = "d"; // On-Us symbol  ⑈ in micrenc.ttf
+
+  const r = routing.replace(/\D/g, "").slice(0, 9).padStart(9, "0");
+  const a = account.replace(/\D/g, "").slice(0, 17);
+  // Check number right-justified in 10 characters (pad with spaces)
+  const chk = checkNum.replace(/\D/g, "").slice(0, 10).padStart(10, " ");
+
+  // AuxONUS[d+check10+d] + EPC[space] + Transit[c+routing9+c] + sep[space] + ON-US[account+d]
+  return `${O}${chk}${O} ${T}${r}${T} ${a}${O}`;
+}
+
+function MicrLine({
+  routing, account, checkNum,
+}: {
+  routing: string; account: string; checkNum: string;
+}) {
+  if (!routing || routing.length < 9 || !account || !checkNum) return null;
+  const micrStr = buildMicrString(routing, account, checkNum);
+  return (
+    <div
+      style={{
+        fontFamily: "'MICRNumeric', monospace",
+        fontSize: "13pt",
+        lineHeight: 1,
+        whiteSpace: "pre",
+        color: "#000000",
+        letterSpacing: "0",
+        userSelect: "none",
+      }}
+      aria-hidden="true"
+    >
+      {micrStr}
+    </div>
+  );
+}
 
 function CheckPortion({
   item, worker, company, run, config, overrideNetPay, remittanceSources = [],
@@ -351,10 +397,21 @@ function CheckPortion({
         )}
       </div>
 
-      {/* ── MICR CLEAR BAND (bottom 0.625in, ANSI X9.27) ── */}
-      {/* Phase 1: Band is intentionally blank. MICR is pre-printed on check stock.
-          Phase 2 (future): render proper E-13B MICR line using installed /fonts/micrenc.ttf */}
-      <div style={{ height: "0.625in", flexShrink: 0 }} />
+      {/* ── MICR BAND (bottom 0.625in, ANSI X9.27 clear zone) ── */}
+      {/* Characters baseline at ~0.085in from check bottom per ANSI X9.100-160 */}
+      <div style={{
+        height: "0.625in",
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "flex-end",
+        paddingBottom: "0.085in",
+        paddingLeft: "0.25in",
+        boxSizing: "border-box",
+      }}>
+        {config.showMicrLine && micrReady && (
+          <MicrLine routing={routing} account={account} checkNum={checkNum} />
+        )}
+      </div>
     </div>
   );
 }
@@ -1509,8 +1566,10 @@ function validateCheckReadiness(
   if (!micrResult.valid && micrResult.field === "checkNum") {
     issues.push({ severity: "blocking", field: "checkNum", message: micrResult.error!, fixPath: "/app/payroll?tab=process", fixLabel: "Open Payroll" });
   }
-  // Phase 1: MICR line is intentionally omitted; checks use pre-printed check stock.
-  // No MICR font warning needed — bank scanning is handled by the pre-printed MICR on the stock.
+  // MICR font loading is detected separately (micrFontLoaded state in PrintCheckPage).
+  // A non-blocking warning is shown in the UI if the font fails to load.
+  // The micrFontLoaded param is kept for future per-check validation if needed.
+  void micrFontLoaded;
   return issues;
 }
 
@@ -1721,7 +1780,7 @@ function CheckDiagnosticsPanel({
           <div className="grid grid-cols-2 gap-2 text-slate-600 dark:text-slate-400 mb-3">
             <div><span className="font-medium">Render engine:</span> browser-print (CSS @media print)</div>
             <div><span className="font-medium">Template:</span> {templateName}</div>
-            <div><span className="font-medium">MICR band:</span> <span className="text-muted-foreground">Blank — pre-printed check stock</span></div>
+            <div><span className="font-medium">MICR band:</span> <span className={micrFontLoaded === true ? "text-green-600" : micrFontLoaded === false ? "text-red-600 font-semibold" : "text-yellow-600"}>{micrFontLoaded === true ? "✓ MICRNumeric font loaded — E-13B active" : micrFontLoaded === false ? "⚠ Font not loaded — MICR will not render" : "Loading font…"}</span></div>
             <div><span className="font-medium">Funding account:</span> {fundingAccountId || "(none linked)"}</div>
           </div>
           <table className="w-full border-collapse text-xs">
@@ -1783,17 +1842,23 @@ export default function PrintCheckPage() {
   const isPacketMode = searchParams.get("packet") === "1";
   const workerFilter = searchParams.get("worker") || null;
   const [fontReady, setFontReady] = useState(false);
-  // Phase 1: MICR line removed — checks use pre-printed check stock for bank scanning.
-  // micrFontLoaded kept as a null constant so downstream code that threads it doesn't break.
-  const micrFontLoaded: boolean | null = null;
+  const [micrFontLoaded, setMicrFontLoaded] = useState<boolean | null>(null);
   const [calibration, setCalibration] = useState<CheckCalibration>({ ...DEFAULT_CALIBRATION });
   const [calibrationTestMode, setCalibrationTestMode] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
-    document.fonts.ready.then(() => {
-      setFontReady(true);
+    let cancelled = false;
+    document.fonts.ready.then(async () => {
+      if (!cancelled) setFontReady(true);
+      try {
+        const loaded = await document.fonts.load("13pt MICRNumeric");
+        if (!cancelled) setMicrFontLoaded(loaded.length > 0);
+      } catch {
+        if (!cancelled) setMicrFontLoaded(false);
+      }
     });
+    return () => { cancelled = true; };
   }, []);
 
   async function handlePrint(
@@ -1804,8 +1869,7 @@ export default function PrintCheckPage() {
     totalAmount: number,
   ) {
     const hasBlocking = checkItemsWithValidation.some(c => c.issues.some(i => i.severity === "blocking"));
-    // Phase 1: MICR band is blank (pre-printed stock). micrOverall is always "ok" or "blocked".
-    const micrOverall = hasBlocking ? "blocked" : "ok";
+    const micrOverall = hasBlocking ? "blocked" : micrFontLoaded === false ? "font_missing" : micrFontLoaded === null ? "pending" : "ok";
     const validationErrors = checkItemsWithValidation
       .filter(c => c.issues.length > 0)
       .map(c => ({
@@ -2096,7 +2160,14 @@ export default function PrintCheckPage() {
         </div>
       )}
 
-      {/* Phase 1: MICR band is blank (pre-printed check stock). No MICR font warning needed. */}
+      {/* MICR font warning banner — screen only */}
+      {micrFontLoaded === false && (
+        <div className="mx-4 mb-3 p-3 bg-amber-50 border border-amber-300 rounded text-amber-800 text-sm print-hide" style={{ maxWidth: "8.5in" }}>
+          <strong>⚠ MICR font not detected.</strong> The MICRNumeric (micrenc.ttf) font failed to load.
+          The MICR line on printed checks will fall back to a plain monospace font and will <strong>not</strong> be magnetically readable.
+          Verify that <code>/fonts/micrenc.ttf</code> is accessible and reload this page.
+        </div>
+      )}
 
       {/* Diagnostics panel — screen only, check mode only */}
       {!isPacketMode && fontReady && checkItemsWithValidation.length > 0 && (
