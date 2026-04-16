@@ -18,7 +18,7 @@ import { computeDispositionDate, getDefaultRetentionPolicySeedData } from "./ret
 import { emitIntegrationEvent } from "./integrationEvents";
 import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
 import { encryptSecret, decryptSecret, isEncryptionAvailable } from "./cryptoUtils";
-import { createContractorNotification, SMS_HIGH_PRIORITY_EVENTS } from "./contractor-notification-helper";
+import { createContractorNotification } from "./contractor-notification-helper";
 import { runContractorReminderScheduler } from "./contractor-scheduler";
 
 const isProduction = process.env.NODE_ENV === "production";
@@ -8019,7 +8019,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         }
       }
       if (workerId) {
-        const signerWorkerRes = await db.execute(sql`SELECT u.company_id FROM users u WHERE u.worker_id = ${workerId} LIMIT 1`);
+        const signerWorkerRes = await db.execute(sql`SELECT w.company_id FROM workers w WHERE w.id = ${workerId} LIMIT 1`);
         const signerCompanyId = (signerWorkerRes.rows[0] as any)?.company_id;
         if (signerCompanyId && signerCompanyId !== contract.company_id) {
           return res.status(403).json({ message: "Signer worker does not belong to this company" });
