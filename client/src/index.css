@@ -2,13 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
+/* MICR E-13B font — installed but reserved for Phase 2 MICR implementation.
+   Checks currently use pre-printed check stock; MICR band left blank. */
 @font-face {
   font-family: 'MICRNumeric';
-  src: url('/fonts/micr-e13b.ttf') format('truetype'),
-       url('/fonts/MICR-Medium.otf') format('opentype'),
-       url('/fonts/MICR-Regular.otf') format('opentype'),
-       url('/fonts/MICR-Plain.ttf') format('truetype'),
-       url('/fonts/micr-numeric.ttf') format('truetype');
+  src: url('/fonts/micrenc.ttf') format('truetype'),
+       url('/fonts/micr-e13b.ttf') format('truetype'),
+       url('/fonts/MICR-Plain.ttf') format('truetype');
   font-weight: normal;
   font-style: normal;
   font-display: block;
@@ -22,11 +22,9 @@
 @media print {
   @font-face {
     font-family: 'MICRNumeric';
-    src: url('/fonts/micr-e13b.ttf') format('truetype'),
-         url('/fonts/MICR-Medium.otf') format('opentype'),
-         url('/fonts/MICR-Regular.otf') format('opentype'),
-         url('/fonts/MICR-Plain.ttf') format('truetype'),
-         url('/fonts/micr-numeric.ttf') format('truetype');
+    src: url('/fonts/micrenc.ttf') format('truetype'),
+         url('/fonts/micr-e13b.ttf') format('truetype'),
+         url('/fonts/MICR-Plain.ttf') format('truetype');
     font-weight: normal;
     font-style: normal;
     font-display: block;

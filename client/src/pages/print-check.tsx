@@ -39,7 +39,8 @@ const DEFAULT_CONFIG = {
   showCompanyName: true,
   showCompanyAddress: true,
   showCheckNumber: true,
-  showMicrLine: true,
+  showMicrLine: false,          // Phase 1: MICR band left blank for pre-printed check stock
+  showBankReference: true,       // Shows Routing/Account/Check# in a labeled section (non-MICR position)
   showEarningsDetail: true,
   showDeductionsDetail: true,
   showYtdTotals: true,
@@ -84,89 +85,14 @@ function CompanyHeader({ company, config }: { company: Company; config: Record<s
   );
 }
 
-// ── MICR E-13B Line Component ──
-// Renders the magnetic ink line at the bottom of a check.
-// Digits use the locally-hosted MICRNumeric font (DejaVu Mono served from /fonts/).
-// Transit ⑆ and On-Us ⑈ symbols are inline SVG so they render correctly in
-// browsers that lack an E-13B glyph, and embed faithfully in print-to-PDF.
-
-function MicrTransit({ h = 16 }: { h?: number }) {
-  const w = Math.round(h * 0.72);
-  const bar = Math.round(w * 0.22);
-  return (
-    <svg
-      width={w} height={h}
-      style={{ display: "inline-block", verticalAlign: "middle", marginBottom: 2 }}
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-    >
-      {/* Left full-height bar */}
-      <rect x={0} y={0} width={bar} height={h} fill="#000" />
-      {/* Right full-height bar */}
-      <rect x={w - bar} y={0} width={bar} height={h} fill="#000" />
-      {/* Top horizontal bridge */}
-      <rect x={0} y={0} width={w} height={bar} fill="#000" />
-      {/* Bottom horizontal bridge */}
-      <rect x={0} y={h - bar} width={w} height={bar} fill="#000" />
-      {/* Inner step — top-right notch (makes it distinctly transit) */}
-      <rect x={bar} y={bar} width={w - bar * 2} height={Math.round(h * 0.28)} fill="#000" />
-    </svg>
-  );
-}
-
-function MicrOnUs({ h = 16 }: { h?: number }) {
-  const w = Math.round(h * 0.58);
-  const bar = Math.round(w * 0.25);
-  return (
-    <svg
-      width={w} height={h}
-      style={{ display: "inline-block", verticalAlign: "middle", marginBottom: 2 }}
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-    >
-      {/* Left bar: full height */}
-      <rect x={0} y={0} width={bar} height={h} fill="#000" />
-      {/* Right bar: full height */}
-      <rect x={w - bar} y={0} width={bar} height={h} fill="#000" />
-      {/* Top cap */}
-      <rect x={0} y={0} width={w} height={bar} fill="#000" />
-      {/* Bottom cap */}
-      <rect x={0} y={h - bar} width={w} height={bar} fill="#000" />
-    </svg>
-  );
-}
-
-function MicrLine({ routing, account, checkNum }: { routing: string; account: string; checkNum: string }) {
-  const SYM_H = 18;
-  const numSpan = (text: string, mx = 0) => (
-    <span style={{
-      fontFamily: "'MICRNumeric'",
-      fontSize: "12.5pt",
-      letterSpacing: 0,
-      lineHeight: 1,
-      verticalAlign: "middle",
-      marginLeft: mx,
-      marginRight: mx,
-    }}>
-      {text}
-    </span>
-  );
-  const gap = <span style={{ display: "inline-block", width: "12px" }} />;
-
-  return (
-    <div style={{ lineHeight: 1, display: "flex", alignItems: "center", gap: 0 }}>
-      <MicrTransit h={SYM_H} />
-      {numSpan(routing, 2)}
-      <MicrTransit h={SYM_H} />
-      {gap}
-      {numSpan(account)}
-      {gap}
-      <MicrOnUs h={SYM_H} />
-      {numSpan(checkNum, 2)}
-      <MicrOnUs h={SYM_H} />
-    </div>
-  );
-}
+// ── MICR E-13B Line ──
+// Phase 1: MICR line intentionally removed. Checks use pre-printed check stock.
+// The 0.625in MICR clear band is preserved as blank space so layout aligns with
+// standard check stock (ANSI X9.27). Bank routing/account is shown as a small
+// labeled "Bank Reference" section inside the content area (non-MICR position).
+//
+// Phase 2 (future): render proper E-13B MICR using /fonts/micrenc.ttf once
+// magnetic-compatible toner workflow and printing equipment are confirmed.
 
 function CheckPortion({
   item, worker, company, run, config, overrideNetPay, remittanceSources = [],
@@ -391,24 +317,44 @@ function CheckPortion({
             <div style={{ fontSize: "8px", color: "#666", marginTop: "2px", letterSpacing: "0.4px", textAlign: "center", width: "2.6in", margin: "2px auto 0" }}>AUTHORIZED SIGNATURE</div>
           </div>
         </div>
+
+        {/* ── BANK REFERENCE (non-MICR labeled section, inside content area) ── */}
+        {(config as any).showBankReference && (routing || account) && (
+          <div style={{
+            borderTop: "0.5px dashed #bbb",
+            marginTop: "6px",
+            paddingTop: "4px",
+            display: "flex",
+            gap: "18px",
+            alignItems: "center",
+            paddingLeft: "0.05in",
+          }}>
+            <span style={{ fontSize: "7px", fontWeight: "700", color: "#999", letterSpacing: "0.5px", textTransform: "uppercase", flexShrink: 0 }}>
+              Bank Reference
+            </span>
+            {routing && (
+              <span style={{ fontSize: "7.5px", color: "#555", fontFamily: "'Courier New', monospace" }}>
+                Routing: {routing}
+              </span>
+            )}
+            {account && (
+              <span style={{ fontSize: "7.5px", color: "#555", fontFamily: "'Courier New', monospace" }}>
+                Account: {"·".repeat(Math.max(0, account.length - 4)) + account.slice(-4)}
+              </span>
+            )}
+            {checkNum && (
+              <span style={{ fontSize: "7.5px", color: "#555", fontFamily: "'Courier New', monospace" }}>
+                Check #: {checkNum}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── MICR CLEAR BAND (bottom 0.625in, ANSI X9.27) ── */}
-      {config.showMicrLine && micrReady ? (
-        <div style={{
-          height: "0.625in",
-          borderTop: "0.5px solid #ccc",
-          display: "flex",
-          alignItems: "center",
-          paddingLeft: "0.55in",
-          flexShrink: 0,
-        }}>
-          <MicrLine routing={routing} account={account} checkNum={checkNum} />
-        </div>
-      ) : (
-        /* Reserve the same space so check height stays constant; MICR omitted if banking data is incomplete */
-        <div style={{ height: "0.625in", flexShrink: 0 }} />
-      )}
+      {/* Phase 1: Band is intentionally blank. MICR is pre-printed on check stock.
+          Phase 2 (future): render proper E-13B MICR line using installed /fonts/micrenc.ttf */}
+      <div style={{ height: "0.625in", flexShrink: 0 }} />
     </div>
   );
 }
@@ -1563,9 +1509,8 @@ function validateCheckReadiness(
   if (!micrResult.valid && micrResult.field === "checkNum") {
     issues.push({ severity: "blocking", field: "checkNum", message: micrResult.error!, fixPath: "/app/payroll?tab=process", fixLabel: "Open Payroll" });
   }
-  if (micrFontLoaded === false) {
-    issues.push({ severity: "warning", field: "micrFont", message: "MICR E-13B font did not load — routing/account line may not be machine-readable by bank scanners. Printing is still allowed. Visit Check Print Settings to install the font for live checks.", fixPath: "/app/settings", fixLabel: "Check Print Settings" });
-  }
+  // Phase 1: MICR line is intentionally omitted; checks use pre-printed check stock.
+  // No MICR font warning needed — bank scanning is handled by the pre-printed MICR on the stock.
   return issues;
 }
 
@@ -1776,7 +1721,7 @@ function CheckDiagnosticsPanel({
           <div className="grid grid-cols-2 gap-2 text-slate-600 dark:text-slate-400 mb-3">
             <div><span className="font-medium">Render engine:</span> browser-print (CSS @media print)</div>
             <div><span className="font-medium">Template:</span> {templateName}</div>
-            <div><span className="font-medium">MICR font:</span> {micrFontLoaded === true ? <span className="text-green-600 font-medium">✓ Loaded</span> : micrFontLoaded === false ? <span className="text-red-600 font-medium">✕ Not detected</span> : "Checking…"}</div>
+            <div><span className="font-medium">MICR band:</span> <span className="text-muted-foreground">Blank — pre-printed check stock</span></div>
             <div><span className="font-medium">Funding account:</span> {fundingAccountId || "(none linked)"}</div>
           </div>
           <table className="w-full border-collapse text-xs">
@@ -1838,45 +1783,16 @@ export default function PrintCheckPage() {
   const isPacketMode = searchParams.get("packet") === "1";
   const workerFilter = searchParams.get("worker") || null;
   const [fontReady, setFontReady] = useState(false);
-  const [micrFontLoaded, setMicrFontLoaded] = useState<boolean | null>(null);
+  // Phase 1: MICR line removed — checks use pre-printed check stock for bank scanning.
+  // micrFontLoaded kept as a null constant so downstream code that threads it doesn't break.
+  const micrFontLoaded: boolean | null = null;
   const [calibration, setCalibration] = useState<CheckCalibration>({ ...DEFAULT_CALIBRATION });
   const [calibrationTestMode, setCalibrationTestMode] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
-    document.fonts.ready.then(async () => {
+    document.fonts.ready.then(() => {
       setFontReady(true);
-      // 4-method MICR font detection cascade
-      try {
-        // Method 1: standard fonts.load
-        const loaded = await document.fonts.load("12px MICRNumeric", "1234567890");
-        if (loaded.length > 0) { setMicrFontLoaded(true); return; }
-      } catch {}
-      try {
-        // Method 2: canvas pixel-width comparison
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.font = "16px MICRNumeric";
-          const micrW = ctx.measureText("1234567890").width;
-          ctx.font = "16px sans-serif";
-          const fallbackW = ctx.measureText("1234567890").width;
-          if (Math.abs(micrW - fallbackW) > 2) { setMicrFontLoaded(true); return; }
-        }
-      } catch {}
-      try {
-        // Method 3: document.fonts.forEach status
-        let found = false;
-        document.fonts.forEach(f => { if (f.family.includes("MICR") && f.status === "loaded") found = true; });
-        if (found) { setMicrFontLoaded(true); return; }
-      } catch {}
-      try {
-        // Method 4: direct FontFace load
-        const ff = new FontFace("MICRNumeric-check", "url('/fonts/micr-e13b.ttf')");
-        await ff.load();
-        setMicrFontLoaded(true); return;
-      } catch {}
-      setMicrFontLoaded(false);
     });
   }, []);
 
@@ -1888,7 +1804,8 @@ export default function PrintCheckPage() {
     totalAmount: number,
   ) {
     const hasBlocking = checkItemsWithValidation.some(c => c.issues.some(i => i.severity === "blocking"));
-    const micrOverall = micrFontLoaded === false ? "font_missing" : hasBlocking ? "blocked" : "ok";
+    // Phase 1: MICR band is blank (pre-printed stock). micrOverall is always "ok" or "blocked".
+    const micrOverall = hasBlocking ? "blocked" : "ok";
     const validationErrors = checkItemsWithValidation
       .filter(c => c.issues.length > 0)
       .map(c => ({
@@ -2149,12 +2066,7 @@ export default function PrintCheckPage() {
         )}
         <span className="text-sm text-muted-foreground" data-testid="text-check-info">
           {isPacketMode ? "Payroll Packet" : workerFilter ? "Pay Stub" : `${checkWorkerItems.length} check(s)`} for {company?.name || ""} — Template: {activeTemplate?.name || "Default"}
-          {fontReady && micrFontLoaded === true && (
-            <span className="ml-2 text-green-600 font-medium text-xs">● MICR font ready</span>
-          )}
-          {fontReady && micrFontLoaded === false && (
-            <span className="ml-2 text-red-600 font-medium text-xs" data-testid="badge-micr-warning">⚠ MICR font not detected</span>
-          )}
+          <span className="ml-2 text-muted-foreground text-xs">· Pre-printed check stock</span>
         </span>
       </div>
 
@@ -2184,12 +2096,7 @@ export default function PrintCheckPage() {
         </div>
       )}
 
-      {fontReady && micrFontLoaded === false && !isPacketMode && !hasBlockingIssues && (
-        <div className="mx-4 mb-3 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 flex items-center gap-2 print-hide" data-testid="banner-micr-noncompliant">
-          <AlertTriangle className="h-4 w-4 shrink-0" />
-          <span>⚠ MICR NOT COMPLIANT — DO NOT USE FOR LIVE CHECKS. The MICR E-13B font did not load. The routing/account line may not be machine-readable by bank equipment.</span>
-        </div>
-      )}
+      {/* Phase 1: MICR band is blank (pre-printed check stock). No MICR font warning needed. */}
 
       {/* Diagnostics panel — screen only, check mode only */}
       {!isPacketMode && fontReady && checkItemsWithValidation.length > 0 && (
