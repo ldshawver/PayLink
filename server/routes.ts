@@ -8261,8 +8261,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const tplRes = await db.execute(sql`SELECT id, company_id, is_global FROM contractor_templates WHERE id = ${req.params.id}`);
       if (!tplRes.rows[0]) return res.status(404).json({ message: "Template not found" });
       const tpl = tplRes.rows[0] as any;
+      // Non-platform admins cannot mutate global/platform templates (company_id=null or is_global=true)
+      if (!isPlatform && (!tpl.company_id || tpl.is_global)) return res.status(403).json({ message: "Platform role required to modify global templates" });
       // Non-platform admins can only edit their own company's templates
-      if (!isPlatform && tpl.company_id && tpl.company_id !== user?.companyId) return res.status(403).json({ message: "Access denied" });
+      if (!isPlatform && tpl.company_id !== user?.companyId) return res.status(403).json({ message: "Access denied" });
       const { name, description, templateType, industry, bodyJson, defaultPaymentTerms, defaultScopeTemplate, defaultAssumptions, defaultExclusions, defaultWarranty, isActive, isDefault, layoutVariant, workTypeTags } = req.body;
       const result = await db.execute(sql`
         UPDATE contractor_templates SET
@@ -8294,10 +8296,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Verify template ownership before soft-deleting
       const user = await storage.getUser(req.session.userId!);
       const isPlatform = (user?.role || "").startsWith("platform_");
-      const tplRes = await db.execute(sql`SELECT id, company_id FROM contractor_templates WHERE id = ${req.params.id}`);
+      const tplRes = await db.execute(sql`SELECT id, company_id, is_global FROM contractor_templates WHERE id = ${req.params.id}`);
       if (!tplRes.rows[0]) return res.status(404).json({ message: "Template not found" });
       const tpl = tplRes.rows[0] as any;
-      if (!isPlatform && tpl.company_id && tpl.company_id !== user?.companyId) return res.status(403).json({ message: "Access denied" });
+      // Non-platform admins cannot delete global/platform templates
+      if (!isPlatform && (!tpl.company_id || tpl.is_global)) return res.status(403).json({ message: "Platform role required to delete global templates" });
+      if (!isPlatform && tpl.company_id !== user?.companyId) return res.status(403).json({ message: "Access denied" });
       await db.execute(sql`UPDATE contractor_templates SET is_active = FALSE, updated_at = NOW() WHERE id = ${req.params.id}`);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to delete template: " + e.message }); }
@@ -8513,14 +8517,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!result.rows[0]) {
         return res.json({ companyId: cid, minReviewers: 1, reviewMode: "parallel", tradeEnabled: true,
           contractSigOverdueDays: 7, contractRenewalWarningDays: 30, contractExpiryWarningDays: 14,
+          contractRenegotiationWarningDays: 7,
           invoiceDueReminderDays: 3, invoiceOverdueReminderDays: 1,
+          reviewerPool: "",
           notificationRules: {}, permissionMatrix: {} });
       }
       const row = result.rows[0] as any;
       res.json({ companyId: row.company_id, minReviewers: row.min_reviewers, reviewMode: row.review_mode,
         tradeEnabled: row.trade_enabled, contractSigOverdueDays: row.contract_sig_overdue_days,
         contractRenewalWarningDays: row.contract_renewal_warning_days, contractExpiryWarningDays: row.contract_expiry_warning_days,
+        contractRenegotiationWarningDays: row.contract_renegotiation_warning_days ?? 7,
         invoiceDueReminderDays: row.invoice_due_reminder_days, invoiceOverdueReminderDays: row.invoice_overdue_reminder_days,
+        reviewerPool: row.reviewer_pool || "",
+        documentRetentionMonths: row.document_retention_months ?? 84,
+        documentArchiveAfterDays: row.document_archive_after_days ?? 365,
+        autoArchiveEnabled: row.auto_archive_enabled ?? false,
         notificationRules: row.notification_rules || {}, permissionMatrix: row.permission_matrix || {} });
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch workflow settings" }); }
   });
@@ -8531,17 +8542,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const cid = user?.companyId;
       if (!cid) return res.status(400).json({ message: "No company context" });
       const { minReviewers, reviewMode, tradeEnabled, contractSigOverdueDays, contractRenewalWarningDays,
-        contractExpiryWarningDays, invoiceDueReminderDays, invoiceOverdueReminderDays,
+        contractExpiryWarningDays, contractRenegotiationWarningDays, invoiceDueReminderDays, invoiceOverdueReminderDays,
+        reviewerPool, documentRetentionMonths, documentArchiveAfterDays, autoArchiveEnabled,
         notificationRules, permissionMatrix } = req.body;
       const result = await db.execute(sql`
         INSERT INTO contractor_workflow_settings
           (company_id, min_reviewers, review_mode, trade_enabled, contract_sig_overdue_days,
-           contract_renewal_warning_days, contract_expiry_warning_days, invoice_due_reminder_days,
-           invoice_overdue_reminder_days, notification_rules, permission_matrix, updated_by, updated_at)
+           contract_renewal_warning_days, contract_expiry_warning_days, contract_renegotiation_warning_days,
+           invoice_due_reminder_days, invoice_overdue_reminder_days, reviewer_pool,
+           document_retention_months, document_archive_after_days, auto_archive_enabled,
+           notification_rules, permission_matrix, updated_by, updated_at)
         VALUES
           (${cid}, ${minReviewers ?? 1}, ${reviewMode ?? "parallel"}, ${tradeEnabled ?? true},
            ${contractSigOverdueDays ?? 7}, ${contractRenewalWarningDays ?? 30}, ${contractExpiryWarningDays ?? 14},
+           ${contractRenegotiationWarningDays ?? 7},
            ${invoiceDueReminderDays ?? 3}, ${invoiceOverdueReminderDays ?? 1},
+           ${reviewerPool || null},
+           ${documentRetentionMonths ?? 84}, ${documentArchiveAfterDays ?? 365}, ${autoArchiveEnabled ?? false},
            ${notificationRules ? JSON.stringify(notificationRules) : '{}'},
            ${permissionMatrix ? JSON.stringify(permissionMatrix) : '{}'},
            ${req.session.userId}, NOW())
@@ -8550,8 +8567,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           trade_enabled = EXCLUDED.trade_enabled, contract_sig_overdue_days = EXCLUDED.contract_sig_overdue_days,
           contract_renewal_warning_days = EXCLUDED.contract_renewal_warning_days,
           contract_expiry_warning_days = EXCLUDED.contract_expiry_warning_days,
+          contract_renegotiation_warning_days = EXCLUDED.contract_renegotiation_warning_days,
           invoice_due_reminder_days = EXCLUDED.invoice_due_reminder_days,
           invoice_overdue_reminder_days = EXCLUDED.invoice_overdue_reminder_days,
+          reviewer_pool = EXCLUDED.reviewer_pool,
+          document_retention_months = EXCLUDED.document_retention_months,
+          document_archive_after_days = EXCLUDED.document_archive_after_days,
+          auto_archive_enabled = EXCLUDED.auto_archive_enabled,
           notification_rules = EXCLUDED.notification_rules, permission_matrix = EXCLUDED.permission_matrix,
           updated_by = EXCLUDED.updated_by, updated_at = NOW()
         RETURNING *

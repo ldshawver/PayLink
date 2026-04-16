@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import {
   FileText, Plus, Send, CheckCircle, XCircle, Clock, DollarSign, AlertTriangle,
   Edit, Trash2, Eye, ChevronRight, Sparkles, Paperclip, History, RotateCcw,
-  Bell, Download, Upload, ArrowLeft, Bot, Loader2, TrendingUp, Users,
+  Bell, Download, Upload, ArrowLeft, Bot, Loader2, TrendingUp, Users, Printer,
   Building2, Calendar, Tag, Shield, Lock, CheckCheck, FilePlus,
   LayoutDashboard, Receipt, FolderOpen, MessageSquare, Palette,
   Settings, FileSignature, CreditCard, Package, ChevronDown, ChevronUp,
@@ -3632,13 +3632,15 @@ function DocumentsSection() {
 
   const [contractorFilter, setContractorFilter] = useState("all");
   const [costCenterFilter, setCostCenterFilter] = useState("all");
+  const [jobFilter, setJobFilter] = useState("all");
   const [emailSending, setEmailSending] = useState<string | null>(null);
+  const [expandedAudit, setExpandedAudit] = useState<string | null>(null);
 
   type DocRow = {
     id: string; type: string; title: string; status: string; date: string;
     amount?: string; immutable: boolean; hasVersions: boolean;
-    contractorId?: string; contractorName?: string; costCenter?: string;
-    signers?: Array<{name?: string; email?: string; signedAt?: string}>;
+    contractorId?: string; contractorName?: string; costCenter?: string; workType?: string;
+    signers?: Array<{name?: string; email?: string; signedAt?: string; role?: string}>;
   };
 
   const allDocs: DocRow[] = [
@@ -3649,13 +3651,19 @@ function DocumentsSection() {
       contractorId: p.contractorId,
       contractorName: (p as any).contractorName,
       costCenter: (p as any).costCenter,
+      workType: (p as any).workType || (p as any).work_type,
     })),
     ...contracts.map(c => ({
       id: c.id, type: "contract", title: c.title || c.contractNumber || "Contract",
       status: c.status, date: c.createdAt, amount: c.totalValue || c.value,
       immutable: isImmutable("contract", c.status), hasVersions: true,
       contractorId: c.contractorId, contractorName: c.contractorName,
-      signers: c.signers?.map(s => ({ name: (s as any).signerName, email: (s as any).signerEmail, signedAt: (s as any).signedAt })),
+      signers: c.signers?.map(s => ({
+        name: (s as any).signerName || (s as any).name,
+        email: (s as any).signerEmail || (s as any).email,
+        signedAt: (s as any).signedAt || (s as any).signed_at,
+        role: (s as any).role,
+      })),
     })),
     ...invoices.map(i => ({
       id: i.id, type: "invoice", title: i.title || `Invoice #${i.invoiceNumber || i.id.slice(0,8)}`,
@@ -3674,12 +3682,14 @@ function DocumentsSection() {
     id: id!, name: allDocs.find(d => d.contractorId === id)?.contractorName || id!.slice(0, 8),
   }));
   const costCenterOptions = [...new Set(allDocs.map(d => d.costCenter).filter(Boolean))];
+  const jobOptions = [...new Set(allDocs.map(d => d.workType).filter(Boolean))];
 
   const filtered = allDocs.filter(d => {
     if (typeFilter !== "all" && d.type !== typeFilter) return false;
     if (statusFilter !== "all" && d.status !== statusFilter) return false;
     if (contractorFilter !== "all" && d.contractorId !== contractorFilter) return false;
     if (costCenterFilter !== "all" && d.costCenter !== costCenterFilter) return false;
+    if (jobFilter !== "all" && d.workType !== jobFilter) return false;
     if (search && !d.title.toLowerCase().includes(search.toLowerCase())) return false;
     if (dateFrom && new Date(d.date) < new Date(dateFrom)) return false;
     if (dateTo && new Date(d.date) > new Date(dateTo + "T23:59:59")) return false;
@@ -3802,6 +3812,17 @@ function DocumentsSection() {
               </SelectContent>
             </Select>
           )}
+          {jobOptions.length > 0 && (
+            <Select value={jobFilter} onValueChange={setJobFilter}>
+              <SelectTrigger className="h-8 w-32 text-xs" data-testid="select-doc-job">
+                <SelectValue placeholder="All Work Types" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Work Types</SelectItem>
+                {jobOptions.map(j => <SelectItem key={j} value={j!}>{j}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
           <Button size="sm" variant={showDateFilter ? "secondary" : "ghost"} className="h-8 text-xs" onClick={() => setShowDateFilter(v => !v)} data-testid="btn-toggle-date-filter">
             <Calendar className="h-3 w-3 mr-1" /> Date
           </Button>
@@ -3834,7 +3855,8 @@ function DocumentsSection() {
               doc.type === "contract" ? CONTRACT_STATUS_CONFIG[doc.status] :
               INVOICE_STATUS_CONFIG[doc.status];
             return (
-              <div key={`${doc.type}-${doc.id}`} className="border rounded-lg p-3 flex items-center gap-3 hover:bg-muted/30 transition-colors group" data-testid={`row-doc-${doc.id}`}>
+              <div key={`${doc.type}-${doc.id}`} className="space-y-0">
+              <div className="border rounded-lg p-3 flex items-center gap-3 hover:bg-muted/30 transition-colors group" data-testid={`row-doc-${doc.id}`}>
                 <div className={cn("h-9 w-9 rounded-lg flex items-center justify-center shrink-0",
                   doc.type === "proposal" ? "bg-blue-50 dark:bg-blue-950/30" :
                   doc.type === "contract" ? "bg-purple-50 dark:bg-purple-950/30" :
@@ -3875,6 +3897,13 @@ function DocumentsSection() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {doc.signers && doc.signers.length > 0 && (
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Audit trail"
+                      onClick={() => setExpandedAudit(expandedAudit === doc.id ? null : doc.id)}
+                      data-testid={`btn-audit-${doc.id}`}>
+                      <Shield className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                   {doc.hasVersions && (
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Version history"
                       onClick={() => setVersionDrawer({ type: doc.type as "contract"|"proposal", id: doc.id, title: doc.title })}
@@ -3882,10 +3911,29 @@ function DocumentsSection() {
                       <History className="h-3.5 w-3.5" />
                     </Button>
                   )}
+                  {(doc.type === "contract" || doc.type === "invoice" || doc.type === "proposal") && (
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="View document"
+                      onClick={() => {
+                        const url = doc.type === "payment"
+                          ? `/app/contractor-hub?section=payments`
+                          : `/api/contractor-${doc.type}s/${doc.id}/download`;
+                        window.open(url, "_blank");
+                      }}
+                      data-testid={`btn-view-doc-${doc.id}`}>
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                   {(doc.type === "contract" || doc.type === "invoice") && (
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Download"
                       onClick={() => handleDownload(doc)} data-testid={`btn-download-doc-${doc.id}`}>
                       <Download className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  {(doc.type === "contract" || doc.type === "invoice") && (
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Print (open in new tab)"
+                      onClick={() => window.open(`/api/contractor-${doc.type}s/${doc.id}/download`, "_blank")}
+                      data-testid={`btn-print-doc-${doc.id}`}>
+                      <Printer className="h-3.5 w-3.5" />
                     </Button>
                   )}
                   {(doc.type === "invoice" || doc.type === "proposal" || doc.type === "contract") && (
@@ -3910,6 +3958,31 @@ function DocumentsSection() {
                     </span>
                   )}
                 </div>
+              </div>
+              {/* Audit trail expansion */}
+              {expandedAudit === doc.id && doc.signers && doc.signers.length > 0 && (
+                <div className="border-x border-b rounded-b-lg px-3 py-2 bg-muted/20 -mt-px" data-testid={`audit-trail-${doc.id}`}>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Signature Audit Trail</p>
+                  <div className="space-y-1.5">
+                    {doc.signers.map((signer, idx) => (
+                      <div key={idx} className="flex items-center gap-3 text-xs">
+                        <div className={cn("h-5 w-5 rounded-full flex items-center justify-center shrink-0",
+                          signer.signedAt ? "bg-green-500" : "bg-muted-foreground/20")}>
+                          {signer.signedAt ? <CheckCheck className="h-3 w-3 text-white" /> : <Clock className="h-3 w-3 text-muted-foreground" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <span className="font-medium">{signer.name || signer.email || "Unknown"}</span>
+                          {signer.role && <span className="text-muted-foreground ml-1">({signer.role})</span>}
+                          {signer.email && signer.name && <span className="text-muted-foreground ml-1">— {signer.email}</span>}
+                        </div>
+                        <div className={cn("shrink-0 font-medium", signer.signedAt ? "text-green-600" : "text-muted-foreground")}>
+                          {signer.signedAt ? `Signed ${fmtDate(signer.signedAt)}` : "Pending signature"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               </div>
             );
           })}
@@ -4549,6 +4622,39 @@ function SettingsSection() {
                   data-testid="toggle-trade-enabled">
                   <span className={cn("inline-block h-5 w-5 rounded-full bg-white shadow transition-transform mt-0.5",
                     wfForm.tradeEnabled ? "translate-x-5" : "translate-x-0.5")} />
+                </button>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-5 space-y-4">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Document Archive & Retention</p>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Retention Period (months)</Label>
+                  <Input type="number" min={1} max={120} value={wfForm.documentRetentionMonths ?? 84}
+                    onChange={e => updWf("documentRetentionMonths", parseInt(e.target.value) || 84)}
+                    data-testid="input-doc-retention-months" />
+                  <p className="text-xs text-muted-foreground mt-1">Auto-archive documents older than this period (default: 84 months / 7 years)</p>
+                </div>
+                <div>
+                  <Label>Archive After Inactivity (days)</Label>
+                  <Input type="number" min={30} max={3650} value={wfForm.documentArchiveAfterDays ?? 365}
+                    onChange={e => updWf("documentArchiveAfterDays", parseInt(e.target.value) || 365)}
+                    data-testid="input-doc-archive-after-days" />
+                  <p className="text-xs text-muted-foreground mt-1">Archive completed/voided docs after this many days of inactivity</p>
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">Auto-Archive Completed Contracts</p>
+                  <p className="text-xs text-muted-foreground">Automatically move completed/voided contracts to the archive</p>
+                </div>
+                <button onClick={() => updWf("autoArchiveEnabled", !wfForm.autoArchiveEnabled)}
+                  className={cn("relative inline-flex h-6 w-11 rounded-full transition-colors", wfForm.autoArchiveEnabled ? "bg-primary" : "bg-muted-foreground/30")}
+                  data-testid="toggle-auto-archive">
+                  <span className={cn("inline-block h-5 w-5 rounded-full bg-white shadow transition-transform mt-0.5",
+                    wfForm.autoArchiveEnabled ? "translate-x-5" : "translate-x-0.5")} />
                 </button>
               </div>
             </CardContent>

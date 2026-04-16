@@ -2693,6 +2693,11 @@ Thank you,
     await run("contractor_templates.is_default", sql`ALTER TABLE contractor_templates ADD COLUMN IF NOT EXISTS is_default BOOLEAN DEFAULT FALSE`);
     await run("contractor_templates.layout_variant", sql`ALTER TABLE contractor_templates ADD COLUMN IF NOT EXISTS layout_variant TEXT DEFAULT 'standard'`);
     await run("contractor_templates.work_type_tags", sql`ALTER TABLE contractor_templates ADD COLUMN IF NOT EXISTS work_type_tags TEXT`);
+    await run("contractor_workflow_settings.contract_renegotiation_warning_days", sql`ALTER TABLE contractor_workflow_settings ADD COLUMN IF NOT EXISTS contract_renegotiation_warning_days INTEGER DEFAULT 7`);
+    await run("contractor_workflow_settings.reviewer_pool", sql`ALTER TABLE contractor_workflow_settings ADD COLUMN IF NOT EXISTS reviewer_pool TEXT`);
+    await run("contractor_workflow_settings.document_retention_months", sql`ALTER TABLE contractor_workflow_settings ADD COLUMN IF NOT EXISTS document_retention_months INTEGER DEFAULT 84`);
+    await run("contractor_workflow_settings.document_archive_after_days", sql`ALTER TABLE contractor_workflow_settings ADD COLUMN IF NOT EXISTS document_archive_after_days INTEGER DEFAULT 365`);
+    await run("contractor_workflow_settings.auto_archive_enabled", sql`ALTER TABLE contractor_workflow_settings ADD COLUMN IF NOT EXISTS auto_archive_enabled BOOLEAN DEFAULT FALSE`);
   }
 
   const { seedDatabase } = await import("./seed");
