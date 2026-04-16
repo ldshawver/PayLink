@@ -1,4 +1,6 @@
 import nodemailer from "nodemailer";
+import { storage } from "./storage";
+import { decryptSecret } from "./cryptoUtils";
 
 /**
  * Normalize a phone number to E.164 format (+1XXXXXXXXXX) for Twilio.
@@ -52,7 +54,36 @@ function deriveSmtpHost(email?: string): string | undefined {
   return knownHosts[domain] ?? `smtp.${domain}`;
 }
 
-export function getTransporter() {
+/**
+ * Resolve SMTP transport — checks DB config first, falls back to env vars.
+ * Returns null if configuration is missing.
+ */
+export async function getTransporter(): Promise<{ transporter: nodemailer.Transporter; fromAddress: string } | null> {
+  try {
+    const dbCfg = await storage.getSmtpConfig();
+    if (dbCfg?.isConfigured && dbCfg.host && dbCfg.username) {
+      const pass = dbCfg.hasPassword && dbCfg.passwordHash
+        ? (decryptSecret(dbCfg.passwordHash) ?? process.env.SMTP_PASS ?? "")
+        : (process.env.SMTP_PASS ?? "");
+      const port = dbCfg.port ?? 587;
+      const secure = port === 465;
+      const transporter = nodemailer.createTransport({
+        host: dbCfg.host,
+        port,
+        secure,
+        auth: { user: dbCfg.username, pass },
+        ...(dbCfg.tlsMode === "starttls" && !secure ? { requireTLS: true } : {}),
+      });
+      const fromAddress = dbCfg.fromEmail
+        ? (dbCfg.fromName ? `"${dbCfg.fromName}" <${dbCfg.fromEmail}>` : dbCfg.fromEmail)
+        : dbCfg.username;
+      return { transporter, fromAddress };
+    }
+  } catch {
+    // DB unavailable — fall through to env var resolution
+  }
+
+  // Env var fallback
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
   const host = process.env.SMTP_HOST || deriveSmtpHost(user);
@@ -62,20 +93,66 @@ export function getTransporter() {
 
   if (!host || !user || !pass) return null;
 
-  // Port 465 = implicit TLS (secure:true). Port 587 with SMTP_TLS=true = STARTTLS (secure:false + requireTLS:true).
   const secure = port === 465;
-  const transportOptions: any = {
+  const transporter = nodemailer.createTransport({
     host,
     port,
     secure,
     auth: { user, pass },
-  };
-  if (!secure && useTls) {
-    transportOptions.requireTLS = true;
-    transportOptions.tls = { ciphers: "SSLv3", rejectUnauthorized: false };
+    ...((!secure && useTls) ? { requireTLS: true, tls: { ciphers: "SSLv3", rejectUnauthorized: false } } : {}),
+  });
+  return { transporter, fromAddress };
+}
+
+/**
+ * Resolve Twilio credentials — checks DB config first, falls back to env vars.
+ * Returns null if not fully configured.
+ */
+async function getTwilioCredentials(): Promise<{
+  accountSid: string;
+  authToken: string;
+  fromNumber: string | null;
+  messagingServiceSid: string | null;
+} | null> {
+  try {
+    const dbCfg = await storage.getSmsConfig();
+    if (dbCfg?.isConfigured && dbCfg.accountSid) {
+      const authToken = dbCfg.hasAuthToken && dbCfg.authTokenHash
+        ? (decryptSecret(dbCfg.authTokenHash) ?? process.env.TWILIO_AUTH_TOKEN ?? "")
+        : (process.env.TWILIO_AUTH_TOKEN ?? "");
+      if (authToken && (dbCfg.fromNumber || dbCfg.messagingServiceSid)) {
+        return {
+          accountSid: dbCfg.accountSid,
+          authToken,
+          fromNumber: dbCfg.fromNumber ?? null,
+          messagingServiceSid: dbCfg.messagingServiceSid ?? null,
+        };
+      }
+    }
+  } catch {
+    // DB unavailable — fall through to env var resolution
   }
 
-  return { transporter: nodemailer.createTransport(transportOptions), fromAddress };
+  // Env var fallback
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const fromNumber = process.env.TWILIO_PHONE_NUMBER ?? null;
+  if (!accountSid || !authToken || !fromNumber) return null;
+  return { accountSid, authToken, fromNumber, messagingServiceSid: null };
+}
+
+async function sendViaTwilio(to: string, body: string): Promise<void> {
+  const creds = await getTwilioCredentials();
+  if (!creds) throw new Error("Twilio not configured");
+  const twilio = (await import("twilio")).default;
+  const client = twilio(creds.accountSid, creds.authToken);
+  const msgParams: Record<string, string> = { body, to: normalizePhone(to) };
+  if (creds.messagingServiceSid) {
+    msgParams.messagingServiceSid = creds.messagingServiceSid;
+  } else {
+    msgParams.from = normalizePhone(creds.fromNumber!);
+  }
+  await client.messages.create(msgParams);
 }
 
 function formatShiftList(shifts: ScheduleNotificationPayload["shifts"]): string {
@@ -94,7 +171,7 @@ function formatShiftList(shifts: ScheduleNotificationPayload["shifts"]): string 
 export async function sendScheduleEmailNotification(payload: ScheduleNotificationPayload): Promise<{ sent: boolean; error?: string }> {
   if (!payload.email) return { sent: false, error: "No email address" };
 
-  const smtp = getTransporter();
+  const smtp = await getTransporter();
   if (!smtp) {
     console.warn("[Email] SMTP not configured — skipping email for", payload.workerName);
     return { sent: false, error: "SMTP not configured" };
@@ -144,7 +221,7 @@ export async function sendScheduleEmailNotification(payload: ScheduleNotificatio
 
 export async function sendShiftMarketplaceEmail(payload: ShiftMarketplaceNotificationPayload): Promise<{ sent: boolean; error?: string }> {
   if (!payload.email) return { sent: false, error: "No email address" };
-  const smtp = getTransporter();
+  const smtp = await getTransporter();
   if (!smtp) return { sent: false, error: "SMTP not configured" };
   const html = payload.bodyHtml || `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
     <div style="background:linear-gradient(135deg,#0d9488,#2563eb);padding:20px;border-radius:8px 8px 0 0;">
@@ -168,17 +245,12 @@ export async function sendShiftMarketplaceEmail(payload: ShiftMarketplaceNotific
 
 export async function sendShiftMarketplaceSms(payload: ShiftMarketplaceNotificationPayload): Promise<{ sent: boolean; error?: string }> {
   if (!payload.phone) return { sent: false, error: "No phone number" };
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const fromNumber = process.env.TWILIO_PHONE_NUMBER;
-  if (!accountSid || !authToken || !fromNumber) return { sent: false, error: "Twilio not configured" };
   try {
-    const twilio = (await import("twilio")).default;
-    const client = twilio(accountSid, authToken);
-    await client.messages.create({ body: payload.bodyText, from: normalizePhone(fromNumber), to: normalizePhone(payload.phone) });
+    await sendViaTwilio(payload.phone, payload.bodyText);
     console.log(`[SMS] Shift marketplace notification sent to ${payload.phone}`);
     return { sent: true };
   } catch (err: any) {
+    if (err.message === "Twilio not configured") return { sent: false, error: "Twilio not configured" };
     console.error(`[SMS] Failed shift marketplace SMS to ${payload.phone}:`, err.message);
     return { sent: false, error: err.message };
   }
@@ -198,7 +270,7 @@ export interface ApprovalReminderPayload {
 
 export async function sendApprovalReminderEmail(payload: ApprovalReminderPayload): Promise<{ sent: boolean; error?: string }> {
   if (!payload.email) return { sent: false, error: "No email address" };
-  const smtp = getTransporter();
+  const smtp = await getTransporter();
   if (!smtp) return { sent: false, error: "SMTP not configured" };
 
   const items: string[] = [];
@@ -209,7 +281,6 @@ export async function sendApprovalReminderEmail(payload: ApprovalReminderPayload
 
   if (items.length === 0) return { sent: false, error: "No pending items" };
 
-  const itemList = items.join(", ");
   const subject = `Action Required: ${items.length} type${items.length > 1 ? "s" : ""} of items pending your approval — ${payload.companyName}`;
   const text = `Hi ${payload.recipientName},\n\nYou have items pending your approval at ${payload.companyName}:\n\n${items.map(i => `  • ${i}`).join("\n")}\n\nPlease review and approve or reject these items before payroll is processed.\n\nView pending items: ${payload.dashboardUrl}\n\nThank you,\n${payload.companyName} via PayLink`;
 
@@ -246,10 +317,6 @@ export async function sendApprovalReminderEmail(payload: ApprovalReminderPayload
 
 export async function sendApprovalReminderSms(payload: ApprovalReminderPayload): Promise<{ sent: boolean; error?: string }> {
   if (!payload.phone) return { sent: false, error: "No phone number" };
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const fromNumber = process.env.TWILIO_PHONE_NUMBER;
-  if (!accountSid || !authToken || !fromNumber) return { sent: false, error: "Twilio not configured" };
 
   const items: string[] = [];
   if (payload.pendingPunches > 0) items.push(`${payload.pendingPunches} punches`);
@@ -261,12 +328,11 @@ export async function sendApprovalReminderSms(payload: ApprovalReminderPayload):
   const message = `PayLink Reminder: ${payload.recipientName}, you have pending approvals at ${payload.companyName}: ${items.join(", ")}. Please review before payroll runs. ${payload.dashboardUrl}`;
 
   try {
-    const twilio = (await import("twilio")).default;
-    const client = twilio(accountSid, authToken);
-    await client.messages.create({ body: message, from: normalizePhone(fromNumber), to: normalizePhone(payload.phone) });
+    await sendViaTwilio(payload.phone, message);
     console.log(`[SMS] Approval reminder sent to ${payload.phone}`);
     return { sent: true };
   } catch (err: any) {
+    if (err.message === "Twilio not configured") return { sent: false, error: "Twilio not configured" };
     console.error(`[SMS] Failed approval reminder to ${payload.phone}:`, err.message);
     return { sent: false, error: err.message };
   }
@@ -379,29 +445,21 @@ export async function sendScheduleSmsNotification(payload: ScheduleNotificationP
   const phone = payload.phone;
   if (!phone) return { sent: false, error: "No phone number" };
 
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const fromNumber = process.env.TWILIO_PHONE_NUMBER;
-
-  if (!accountSid || !authToken || !fromNumber) {
-    console.warn("[SMS] Twilio not configured — skipping SMS for", payload.workerName);
-    return { sent: false, error: "Twilio not configured" };
-  }
-
   const nextShift = payload.shifts.sort((a, b) => a.date.localeCompare(b.date))[0];
   const [year, month, day] = nextShift.date.split("-").map(Number);
   const d = new Date(year, month - 1, day);
   const dayName = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-
   const message = `Hi ${payload.workerName}, your schedule at ${payload.companyName} has been posted. Next shift: ${dayName} ${nextShift.startTime}-${nextShift.endTime}. View: ${payload.scheduleViewUrl}`;
 
   try {
-    const twilio = (await import("twilio")).default;
-    const client = twilio(accountSid, authToken);
-    await client.messages.create({ body: message, from: normalizePhone(fromNumber), to: normalizePhone(phone) });
+    await sendViaTwilio(phone, message);
     console.log(`[SMS] Sent schedule notification to ${phone}`);
     return { sent: true };
   } catch (err: any) {
+    if (err.message === "Twilio not configured") {
+      console.warn("[SMS] Twilio not configured — skipping SMS for", payload.workerName);
+      return { sent: false, error: "Twilio not configured" };
+    }
     console.error(`[SMS] Failed to send to ${phone}:`, err.message);
     return { sent: false, error: err.message };
   }

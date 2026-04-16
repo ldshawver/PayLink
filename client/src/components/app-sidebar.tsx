@@ -68,6 +68,7 @@ import {
   KeyRound,
   Printer,
   Package,
+  Mail,
 } from "lucide-react";
 import {
   Sidebar,
@@ -435,13 +436,13 @@ const TENANT_NAV: NavGroup[] = [
   },
   {
     groupLabel: "System Admin",
-    roles: ["admin"],
+    roles: ["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"],
     sections: [
       {
         label: "Settings",
         icon: Settings,
         url: "/app/settings",
-        roles: ["admin"],
+        roles: ["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"],
         items: [
           { title: "Company Policies", url: "/app/settings", icon: Shield },
           { title: "Check Print Calibration", url: "/app/settings#calibration", icon: Printer },
@@ -449,17 +450,31 @@ const TENANT_NAV: NavGroup[] = [
         ],
       },
       {
+        label: "Email Settings",
+        icon: Mail,
+        url: "/app/settings/email",
+        roles: ["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"],
+        items: [],
+      },
+      {
+        label: "SMS Settings",
+        icon: MessageSquare,
+        url: "/app/settings/sms",
+        roles: ["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"],
+        items: [],
+      },
+      {
         label: "Alert Templates",
         icon: Bell,
         url: "/app/notification-templates",
-        roles: ["admin"],
+        roles: ["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"],
         items: [],
       },
       {
         label: "Tenant Permissions",
         icon: UserCog,
         url: "/app/role-management",
-        roles: ["admin"],
+        roles: ["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"],
         items: [
           { title: "Role Assignments", url: "/app/role-management?tab=assignments", icon: Users },
           { title: "Custom Roles", url: "/app/role-management?tab=custom-roles", icon: Shield },

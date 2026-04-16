@@ -210,6 +210,9 @@ import {
   weeklyLaborGoals, weeklyRevenueGoals,
   type WeeklyLaborGoal, type InsertWeeklyLaborGoal,
   type WeeklyRevenueGoal, type InsertWeeklyRevenueGoal,
+  smtpConfig, smsConfig,
+  type SmtpConfig, type InsertSmtpConfig,
+  type SmsConfig, type InsertSmsConfig,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -992,6 +995,14 @@ export interface IStorage {
   updateInventoryItem(id: string, data: Partial<InventoryItem>): Promise<InventoryItem | undefined>;
   deleteInventoryItem(id: string): Promise<void>;
   bulkSetInventory(companyId: string, items: InsertInventoryItem[]): Promise<InventoryItem[]>;
+
+  getSmtpConfig(): Promise<SmtpConfig | undefined>;
+  upsertSmtpConfig(data: Partial<InsertSmtpConfig>): Promise<SmtpConfig>;
+  updateSmtpConfigTestResult(result: string): Promise<void>;
+
+  getSmsConfig(): Promise<SmsConfig | undefined>;
+  upsertSmsConfig(data: Partial<InsertSmsConfig>): Promise<SmsConfig>;
+  updateSmsConfigTestResult(result: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -4385,6 +4396,54 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteWeeklyRevenueGoal(id: string): Promise<void> {
     await db.delete(weeklyRevenueGoals).where(eq(weeklyRevenueGoals.id, id));
+  }
+
+  // ── SMTP Config ───────────────────────────────────────────────────────────────
+  async getSmtpConfig(): Promise<SmtpConfig | undefined> {
+    const [r] = await db.select().from(smtpConfig).limit(1);
+    return r;
+  }
+
+  async upsertSmtpConfig(data: Partial<InsertSmtpConfig>): Promise<SmtpConfig> {
+    const existing = await this.getSmtpConfig();
+    if (existing) {
+      const [r] = await db.update(smtpConfig).set({ ...data, updatedAt: new Date() }).where(eq(smtpConfig.id, existing.id)).returning();
+      return r;
+    } else {
+      const [r] = await db.insert(smtpConfig).values({ ...data, updatedAt: new Date() } as InsertSmtpConfig).returning();
+      return r;
+    }
+  }
+
+  async updateSmtpConfigTestResult(result: string): Promise<void> {
+    const existing = await this.getSmtpConfig();
+    if (existing) {
+      await db.update(smtpConfig).set({ lastTestedAt: new Date(), lastTestResult: result }).where(eq(smtpConfig.id, existing.id));
+    }
+  }
+
+  // ── SMS Config ────────────────────────────────────────────────────────────────
+  async getSmsConfig(): Promise<SmsConfig | undefined> {
+    const [r] = await db.select().from(smsConfig).limit(1);
+    return r;
+  }
+
+  async upsertSmsConfig(data: Partial<InsertSmsConfig>): Promise<SmsConfig> {
+    const existing = await this.getSmsConfig();
+    if (existing) {
+      const [r] = await db.update(smsConfig).set({ ...data, updatedAt: new Date() }).where(eq(smsConfig.id, existing.id)).returning();
+      return r;
+    } else {
+      const [r] = await db.insert(smsConfig).values({ ...data, updatedAt: new Date() } as InsertSmsConfig).returning();
+      return r;
+    }
+  }
+
+  async updateSmsConfigTestResult(result: string): Promise<void> {
+    const existing = await this.getSmsConfig();
+    if (existing) {
+      await db.update(smsConfig).set({ lastTestedAt: new Date(), lastTestResult: result }).where(eq(smsConfig.id, existing.id));
+    }
   }
 }
 

@@ -2607,6 +2607,65 @@ Thank you,
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    await run("smtp_config table", sql`CREATE TABLE IF NOT EXISTS smtp_config (
+      id SERIAL PRIMARY KEY,
+      host TEXT,
+      port INTEGER DEFAULT 587,
+      username TEXT,
+      password_hash TEXT,
+      has_password BOOLEAN DEFAULT FALSE,
+      tls_mode TEXT DEFAULT 'starttls',
+      from_name TEXT,
+      from_email TEXT,
+      is_configured BOOLEAN DEFAULT FALSE,
+      last_tested_at TIMESTAMP,
+      last_test_result TEXT,
+      updated_at TIMESTAMP DEFAULT NOW(),
+      updated_by TEXT
+    )`);
+
+    await run("sms_config table", sql`CREATE TABLE IF NOT EXISTS sms_config (
+      id SERIAL PRIMARY KEY,
+      provider TEXT DEFAULT 'twilio',
+      account_sid TEXT,
+      has_auth_token BOOLEAN DEFAULT FALSE,
+      auth_token_hash TEXT,
+      from_number TEXT,
+      messaging_service_sid TEXT,
+      is_configured BOOLEAN DEFAULT FALSE,
+      last_tested_at TIMESTAMP,
+      last_test_result TEXT,
+      updated_at TIMESTAMP DEFAULT NOW(),
+      updated_by TEXT
+    )`);
+
+    await run("roles.capabilities", sql`ALTER TABLE roles ADD COLUMN IF NOT EXISTS capabilities TEXT`);
+    await run("role_permissions.can_configure", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_configure BOOLEAN DEFAULT FALSE`);
+
+    await run("weekly_labor_goals table", sql`CREATE TABLE IF NOT EXISTS weekly_labor_goals (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      cost_center_id VARCHAR,
+      job_id VARCHAR,
+      week_start DATE NOT NULL,
+      target_amount NUMERIC NOT NULL DEFAULT 0,
+      auto_recur BOOLEAN DEFAULT FALSE,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    await run("weekly_revenue_goals table", sql`CREATE TABLE IF NOT EXISTS weekly_revenue_goals (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      cost_center_id VARCHAR,
+      job_id VARCHAR,
+      week_start DATE NOT NULL,
+      target_amount NUMERIC NOT NULL DEFAULT 0,
+      auto_recur BOOLEAN DEFAULT FALSE,
+      created_by VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   const { seedDatabase } = await import("./seed");

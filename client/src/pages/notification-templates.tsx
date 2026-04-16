@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -31,8 +32,8 @@ import {
   Send,
   Save,
   Info,
-  CheckCircle2,
   AlertCircle,
+  X,
 } from "lucide-react";
 
 interface NotificationTemplate {
@@ -52,7 +53,7 @@ interface NotificationTemplate {
 
 interface NotifStatus {
   email: { configured: boolean; from: string | null; missing?: string[]; derivedHost?: string | null };
-  sms: { configured: boolean; fromNumber: string | null; missing?: string[] };
+  sms: { configured: boolean; missing?: string[] };
 }
 
 function VariableBadge({ v }: { v: string }) {
@@ -179,14 +180,16 @@ function TemplateCard({ template, status }: { template: NotificationTemplate; st
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Label htmlFor={`email-toggle-${template.event_type}`} className="text-xs text-muted-foreground">
-                    {form.emailEnabled ? "Enabled" : "Disabled"}
+                  <Label htmlFor={`email-toggle-${template.event_type}`} className={`text-xs ${status && !status.email.configured ? "text-muted-foreground/50" : "text-muted-foreground"}`}>
+                    {status && !status.email.configured ? "Unavailable" : (form.emailEnabled ? "Enabled" : "Disabled")}
                   </Label>
                   <Switch
                     id={`email-toggle-${template.event_type}`}
-                    checked={form.emailEnabled}
+                    checked={form.emailEnabled && !!(status?.email.configured)}
                     onCheckedChange={v => setForm(f => ({ ...f, emailEnabled: v }))}
+                    disabled={status !== undefined && !status.email.configured}
                     data-testid={`switch-email-${template.event_type}`}
+                    title={status && !status.email.configured ? "Configure SMTP to enable email alerts" : undefined}
                   />
                 </div>
               </div>
@@ -227,14 +230,16 @@ function TemplateCard({ template, status }: { template: NotificationTemplate; st
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Label htmlFor={`sms-toggle-${template.event_type}`} className="text-xs text-muted-foreground">
-                    {form.smsEnabled ? "Enabled" : "Disabled"}
+                  <Label htmlFor={`sms-toggle-${template.event_type}`} className={`text-xs ${status && !status.sms.configured ? "text-muted-foreground/50" : "text-muted-foreground"}`}>
+                    {status && !status.sms.configured ? "Unavailable" : (form.smsEnabled ? "Enabled" : "Disabled")}
                   </Label>
                   <Switch
                     id={`sms-toggle-${template.event_type}`}
-                    checked={form.smsEnabled}
+                    checked={form.smsEnabled && !!(status?.sms.configured)}
                     onCheckedChange={v => setForm(f => ({ ...f, smsEnabled: v }))}
+                    disabled={status !== undefined && !status.sms.configured}
                     data-testid={`switch-sms-${template.event_type}`}
+                    title={status && !status.sms.configured ? "Configure Twilio to enable SMS alerts" : undefined}
                   />
                 </div>
               </div>
@@ -376,6 +381,22 @@ export default function NotificationTemplatesPage() {
     queryKey: ["/api/admin/notification-status"],
   });
 
+  const [emailBannerDismissed, setEmailBannerDismissed] = useState(
+    () => localStorage.getItem("notif-email-banner-dismissed") === "true"
+  );
+  const [smsBannerDismissed, setSmsBannerDismissed] = useState(
+    () => localStorage.getItem("notif-sms-banner-dismissed") === "true"
+  );
+
+  function dismissEmailBanner() {
+    setEmailBannerDismissed(true);
+    localStorage.setItem("notif-email-banner-dismissed", "true");
+  }
+  function dismissSmsBanner() {
+    setSmsBannerDismissed(true);
+    localStorage.setItem("notif-sms-banner-dismissed", "true");
+  }
+
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
       <div>
@@ -386,35 +407,61 @@ export default function NotificationTemplatesPage() {
         </p>
       </div>
 
-      {/* Channel status */}
-      {status && (
+      {/* Channel status — only show warning banner when at least one channel is unconfigured */}
+      {status && (!status.email.configured || !status.sms.configured) && (
         <div className="flex flex-col gap-2">
-          <div className={`flex flex-wrap items-center gap-2 rounded-lg px-3 py-2 text-sm border ${status.email.configured ? "bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950 dark:border-emerald-800 dark:text-emerald-300" : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-300"}`}>
-            {status.email.configured ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
-            <span className="font-medium">Email (SMTP):</span>
-            {status.email.configured
-              ? <span>Configured — from {status.email.from}{status.email.derivedHost ? ` (host auto-derived: ${status.email.derivedHost})` : ""}</span>
-              : <span className="flex flex-wrap items-center gap-1">
-                  Not configured — missing:&nbsp;
-                  {(status.email.missing ?? ["SMTP_HOST", "SMTP_USER", "SMTP_PASS"]).map((v: string) => (
-                    <code key={v} className="text-xs bg-amber-200/60 dark:bg-amber-900/60 px-1.5 py-0.5 rounded font-mono">{v}</code>
-                  ))}
-                </span>
-            }
-          </div>
-          <div className={`flex flex-wrap items-center gap-2 rounded-lg px-3 py-2 text-sm border ${status.sms.configured ? "bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950 dark:border-emerald-800 dark:text-emerald-300" : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-300"}`}>
-            {status.sms.configured ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
-            <span className="font-medium">SMS (Twilio):</span>
-            {status.sms.configured
-              ? <span>Configured</span>
-              : <span className="flex flex-wrap items-center gap-1">
-                  Not configured — missing:&nbsp;
-                  {(status.sms.missing ?? ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER"]).map((v: string) => (
-                    <code key={v} className="text-xs bg-amber-200/60 dark:bg-amber-900/60 px-1.5 py-0.5 rounded font-mono">{v}</code>
-                  ))}
-                </span>
-            }
-          </div>
+          {!status.email.configured && !emailBannerDismissed && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg px-3 py-2 text-sm border bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-300">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span className="font-medium">Email (SMTP):</span>
+              <span className="flex flex-wrap items-center gap-1">
+                Not configured — missing:&nbsp;
+                {(status.email.missing ?? ["SMTP_HOST", "SMTP_USER", "SMTP_PASS"]).map((v: string) => (
+                  <code key={v} className="text-xs bg-amber-200/60 dark:bg-amber-900/60 px-1.5 py-0.5 rounded font-mono">{v}</code>
+                ))}
+              </span>
+              <Link href="/app/settings/email" className="ml-auto">
+                <Button variant="ghost" size="sm" className="h-6 text-xs px-2" data-testid="button-configure-email">
+                  Configure Email
+                </Button>
+              </Link>
+              <button
+                type="button"
+                className="ml-1 text-amber-600 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-200"
+                onClick={dismissEmailBanner}
+                aria-label="Dismiss email warning"
+                data-testid="button-dismiss-email-banner"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+          {!status.sms.configured && !smsBannerDismissed && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg px-3 py-2 text-sm border bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-300">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span className="font-medium">SMS (Twilio):</span>
+              <span className="flex flex-wrap items-center gap-1">
+                Not configured — missing:&nbsp;
+                {(status.sms.missing ?? ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER"]).map((v: string) => (
+                  <code key={v} className="text-xs bg-amber-200/60 dark:bg-amber-900/60 px-1.5 py-0.5 rounded font-mono">{v}</code>
+                ))}
+              </span>
+              <Link href="/app/settings/sms" className="ml-auto">
+                <Button variant="ghost" size="sm" className="h-6 text-xs px-2" data-testid="button-configure-sms">
+                  Configure SMS
+                </Button>
+              </Link>
+              <button
+                type="button"
+                className="ml-1 text-amber-600 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-200"
+                onClick={dismissSmsBanner}
+                aria-label="Dismiss SMS warning"
+                data-testid="button-dismiss-sms-banner"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
         </div>
       )}
 

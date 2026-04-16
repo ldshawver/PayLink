@@ -73,6 +73,8 @@ const RoleManagementPage = lazy(() => import("@/pages/role-management"));
 const PlatformAuditPage = lazy(() => import("@/pages/platform-audit"));
 const InventoryPage = lazy(() => import("@/pages/inventory"));
 const KpiGoalsPage = lazy(() => import("@/pages/kpi-goals"));
+const EmailSettingsPage = lazy(() => import("@/pages/email-settings"));
+const SmsSettingsPage = lazy(() => import("@/pages/sms-settings"));
 
 // ─── Shared page-loading fallback ────────────────────────────────────────────
 function PageLoader() {
@@ -85,7 +87,7 @@ function PageLoader() {
 
 // Client-side role expansion — maps new explicit role names to legacy aliases for RoleGuard
 const ADMIN_ROLE_ALIASES = new Set([
-  "admin", "platform_super_admin", "platform_admin", "platform_support", "platform_implementation",
+  "admin", "system_admin", "platform_super_admin", "platform_admin", "platform_support", "platform_implementation",
   "tenant_owner", "tenant_admin", "tenant_hr_admin", "tenant_payroll_admin", "tenant_finance_admin",
 ]);
 const MANAGER_ROLE_ALIASES = new Set([
@@ -100,17 +102,34 @@ function expandRoles(role: string): string[] {
   return out;
 }
 
+function AccessDenied() {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center p-6">
+      <div className="h-14 w-14 rounded-full bg-destructive/10 flex items-center justify-center">
+        <span className="text-2xl text-destructive font-bold">403</span>
+      </div>
+      <h2 className="text-xl font-semibold">Access Denied</h2>
+      <p className="text-muted-foreground max-w-sm text-sm">
+        You don't have permission to view this page. Contact your administrator if you believe this is an error.
+      </p>
+    </div>
+  );
+}
+
 function RoleGuard({ roles, children }: { roles: string[]; children: React.ReactNode }) {
   const { user } = useAuth();
-  const [, setLocation] = useLocation();
   const userRole = user?.role || "employee";
   const expanded = expandRoles(userRole);
   const allowed = roles.some(r => expanded.includes(r));
 
-  if (!allowed) {
-    setTimeout(() => setLocation("/app"), 0);
-    return null;
-  }
+  if (!allowed) return <AccessDenied />;
+  return <>{children}</>;
+}
+
+function StrictRoleGuard({ roles, children }: { roles: string[]; children: React.ReactNode }) {
+  const { user, isLoading } = useAuth();
+  if (isLoading || !user) return null;
+  if (!roles.includes(user.role)) return <AccessDenied />;
   return <>{children}</>;
 }
 
@@ -158,7 +177,9 @@ function AuthenticatedRouter() {
         <Route path="/app/contractor-hub" component={ContractorHubPage} />
         <Route path="/app/treasury">{() => <RoleGuard roles={["admin"]}><TreasuryPage /></RoleGuard>}</Route>
         <Route path="/app/settings">{() => <RoleGuard roles={["admin"]}><SettingsPage /></RoleGuard>}</Route>
-        <Route path="/app/role-management">{() => <RoleGuard roles={["admin"]}><RoleManagementPage /></RoleGuard>}</Route>
+        <Route path="/app/settings/email">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"]}><EmailSettingsPage /></StrictRoleGuard>}</Route>
+        <Route path="/app/settings/sms">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"]}><SmsSettingsPage /></StrictRoleGuard>}</Route>
+        <Route path="/app/role-management">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"]}><RoleManagementPage /></StrictRoleGuard>}</Route>
         <Route path="/app/kpi-goals">{() => <RoleGuard roles={["admin", "manager"]}><KpiGoalsPage /></RoleGuard>}</Route>
         <Route component={NotFound} />
       </Switch>

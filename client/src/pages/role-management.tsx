@@ -17,8 +17,8 @@ import { Users, Shield, KeyRound, Pencil, Plus, Trash2, Search, AlertCircle } fr
 import { useToast } from "@/hooks/use-toast";
 
 type UserRecord = { id: string; username: string; role: string; companyId?: string | null; workerId?: string | null; isActive: boolean };
-type Role = { id: string; name: string; description?: string; level: number; isSystem?: boolean; companyId?: string | null };
-type RolePermission = { id: string; roleId: string; resource: string; canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean; canExport: boolean; canApprove: boolean };
+type Role = { id: string; name: string; description?: string; level: number; isSystem?: boolean; companyId?: string | null; capabilities?: string | null };
+type RolePermission = { id: string; roleId: string; resource: string; canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean; canExport: boolean; canApprove: boolean; canConfigure: boolean };
 
 const TENANT_ROLES = [
   "tenant_owner", "tenant_admin", "tenant_hr_admin", "tenant_payroll_admin",
@@ -177,6 +177,18 @@ function RoleAssignmentsTab() {
 }
 
 // ─── Tab 2: Custom Roles ──────────────────────────────────────────────────────
+type Capabilities = { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean; canExport: boolean; canApprove: boolean; canConfigure: boolean };
+const DEFAULT_CAPS: Capabilities = { canView: true, canCreate: false, canEdit: false, canDelete: false, canExport: false, canApprove: false, canConfigure: false };
+const CAP_LABELS: Array<{ key: keyof Capabilities; label: string }> = [
+  { key: "canView", label: "View" }, { key: "canCreate", label: "Create" }, { key: "canEdit", label: "Edit" },
+  { key: "canDelete", label: "Delete" }, { key: "canExport", label: "Export" },
+  { key: "canApprove", label: "Approve" }, { key: "canConfigure", label: "Configure" },
+];
+
+function parseCaps(raw?: string | null): Capabilities {
+  try { return raw ? { ...DEFAULT_CAPS, ...JSON.parse(raw) } : { ...DEFAULT_CAPS }; } catch { return { ...DEFAULT_CAPS }; }
+}
+
 function CustomRolesTab() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -184,6 +196,7 @@ function CustomRolesTab() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [level, setLevel] = useState("50");
+  const [caps, setCaps] = useState<Capabilities>({ ...DEFAULT_CAPS });
 
   const { data: roles = [], isLoading } = useQuery<Role[]>({ queryKey: ["/api/roles"] });
   const customRoles = roles.filter(r => !r.isSystem);
@@ -219,14 +232,21 @@ function CustomRolesTab() {
     onError: () => toast({ title: "Failed to delete role", variant: "destructive" }),
   });
 
-  function resetForm() { setName(""); setDescription(""); setLevel("50"); setEditRole(null); }
+  function resetForm() { setName(""); setDescription(""); setLevel("50"); setCaps({ ...DEFAULT_CAPS }); setEditRole(null); }
 
   function openCreate() { resetForm(); setDialogOpen(true); }
-  function openEdit(r: Role) { setEditRole(r); setName(r.name); setDescription(r.description || ""); setLevel(String(r.level)); setDialogOpen(true); }
+  function openEdit(r: Role) {
+    setEditRole(r);
+    setName(r.name);
+    setDescription(r.description || "");
+    setLevel(String(r.level));
+    setCaps(parseCaps(r.capabilities));
+    setDialogOpen(true);
+  }
 
   function submit() {
     if (!name.trim()) return toast({ title: "Name is required", variant: "destructive" });
-    const payload = { name: name.trim(), description: description.trim(), level: parseInt(level) };
+    const payload = { name: name.trim(), description: description.trim(), level: parseInt(level), capabilities: JSON.stringify(caps) };
     if (editRole) updateMutation.mutate({ ...payload, id: editRole.id });
     else createMutation.mutate(payload);
   }
@@ -259,6 +279,25 @@ function CustomRolesTab() {
               <div className="space-y-1">
                 <Label>Permission Level <span className="text-muted-foreground">(1=employee, 50=manager, 100=admin)</span></Label>
                 <Input type="number" min={1} max={100} value={level} onChange={e => setLevel(e.target.value)} data-testid="input-role-level" />
+              </div>
+              <div className="space-y-2">
+                <Label>Default Capabilities</Label>
+                <p className="text-xs text-muted-foreground">Select the capabilities this role has by default across all resources.</p>
+                <div className="grid grid-cols-2 gap-2 border rounded-lg p-3 bg-muted/30">
+                  {CAP_LABELS.map(({ key, label }) => (
+                    <div key={key} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id={`cap-${key}`}
+                        checked={caps[key]}
+                        onChange={e => setCaps(c => ({ ...c, [key]: e.target.checked }))}
+                        className="cursor-pointer"
+                        data-testid={`cap-checkbox-${key}`}
+                      />
+                      <label htmlFor={`cap-${key}`} className="text-sm cursor-pointer select-none">{label}</label>
+                    </div>
+                  ))}
+                </div>
               </div>
               <div className="flex gap-2 pt-1">
                 <Button onClick={submit} disabled={isPending} data-testid="button-save-custom-role">
@@ -349,15 +388,24 @@ type MatrixData = {
   userRoles: any[];
 };
 
-const PERM_KEYS = ["canView", "canCreate", "canEdit", "canDelete", "canExport", "canApprove"] as const;
+const PERM_KEYS = ["canView", "canCreate", "canEdit", "canDelete", "canExport", "canApprove", "canConfigure"] as const;
 const PERM_LABELS: Record<string, string> = {
   canView: "View", canCreate: "Create", canEdit: "Edit",
-  canDelete: "Delete", canExport: "Export", canApprove: "Approve",
+  canDelete: "Delete", canExport: "Export", canApprove: "Approve", canConfigure: "Configure",
 };
+
+const SCOPE_OPTIONS = [
+  { value: "all", label: "All Scopes" },
+  { value: "tenant", label: "Tenant" },
+  { value: "department", label: "Department" },
+  { value: "direct_reports", label: "Direct Reports" },
+  { value: "self", label: "Self" },
+] as const;
 
 function PermissionOverridesTab() {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
+  const [scopeFilter, setScopeFilter] = useState(() => localStorage.getItem("perm-scope-filter") || "all");
 
   const { data: matrix, isLoading } = useQuery<MatrixData>({ queryKey: ["/api/permissions/matrix"] });
 
@@ -375,13 +423,23 @@ function PermissionOverridesTab() {
   if (!matrix) return <p className="text-destructive text-sm">Failed to load permission matrix.</p>;
 
   const { roles = [], permissions = [] } = matrix;
+
+  const scopedRoles = roles.filter(r => {
+    if (scopeFilter === "all") return true;
+    if (scopeFilter === "tenant") return r.level >= 40;
+    if (scopeFilter === "department") return r.level >= 20 && r.level < 40;
+    if (scopeFilter === "direct_reports") return r.level >= 5 && r.level < 20;
+    if (scopeFilter === "self") return r.level < 5;
+    return true;
+  });
+
   const resources = Array.from(new Set(permissions.map(p => p.resource))).sort();
   const filteredResources = resources.filter(r => r.toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <div className="relative flex-1 max-w-sm">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[160px] max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Filter resources…"
@@ -391,6 +449,16 @@ function PermissionOverridesTab() {
             data-testid="input-perm-search"
           />
         </div>
+        <Select value={scopeFilter} onValueChange={v => { setScopeFilter(v); localStorage.setItem("perm-scope-filter", v); }}>
+          <SelectTrigger className="w-[160px]" data-testid="select-perm-scope">
+            <SelectValue placeholder="Scope" />
+          </SelectTrigger>
+          <SelectContent>
+            {SCOPE_OPTIONS.map(o => (
+              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Badge variant="secondary">{filteredResources.length} resource{filteredResources.length !== 1 ? "s" : ""}</Badge>
       </div>
 
@@ -422,7 +490,7 @@ function PermissionOverridesTab() {
                         </tr>
                       </thead>
                       <tbody>
-                        {roles.map(role => {
+                        {scopedRoles.map(role => {
                           const perm = resourcePerms.find(p => p.roleId === role.id);
                           if (!perm) return null;
                           return (

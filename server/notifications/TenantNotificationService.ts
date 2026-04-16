@@ -168,7 +168,7 @@ export async function sendTenantLifecycleNotification(
 
   if (payload.ownerEmail) {
     try {
-      const smtp = getTransporter();
+      const smtp = await getTransporter();
       if (smtp) {
         await smtp.transporter.sendMail({
           from: smtp.fromAddress,

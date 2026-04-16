@@ -17,6 +17,7 @@ import fs from "fs";
 import { computeDispositionDate, getDefaultRetentionPolicySeedData } from "./retentionCalculator";
 import { emitIntegrationEvent } from "./integrationEvents";
 import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
+import { encryptSecret, decryptSecret, isEncryptionAvailable } from "./cryptoUtils";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -123,6 +124,9 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 function expandRoleForGuard(role: string): string[] {
   if (role === "platform_super_admin" || role === "platform_admin") {
     return ["admin", "manager", "supervisor", role];
+  }
+  if (role === "system_admin") {
+    return ["admin", "system_admin"];
   }
   if (role === "platform_support" || role === "platform_implementation") {
     return ["admin", "manager", role];
@@ -10826,7 +10830,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/roles", async (_req, res) => {
+  app.get("/api/roles", requireRole("admin"), async (_req, res) => {
     try {
       const items = await storage.getRoles();
       res.json(items);
@@ -10836,12 +10840,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/roles", requireRole("admin"), async (req, res) => {
+  // Roles explicitly allowed to manage custom roles and permissions.
+  // Literal check (no alias expansion) to prevent unintended role bleed-through.
+  const ROLE_MGMT_ALLOWED: readonly string[] = [
+    "admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin",
+  ];
+  function assertRoleMgmtAccess(userRole: string | undefined, res: any): boolean {
+    if (!ROLE_MGMT_ALLOWED.includes(userRole ?? "")) {
+      res.status(403).json({ message: "Insufficient role for role management" });
+      return false;
+    }
+    return true;
+  }
+
+  app.post("/api/roles", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
-      const data = insertRoleSchema.parse(req.body);
-      delete (data as any).isSystem;
+      if (!assertRoleMgmtAccess(user?.role, res)) return;
+      const { isSystem, ...body } = req.body;
+      const data = insertRoleSchema.parse(body);
       const item = await storage.createRole(data);
       res.status(201).json(item);
     } catch (error: any) {
@@ -10849,10 +10866,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/roles/:id", requireRole("admin"), async (req, res) => {
+  app.patch("/api/roles/:id", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      if (!assertRoleMgmtAccess(user?.role, res)) return;
       const { isSystem, ...data } = req.body;
       const item = await storage.updateRole(req.params.id, data);
       if (!item) return res.status(404).json({ message: "Not found" });
@@ -10863,10 +10880,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/roles/:id", requireRole("admin"), async (req, res) => {
+  app.delete("/api/roles/:id", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      if (!assertRoleMgmtAccess(user?.role, res)) return;
       const role = await storage.getRole(req.params.id);
       if (role?.isSystem) return res.status(400).json({ message: "Cannot delete system roles" });
       await storage.deleteRole(req.params.id);
@@ -10960,7 +10977,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/role-permissions", async (req, res) => {
+  app.get("/api/role-permissions", requireRole("admin"), async (req, res) => {
     try {
       const roleId = req.query.roleId as string | undefined;
       if (roleId) {
@@ -10976,10 +10993,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/role-permissions", requireRole("admin"), async (req, res) => {
+  app.post("/api/role-permissions", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      if (!assertRoleMgmtAccess(user?.role, res)) return;
       const data = insertRolePermissionSchema.parse(req.body);
       const item = await storage.createRolePermission(data);
       res.status(201).json(item);
@@ -10988,10 +11005,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.patch("/api/role-permissions/:id", requireRole("admin"), async (req, res) => {
+  app.patch("/api/role-permissions/:id", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      if (!assertRoleMgmtAccess(user?.role, res)) return;
       const item = await storage.updateRolePermission(req.params.id, req.body);
       if (!item) return res.status(404).json({ message: "Not found" });
       res.json(item);
@@ -11001,10 +11018,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.delete("/api/role-permissions/:id", requireRole("admin"), async (req, res) => {
+  app.delete("/api/role-permissions/:id", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      if (!assertRoleMgmtAccess(user?.role, res)) return;
       await storage.deleteRolePermission(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -11013,10 +11030,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/role-permissions/bulk", async (req, res) => {
+  app.post("/api/role-permissions/bulk", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      if (!assertRoleMgmtAccess(user?.role, res)) return;
       const { roleId, permissions } = req.body;
       if (!roleId || !permissions) return res.status(400).json({ message: "roleId and permissions required" });
       await storage.deleteRolePermissionsByRole(roleId);
@@ -11033,7 +11050,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/user-roles", async (req, res) => {
+  app.get("/api/user-roles", requireRole("admin"), async (req, res) => {
     try {
       const userId = req.query.userId as string | undefined;
       const items = await storage.getUserRoles(userId);
@@ -11044,10 +11061,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.post("/api/user-roles", async (req, res) => {
+  app.post("/api/user-roles", requireRole("admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      if (!assertRoleMgmtAccess(user?.role, res)) return;
       const data = insertUserRoleSchema.parse(req.body);
       const item = await storage.createUserRole(data);
       res.status(201).json(item);
@@ -11059,7 +11076,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.delete("/api/user-roles/:id", requireRole("admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (user?.role !== "admin") return res.status(403).json({ message: "Admin access required" });
+      if (!assertRoleMgmtAccess(user?.role, res)) return;
       await storage.deleteUserRole(req.params.id);
       res.json({ message: "Deleted" });
     } catch (error) {
@@ -16117,7 +16134,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // SMTP notification — best-effort only; DB persistence is source of truth
       try {
         const { getTransporter } = await import("./notifications.js");
-        const smtp = getTransporter();
+        const smtp = await getTransporter();
         if (smtp) {
           const interestLabel = interest.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
           const nameLabel = [firstName, lastName].filter(Boolean).join(" ") || "(not provided)";
@@ -16237,7 +16254,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const { getTransporter } = await import("./notifications");
       if (channel === "email") {
         if (!toEmail) return res.status(400).json({ message: "toEmail required" });
-        const smtp = getTransporter();
+        const smtp = await getTransporter();
         if (!smtp) return res.status(400).json({ message: "SMTP not configured" });
         const subject = fill(tmpl.email_subject);
         const body = fill(tmpl.email_body);
@@ -16272,54 +16289,429 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  // Admin — SMS/notification config status
-  app.get("/api/admin/notification-status", requireRole("admin"), async (_req, res) => {
-    const smtpUser = process.env.SMTP_USER;
-    const smtpPass = process.env.SMTP_PASS;
-    const smtpHostExplicit = process.env.SMTP_HOST;
-    // Derive host from email domain if not explicitly set
-    let smtpHostDerived: string | undefined;
-    if (!smtpHostExplicit && smtpUser && smtpUser.includes("@")) {
-      const domain = smtpUser.split("@")[1].toLowerCase();
-      const knownHosts: Record<string, string> = {
-        "gmail.com": "smtp.gmail.com", "googlemail.com": "smtp.gmail.com",
-        "outlook.com": "smtp.office365.com", "hotmail.com": "smtp.office365.com", "live.com": "smtp.office365.com",
-        "yahoo.com": "smtp.mail.yahoo.com", "sendgrid.net": "smtp.sendgrid.net",
-        "mailgun.org": "smtp.mailgun.org", "zoho.com": "smtp.zoho.com",
-      };
-      smtpHostDerived = knownHosts[domain] ?? `smtp.${domain}`;
-    }
-    const smtpHost = smtpHostExplicit || smtpHostDerived;
-    const smtpConfigured = !!(smtpHost && smtpUser && smtpPass);
-    const smtpMissing = [
-      !smtpHostExplicit && !smtpHostDerived ? "SMTP_HOST" : null,
-      !smtpUser ? "SMTP_USER" : null,
-      !smtpPass ? "SMTP_PASS" : null,
-    ].filter(Boolean);
+  // Admin — SMS/notification config status (DB config takes precedence over env vars)
+  app.get("/api/admin/notification-status", requireRole("admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (_req, res) => {
+    // Check DB-backed config first, then fall back to env vars
+    let emailConfigured = false;
+    let emailFrom: string | null = null;
+    let emailDerivedHost: string | null = null;
+    let emailMissing: string[] = [];
 
-    const twilioSid = process.env.TWILIO_ACCOUNT_SID;
-    const twilioToken = process.env.TWILIO_AUTH_TOKEN;
-    const twilioPhone = process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_FROM_NUMBER;
-    const twilioMissing = [
-      !twilioSid ? "TWILIO_ACCOUNT_SID" : null,
-      !twilioToken ? "TWILIO_AUTH_TOKEN" : null,
-      !twilioPhone ? "TWILIO_PHONE_NUMBER" : null,
-    ].filter(Boolean);
+    let smsConfigured = false;
+    let smsMissing: string[] = [];
+
+    try {
+      const [dbSmtp, dbSms] = await Promise.all([
+        storage.getSmtpConfig(),
+        storage.getSmsConfig(),
+      ]);
+
+      if (dbSmtp?.isConfigured) {
+        emailConfigured = true;
+        emailFrom = dbSmtp.fromEmail || dbSmtp.username || null;
+      }
+      if (dbSms?.isConfigured) {
+        smsConfigured = true;
+      }
+    } catch {
+      // DB unavailable — continue with env var check
+    }
+
+    // Env var fallback for email
+    if (!emailConfigured) {
+      const smtpUser = process.env.SMTP_USER;
+      const smtpPass = process.env.SMTP_PASS;
+      const smtpHostExplicit = process.env.SMTP_HOST;
+      let smtpHostDerived: string | undefined;
+      if (!smtpHostExplicit && smtpUser?.includes("@")) {
+        const domain = smtpUser.split("@")[1].toLowerCase();
+        const knownHosts: Record<string, string> = {
+          "gmail.com": "smtp.gmail.com", "googlemail.com": "smtp.gmail.com",
+          "outlook.com": "smtp.office365.com", "hotmail.com": "smtp.office365.com", "live.com": "smtp.office365.com",
+          "yahoo.com": "smtp.mail.yahoo.com", "sendgrid.net": "smtp.sendgrid.net",
+          "mailgun.org": "smtp.mailgun.org", "zoho.com": "smtp.zoho.com",
+        };
+        smtpHostDerived = knownHosts[domain] ?? `smtp.${domain}`;
+      }
+      const smtpHost = smtpHostExplicit || smtpHostDerived;
+      emailConfigured = !!(smtpHost && smtpUser && smtpPass);
+      emailFrom = process.env.SMTP_FROM || smtpUser || null;
+      emailDerivedHost = smtpHostDerived || null;
+      emailMissing = [
+        !smtpHostExplicit && !smtpHostDerived ? "SMTP_HOST" : null,
+        !smtpUser ? "SMTP_USER" : null,
+        !smtpPass ? "SMTP_PASS" : null,
+      ].filter(Boolean) as string[];
+    }
+
+    // Env var fallback for SMS
+    if (!smsConfigured) {
+      const twilioSid = process.env.TWILIO_ACCOUNT_SID;
+      const twilioToken = process.env.TWILIO_AUTH_TOKEN;
+      const twilioPhone = process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_FROM_NUMBER;
+      smsConfigured = !!(twilioSid && twilioToken && twilioPhone);
+      smsMissing = [
+        !twilioSid ? "TWILIO_ACCOUNT_SID" : null,
+        !twilioToken ? "TWILIO_AUTH_TOKEN" : null,
+        !twilioPhone ? "TWILIO_PHONE_NUMBER" : null,
+      ].filter(Boolean) as string[];
+    }
 
     res.json({
       sms: {
-        configured: !!(twilioSid && twilioToken && twilioPhone),
-        missing: twilioMissing,
-        fromNumber: twilioPhone ? "configured" : null,
+        configured: smsConfigured,
+        missing: smsMissing,
       },
       email: {
-        configured: smtpConfigured,
-        missing: smtpMissing,
-        from: process.env.SMTP_FROM || smtpUser || null,
-        derivedHost: smtpHostDerived || null,
+        configured: emailConfigured,
+        missing: emailMissing,
+        from: emailFrom,
+        derivedHost: emailDerivedHost,
       },
     });
   });
+
+  // ── SMTP / SMS Config routes ──────────────────────────────────────────────────
+  // Allowed roles: legacy "admin" + all elevated platform/tenant admin roles.
+  const CHANNEL_CONFIG_ROLES = [
+    "admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner",
+  ] as const;
+
+  function isChannelConfigEditor(role: string): boolean {
+    return (CHANNEL_CONFIG_ROLES as readonly string[]).includes(role);
+  }
+
+  // -- SMTP --
+  app.get("/api/admin/smtp-config",
+    requireRole(...CHANNEL_CONFIG_ROLES),
+    async (req, res) => {
+      try {
+        const user = await storage.getUser(req.session!.userId!);
+        const canEdit = isChannelConfigEditor(user?.role ?? "");
+        if (!canEdit) return res.status(403).json({ message: "Insufficient role for channel configuration access" });
+        const config = await storage.getSmtpConfig();
+        if (!config) return res.json({ isConfigured: false, canEdit });
+        res.json({
+          id: config.id,
+          host: config.host,
+          port: config.port,
+          username: config.username,
+          hasPassword: config.hasPassword,
+          tlsMode: config.tlsMode,
+          fromName: config.fromName,
+          fromEmail: config.fromEmail,
+          isConfigured: config.isConfigured,
+          lastTestedAt: config.lastTestedAt,
+          lastTestResult: config.lastTestResult,
+          updatedAt: config.updatedAt,
+          updatedBy: config.updatedBy,
+          canEdit,
+        });
+      } catch (err) {
+        res.status(500).json({ message: safeErrorMessage(err, "Failed to load SMTP config") });
+      }
+    },
+  );
+
+  app.put("/api/admin/smtp-config",
+    requireRole(...CHANNEL_CONFIG_ROLES),
+    async (req, res) => {
+      try {
+        const user = await storage.getUser(req.session!.userId!);
+        if (!isChannelConfigEditor(user?.role ?? "")) {
+          return res.status(403).json({ message: "You do not have permission to edit channel configuration." });
+        }
+
+        const { host, port, username, password, tlsMode, fromName, fromEmail } = req.body as {
+          host?: string; port?: string | number; username?: string; password?: string;
+          tlsMode?: string; fromName?: string; fromEmail?: string;
+        };
+
+        if (password?.trim() && !isEncryptionAvailable()) {
+          return res.status(503).json({
+            message: "Credential storage is unavailable: SESSION_SECRET is not set. Configure a strong secret before saving SMTP credentials in production.",
+          });
+        }
+
+        const existingSmtp = await storage.getSmtpConfig();
+        const hasStoredPassword = existingSmtp?.hasPassword ?? false;
+        const willHavePassword = !!(password?.trim()) || hasStoredPassword;
+
+        const base = {
+          host: host || null,
+          port: port ? parseInt(String(port)) : 587,
+          username: username || null,
+          tlsMode: tlsMode || "starttls",
+          fromName: fromName || null,
+          fromEmail: fromEmail || null,
+          updatedBy: user?.username ?? "admin",
+          isConfigured: !!(host && username && willHavePassword),
+        };
+
+        const withSecret = password && password.trim()
+          ? { ...base, passwordHash: encryptSecret(password), hasPassword: true }
+          : base;
+
+        const config = await storage.upsertSmtpConfig(withSecret);
+
+        await writeAuditLog({
+          actorUserId: req.session!.userId!,
+          targetResource: "smtp_config",
+          changeType: "update",
+          note: `SMTP config updated: host=${host ?? ""}, username=${username ?? ""}`,
+          companyId: user?.companyId ?? null,
+        });
+
+        res.json({
+          id: config.id,
+          host: config.host,
+          port: config.port,
+          username: config.username,
+          hasPassword: config.hasPassword,
+          tlsMode: config.tlsMode,
+          fromName: config.fromName,
+          fromEmail: config.fromEmail,
+          isConfigured: config.isConfigured,
+          updatedAt: config.updatedAt,
+          updatedBy: config.updatedBy,
+        });
+      } catch (err) {
+        res.status(500).json({ message: safeErrorMessage(err, "Failed to save SMTP config") });
+      }
+    },
+  );
+
+  app.post("/api/admin/smtp-config/test",
+    requireRole(...CHANNEL_CONFIG_ROLES),
+    async (req, res) => {
+      try {
+        const user = await storage.getUser(req.session!.userId!);
+        if (!isChannelConfigEditor(user?.role ?? "")) {
+          return res.status(403).json({ message: "You do not have permission to test channel configuration." });
+        }
+        const { toEmail } = req.body as { toEmail?: string };
+        if (!toEmail) return res.status(400).json({ message: "toEmail is required" });
+
+        const config = await storage.getSmtpConfig();
+        if (!config?.isConfigured) {
+          return res.status(400).json({ sent: false, message: "SMTP is not configured" });
+        }
+
+        const plainPass = config.hasPassword && config.passwordHash
+          ? (decryptSecret(config.passwordHash) ?? process.env.SMTP_PASS ?? "")
+          : (process.env.SMTP_PASS ?? "");
+
+        const nodemailer = (await import("nodemailer")).default;
+        const smtpPort = config.port ?? 587;
+        const secure = smtpPort === 465;
+        const transporter = nodemailer.createTransport({
+          host: config.host!,
+          port: smtpPort,
+          secure,
+          auth: { user: config.username!, pass: plainPass },
+          ...(config.tlsMode === "starttls" && !secure ? { requireTLS: true } : {}),
+        });
+
+        const fromAddress = config.fromEmail
+          ? (config.fromName ? `"${config.fromName}" <${config.fromEmail}>` : config.fromEmail)
+          : config.username!;
+
+        await transporter.sendMail({
+          from: fromAddress,
+          to: toEmail,
+          subject: "PayLink – SMTP Test Email",
+          text: "This is a test email from PayLink to verify your SMTP configuration is working correctly.",
+          html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+            <div style="background:linear-gradient(135deg,#0d9488,#2563eb);padding:20px;border-radius:8px 8px 0 0;">
+              <h1 style="color:white;margin:0;font-size:20px;">SMTP Test Successful</h1>
+            </div>
+            <div style="background:#f9fafb;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;">
+              <p style="color:#374151;">Your PayLink SMTP configuration is working correctly.</p>
+              <p style="color:#6b7280;font-size:13px;">Sent by ${user?.username ?? "admin"} from PayLink admin panel.</p>
+            </div>
+          </div>`,
+        });
+
+        await storage.updateSmtpConfigTestResult("success");
+        await writeAuditLog({
+          actorUserId: req.session!.userId!,
+          targetResource: "smtp_config",
+          changeType: "test",
+          note: `SMTP test email sent to ${toEmail} — success`,
+          companyId: user?.companyId ?? null,
+        });
+        res.json({ sent: true, to: toEmail });
+      } catch (err: any) {
+        await storage.updateSmtpConfigTestResult(`error: ${err.message}`).catch(() => {});
+        await writeAuditLog({
+          actorUserId: req.session!.userId!,
+          targetResource: "smtp_config",
+          changeType: "test",
+          note: `SMTP test failed: ${err.message}`,
+          companyId: (await storage.getUser(req.session!.userId!))?.companyId ?? null,
+        }).catch(() => {});
+        res.status(500).json({ sent: false, error: err.message });
+      }
+    },
+  );
+
+  // -- SMS --
+  app.get("/api/admin/sms-config",
+    requireRole(...CHANNEL_CONFIG_ROLES),
+    async (req, res) => {
+      try {
+        const user = await storage.getUser(req.session!.userId!);
+        const canEdit = isChannelConfigEditor(user?.role ?? "");
+        if (!canEdit) return res.status(403).json({ message: "Insufficient role for channel configuration access" });
+        const config = await storage.getSmsConfig();
+        if (!config) return res.json({ isConfigured: false, canEdit });
+        res.json({
+          id: config.id,
+          provider: config.provider,
+          accountSid: config.accountSid,
+          hasAuthToken: config.hasAuthToken,
+          fromNumber: config.fromNumber,
+          messagingServiceSid: config.messagingServiceSid,
+          isConfigured: config.isConfigured,
+          lastTestedAt: config.lastTestedAt,
+          lastTestResult: config.lastTestResult,
+          updatedAt: config.updatedAt,
+          updatedBy: config.updatedBy,
+          canEdit,
+        });
+      } catch (err) {
+        res.status(500).json({ message: safeErrorMessage(err, "Failed to load SMS config") });
+      }
+    },
+  );
+
+  app.put("/api/admin/sms-config",
+    requireRole(...CHANNEL_CONFIG_ROLES),
+    async (req, res) => {
+      try {
+        const user = await storage.getUser(req.session!.userId!);
+        if (!isChannelConfigEditor(user?.role ?? "")) {
+          return res.status(403).json({ message: "You do not have permission to edit channel configuration." });
+        }
+
+        const { provider, accountSid, authToken, fromNumber, messagingServiceSid } = req.body as {
+          provider?: string; accountSid?: string; authToken?: string;
+          fromNumber?: string; messagingServiceSid?: string;
+        };
+
+        if (authToken?.trim() && !isEncryptionAvailable()) {
+          return res.status(503).json({
+            message: "Credential storage is unavailable: SESSION_SECRET is not set. Configure a strong secret before saving SMS credentials in production.",
+          });
+        }
+
+        const existingSms = await storage.getSmsConfig();
+        const hasStoredAuthToken = existingSms?.hasAuthToken ?? false;
+        const willHaveAuthToken = !!(authToken?.trim()) || hasStoredAuthToken;
+
+        const base = {
+          provider: provider || "twilio",
+          accountSid: accountSid || null,
+          fromNumber: fromNumber || null,
+          messagingServiceSid: messagingServiceSid || null,
+          updatedBy: user?.username ?? "admin",
+          isConfigured: !!(accountSid && willHaveAuthToken && (fromNumber || messagingServiceSid)),
+        };
+
+        const withSecret = authToken && authToken.trim()
+          ? { ...base, authTokenHash: encryptSecret(authToken), hasAuthToken: true }
+          : base;
+
+        const config = await storage.upsertSmsConfig(withSecret);
+
+        await writeAuditLog({
+          actorUserId: req.session!.userId!,
+          targetResource: "sms_config",
+          changeType: "update",
+          note: `SMS config updated: provider=${provider ?? "twilio"}, accountSid=${accountSid ? accountSid.slice(0, 8) + "..." : "none"}`,
+          companyId: user?.companyId ?? null,
+        });
+
+        res.json({
+          id: config.id,
+          provider: config.provider,
+          accountSid: config.accountSid,
+          hasAuthToken: config.hasAuthToken,
+          fromNumber: config.fromNumber,
+          messagingServiceSid: config.messagingServiceSid,
+          isConfigured: config.isConfigured,
+          updatedAt: config.updatedAt,
+          updatedBy: config.updatedBy,
+        });
+      } catch (err) {
+        res.status(500).json({ message: safeErrorMessage(err, "Failed to save SMS config") });
+      }
+    },
+  );
+
+  app.post("/api/admin/sms-config/test",
+    requireRole(...CHANNEL_CONFIG_ROLES),
+    async (req, res) => {
+      let actorCompanyId: string | null = null;
+      try {
+        const user = await storage.getUser(req.session!.userId!);
+        actorCompanyId = user?.companyId ?? null;
+        if (!isChannelConfigEditor(user?.role ?? "")) {
+          return res.status(403).json({ message: "You do not have permission to test channel configuration." });
+        }
+        const { toPhone } = req.body as { toPhone?: string };
+        if (!toPhone) return res.status(400).json({ message: "toPhone is required" });
+
+        const config = await storage.getSmsConfig();
+
+        const accountSid = config?.accountSid || process.env.TWILIO_ACCOUNT_SID;
+        const authToken = config?.hasAuthToken && config.authTokenHash
+          ? (decryptSecret(config.authTokenHash) ?? process.env.TWILIO_AUTH_TOKEN ?? "")
+          : (process.env.TWILIO_AUTH_TOKEN ?? "");
+        const fromNumber = config?.messagingServiceSid
+          ? null
+          : (config?.fromNumber || process.env.TWILIO_PHONE_NUMBER);
+        const messagingServiceSid = config?.messagingServiceSid || null;
+
+        if (!accountSid || !authToken || (!fromNumber && !messagingServiceSid)) {
+          return res.status(400).json({ sent: false, message: "SMS (Twilio) is not configured" });
+        }
+
+        const twilio = (await import("twilio")).default;
+        const client = twilio(accountSid, authToken);
+        const msgParams: Record<string, string> = {
+          body: "PayLink test message — SMS notifications are working correctly!",
+          to: normalizePhone(toPhone),
+        };
+        if (messagingServiceSid) {
+          msgParams.messagingServiceSid = messagingServiceSid;
+        } else {
+          msgParams.from = normalizePhone(fromNumber!);
+        }
+        await client.messages.create(msgParams);
+
+        await storage.updateSmsConfigTestResult("success");
+        await writeAuditLog({
+          actorUserId: req.session!.userId!,
+          targetResource: "sms_config",
+          changeType: "test",
+          note: `SMS test sent to ${toPhone} — success`,
+          companyId: actorCompanyId,
+        });
+        res.json({ sent: true, to: toPhone });
+      } catch (err: any) {
+        await storage.updateSmsConfigTestResult(`error: ${err.message}`).catch(() => {});
+        await writeAuditLog({
+          actorUserId: req.session!.userId!,
+          targetResource: "sms_config",
+          changeType: "test",
+          note: `SMS test failed: ${err.message}`,
+          companyId: actorCompanyId,
+        }).catch(() => {});
+        res.status(500).json({ sent: false, error: err.message });
+      }
+    },
+  );
 
   // Admin — view all requests
   app.get("/api/admin/license-requests", requireRole("admin"), async (req, res) => {
@@ -16659,7 +17051,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Pre-load SMTP transporter and Twilio client once for efficiency
       const { getTransporter } = await import("./notifications");
-      const smtp = (channel === "email" || channel === "both") ? getTransporter() : null;
+      const smtp = (channel === "email" || channel === "both") ? await getTransporter() : null;
       let twilioClient: any = null;
       const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
       if ((channel === "sms" || channel === "both") && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && twilioFrom) {
@@ -18609,7 +19001,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!toEmail) return res.status(400).json({ message: "No recipient email — set one on the document first" });
 
       const { getTransporter } = await import("./notifications.js");
-      const smtp = getTransporter();
+      const smtp = await getTransporter();
       if (!smtp) return res.status(503).json({ message: "Email is not configured on this server. Ask your admin to configure SMTP." });
 
       const [items, branding] = await Promise.all([

@@ -1029,6 +1029,7 @@ export const roles = pgTable("roles", {
   description: text("description"),
   level: integer("level").notNull().default(5),
   isSystem: boolean("is_system").default(false),
+  capabilities: text("capabilities"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -1042,6 +1043,7 @@ export const rolePermissions = pgTable("role_permissions", {
   canDelete: boolean("can_delete").default(false),
   canExport: boolean("can_export").default(false),
   canApprove: boolean("can_approve").default(false),
+  canConfigure: boolean("can_configure").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -4116,3 +4118,43 @@ export const inventoryItems = pgTable("inventory_items", {
 export const insertInventoryItemSchema = createInsertSchema(inventoryItems).omit({ id: true, createdAt: true, updatedAt: true });
 export type InventoryItem = typeof inventoryItems.$inferSelect;
 export type InsertInventoryItem = z.infer<typeof insertInventoryItemSchema>;
+
+export const smtpConfig = pgTable("smtp_config", {
+  id: serial("id").primaryKey(),
+  host: text("host"),
+  port: integer("port").default(587),
+  username: text("username"),
+  passwordHash: text("password_hash"),
+  hasPassword: boolean("has_password").default(false),
+  tlsMode: text("tls_mode").default("starttls"),
+  fromName: text("from_name"),
+  fromEmail: text("from_email"),
+  isConfigured: boolean("is_configured").default(false),
+  lastTestedAt: timestamp("last_tested_at"),
+  lastTestResult: text("last_test_result"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  updatedBy: text("updated_by"),
+});
+
+export const insertSmtpConfigSchema = createInsertSchema(smtpConfig).omit({ id: true, updatedAt: true });
+export type SmtpConfig = typeof smtpConfig.$inferSelect;
+export type InsertSmtpConfig = z.infer<typeof insertSmtpConfigSchema>;
+
+export const smsConfig = pgTable("sms_config", {
+  id: serial("id").primaryKey(),
+  provider: text("provider").default("twilio"),
+  accountSid: text("account_sid"),
+  hasAuthToken: boolean("has_auth_token").default(false),
+  authTokenHash: text("auth_token_hash"),
+  fromNumber: text("from_number"),
+  messagingServiceSid: text("messaging_service_sid"),
+  isConfigured: boolean("is_configured").default(false),
+  lastTestedAt: timestamp("last_tested_at"),
+  lastTestResult: text("last_test_result"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  updatedBy: text("updated_by"),
+});
+
+export const insertSmsConfigSchema = createInsertSchema(smsConfig).omit({ id: true, updatedAt: true });
+export type SmsConfig = typeof smsConfig.$inferSelect;
+export type InsertSmsConfig = z.infer<typeof insertSmsConfigSchema>;

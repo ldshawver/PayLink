@@ -241,6 +241,9 @@ export function expandRoleForLegacyGuards(role: string): string[] {
   if (role === "platform_super_admin" || role === "platform_admin") {
     return ["admin", "manager", "supervisor", role];
   }
+  if (role === "system_admin") {
+    return ["admin", "system_admin"];
+  }
   if (role === "platform_support" || role === "platform_implementation") {
     return ["admin", "manager", role];
   }
