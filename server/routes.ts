@@ -8704,7 +8704,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const sigOverdue = await db.execute(sql`
         SELECT id, contract_number, title, contractor_id, sent_at FROM contractor_contracts
         WHERE company_id = ${cid} AND status IN ('sent','partially_signed') AND sent_at IS NOT NULL
-        AND sent_at < NOW() - INTERVAL '${sql.raw(String(contractSigOverdueDays))} days'
+        AND sent_at < NOW() - (${contractSigOverdueDays} * INTERVAL '1 day')
       `);
       for (const c of sigOverdue.rows as any[]) {
         // Dedup: skip if a reminder for this entity+type is pending OR was sent within last 24h
@@ -8723,7 +8723,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const expiring = await db.execute(sql`
         SELECT id, contract_number, title, contractor_id, end_date FROM contractor_contracts
         WHERE company_id = ${cid} AND status IN ('active','fully_signed') AND end_date IS NOT NULL
-        AND end_date BETWEEN NOW() AND NOW() + INTERVAL '${sql.raw(String(contractExpiryWarningDays))} days'
+        AND end_date BETWEEN NOW() AND NOW() + (${contractExpiryWarningDays} * INTERVAL '1 day')
       `);
       for (const c of expiring.rows as any[]) {
         const existing = await db.execute(sql`
@@ -8741,7 +8741,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const invoicesDue = await db.execute(sql`
         SELECT ci.id, ci.invoice_number, ci.contractor_id, ci.due_date FROM contractor_invoices ci
         WHERE ci.company_id = ${cid} AND ci.status NOT IN ('paid','void','cancelled')
-        AND ci.due_date BETWEEN NOW() AND NOW() + INTERVAL '${sql.raw(String(invoiceDueReminderDays))} days'
+        AND ci.due_date BETWEEN NOW() AND NOW() + (${invoiceDueReminderDays} * INTERVAL '1 day')
       `);
       for (const inv of invoicesDue.rows as any[]) {
         const existing = await db.execute(sql`
@@ -8759,7 +8759,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const invoicesOverdue = await db.execute(sql`
         SELECT ci.id, ci.invoice_number, ci.contractor_id, ci.due_date FROM contractor_invoices ci
         WHERE ci.company_id = ${cid} AND ci.status NOT IN ('paid','void','cancelled')
-        AND ci.due_date < NOW() - INTERVAL '${sql.raw(String(invoiceOverdueReminderDays))} days'
+        AND ci.due_date < NOW() - (${invoiceOverdueReminderDays} * INTERVAL '1 day')
       `);
       for (const inv of invoicesOverdue.rows as any[]) {
         const existing = await db.execute(sql`
