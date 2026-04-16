@@ -18,6 +18,8 @@ import { computeDispositionDate, getDefaultRetentionPolicySeedData } from "./ret
 import { emitIntegrationEvent } from "./integrationEvents";
 import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
 import { encryptSecret, decryptSecret, isEncryptionAvailable } from "./cryptoUtils";
+import { createContractorNotification, SMS_HIGH_PRIORITY_EVENTS } from "./contractor-notification-helper";
+import { runContractorReminderScheduler } from "./contractor-scheduler";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -8008,6 +8010,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (["void", "fully_signed", "terminated", "completed"].includes(contract.status)) return res.status(400).json({ message: "Cannot add signer to a contract in " + contract.status + " status" });
       const { name, email, role, workerId, userId } = req.body;
       if (!name) return res.status(400).json({ message: "Signer name is required" });
+      // Validate that userId/workerId belongs to the same company as the contract (prevent cross-company notification leak)
+      if (userId) {
+        const signerUserRes = await db.execute(sql`SELECT company_id FROM users WHERE id = ${userId} LIMIT 1`);
+        const signerCompanyId = (signerUserRes.rows[0] as any)?.company_id;
+        if (signerCompanyId && signerCompanyId !== contract.company_id) {
+          return res.status(403).json({ message: "Signer user does not belong to this company" });
+        }
+      }
+      if (workerId) {
+        const signerWorkerRes = await db.execute(sql`SELECT u.company_id FROM users u WHERE u.worker_id = ${workerId} LIMIT 1`);
+        const signerCompanyId = (signerWorkerRes.rows[0] as any)?.company_id;
+        if (signerCompanyId && signerCompanyId !== contract.company_id) {
+          return res.status(403).json({ message: "Signer worker does not belong to this company" });
+        }
+      }
       // Validate role: must be one of the accepted signer roles
       const validRoles = ["contractor", "company_rep", "reviewer", "witness"];
       const signerRole = validRoles.includes(role) ? role : "contractor";
@@ -8584,85 +8601,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to mark all read" }); }
   });
 
-  // High-priority event types eligible for SMS dispatch (e.g. overdue/urgent only)
-  const SMS_HIGH_PRIORITY_EVENTS = new Set(["contract_signature_overdue", "invoice_overdue", "invoice_due", "signature_overdue", "payment_due", "reminder_overdue"]);
-
-  // Internal helper: create a contractor notification with per-recipient isolation
-  // Resolves companyId from worker when needed, checks notification_rules for email/SMS dispatch
-  async function createContractorNotification({ workerId, userId, companyId, notificationType, title, body, entityType, entityId, actionUrl }: { workerId?: string | null; userId?: string | null; companyId?: string | null; notificationType: string; title: string; body?: string; entityType?: string; entityId?: string; actionUrl?: string; }) {
-    try {
-      // Resolve effective companyId first (needed for notification rule lookup)
-      let effectiveCompanyId = companyId || null;
-      let workerUserRecord: { id: string; email: string; phone: string; company_id: string; worker_name: string } | null = null;
-
-      if (workerId) {
-        const uRes = await db.execute(sql`SELECT u.id, u.email, u.phone, u.company_id, w.first_name || ' ' || w.last_name AS worker_name FROM users u LEFT JOIN workers w ON w.id = u.worker_id WHERE u.worker_id = ${workerId} LIMIT 1`);
-        const row = uRes.rows[0];
-        if (row) {
-          workerUserRecord = row as { id: string; email: string; phone: string; company_id: string; worker_name: string };
-          effectiveCompanyId = effectiveCompanyId || workerUserRecord.company_id;
-        }
-      }
-
-      // Evaluate notification rules for this company + event type
-      let emailEnabled = false;
-      let smsEnabled = false;
-      if (effectiveCompanyId) {
-        try {
-          const settingsRes = await db.execute(sql`SELECT notification_rules FROM contractor_workflow_settings WHERE company_id = ${effectiveCompanyId} LIMIT 1`);
-          const rules = ((settingsRes.rows[0] || {}) as Record<string, unknown>).notification_rules as Record<string, { email?: boolean; sms?: boolean }> || {};
-          const eventRules = rules[notificationType] || {};
-          emailEnabled = eventRules.email === true;
-          // SMS: only allowed for high-priority event types
-          smsEnabled = eventRules.sms === true && SMS_HIGH_PRIORITY_EVENTS.has(notificationType);
-        } catch (_) {}
-      }
-
-      if (userId) {
-        // Targeted at a specific user by their user ID
-        await db.execute(sql`
-          INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
-          VALUES (${workerId || null}, ${userId}, ${effectiveCompanyId}, ${notificationType}, ${title}, ${body || null}, ${entityType || null}, ${entityId || null}, ${actionUrl || null})
-        `);
-      } else if (workerId) {
-        // Targeted at a specific worker — one row for that worker/user
-        await db.execute(sql`
-          INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
-          VALUES (${workerId}, ${workerUserRecord?.id || null}, ${effectiveCompanyId}, ${notificationType}, ${title}, ${body || null}, ${entityType || null}, ${entityId || null}, ${actionUrl || null})
-        `);
-        // Dispatch email/SMS if enabled by notification rules
-        if ((emailEnabled || smsEnabled) && workerUserRecord) {
-          try {
-            const { sendGenericNotificationEmail, sendGenericNotificationSms } = await import("./notifications.js");
-            if (emailEnabled && workerUserRecord.email) sendGenericNotificationEmail({ recipientName: workerUserRecord.worker_name || "Contractor", email: workerUserRecord.email, title, body: body || "", actionUrl: actionUrl || "" }).catch(() => {});
-            if (smsEnabled && workerUserRecord.phone) sendGenericNotificationSms({ phone: workerUserRecord.phone, title, body: body || "" }).catch(() => {});
-          } catch (_) {}
-        }
-      } else if (effectiveCompanyId) {
-        // Company-scoped (admin/manager targeted): fan-out one row per recipient for read-state isolation
-        const admins = await db.execute(sql`
-          SELECT u.id, u.email, u.phone, u.username AS name FROM users u
-          WHERE u.company_id = ${effectiveCompanyId}
-          AND u.role IN ('admin','manager','tenant_admin','tenant_owner') LIMIT 10
-        `);
-        const adminRows = admins.rows as Array<{ id: string; email: string; phone: string; name: string }>;
-        for (const admin of adminRows) {
-          await db.execute(sql`
-            INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
-            VALUES (${null}, ${admin.id}, ${effectiveCompanyId}, ${notificationType}, ${title}, ${body || null}, ${entityType || null}, ${entityId || null}, ${actionUrl || null})
-          `);
-          if ((emailEnabled || smsEnabled) && (admin.email || admin.phone)) {
-            try {
-              const { sendGenericNotificationEmail, sendGenericNotificationSms } = await import("./notifications.js");
-              if (emailEnabled && admin.email) sendGenericNotificationEmail({ recipientName: admin.name || "Admin", email: admin.email, title, body: body || "", actionUrl: actionUrl || "" }).catch(() => {});
-              if (smsEnabled && admin.phone) sendGenericNotificationSms({ phone: admin.phone, title, body: body || "" }).catch(() => {});
-            } catch (_) {}
-          }
-        }
-      }
-    } catch (e) { console.error("Failed to create contractor notification:", e); }
-  }
-
   // ── Contractor Reminders ──────────────────────────────────────────────────
   app.get("/api/contractor-reminders", requireAuth, async (req, res) => {
     try {
@@ -8760,97 +8698,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.getUser(req.session.userId!);
       const cid = user?.companyId;
       if (!cid) return res.status(400).json({ message: "No company context" });
-
-      // Load workflow settings for reminder thresholds
-      const settingsRes = await db.execute(sql`SELECT * FROM contractor_workflow_settings WHERE company_id = ${cid}`);
-      const settings = settingsRes.rows[0] as any || {};
-      const contractSigOverdueDays = settings.contract_sig_overdue_days ?? 7;
-      const contractExpiryWarningDays = settings.contract_expiry_warning_days ?? 14;
-      const invoiceDueReminderDays = settings.invoice_due_reminder_days ?? 3;
-      const invoiceOverdueReminderDays = settings.invoice_overdue_reminder_days ?? 1;
-
-      const now = new Date();
-      let created = 0;
-
-      // ── Contract signature overdue ──
-      const sigOverdue = await db.execute(sql`
-        SELECT id, contract_number, title, contractor_id, sent_at FROM contractor_contracts
-        WHERE company_id = ${cid} AND status IN ('sent','partially_signed') AND sent_at IS NOT NULL
-        AND sent_at::timestamptz < NOW() - (${contractSigOverdueDays} * INTERVAL '1 day')
-      `);
-      for (const c of sigOverdue.rows as any[]) {
-        // Dedup: skip if a reminder for this entity+type is pending OR was sent within last 24h
-        const existing = await db.execute(sql`
-          SELECT id FROM contractor_reminders
-          WHERE entity_type = 'contract' AND entity_id = ${c.id} AND reminder_type = 'signature'
-          AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
-        `);
-        if (!existing.rows.length) {
-          await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at) VALUES (${c.contractor_id}, ${cid}, 'contract', ${c.id}, 'signature', ${"Signature overdue: " + (c.title || c.contract_number || c.id)}, 'Contract signature is overdue. Follow up with the contractor.', ${now.toISOString()}, 'in_app', 'pending', NOW())`);
-          // Also create a contractor notification for this overdue signature (high-priority)
-          createContractorNotification({ companyId: cid, notificationType: "signature_overdue", title: `Signature Overdue: ${c.title || c.contract_number}`, body: "A contract has not been signed and is now overdue. Follow up with the contractor.", entityType: "contract", entityId: c.id, actionUrl: `/app/contractor-hub?section=contracts&id=${c.id}` }).catch(() => {});
-          created++;
-        }
+      // Delegate to the shared scheduler (scoped to this company only)
+      const result = await runContractorReminderScheduler([cid]);
+      if (result.errors.length > 0) {
+        return res.status(500).json({ message: "Scheduler encountered errors", errors: result.errors });
       }
-
-      // ── Contract expiring soon ──
-      const expiring = await db.execute(sql`
-        SELECT id, contract_number, title, contractor_id, end_date FROM contractor_contracts
-        WHERE company_id = ${cid} AND status IN ('active','fully_signed') AND end_date IS NOT NULL
-        AND end_date::date BETWEEN CURRENT_DATE AND CURRENT_DATE + (${contractExpiryWarningDays} * INTERVAL '1 day')::interval
-      `);
-      for (const c of expiring.rows as any[]) {
-        const existing = await db.execute(sql`
-          SELECT id FROM contractor_reminders
-          WHERE entity_type = 'contract' AND entity_id = ${c.id} AND reminder_type = 'expiry'
-          AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
-        `);
-        if (!existing.rows.length) {
-          await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at) VALUES (${c.contractor_id}, ${cid}, 'contract', ${c.id}, 'expiry', ${"Contract expiring soon: " + (c.title || c.contract_number || c.id)}, ${"Contract expires on " + c.end_date}, ${now.toISOString()}, 'in_app', 'pending', NOW())`);
-          createContractorNotification({ companyId: cid, notificationType: "contract_expiring", title: `Contract Expiring Soon: ${c.title || c.contract_number}`, body: `Contract expires on ${c.end_date}. Review renewal or termination options.`, entityType: "contract", entityId: c.id, actionUrl: `/app/contractor-hub?section=contracts&id=${c.id}` }).catch(() => {});
-          created++;
-        }
-      }
-
-      // ── Invoice due reminder ──
-      const invoicesDue = await db.execute(sql`
-        SELECT ci.id, ci.invoice_number, ci.contractor_id, ci.due_date FROM contractor_invoices ci
-        WHERE ci.company_id = ${cid} AND ci.status NOT IN ('paid','void','cancelled')
-        AND ci.due_date::date BETWEEN CURRENT_DATE AND CURRENT_DATE + (${invoiceDueReminderDays} * INTERVAL '1 day')::interval
-      `);
-      for (const inv of invoicesDue.rows as any[]) {
-        const existing = await db.execute(sql`
-          SELECT id FROM contractor_reminders
-          WHERE entity_type = 'invoice' AND entity_id = ${inv.id} AND reminder_type = 'payment'
-          AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
-        `);
-        if (!existing.rows.length) {
-          await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at) VALUES (${inv.contractor_id}, ${cid}, 'invoice', ${inv.id}, 'payment', ${"Invoice due soon: #" + (inv.invoice_number || inv.id.slice(0,8))}, ${"Due on " + inv.due_date}, ${now.toISOString()}, 'in_app', 'pending', NOW())`);
-          createContractorNotification({ workerId: inv.contractor_id, companyId: cid, notificationType: "invoice_due", title: `Invoice Due Soon: #${inv.invoice_number || inv.id.slice(0, 8)}`, body: `Invoice is due on ${inv.due_date}. Please ensure payment is arranged.`, entityType: "invoice", entityId: inv.id, actionUrl: `/app/contractor-hub?section=invoices&id=${inv.id}` }).catch(() => {});
-          created++;
-        }
-      }
-
-      // ── Invoice overdue ──
-      const invoicesOverdue = await db.execute(sql`
-        SELECT ci.id, ci.invoice_number, ci.contractor_id, ci.due_date FROM contractor_invoices ci
-        WHERE ci.company_id = ${cid} AND ci.status NOT IN ('paid','void','cancelled')
-        AND ci.due_date::date < CURRENT_DATE - (${invoiceOverdueReminderDays} * INTERVAL '1 day')::interval
-      `);
-      for (const inv of invoicesOverdue.rows as any[]) {
-        const existing = await db.execute(sql`
-          SELECT id FROM contractor_reminders
-          WHERE entity_type = 'invoice' AND entity_id = ${inv.id} AND reminder_type = 'follow_up'
-          AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
-        `);
-        if (!existing.rows.length) {
-          await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at) VALUES (${inv.contractor_id}, ${cid}, 'invoice', ${inv.id}, 'follow_up', ${"Invoice overdue: #" + (inv.invoice_number || inv.id.slice(0,8))}, ${"Was due on " + inv.due_date}, ${now.toISOString()}, 'in_app', 'pending', NOW())`);
-          createContractorNotification({ workerId: inv.contractor_id, companyId: cid, notificationType: "invoice_overdue", title: `Invoice Overdue: #${inv.invoice_number || inv.id.slice(0, 8)}`, body: `Invoice was due on ${inv.due_date} and remains unpaid. Immediate follow-up required.`, entityType: "invoice", entityId: inv.id, actionUrl: `/app/contractor-hub?section=invoices&id=${inv.id}` }).catch(() => {});
-          created++;
-        }
-      }
-
-      res.json({ success: true, created });
+      res.json({ success: true, created: result.created });
     } catch (e: any) { res.status(500).json({ message: "Scheduler failed: " + e.message }); }
   });
 
