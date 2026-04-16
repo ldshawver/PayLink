@@ -35,17 +35,22 @@ export async function createContractorNotification({
 }: ContractorNotificationInput): Promise<void> {
   try {
     let effectiveCompanyId = companyId || null;
-    let workerUserRecord: { id: string; email: string; phone: string; company_id: string; worker_name: string } | null = null;
+    let workerUserRecord: { id: string; email: string | null; phone: string | null; company_id: string; worker_name: string } | null = null;
 
     if (workerId) {
+      // email and phone live on the workers table, not users
       const uRes = await db.execute(sql`
-        SELECT u.id, u.email, u.phone, u.company_id, w.first_name || ' ' || w.last_name AS worker_name
-        FROM users u LEFT JOIN workers w ON w.id = u.worker_id
+        SELECT u.id, u.company_id,
+               COALESCE(w.email, w.work_email) AS email,
+               COALESCE(w.mobile_phone, w.phone, w.work_phone) AS phone,
+               w.first_name || ' ' || w.last_name AS worker_name
+        FROM users u
+        LEFT JOIN workers w ON w.id = u.worker_id
         WHERE u.worker_id = ${workerId} LIMIT 1
       `);
       const row = uRes.rows[0];
       if (row) {
-        workerUserRecord = row as { id: string; email: string; phone: string; company_id: string; worker_name: string };
+        workerUserRecord = row as { id: string; email: string | null; phone: string | null; company_id: string; worker_name: string };
         effectiveCompanyId = effectiveCompanyId || workerUserRecord.company_id;
       }
     }
@@ -66,11 +71,13 @@ export async function createContractorNotification({
     }
 
     if (userId) {
+      // Targeted at a specific user by their user ID — insert one row
       await db.execute(sql`
         INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
         VALUES (${workerId || null}, ${userId}, ${effectiveCompanyId}, ${notificationType}, ${title}, ${body || null}, ${entityType || null}, ${entityId || null}, ${actionUrl || null})
       `);
     } else if (workerId) {
+      // Targeted at a specific worker — one row for that worker/user
       await db.execute(sql`
         INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
         VALUES (${workerId}, ${workerUserRecord?.id || null}, ${effectiveCompanyId}, ${notificationType}, ${title}, ${body || null}, ${entityType || null}, ${entityId || null}, ${actionUrl || null})
@@ -87,12 +94,18 @@ export async function createContractorNotification({
         } catch (_) {}
       }
     } else if (effectiveCompanyId) {
+      // Company-scoped (admin/manager targeted): fan-out one row per recipient for read-state isolation
+      // email/phone come from workers table via LEFT JOIN (admins without worker records get null email/phone)
       const admins = await db.execute(sql`
-        SELECT u.id, u.email, u.phone, u.username AS name FROM users u
+        SELECT u.id, u.username AS name,
+               COALESCE(w.email, w.work_email) AS email,
+               COALESCE(w.mobile_phone, w.phone, w.work_phone) AS phone
+        FROM users u
+        LEFT JOIN workers w ON w.id = u.worker_id
         WHERE u.company_id = ${effectiveCompanyId}
         AND u.role IN ('admin','manager','tenant_admin','tenant_owner') LIMIT 10
       `);
-      const adminRows = admins.rows as Array<{ id: string; email: string; phone: string; name: string }>;
+      const adminRows = admins.rows as Array<{ id: string; email: string | null; phone: string | null; name: string }>;
       for (const admin of adminRows) {
         await db.execute(sql`
           INSERT INTO contractor_notifications (worker_id, user_id, company_id, notification_type, title, body, entity_type, entity_id, action_url)
