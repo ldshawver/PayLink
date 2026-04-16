@@ -7836,6 +7836,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await autoSnapshotContract(req.params.id, req.session.userId!, `pre-void snapshot${reason ? ": " + reason : ""}`);
       const result = await db.execute(sql`UPDATE contractor_contracts SET status = 'void', voided_at = NOW(), void_reason = ${reason || null}, updated_at = NOW() WHERE id = ${req.params.id} RETURNING *`);
       if (!result.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      // Notify contractor of void
+      try {
+        const { sendContractEventEmail } = await import("./notifications.js");
+        const baseUrl = process.env.APP_BASE_URL || "";
+        const wRes = await db.execute(sql`SELECT u.email, w.first_name || ' ' || w.last_name AS name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${contract.contractor_id} LIMIT 1`);
+        const recipient = wRes.rows[0] as any;
+        if (recipient?.email) {
+          sendContractEventEmail({ event: "contract_voided" as any, recipientName: recipient.name || "Contractor", email: recipient.email, contractTitle: contract.title, entityId: req.params.id, entityType: "contract", note: reason || "Contract has been voided.", actionUrl: `${baseUrl}/app/contractor-hub` }).catch(() => {});
+        }
+        await db.execute(sql`INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read) SELECT ${contract.company_id}, u.id, 'contract_voided', ${"Contract Voided: " + contract.title}, ${reason || "This contract has been voided."}, ${baseUrl + "/app/contractor-hub"}, false FROM users u WHERE u.worker_id = ${contract.contractor_id} LIMIT 1`);
+      } catch (notifErr) { console.error("[Contract] Notify void failed:", notifErr); }
       res.json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to void contract: " + e.message }); }
   });
@@ -8177,6 +8188,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch templates" }); }
   });
 
+  // ── Contractor Templates: admin list (includes disabled) — MUST be before /:id ──
+  app.get("/api/contractor-templates/admin-all", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const cid = user?.companyId;
+      const result = await db.execute(sql`
+        SELECT * FROM contractor_templates WHERE company_id = ${cid} OR is_global = TRUE ORDER BY is_global DESC, template_type, name ASC
+      `);
+      res.json(result.rows);
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch all templates" }); }
+  });
+
   app.get("/api/contractor-templates/:id", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
@@ -8444,6 +8467,78 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to dismiss reminder: " + e.message }); }
   });
+
+  // ── Contractor Workflow Settings (GET/PUT) ───────────────────────────────
+  app.get("/api/contractor-workflow-settings", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const cid = user?.companyId;
+      const result = await db.execute(sql`SELECT * FROM contractor_workflow_settings WHERE company_id = ${cid}`);
+      if (!result.rows[0]) {
+        return res.json({ companyId: cid, minReviewers: 1, reviewMode: "parallel", tradeEnabled: true,
+          contractSigOverdueDays: 7, contractRenewalWarningDays: 30, contractExpiryWarningDays: 14,
+          invoiceDueReminderDays: 3, invoiceOverdueReminderDays: 1,
+          notificationRules: {}, permissionMatrix: {} });
+      }
+      const row = result.rows[0] as any;
+      res.json({ companyId: row.company_id, minReviewers: row.min_reviewers, reviewMode: row.review_mode,
+        tradeEnabled: row.trade_enabled, contractSigOverdueDays: row.contract_sig_overdue_days,
+        contractRenewalWarningDays: row.contract_renewal_warning_days, contractExpiryWarningDays: row.contract_expiry_warning_days,
+        invoiceDueReminderDays: row.invoice_due_reminder_days, invoiceOverdueReminderDays: row.invoice_overdue_reminder_days,
+        notificationRules: row.notification_rules || {}, permissionMatrix: row.permission_matrix || {} });
+    } catch (e: any) { res.status(500).json({ message: "Failed to fetch workflow settings" }); }
+  });
+
+  app.put("/api/contractor-workflow-settings", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const cid = user?.companyId;
+      if (!cid) return res.status(400).json({ message: "No company context" });
+      const { minReviewers, reviewMode, tradeEnabled, contractSigOverdueDays, contractRenewalWarningDays,
+        contractExpiryWarningDays, invoiceDueReminderDays, invoiceOverdueReminderDays,
+        notificationRules, permissionMatrix } = req.body;
+      const result = await db.execute(sql`
+        INSERT INTO contractor_workflow_settings
+          (company_id, min_reviewers, review_mode, trade_enabled, contract_sig_overdue_days,
+           contract_renewal_warning_days, contract_expiry_warning_days, invoice_due_reminder_days,
+           invoice_overdue_reminder_days, notification_rules, permission_matrix, updated_by, updated_at)
+        VALUES
+          (${cid}, ${minReviewers ?? 1}, ${reviewMode ?? "parallel"}, ${tradeEnabled ?? true},
+           ${contractSigOverdueDays ?? 7}, ${contractRenewalWarningDays ?? 30}, ${contractExpiryWarningDays ?? 14},
+           ${invoiceDueReminderDays ?? 3}, ${invoiceOverdueReminderDays ?? 1},
+           ${notificationRules ? JSON.stringify(notificationRules) : '{}'},
+           ${permissionMatrix ? JSON.stringify(permissionMatrix) : '{}'},
+           ${req.session.userId}, NOW())
+        ON CONFLICT (company_id) DO UPDATE SET
+          min_reviewers = EXCLUDED.min_reviewers, review_mode = EXCLUDED.review_mode,
+          trade_enabled = EXCLUDED.trade_enabled, contract_sig_overdue_days = EXCLUDED.contract_sig_overdue_days,
+          contract_renewal_warning_days = EXCLUDED.contract_renewal_warning_days,
+          contract_expiry_warning_days = EXCLUDED.contract_expiry_warning_days,
+          invoice_due_reminder_days = EXCLUDED.invoice_due_reminder_days,
+          invoice_overdue_reminder_days = EXCLUDED.invoice_overdue_reminder_days,
+          notification_rules = EXCLUDED.notification_rules, permission_matrix = EXCLUDED.permission_matrix,
+          updated_by = EXCLUDED.updated_by, updated_at = NOW()
+        RETURNING *
+      `);
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to save workflow settings: " + e.message }); }
+  });
+
+  // ── Contractor Templates: set-default ────────────────────────────────────
+  app.patch("/api/contractor-templates/:id/set-default", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const cid = user?.companyId;
+      const tplRes = await db.execute(sql`SELECT * FROM contractor_templates WHERE id = ${req.params.id}`);
+      if (!tplRes.rows[0]) return res.status(404).json({ message: "Template not found" });
+      const tpl = tplRes.rows[0] as any;
+      // Clear existing defaults for same type + company
+      await db.execute(sql`UPDATE contractor_templates SET is_default = FALSE WHERE template_type = ${tpl.template_type} AND (company_id = ${cid} OR is_global = TRUE)`);
+      const result = await db.execute(sql`UPDATE contractor_templates SET is_default = TRUE WHERE id = ${req.params.id} RETURNING *`);
+      res.json(result.rows[0]);
+    } catch (e: any) { res.status(500).json({ message: "Failed to set default template: " + e.message }); }
+  });
+
 
   // ── Contractor Invoice: create from proposal or contract with guardrail ────
   app.post("/api/contractor-invoices/from-proposal", requireAuth, requireRole("admin", "manager"), async (req, res) => {

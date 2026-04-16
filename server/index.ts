@@ -2666,6 +2666,33 @@ Thank you,
       created_by VARCHAR,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    // ── Task #34: contractor workflow settings + branding contact fields ──────
+    await run("contractor_workflow_settings table", sql`CREATE TABLE IF NOT EXISTS contractor_workflow_settings (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR UNIQUE,
+      min_reviewers INTEGER DEFAULT 1,
+      review_mode TEXT DEFAULT 'parallel',
+      trade_enabled BOOLEAN DEFAULT TRUE,
+      contract_sig_overdue_days INTEGER DEFAULT 7,
+      contract_renewal_warning_days INTEGER DEFAULT 30,
+      contract_expiry_warning_days INTEGER DEFAULT 14,
+      invoice_due_reminder_days INTEGER DEFAULT 3,
+      invoice_overdue_reminder_days INTEGER DEFAULT 1,
+      notification_rules JSONB DEFAULT '{}',
+      permission_matrix JSONB DEFAULT '{}',
+      updated_by VARCHAR,
+      updated_at TIMESTAMP DEFAULT NOW(),
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("contractor_branding.contact_name", sql`ALTER TABLE contractor_branding ADD COLUMN IF NOT EXISTS contact_name TEXT`);
+    await run("contractor_branding.address", sql`ALTER TABLE contractor_branding ADD COLUMN IF NOT EXISTS address TEXT`);
+    await run("contractor_branding.phone", sql`ALTER TABLE contractor_branding ADD COLUMN IF NOT EXISTS phone TEXT`);
+    await run("contractor_branding.contact_email", sql`ALTER TABLE contractor_branding ADD COLUMN IF NOT EXISTS contact_email TEXT`);
+    await run("contractor_branding.logo_url", sql`ALTER TABLE contractor_branding ADD COLUMN IF NOT EXISTS logo_url TEXT`);
+    await run("contractor_templates.is_default", sql`ALTER TABLE contractor_templates ADD COLUMN IF NOT EXISTS is_default BOOLEAN DEFAULT FALSE`);
+    await run("contractor_templates.layout_variant", sql`ALTER TABLE contractor_templates ADD COLUMN IF NOT EXISTS layout_variant TEXT DEFAULT 'standard'`);
+    await run("contractor_templates.work_type_tags", sql`ALTER TABLE contractor_templates ADD COLUMN IF NOT EXISTS work_type_tags TEXT`);
   }
 
   const { seedDatabase } = await import("./seed");

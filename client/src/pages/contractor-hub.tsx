@@ -25,7 +25,7 @@ import {
   Settings, FileSignature, CreditCard, Package, ChevronDown, ChevronUp,
   ExternalLink, Info, AlertCircle, ThumbsUp, ThumbsDown, MessageCircle,
   Briefcase, Layers, SlidersHorizontal, ArrowUpDown, Globe, Phone, Mail,
-  Image, Paintbrush, CheckSquare
+  Image, Paintbrush, CheckSquare, Search
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -3533,27 +3533,261 @@ function PaymentsSection({ invoices }: { invoices: Invoice[] }) {
   );
 }
 
-// ─── Documents Section ────────────────────────────────────────────────────────
+// ─── Documents Section ─────────────────────────────────────────────────────────
+
+const DOC_TYPE_ICONS: Record<string, React.FC<{className?: string}>> = {
+  proposal: FileText, contract: FileSignature, invoice: Receipt,
+  payment: CreditCard, dam: FolderOpen,
+};
+
+const IMMUTABLE_STATUSES: Record<string, string[]> = {
+  proposal: ["approved", "converted_to_contract"],
+  contract: ["fully_signed", "active", "completed"],
+  invoice: ["paid", "closed"],
+};
+
+function isImmutable(type: string, status: string) {
+  return (IMMUTABLE_STATUSES[type] || []).includes(status);
+}
+
+function VersionHistoryDrawer({ open, onClose, entityType, entityId, entityTitle }: {
+  open: boolean; onClose: () => void; entityType: "contract" | "proposal"; entityId: string; entityTitle: string;
+}) {
+  const { data: versions = [], isLoading } = useQuery<any[]>({
+    queryKey: [`/api/contractor-${entityType}s/${entityId}/versions`],
+    enabled: open && !!entityId,
+    queryFn: async () => {
+      const r = await fetch(`/api/contractor-${entityType}s/${entityId}/versions`, { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+  });
+
+  return (
+    <Sheet open={open} onOpenChange={v => !v && onClose()}>
+      <SheetContent className="w-[400px] sm:w-[540px]">
+        <SheetHeader>
+          <SheetTitle className="flex items-center gap-2">
+            <History className="h-4 w-4" /> Version History
+          </SheetTitle>
+          <p className="text-xs text-muted-foreground truncate">{entityTitle}</p>
+        </SheetHeader>
+        <ScrollArea className="h-[calc(100vh-120px)] mt-4">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+          ) : versions.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <History className="h-8 w-8 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">No version history yet</p>
+              <p className="text-xs mt-1">Versions are created on each status change</p>
+            </div>
+          ) : (
+            <div className="space-y-3 pr-2">
+              {versions.map((v: any, i: number) => (
+                <div key={v.id || i} className={cn("border rounded-lg p-3", i === 0 ? "border-primary/30 bg-primary/5" : "")}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-semibold">Version {v.version_number ?? v.version ?? (versions.length - i)}</span>
+                    {i === 0 && <span className="text-xs bg-primary text-primary-foreground rounded px-1.5 py-0.5">Current</span>}
+                    {i > 0 && <span className="text-xs bg-muted text-muted-foreground rounded px-1.5 py-0.5">Superseded</span>}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{fmtDate(v.created_at || v.createdAt)}</p>
+                  {(v.reason || v.change_notes) && <p className="text-xs mt-1 italic text-foreground/70">{v.reason || v.change_notes}</p>}
+                  {v.changed_by && <p className="text-xs text-muted-foreground mt-0.5">By: {v.changed_by}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </ScrollArea>
+      </SheetContent>
+    </Sheet>
+  );
+}
 
 function DocumentsSection() {
+  const { toast } = useToast();
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [versionDrawer, setVersionDrawer] = useState<{type: "contract"|"proposal"; id: string; title: string} | null>(null);
+
+  const { data: proposals = [] } = useQuery<Proposal[]>({
+    queryKey: ["/api/contractor-proposals"],
+    select: (d: any) => snakeToCamel(d),
+  });
+  const { data: contracts = [] } = useQuery<Contract[]>({
+    queryKey: ["/api/contractor-contracts"],
+    queryFn: async () => { const r = await fetch("/api/contractor-contracts", { credentials: "include" }); return r.ok ? r.json() : []; },
+  });
+  const { data: invoices = [] } = useQuery<Invoice[]>({
+    queryKey: ["/api/contractor-invoices"],
+    select: (d: any) => snakeToCamel(d),
+  });
+
+  type DocRow = {
+    id: string; type: string; title: string; status: string; date: string;
+    amount?: string; immutable: boolean; hasVersions: boolean; contractorId?: string;
+  };
+
+  const allDocs: DocRow[] = [
+    ...proposals.map(p => ({
+      id: p.id, type: "proposal", title: p.title || p.proposalNumber || "Proposal",
+      status: p.status, date: p.createdAt, amount: p.amount,
+      immutable: isImmutable("proposal", p.status), hasVersions: true,
+      contractorId: p.contractorId,
+    })),
+    ...contracts.map(c => ({
+      id: c.id, type: "contract", title: c.title || c.contractNumber || "Contract",
+      status: c.status, date: c.createdAt, amount: c.totalValue || c.value,
+      immutable: isImmutable("contract", c.status), hasVersions: true,
+      contractorId: c.contractorId,
+    })),
+    ...invoices.map(i => ({
+      id: i.id, type: "invoice", title: i.title || `Invoice #${i.invoiceNumber || i.id.slice(0,8)}`,
+      status: i.status, date: i.createdAt, amount: i.amount,
+      immutable: isImmutable("invoice", i.status), hasVersions: false,
+      contractorId: i.contractorId,
+    })),
+  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  const filtered = allDocs.filter(d => {
+    if (typeFilter !== "all" && d.type !== typeFilter) return false;
+    if (statusFilter !== "all" && d.status !== statusFilter) return false;
+    if (search && !d.title.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  async function handleDownload(doc: DocRow) {
+    try {
+      const endpoint = doc.type === "contract"
+        ? `/api/contractor-contracts/${doc.id}/download`
+        : doc.type === "invoice"
+        ? `/api/contractor-invoices/${doc.id}/download`
+        : null;
+      if (!endpoint) { toast({ title: "Download not available for this document type" }); return; }
+      const r = await fetch(endpoint, { credentials: "include" });
+      if (!r.ok) { toast({ title: "Download failed", variant: "destructive" }); return; }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `paylink-${doc.type}-${doc.id.slice(0,8)}.json`; a.click();
+      URL.revokeObjectURL(url);
+    } catch { toast({ title: "Download failed", variant: "destructive" }); }
+  }
+
+  const statusOptions = [
+    ...new Set(allDocs.map(d => d.status))
+  ].sort();
+
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-lg font-semibold">Documents</h2>
-        <p className="text-sm text-muted-foreground">Access and manage your contractor documents</p>
+        <p className="text-sm text-muted-foreground">{allDocs.length} total workflow artifacts</p>
       </div>
-      <Card>
-        <CardContent className="p-6 text-center">
-          <FolderOpen className="h-12 w-12 mx-auto mb-3 text-primary/40" />
-          <p className="font-medium mb-1">Document Library</p>
-          <p className="text-sm text-muted-foreground mb-4">Your contractor documents, certificates, and files are managed in the Document Library.</p>
-          <Button variant="outline" asChild data-testid="btn-open-documents">
-            <a href="/app/documents">
-              <ExternalLink className="h-4 w-4 mr-1" /> Open Document Library
-            </a>
-          </Button>
-        </CardContent>
-      </Card>
+
+      {/* Filters */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative flex-1 min-w-[180px] max-w-xs">
+          <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
+          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search documents..." className="h-8 pl-8" data-testid="input-search-docs" />
+        </div>
+        <div className="flex gap-1">
+          {(["all","proposal","contract","invoice"] as const).map(t => (
+            <Button key={t} size="sm" variant={typeFilter === t ? "default" : "ghost"} className="h-8 text-xs"
+              onClick={() => setTypeFilter(t)} data-testid={`btn-filter-type-${t}`}>
+              {t === "all" ? "All" : t.charAt(0).toUpperCase() + t.slice(1) + "s"}
+            </Button>
+          ))}
+        </div>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="h-8 w-36 text-xs" data-testid="select-doc-status">
+            <SelectValue placeholder="All Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Status</SelectItem>
+            {statusOptions.map(s => <SelectItem key={s} value={s}>{s.replace(/_/g, " ")}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Document list */}
+      {filtered.length === 0 ? (
+        <div className="text-center py-12 border border-dashed rounded-lg text-muted-foreground">
+          <FolderOpen className="h-10 w-10 mx-auto mb-3 opacity-30" />
+          <p className="font-medium">{allDocs.length === 0 ? "No documents yet" : "No documents match your filter"}</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map(doc => {
+            const Icon = DOC_TYPE_ICONS[doc.type] || FileText;
+            const statusCfg =
+              doc.type === "proposal" ? PROPOSAL_STATUS_CONFIG[doc.status] :
+              doc.type === "contract" ? CONTRACT_STATUS_CONFIG[doc.status] :
+              INVOICE_STATUS_CONFIG[doc.status];
+            return (
+              <div key={`${doc.type}-${doc.id}`} className="border rounded-lg p-3 flex items-center gap-3 hover:bg-muted/30 transition-colors group" data-testid={`row-doc-${doc.id}`}>
+                <div className={cn("h-9 w-9 rounded-lg flex items-center justify-center shrink-0",
+                  doc.type === "proposal" ? "bg-blue-50 dark:bg-blue-950/30" :
+                  doc.type === "contract" ? "bg-purple-50 dark:bg-purple-950/30" : "bg-green-50 dark:bg-green-950/30")}>
+                  <Icon className={cn("h-4 w-4",
+                    doc.type === "proposal" ? "text-blue-600" :
+                    doc.type === "contract" ? "text-purple-600" : "text-green-600")} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-medium truncate">{doc.title}</p>
+                    {doc.immutable && (
+                      <span className="inline-flex items-center gap-1 text-xs bg-amber-50 dark:bg-amber-950/30 text-amber-700 rounded px-1.5 py-0.5">
+                        <Lock className="h-3 w-3" /> Final
+                      </span>
+                    )}
+                    {statusCfg && (
+                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${statusCfg.color} ${statusCfg.bg}`}>
+                        {statusCfg.label}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground">
+                    <span className="capitalize">{doc.type}</span>
+                    <span>·</span>
+                    <span>{fmtDate(doc.date)}</span>
+                    {doc.amount && <><span>·</span><span className="font-medium text-foreground">{fmt(doc.amount)}</span></>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {doc.hasVersions && (
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Version history"
+                      onClick={() => setVersionDrawer({ type: doc.type as "contract"|"proposal", id: doc.id, title: doc.title })}
+                      data-testid={`btn-history-${doc.id}`}>
+                      <History className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  {(doc.type === "contract" || doc.type === "invoice") && (
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Download"
+                      onClick={() => handleDownload(doc)} data-testid={`btn-download-doc-${doc.id}`}>
+                      <Download className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Print"
+                    onClick={() => window.print()} data-testid={`btn-print-doc-${doc.id}`}>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Version history drawer */}
+      {versionDrawer && (
+        <VersionHistoryDrawer
+          open={!!versionDrawer}
+          onClose={() => setVersionDrawer(null)}
+          entityType={versionDrawer.type}
+          entityId={versionDrawer.id}
+          entityTitle={versionDrawer.title}
+        />
+      )}
     </div>
   );
 }
@@ -3588,6 +3822,9 @@ function BrandingSection() {
   const { toast } = useToast();
   const [form, setForm] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState(false);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
   const { data: currentUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const sectionIsAdmin = currentUser?.role === "admin" || currentUser?.role === "manager" ||
@@ -3607,6 +3844,7 @@ function BrandingSection() {
     if (branding && !dirty) {
       setForm({
         businessName: branding.business_name || "",
+        contactName: branding.contact_name || "",
         tagline: branding.tagline || "",
         primaryColor: branding.primary_color || "#0f766e",
         secondaryColor: branding.secondary_color || "#64748b",
@@ -3616,170 +3854,713 @@ function BrandingSection() {
         coverNote: branding.cover_note || "",
         footerText: branding.footer_text || "",
         insuranceInfo: branding.insurance_info || "",
+        address: branding.address || "",
+        phone: branding.phone || "",
+        contactEmail: branding.contact_email || "",
       });
+      if (branding.logo_url || branding.logo_path) setLogoPreview(branding.logo_url || branding.logo_path);
     }
   }, [branding, dirty]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const body = new URLSearchParams();
-      Object.entries(form).forEach(([k, v]) => v && body.append(k, v));
-      const r = await fetch("/api/contractor-branding", {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: body.toString(),
-      });
+      const fd = new FormData();
+      Object.entries(form).forEach(([k, v]) => v && fd.append(k, v));
+      if (logoFile) fd.append("logo", logoFile);
+      const r = await fetch("/api/contractor-branding", { method: "POST", credentials: "include", body: fd });
       if (!r.ok) { const e = await r.json(); throw new Error(e.message); }
       return r.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-branding"] });
       toast({ title: "Branding saved" });
-      setDirty(false);
+      setDirty(false); setLogoFile(null);
     },
     onError: (e: any) => toast({ title: e?.message || "Save failed", variant: "destructive" }),
   });
 
   function upd(k: string, v: string) { setForm(f => ({ ...f, [k]: v })); setDirty(true); }
 
+  function handleLogoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLogoFile(file); setDirty(true);
+    const reader = new FileReader();
+    reader.onload = ev => setLogoPreview(ev.target?.result as string);
+    reader.readAsDataURL(file);
+  }
+
   if (sectionIsAdmin) return (
     <div className="flex flex-col items-center justify-center py-16 text-center gap-3" data-testid="branding-admin-notice">
       <Briefcase className="h-10 w-10 text-muted-foreground/50" />
       <h3 className="font-medium text-base">Branding is a Contractor Feature</h3>
-      <p className="text-sm text-muted-foreground max-w-sm">Profile & Branding allows contractors to customize how their proposals appear to clients. This section is only available for contractor accounts.</p>
+      <p className="text-sm text-muted-foreground max-w-sm">Profile & Branding lets contractors customize how proposals appear to clients. This section is only available for contractor accounts.</p>
     </div>
   );
 
   if (isLoading) return <div className="flex items-center justify-center py-12"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
+
+  const accentColor = form.primaryColor || "#0f766e";
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold">Profile & Branding</h2>
-          <p className="text-sm text-muted-foreground">Customize how your proposals look to clients</p>
+          <p className="text-sm text-muted-foreground">Customize how your proposals and invoices look to clients</p>
         </div>
         <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !dirty} data-testid="btn-save-branding">
           {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
-          Save Branding
+          Save Changes
         </Button>
       </div>
 
+      {/* Logo Upload */}
+      <Card>
+        <CardContent className="p-5 space-y-4">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5"><Image className="h-3.5 w-3.5" /> Logo</p>
+          <div className="flex items-center gap-4">
+            <div className="h-20 w-20 rounded-lg border-2 border-dashed flex items-center justify-center bg-muted/30 overflow-hidden shrink-0"
+              style={{ borderColor: logoPreview ? accentColor : undefined }}>
+              {logoPreview
+                ? <img src={logoPreview} alt="Logo" className="h-full w-full object-contain" />
+                : <Image className="h-8 w-8 text-muted-foreground/40" />}
+            </div>
+            <div className="space-y-2">
+              <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoChange} data-testid="input-logo-file" />
+              <Button size="sm" variant="outline" onClick={() => logoInputRef.current?.click()} data-testid="btn-upload-logo">
+                <Upload className="h-3.5 w-3.5 mr-1" /> {logoPreview ? "Change Logo" : "Upload Logo"}
+              </Button>
+              {logoPreview && (
+                <Button size="sm" variant="ghost" className="text-red-500 text-xs" onClick={() => { setLogoPreview(null); setLogoFile(null); setDirty(true); }} data-testid="btn-remove-logo">
+                  Remove
+                </Button>
+              )}
+              <p className="text-xs text-muted-foreground">PNG, JPG or SVG · Max 2MB · Appears on proposals & invoices</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Business Identity */}
       <Card>
         <CardContent className="p-5 space-y-4">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5"><Briefcase className="h-3.5 w-3.5" /> Business Identity</p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2 sm:col-span-1">
-              <Label>Business Name</Label>
+              <Label>Business / Company Name</Label>
               <Input value={form.businessName || ""} onChange={e => upd("businessName", e.target.value)} placeholder="Your business or trading name" data-testid="input-brand-name" />
             </div>
             <div className="col-span-2 sm:col-span-1">
-              <Label>License Number</Label>
-              <Input value={form.licenseNumber || ""} onChange={e => upd("licenseNumber", e.target.value)} placeholder="Contractor license #" data-testid="input-brand-license" />
+              <Label>Contact Name</Label>
+              <Input value={form.contactName || ""} onChange={e => upd("contactName", e.target.value)} placeholder="Your name or primary contact" data-testid="input-brand-contact-name" />
             </div>
             <div className="col-span-2">
               <Label>Tagline</Label>
               <Input value={form.tagline || ""} onChange={e => upd("tagline", e.target.value)} placeholder="Your professional tagline" data-testid="input-brand-tagline" />
             </div>
-            <div className="col-span-2 sm:col-span-1">
+            <div className="col-span-2">
+              <Label>Address</Label>
+              <Input value={form.address || ""} onChange={e => upd("address", e.target.value)} placeholder="123 Main St, City, State ZIP" data-testid="input-brand-address" />
+            </div>
+            <div>
+              <Label>Phone</Label>
+              <div className="relative">
+                <Phone className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input className="pl-8" value={form.phone || ""} onChange={e => upd("phone", e.target.value)} placeholder="(555) 000-0000" data-testid="input-brand-phone" />
+              </div>
+            </div>
+            <div>
+              <Label>Email</Label>
+              <div className="relative">
+                <Mail className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input className="pl-8" type="email" value={form.contactEmail || ""} onChange={e => upd("contactEmail", e.target.value)} placeholder="you@business.com" data-testid="input-brand-email" />
+              </div>
+            </div>
+            <div>
               <Label>Website</Label>
               <div className="relative">
                 <Globe className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input className="pl-8" value={form.websiteUrl || ""} onChange={e => upd("websiteUrl", e.target.value)} placeholder="https://yoursite.com" data-testid="input-brand-website" />
               </div>
             </div>
-            <div className="col-span-2 sm:col-span-1">
-              <Label>Insurance Info</Label>
-              <Input value={form.insuranceInfo || ""} onChange={e => upd("insuranceInfo", e.target.value)} placeholder="Policy #, carrier, expiry" data-testid="input-brand-insurance" />
+            <div>
+              <Label>License Number</Label>
+              <Input value={form.licenseNumber || ""} onChange={e => upd("licenseNumber", e.target.value)} placeholder="Contractor license #" data-testid="input-brand-license" />
             </div>
           </div>
         </CardContent>
       </Card>
 
+      {/* Colors */}
       <Card>
         <CardContent className="p-5 space-y-4">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5"><Paintbrush className="h-3.5 w-3.5" /> Proposal Appearance</p>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5"><Paintbrush className="h-3.5 w-3.5" /> Brand Colors</p>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <Label>Brand Color (Primary)</Label>
+              <Label>Primary Color</Label>
               <div className="flex items-center gap-2 mt-1">
                 <input type="color" value={form.primaryColor || "#0f766e"} onChange={e => upd("primaryColor", e.target.value)} className="h-9 w-12 rounded border cursor-pointer" data-testid="input-brand-primary-color" />
                 <Input value={form.primaryColor || "#0f766e"} onChange={e => upd("primaryColor", e.target.value)} className="flex-1 font-mono text-sm" data-testid="input-brand-primary-color-hex" />
               </div>
             </div>
             <div>
-              <Label>Accent Color (Secondary)</Label>
+              <Label>Accent Color</Label>
               <div className="flex items-center gap-2 mt-1">
                 <input type="color" value={form.secondaryColor || "#64748b"} onChange={e => upd("secondaryColor", e.target.value)} className="h-9 w-12 rounded border cursor-pointer" data-testid="input-brand-secondary-color" />
                 <Input value={form.secondaryColor || "#64748b"} onChange={e => upd("secondaryColor", e.target.value)} className="flex-1 font-mono text-sm" data-testid="input-brand-secondary-color-hex" />
               </div>
             </div>
           </div>
+          {/* Color swatch palette */}
+          <div className="flex gap-2 flex-wrap">
+            {["#0f766e","#0369a1","#7c3aed","#be123c","#b45309","#166534","#1e40af","#334155"].map(c => (
+              <button key={c} className={cn("h-6 w-6 rounded-full border-2 transition-transform hover:scale-110", form.primaryColor === c ? "border-foreground scale-110" : "border-transparent")}
+                style={{ background: c }} onClick={() => upd("primaryColor", c)} title={c} data-testid={`swatch-${c.replace("#","")}`} />
+            ))}
+          </div>
         </CardContent>
       </Card>
 
+      {/* Proposal Text */}
       <Card>
         <CardContent className="p-5 space-y-4">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5"><FileText className="h-3.5 w-3.5" /> Proposal Text</p>
-          <div className="space-y-4">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5"><FileText className="h-3.5 w-3.5" /> Document Text</p>
+          <div className="space-y-3">
             <div>
-              <Label>Cover Note (opening statement)</Label>
+              <Label>Cover Note</Label>
               <Textarea value={form.coverNote || ""} onChange={e => upd("coverNote", e.target.value)} placeholder="Thank you for the opportunity to submit this proposal..." rows={3} data-testid="textarea-brand-cover" />
             </div>
             <div>
-              <Label>Signature / Closing Text</Label>
-              <Textarea value={form.signatureText || ""} onChange={e => upd("signatureText", e.target.value)} placeholder="Respectfully submitted,\nYour Name\nYour Title" rows={3} data-testid="textarea-brand-signature" />
+              <Label>Closing / Signature Text</Label>
+              <Textarea value={form.signatureText || ""} onChange={e => upd("signatureText", e.target.value)} placeholder="Respectfully submitted..." rows={2} data-testid="textarea-brand-signature" />
             </div>
             <div>
               <Label>Footer Text</Label>
-              <Input value={form.footerText || ""} onChange={e => upd("footerText", e.target.value)} placeholder="Footer text displayed on proposals & invoices" data-testid="input-brand-footer" />
+              <Input value={form.footerText || ""} onChange={e => upd("footerText", e.target.value)} placeholder="Footer displayed on proposals & invoices" data-testid="input-brand-footer" />
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {branding && (
-        <div className="rounded-lg border p-4 bg-muted/30">
-          <p className="text-xs font-semibold mb-3 flex items-center gap-1.5"><Eye className="h-3.5 w-3.5" /> Preview Applied To Proposals</p>
-          <div className="rounded border p-4 bg-white dark:bg-background space-y-2" style={{ borderColor: form.primaryColor || "#0f766e" }}>
-            <div className="flex items-start justify-between">
+      {/* Live Preview */}
+      <div className="rounded-lg border-2 p-4" style={{ borderColor: accentColor }}>
+        <p className="text-xs font-semibold mb-3 flex items-center gap-1.5 text-muted-foreground"><Eye className="h-3.5 w-3.5" /> Live Preview</p>
+        <div className="rounded border bg-white dark:bg-background p-4 space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-3">
+              {logoPreview && <img src={logoPreview} alt="Logo" className="h-10 w-10 object-contain rounded" />}
               <div>
-                <p className="font-bold text-sm" style={{ color: form.primaryColor || "#0f766e" }}>{form.businessName || "Your Business Name"}</p>
+                <p className="font-bold text-sm" style={{ color: accentColor }}>{form.businessName || "Your Business Name"}</p>
                 {form.tagline && <p className="text-xs text-muted-foreground">{form.tagline}</p>}
-              </div>
-              <div className="text-right text-xs text-muted-foreground">
-                {form.websiteUrl && <p>{form.websiteUrl}</p>}
-                {form.licenseNumber && <p>Lic. #{form.licenseNumber}</p>}
+                {form.contactName && <p className="text-xs text-muted-foreground">{form.contactName}</p>}
               </div>
             </div>
-            {form.coverNote && <p className="text-xs italic text-muted-foreground border-t pt-2 mt-2">{form.coverNote.slice(0, 100)}...</p>}
+            <div className="text-right text-xs text-muted-foreground space-y-0.5">
+              {form.address && <p>{form.address}</p>}
+              {form.phone && <p>{form.phone}</p>}
+              {form.contactEmail && <p>{form.contactEmail}</p>}
+              {form.websiteUrl && <p>{form.websiteUrl}</p>}
+              {form.licenseNumber && <p>Lic. #{form.licenseNumber}</p>}
+            </div>
           </div>
+          <div className="h-px w-full" style={{ background: accentColor, opacity: 0.3 }} />
+          {form.coverNote && <p className="text-xs italic text-muted-foreground">{form.coverNote.slice(0,120)}{form.coverNote.length > 120 ? "..." : ""}</p>}
+          {form.footerText && <p className="text-xs text-center text-muted-foreground border-t pt-2 mt-2">{form.footerText}</p>}
         </div>
-      )}
+      </div>
     </div>
   );
 }
 
 // ─── Settings Section ─────────────────────────────────────────────────────────
 
+const NOTIFICATION_EVENTS = [
+  { key: "contract_sent", label: "Contract Sent", desc: "When a contract is sent to a contractor for review" },
+  { key: "signature_requested", label: "Signature Requested", desc: "When a signer is added and signature is needed" },
+  { key: "signature_complete", label: "Signature Complete", desc: "When all signers have signed a contract" },
+  { key: "contract_activated", label: "Contract Activated", desc: "When a contract is marked active" },
+  { key: "contract_expiring", label: "Contract Expiring Soon", desc: "When a contract is within the expiry warning window" },
+  { key: "contract_voided", label: "Contract Voided", desc: "When a contract is voided or terminated" },
+  { key: "invoice_submitted", label: "Invoice Submitted", desc: "When a contractor submits an invoice for approval" },
+  { key: "invoice_approved", label: "Invoice Approved", desc: "When an invoice is approved" },
+  { key: "invoice_rejected", label: "Invoice Rejected", desc: "When an invoice is rejected" },
+  { key: "invoice_paid", label: "Invoice Paid", desc: "When payment is recorded against an invoice" },
+  { key: "budget_override_requested", label: "Budget Override Requested", desc: "When an invoice exceeds contract budget" },
+  { key: "proposal_approved", label: "Proposal Approved", desc: "When a proposal is approved by the company" },
+];
+
+const PERMISSION_ROLES = ["contractor", "reviewer", "finance_approver", "tenant_admin", "global_admin"];
+const PERMISSION_ACTIONS = [
+  { key: "create_proposal", label: "Create Proposal" },
+  { key: "submit_proposal", label: "Submit Proposal" },
+  { key: "approve_proposal", label: "Approve Proposal" },
+  { key: "generate_contract", label: "Generate Contract" },
+  { key: "sign_contract", label: "Sign Contract" },
+  { key: "create_invoice", label: "Create Invoice" },
+  { key: "approve_invoice", label: "Approve Invoice" },
+  { key: "record_payment", label: "Record Payment" },
+  { key: "manage_templates", label: "Manage Templates" },
+  { key: "configure_workflow", label: "Configure Workflow" },
+];
+
+const DEFAULT_MATRIX: Record<string, Record<string, boolean>> = {
+  contractor: { create_proposal: true, submit_proposal: true, approve_proposal: false, generate_contract: false, sign_contract: true, create_invoice: true, approve_invoice: false, record_payment: false, manage_templates: false, configure_workflow: false },
+  reviewer: { create_proposal: false, submit_proposal: false, approve_proposal: true, generate_contract: false, sign_contract: false, create_invoice: false, approve_invoice: false, record_payment: false, manage_templates: false, configure_workflow: false },
+  finance_approver: { create_proposal: false, submit_proposal: false, approve_proposal: false, generate_contract: false, sign_contract: false, create_invoice: false, approve_invoice: true, record_payment: true, manage_templates: false, configure_workflow: false },
+  tenant_admin: { create_proposal: true, submit_proposal: true, approve_proposal: true, generate_contract: true, sign_contract: true, create_invoice: true, approve_invoice: true, record_payment: true, manage_templates: true, configure_workflow: true },
+  global_admin: { create_proposal: true, submit_proposal: true, approve_proposal: true, generate_contract: true, sign_contract: true, create_invoice: true, approve_invoice: true, record_payment: true, manage_templates: true, configure_workflow: true },
+};
+
 function SettingsSection() {
+  const { toast } = useToast();
+  const [settingsTab, setSettingsTab] = useState("templates");
+  const [tplDialog, setTplDialog] = useState<{open: boolean; tpl?: any}>({ open: false });
+  const [tplForm, setTplForm] = useState<Record<string, any>>({});
+  const [wfDirty, setWfDirty] = useState(false);
+  const [wfForm, setWfForm] = useState<Record<string, any>>({});
+  const [matrix, setMatrix] = useState<Record<string, Record<string, boolean>>>(DEFAULT_MATRIX);
+  const [notifRules, setNotifRules] = useState<Record<string, {inApp: boolean; email: boolean; sms: boolean}>>({});
+  const [matrixDirty, setMatrixDirty] = useState(false);
+  const [notifDirty, setNotifDirty] = useState(false);
+
+  const { data: currentUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "manager" ||
+    (currentUser?.role || "").startsWith("tenant_") || (currentUser?.role || "").startsWith("platform_");
+
+  const { data: templates = [], refetch: refetchTemplates } = useQuery<any[]>({
+    queryKey: ["/api/contractor-templates/admin-all"],
+    enabled: isAdmin,
+    queryFn: async () => {
+      const r = await fetch("/api/contractor-templates/admin-all", { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+  });
+
+  const { data: wfSettings } = useQuery<any>({
+    queryKey: ["/api/contractor-workflow-settings"],
+    enabled: isAdmin,
+    queryFn: async () => {
+      const r = await fetch("/api/contractor-workflow-settings", { credentials: "include" });
+      return r.ok ? r.json() : {};
+    },
+  });
+
+  useEffect(() => {
+    if (wfSettings && !wfDirty) {
+      setWfForm({
+        minReviewers: wfSettings.minReviewers ?? 1,
+        reviewMode: wfSettings.reviewMode ?? "parallel",
+        tradeEnabled: wfSettings.tradeEnabled ?? true,
+        contractSigOverdueDays: wfSettings.contractSigOverdueDays ?? 7,
+        contractRenewalWarningDays: wfSettings.contractRenewalWarningDays ?? 30,
+        contractExpiryWarningDays: wfSettings.contractExpiryWarningDays ?? 14,
+        invoiceDueReminderDays: wfSettings.invoiceDueReminderDays ?? 3,
+        invoiceOverdueReminderDays: wfSettings.invoiceOverdueReminderDays ?? 1,
+      });
+      if (wfSettings.notificationRules && Object.keys(wfSettings.notificationRules).length > 0) {
+        setNotifRules(wfSettings.notificationRules);
+      } else {
+        const defaults: Record<string, {inApp: boolean; email: boolean; sms: boolean}> = {};
+        NOTIFICATION_EVENTS.forEach(e => { defaults[e.key] = { inApp: true, email: true, sms: false }; });
+        setNotifRules(defaults);
+      }
+      if (wfSettings.permissionMatrix && Object.keys(wfSettings.permissionMatrix).length > 0) {
+        setMatrix({ ...DEFAULT_MATRIX, ...wfSettings.permissionMatrix });
+      }
+    }
+  }, [wfSettings, wfDirty]);
+
+  // Template mutations
+  const createTplMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/contractor-templates", tplForm),
+    onSuccess: () => { refetchTemplates(); setTplDialog({ open: false }); toast({ title: "Template created" }); },
+    onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
+  });
+  const updateTplMutation = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/contractor-templates/${tplDialog.tpl?.id}`, tplForm),
+    onSuccess: () => { refetchTemplates(); setTplDialog({ open: false }); toast({ title: "Template updated" }); },
+    onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
+  });
+  const toggleTplMutation = useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
+      apiRequest("PATCH", `/api/contractor-templates/${id}`, { isActive }),
+    onSuccess: () => { refetchTemplates(); toast({ title: "Template updated" }); },
+    onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
+  });
+  const setDefaultTplMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("PATCH", `/api/contractor-templates/${id}/set-default`, {}),
+    onSuccess: () => { refetchTemplates(); toast({ title: "Default set" }); },
+    onError: (e: any) => toast({ title: e?.message || "Failed", variant: "destructive" }),
+  });
+
+  // Workflow/reminder settings save
+  const saveWfMutation = useMutation({
+    mutationFn: () => apiRequest("PUT", "/api/contractor-workflow-settings", {
+      ...wfForm, notificationRules: notifRules, permissionMatrix: matrix,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-workflow-settings"] });
+      setWfDirty(false); setMatrixDirty(false); setNotifDirty(false);
+      toast({ title: "Settings saved" });
+    },
+    onError: (e: any) => toast({ title: e?.message || "Failed to save settings", variant: "destructive" }),
+  });
+
+  function updWf(k: string, v: any) { setWfForm(f => ({ ...f, [k]: v })); setWfDirty(true); }
+  function toggleMatrix(role: string, action: string) {
+    setMatrix(m => ({ ...m, [role]: { ...(m[role] || {}), [action]: !(m[role]?.[action]) } }));
+    setMatrixDirty(true);
+  }
+  function toggleNotif(key: string, channel: "inApp"|"email"|"sms") {
+    setNotifRules(r => ({ ...r, [key]: { ...(r[key] || { inApp: true, email: false, sms: false }), [channel]: !r[key]?.[channel] } }));
+    setNotifDirty(true);
+  }
+
+  if (!isAdmin) return (
+    <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
+      <Settings className="h-10 w-10 text-muted-foreground/50" />
+      <h3 className="font-medium">Settings are admin-only</h3>
+      <p className="text-sm text-muted-foreground max-w-sm">Contact your administrator to change workflow settings.</p>
+    </div>
+  );
+
+  const TABS = [
+    { id: "templates", label: "Templates", icon: Layers },
+    { id: "workflow", label: "Workflow", icon: SlidersHorizontal },
+    { id: "reminders", label: "Reminders", icon: Bell },
+    { id: "notifications", label: "Notifications", icon: Bell },
+    { id: "permissions", label: "Permissions", icon: Shield },
+  ];
+
+  const hasUnsaved = wfDirty || matrixDirty || notifDirty;
+
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-lg font-semibold">Settings</h2>
-        <p className="text-sm text-muted-foreground">Notification preferences and hub configuration</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">Settings</h2>
+          <p className="text-sm text-muted-foreground">Templates, workflow rules, reminders, and permissions</p>
+        </div>
+        {hasUnsaved && (
+          <Button onClick={() => saveWfMutation.mutate()} disabled={saveWfMutation.isPending} data-testid="btn-save-settings">
+            {saveWfMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+            Save Settings
+          </Button>
+        )}
       </div>
-      <Card>
-        <CardContent className="p-6 text-center">
-          <Settings className="h-12 w-12 mx-auto mb-3 text-primary/40" />
-          <p className="font-medium mb-1">Hub Settings</p>
-          <p className="text-sm text-muted-foreground mb-4">Invoice reminder frequency, notification preferences, and default payment terms will be configurable here.</p>
-          <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-            <Info className="h-3.5 w-3.5" />
-            <span>Settings coming in Task #35</span>
+
+      {/* Tab bar */}
+      <div className="flex gap-1 border-b pb-0">
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setSettingsTab(t.id)}
+            className={cn("flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors",
+              settingsTab === t.id ? "border-primary text-primary font-medium" : "border-transparent text-muted-foreground hover:text-foreground")}
+            data-testid={`tab-settings-${t.id}`}>
+            <t.icon className="h-3.5 w-3.5" /> {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── TEMPLATES TAB ── */}
+      {settingsTab === "templates" && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">{templates.length} template{templates.length !== 1 ? "s" : ""}</p>
+            <Button size="sm" onClick={() => { setTplForm({ templateType: "proposal", isActive: true }); setTplDialog({ open: true }); }} data-testid="btn-new-template">
+              <Plus className="h-4 w-4 mr-1" /> New Template
+            </Button>
           </div>
-        </CardContent>
-      </Card>
+          {templates.length === 0 ? (
+            <div className="text-center py-10 border border-dashed rounded-lg text-muted-foreground">
+              <Layers className="h-8 w-8 mx-auto mb-2 opacity-30" />
+              <p className="text-sm font-medium">No templates yet</p>
+              <p className="text-xs mt-1">Create proposal or invoice templates for your team</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {templates.map((tpl: any) => (
+                <div key={tpl.id} className={cn("border rounded-lg p-3 flex items-center gap-3", !tpl.is_active && "opacity-50")} data-testid={`row-template-${tpl.id}`}>
+                  <div className={cn("h-8 w-8 rounded flex items-center justify-center shrink-0",
+                    tpl.template_type === "proposal" ? "bg-blue-50 text-blue-600" : "bg-green-50 text-green-600")}>
+                    {tpl.template_type === "proposal" ? <FileText className="h-4 w-4" /> : <Receipt className="h-4 w-4" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-medium">{tpl.name}</p>
+                      <span className={cn("text-xs rounded px-1.5 py-0.5", tpl.is_active ? "bg-green-50 text-green-700" : "bg-gray-100 text-gray-500")}>
+                        {tpl.is_active ? "Active" : "Disabled"}
+                      </span>
+                      {tpl.is_default && <span className="text-xs bg-primary/10 text-primary rounded px-1.5 py-0.5">Default</span>}
+                      {tpl.is_global && <span className="text-xs bg-amber-50 text-amber-700 rounded px-1.5 py-0.5">Global</span>}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-0.5 flex gap-2">
+                      <span className="capitalize">{tpl.template_type}</span>
+                      {tpl.industry && <><span>·</span><span>{tpl.industry}</span></>}
+                      {tpl.layout_variant && <><span>·</span><span className="capitalize">{tpl.layout_variant}</span></>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {!tpl.is_default && tpl.is_active && (
+                      <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setDefaultTplMutation.mutate(tpl.id)} data-testid={`btn-set-default-${tpl.id}`}>Set Default</Button>
+                    )}
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setTplForm({ ...tpl, templateType: tpl.template_type }); setTplDialog({ open: true, tpl }); }} data-testid={`btn-edit-tpl-${tpl.id}`}>
+                      <Edit className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground"
+                      onClick={() => toggleTplMutation.mutate({ id: tpl.id, isActive: !tpl.is_active })} data-testid={`btn-toggle-tpl-${tpl.id}`}>
+                      {tpl.is_active ? <XCircle className="h-3.5 w-3.5" /> : <CheckCircle className="h-3.5 w-3.5" />}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── WORKFLOW TAB ── */}
+      {settingsTab === "workflow" && (
+        <div className="space-y-4">
+          <Card>
+            <CardContent className="p-5 space-y-4">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Approval Settings</p>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Minimum Reviewers</Label>
+                  <Input type="number" min={1} max={10} value={wfForm.minReviewers ?? 1}
+                    onChange={e => updWf("minReviewers", parseInt(e.target.value) || 1)} data-testid="input-min-reviewers" />
+                </div>
+                <div>
+                  <Label>Review Mode</Label>
+                  <Select value={wfForm.reviewMode ?? "parallel"} onValueChange={v => updWf("reviewMode", v)}>
+                    <SelectTrigger data-testid="select-review-mode"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="parallel">Parallel (any reviewer can approve)</SelectItem>
+                      <SelectItem value="sequential">Sequential (reviewers approve in order)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <Separator />
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">Enable Trade / Non-Cash Compensation</p>
+                  <p className="text-xs text-muted-foreground">Allow proposals and invoices to include trade or barter components</p>
+                </div>
+                <button onClick={() => updWf("tradeEnabled", !wfForm.tradeEnabled)}
+                  className={cn("relative inline-flex h-6 w-11 rounded-full transition-colors", wfForm.tradeEnabled ? "bg-primary" : "bg-muted-foreground/30")}
+                  data-testid="toggle-trade-enabled">
+                  <span className={cn("inline-block h-5 w-5 rounded-full bg-white shadow transition-transform mt-0.5",
+                    wfForm.tradeEnabled ? "translate-x-5" : "translate-x-0.5")} />
+                </button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* ── REMINDERS TAB ── */}
+      {settingsTab === "reminders" && (
+        <div className="space-y-4">
+          <Card>
+            <CardContent className="p-5 space-y-5">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Contract Reminder Intervals</p>
+              {[
+                { key: "contractSigOverdueDays", label: "Signature Overdue Reminder", hint: "Days after sending before overdue warning" },
+                { key: "contractRenewalWarningDays", label: "Renewal Warning", hint: "Days before contract end to warn of upcoming renewal" },
+                { key: "contractExpiryWarningDays", label: "Expiry Warning", hint: "Days before expiry to send expiry warning" },
+              ].map(({ key, label, hint }) => (
+                <div key={key} className="flex items-center justify-between gap-4">
+                  <div className="flex-1">
+                    <p className="text-sm font-medium">{label}</p>
+                    <p className="text-xs text-muted-foreground">{hint}</p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Input type="number" min={1} max={365} className="w-20 text-center"
+                      value={wfForm[key] ?? 7} onChange={e => updWf(key, parseInt(e.target.value) || 1)}
+                      data-testid={`input-${key}`} />
+                    <span className="text-xs text-muted-foreground w-8">days</span>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-5 space-y-5">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Invoice Reminder Intervals</p>
+              {[
+                { key: "invoiceDueReminderDays", label: "Due Date Reminder", hint: "Days before due date to send reminder" },
+                { key: "invoiceOverdueReminderDays", label: "Overdue Escalation", hint: "Days after due date before overdue escalation" },
+              ].map(({ key, label, hint }) => (
+                <div key={key} className="flex items-center justify-between gap-4">
+                  <div className="flex-1">
+                    <p className="text-sm font-medium">{label}</p>
+                    <p className="text-xs text-muted-foreground">{hint}</p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Input type="number" min={1} max={365} className="w-20 text-center"
+                      value={wfForm[key] ?? 3} onChange={e => updWf(key, parseInt(e.target.value) || 1)}
+                      data-testid={`input-${key}`} />
+                    <span className="text-xs text-muted-foreground w-8">days</span>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* ── NOTIFICATIONS TAB ── */}
+      {settingsTab === "notifications" && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 px-3 py-1 border-b text-xs font-semibold text-muted-foreground uppercase">
+            <span>Event</span>
+            <span className="w-14 text-center">In-App</span>
+            <span className="w-14 text-center">Email</span>
+            <span className="w-14 text-center">SMS</span>
+          </div>
+          {NOTIFICATION_EVENTS.map(ev => {
+            const rule = notifRules[ev.key] || { inApp: true, email: false, sms: false };
+            return (
+              <div key={ev.key} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 px-3 py-2 border rounded-lg" data-testid={`row-notif-${ev.key}`}>
+                <div>
+                  <p className="text-sm font-medium">{ev.label}</p>
+                  <p className="text-xs text-muted-foreground">{ev.desc}</p>
+                </div>
+                {(["inApp","email","sms"] as const).map(ch => (
+                  <div key={ch} className="w-14 flex justify-center">
+                    <button onClick={() => toggleNotif(ev.key, ch)}
+                      className={cn("h-5 w-9 rounded-full transition-colors", rule[ch] ? "bg-primary" : "bg-muted-foreground/30")}
+                      data-testid={`toggle-notif-${ev.key}-${ch}`}>
+                      <span className={cn("block h-4 w-4 rounded-full bg-white shadow mx-auto transition-transform",
+                        rule[ch] ? "translate-x-2" : "-translate-x-2")} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── PERMISSIONS TAB ── */}
+      {settingsTab === "permissions" && (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">Toggle cells to grant or revoke permissions per role. Changes apply to new sessions.</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs border-collapse" data-testid="permission-matrix">
+              <thead>
+                <tr>
+                  <th className="text-left py-2 px-3 font-semibold text-muted-foreground border-b w-36">Role</th>
+                  {PERMISSION_ACTIONS.map(a => (
+                    <th key={a.key} className="py-2 px-1 font-medium text-muted-foreground border-b text-center" style={{ minWidth: 70 }}>
+                      <span className="block leading-tight">{a.label}</span>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {PERMISSION_ROLES.map(role => (
+                  <tr key={role} className="border-b hover:bg-muted/30">
+                    <td className="py-2 px-3 font-medium capitalize">{role.replace(/_/g, " ")}</td>
+                    {PERMISSION_ACTIONS.map(action => {
+                      const allowed = matrix[role]?.[action.key] ?? false;
+                      return (
+                        <td key={action.key} className="py-2 px-1 text-center">
+                          <button onClick={() => toggleMatrix(role, action.key)}
+                            className={cn("h-6 w-6 rounded mx-auto flex items-center justify-center transition-colors",
+                              allowed ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80")}
+                            data-testid={`perm-${role}-${action.key}`}>
+                            {allowed ? <CheckSquare className="h-3.5 w-3.5" /> : <span className="h-3 w-3 rounded-sm border border-current" />}
+                          </button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Template create/edit dialog */}
+      <Dialog open={tplDialog.open} onOpenChange={v => !v && setTplDialog({ open: false })}>
+        <DialogContent className="max-w-md" data-testid="dialog-template-form">
+          <DialogHeader>
+            <DialogTitle>{tplDialog.tpl ? "Edit Template" : "Create Template"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <Label>Template Name</Label>
+              <Input value={tplForm.name || ""} onChange={e => setTplForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Standard Service Proposal" data-testid="input-tpl-name" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Type</Label>
+                <Select value={tplForm.templateType || "proposal"} onValueChange={v => setTplForm(f => ({ ...f, templateType: v }))}>
+                  <SelectTrigger data-testid="select-tpl-type"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="proposal">Proposal</SelectItem>
+                    <SelectItem value="invoice">Invoice</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Layout</Label>
+                <Select value={tplForm.layoutVariant || "standard"} onValueChange={v => setTplForm(f => ({ ...f, layoutVariant: v }))}>
+                  <SelectTrigger data-testid="select-tpl-layout"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="standard">Standard</SelectItem>
+                    <SelectItem value="minimal">Minimal</SelectItem>
+                    <SelectItem value="detailed">Detailed</SelectItem>
+                    <SelectItem value="branded">Branded</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div>
+              <Label>Industry / Category Tags</Label>
+              <Input value={tplForm.industry || ""} onChange={e => setTplForm(f => ({ ...f, industry: e.target.value }))} placeholder="e.g. construction, electrical, landscaping" data-testid="input-tpl-industry" />
+            </div>
+            <div>
+              <Label>Work Type Tags</Label>
+              <Input value={tplForm.workTypeTags || ""} onChange={e => setTplForm(f => ({ ...f, workTypeTags: e.target.value }))} placeholder="e.g. hourly, fixed-price, retainer" data-testid="input-tpl-work-types" />
+            </div>
+            <div>
+              <Label>Description</Label>
+              <Textarea value={tplForm.description || ""} onChange={e => setTplForm(f => ({ ...f, description: e.target.value }))} rows={2} data-testid="textarea-tpl-desc" />
+            </div>
+            <div className="flex items-center justify-between">
+              <Label>Active</Label>
+              <button onClick={() => setTplForm(f => ({ ...f, isActive: !f.isActive }))}
+                className={cn("relative inline-flex h-5 w-9 rounded-full transition-colors", tplForm.isActive !== false ? "bg-primary" : "bg-muted-foreground/30")}
+                data-testid="toggle-tpl-active">
+                <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition-transform mt-0.5",
+                  tplForm.isActive !== false ? "translate-x-4" : "translate-x-0.5")} />
+              </button>
+            </div>
+            <div className="flex items-center justify-between">
+              <Label>Set as Default</Label>
+              <button onClick={() => setTplForm(f => ({ ...f, isDefault: !f.isDefault }))}
+                className={cn("relative inline-flex h-5 w-9 rounded-full transition-colors", tplForm.isDefault ? "bg-primary" : "bg-muted-foreground/30")}
+                data-testid="toggle-tpl-default">
+                <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition-transform mt-0.5",
+                  tplForm.isDefault ? "translate-x-4" : "translate-x-0.5")} />
+              </button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTplDialog({ open: false })}>Cancel</Button>
+            <Button onClick={() => tplDialog.tpl ? updateTplMutation.mutate() : createTplMutation.mutate()}
+              disabled={createTplMutation.isPending || updateTplMutation.isPending} data-testid="btn-save-template">
+              {(createTplMutation.isPending || updateTplMutation.isPending) ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+              {tplDialog.tpl ? "Save Changes" : "Create Template"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
