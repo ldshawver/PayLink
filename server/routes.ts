@@ -211,6 +211,13 @@ function isManagerRole(role: string | null | undefined): boolean {
   ].includes(role);
 }
 
+// Returns true for any platform-scoped role (platform_super_admin, platform_admin, etc.)
+// Platform users should never be force-scoped to a single company's data.
+function isPlatformUser(role: string | null | undefined): boolean {
+  if (!role) return false;
+  return role.startsWith("platform_");
+}
+
 async function getSessionCompanyId(req: Request): Promise<string | null> {
   if (!req.session?.userId) return null;
   const user = await storage.getUser(req.session.userId);
@@ -857,15 +864,16 @@ export async function registerRoutes(
         return res.json(selfWorker);
       }
       // Determine effective company scope:
-      // 1. Explicit query param takes precedence (only honored for platform admins — no companyId)
-      // 2. All tenant users (any role with a companyId) are always scoped to their company
-      // 3. Platform admins (no companyId) see all or query-filtered workers
+      // 1. Platform users (platform_* role) are NEVER force-scoped — they may have a companyId
+      //    set in the DB but it must not restrict their view.
+      // 2. All tenant users (any non-platform role with a companyId) are scoped to their company.
+      // 3. Platform users may pass ?companyId to narrow to a specific company.
       let effectiveCompanyId: string | undefined;
-      if (user?.companyId) {
+      if (!isPlatformUser(user?.role) && user?.companyId) {
         // Tenant user: always force-scope to their company regardless of query param
         effectiveCompanyId = user.companyId;
       } else if (qCompanyId && qCompanyId !== "all") {
-        // Platform admin requesting specific company
+        // Platform user requesting a specific company (or unscoped user with param)
         effectiveCompanyId = qCompanyId;
       }
       let workers = await storage.getWorkers(effectiveCompanyId);
@@ -3030,13 +3038,13 @@ export async function registerRoutes(
       // Non-manager tenant users (employees, contractors, etc.): only their own punches
       if (user && user.workerId && !isManagerRole(user.role)) {
         punches = punches.filter(p => p.workerId === user.workerId);
-      } else if (user?.companyId) {
+      } else if (!isPlatformUser(user?.role) && user?.companyId) {
         // All tenant users (managers, admins, etc.) are scoped to their own company
         punches = punches.filter(p => p.companyId === user!.companyId);
       }
-      // Platform admins (no companyId): can filter by query param
+      // Platform users (or unscoped users): can filter by query param
       const { companyId: qCompanyId, workerId: qWorkerId } = req.query;
-      if (qCompanyId && !user?.companyId) punches = punches.filter(p => p.companyId === String(qCompanyId));
+      if (qCompanyId && (isPlatformUser(user?.role) || !user?.companyId)) punches = punches.filter(p => p.companyId === String(qCompanyId));
       if (qWorkerId) punches = punches.filter(p => p.workerId === String(qWorkerId));
       res.json(punches);
     } catch (error) {
@@ -3582,11 +3590,11 @@ export async function registerRoutes(
       // Non-manager tenant users (employees, contractors, etc.) only see their own entries
       if (user && user.workerId && !isManagerRole(user.role)) {
         entries = entries.filter(e => e.workerId === user.workerId);
-      } else if (user?.companyId) {
+      } else if (!isPlatformUser(user?.role) && user?.companyId) {
         // All other tenant users (managers, admins) are scoped to their company
         entries = entries.filter(e => e.companyId === user!.companyId);
       }
-      // Optional query filters (platform admins may pass companyId to scope)
+      // Optional query filters (platform users or unscoped users may pass companyId to scope)
       const { startDate, endDate, companyId, workerId } = req.query;
       if (startDate) {
         entries = entries.filter(e => e.date >= String(startDate));
@@ -3594,8 +3602,8 @@ export async function registerRoutes(
       if (endDate) {
         entries = entries.filter(e => e.date <= String(endDate));
       }
-      if (companyId && !user?.companyId) {
-        // Only allow platform admins (no companyId) to filter by companyId param
+      if (companyId && (isPlatformUser(user?.role) || !user?.companyId)) {
+        // Allow platform users to filter by companyId param
         entries = entries.filter(e => e.companyId === String(companyId));
       }
       if (workerId) {
@@ -3753,16 +3761,16 @@ export async function registerRoutes(
       const user = await storage.getUser(req.session.userId!);
       let allSchedules = await storage.getSchedules();
       // Company scope: tenant users only see their own company's schedules
-      if (user?.companyId) {
+      if (!isPlatformUser(user?.role) && user?.companyId) {
         allSchedules = allSchedules.filter((s: any) => s.companyId === user!.companyId);
       }
       // Non-manager tenant users (employees, contractors, etc.) only see their own schedules
       if (user && user.workerId && !isManagerRole(user.role)) {
         allSchedules = allSchedules.filter((s: any) => s.workerId === user!.workerId);
       }
-      // Support optional query filters (for platform admins who have no companyId)
+      // Support optional query filters (for platform users or unscoped users)
       const { companyId: qCompanyId, workerId: qWorkerId, date: qDate } = req.query;
-      if (qCompanyId && !user?.companyId) allSchedules = allSchedules.filter((s: any) => s.companyId === String(qCompanyId));
+      if (qCompanyId && (isPlatformUser(user?.role) || !user?.companyId)) allSchedules = allSchedules.filter((s: any) => s.companyId === String(qCompanyId));
       if (qWorkerId) allSchedules = allSchedules.filter((s: any) => s.workerId === String(qWorkerId));
       if (qDate) allSchedules = allSchedules.filter((s: any) => s.date === String(qDate));
       res.json(allSchedules);
@@ -4050,10 +4058,13 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       const companyId = req.query.companyId as string | undefined;
-      // Managers scoped to their company
+      // Explicit ?companyId param always wins for all roles.
+      // Tenant users (any non-platform role with a companyId) are force-scoped to their company.
+      // Platform users see all runs unless they pass ?companyId.
+      const isTenantUser = !isPlatformUser(user?.role) && !!user?.companyId;
       const scopedCompanyId = companyId && companyId !== "all"
         ? companyId
-        : (user?.role === "manager" && user.companyId ? user.companyId : companyId);
+        : (isTenantUser ? user!.companyId! : undefined);
       const runs = await storage.getPayrollRuns(scopedCompanyId);
       res.json(runs);
     } catch (error) {
