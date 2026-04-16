@@ -6700,27 +6700,46 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!companyId) return res.status(400).json({ message: "No company" });
 
       let rows: any[];
+      const showArchived = req.query.showArchived === "true";
       if (["admin", "manager", "supervisor"].includes(userRole)) {
         // Admins see all proposals targeted at their company
-        const result = await db.execute(sql`
-          SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email
-          FROM contractor_proposals cp
-          LEFT JOIN workers w ON w.id = cp.contractor_id
-          WHERE cp.company_id = ${companyId}
-          ORDER BY cp.created_at DESC
-        `);
+        const result = showArchived
+          ? await db.execute(sql`
+              SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email
+              FROM contractor_proposals cp
+              LEFT JOIN workers w ON w.id = cp.contractor_id
+              WHERE cp.company_id = ${companyId}
+              ORDER BY cp.created_at DESC
+            `)
+          : await db.execute(sql`
+              SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email
+              FROM contractor_proposals cp
+              LEFT JOIN workers w ON w.id = cp.contractor_id
+              WHERE cp.company_id = ${companyId}
+                AND (cp.is_archived IS NOT TRUE)
+              ORDER BY cp.created_at DESC
+            `);
         rows = result.rows ?? (result as any);
       } else {
         // Contractors see their own proposals
         const workerId = user?.workerId;
         if (!workerId) return res.json([]);
-        const result = await db.execute(sql`
-          SELECT cp.*, w.first_name, w.last_name, w.worker_type
-          FROM contractor_proposals cp
-          LEFT JOIN workers w ON w.id = cp.contractor_id
-          WHERE cp.contractor_id = ${workerId}
-          ORDER BY cp.created_at DESC
-        `);
+        const result = showArchived
+          ? await db.execute(sql`
+              SELECT cp.*, w.first_name, w.last_name, w.worker_type
+              FROM contractor_proposals cp
+              LEFT JOIN workers w ON w.id = cp.contractor_id
+              WHERE cp.contractor_id = ${workerId}
+              ORDER BY cp.created_at DESC
+            `)
+          : await db.execute(sql`
+              SELECT cp.*, w.first_name, w.last_name, w.worker_type
+              FROM contractor_proposals cp
+              LEFT JOIN workers w ON w.id = cp.contractor_id
+              WHERE cp.contractor_id = ${workerId}
+                AND (cp.is_archived IS NOT TRUE)
+              ORDER BY cp.created_at DESC
+            `);
         rows = result.rows ?? (result as any);
       }
       res.json(rows);
@@ -7587,20 +7606,30 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const { companyId } = req.query as Record<string, string>;
       const isAdmin = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       let rows;
+      const showArchivedC = req.query.showArchived === "true";
       if (isAdmin) {
         // Admins can see company contracts; platform roles see all if no companyId filter
         const cid = companyId || user?.companyId;
         const isPlatform = (user?.role || "").startsWith("platform_");
-        const result = isPlatform && !cid
-          ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id ORDER BY cc.created_at DESC LIMIT 500`)
-          : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.company_id = ${cid} ORDER BY cc.created_at DESC`);
+        let result;
+        if (isPlatform && !cid) {
+          result = showArchivedC
+            ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id ORDER BY cc.created_at DESC LIMIT 500`)
+            : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.is_archived IS NOT TRUE ORDER BY cc.created_at DESC LIMIT 500`);
+        } else {
+          result = showArchivedC
+            ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.company_id = ${cid} ORDER BY cc.created_at DESC`)
+            : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.company_id = ${cid} AND cc.is_archived IS NOT TRUE ORDER BY cc.created_at DESC`);
+        }
         rows = result.rows;
       } else {
         // Contractors only see their own — always derived from session, never from query param
         const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
         const wId = (wRes.rows[0] as any)?.worker_id;
         if (!wId) return res.json([]);
-        const result = await db.execute(sql`SELECT * FROM contractor_contracts WHERE contractor_id = ${wId} ORDER BY created_at DESC`);
+        const result = showArchivedC
+          ? await db.execute(sql`SELECT * FROM contractor_contracts WHERE contractor_id = ${wId} ORDER BY created_at DESC`)
+          : await db.execute(sql`SELECT * FROM contractor_contracts WHERE contractor_id = ${wId} AND is_archived IS NOT TRUE ORDER BY created_at DESC`);
         rows = result.rows;
       }
       res.json(rows);
@@ -8018,10 +8047,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!propRes.rows[0]) return res.status(404).json({ message: "Proposal not found" });
       const prop = propRes.rows[0] as any;
       const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isAdmin = isPlatform || (user?.role || "").startsWith("tenant_") || user?.role === "admin" || user?.role === "manager";
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
-      const isAdmin = (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_") || user?.role === "admin" || user?.role === "manager";
+      // Non-admin must own the proposal
       if (!isAdmin && prop.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      // Admin must be scoped to their company (platform admins bypass)
+      if (isAdmin && !isPlatform && user?.companyId && prop.company_id !== user.companyId) {
+        return res.status(403).json({ message: "Access denied: proposal belongs to another company" });
+      }
       const lineItemsRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${req.params.id}`);
       const exportData = { ...prop, lineItems: lineItemsRes.rows, exportedAt: new Date().toISOString() };
       const filename = `proposal-${(prop.proposal_number || req.params.id).replace(/[^a-z0-9]/gi, "_")}.json`;
@@ -8038,10 +8073,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!payRes.rows[0]) return res.status(404).json({ message: "Payment not found" });
       const pay = payRes.rows[0] as any;
       const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isAdmin = isPlatform || (user?.role || "").startsWith("tenant_") || user?.role === "admin" || user?.role === "manager";
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
       const workerId = (wRes.rows[0] as any)?.worker_id;
-      const isAdmin = (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_") || user?.role === "admin" || user?.role === "manager";
+      // Non-admin must own the payment record
       if (!isAdmin && pay.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      // Admin must be scoped to their company (platform admins bypass)
+      if (isAdmin && !isPlatform && user?.companyId && pay.company_id !== user.companyId) {
+        return res.status(403).json({ message: "Access denied: payment belongs to another company" });
+      }
       const exportData = { ...pay, exportedAt: new Date().toISOString() };
       const filename = `payment-receipt-${req.params.id.slice(0, 8)}.json`;
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -8630,15 +8671,61 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const tplRes = await db.execute(sql`SELECT * FROM contractor_templates WHERE id = ${req.params.id}`);
       if (!tplRes.rows[0]) return res.status(404).json({ message: "Template not found" });
       const tpl = tplRes.rows[0] as any;
-      // Tenant boundary check: non-platform users can only set defaults for their own company's templates OR global templates
+      // Block tenant users from mutating shared global templates (would affect all tenants)
+      if (!isPlatform && (!tpl.company_id || tpl.is_global)) {
+        return res.status(403).json({ message: "Access denied: only platform admins can set a global template as default. Create a company-specific copy first." });
+      }
+      // Tenant boundary check: non-platform users can only set defaults for their own company's templates
       if (!isPlatform && tpl.company_id && tpl.company_id !== cid) {
         return res.status(403).json({ message: "Access denied: cannot set default for another company's template" });
       }
-      // Clear existing defaults for same type scoped to this company (not touching other companies)
-      await db.execute(sql`UPDATE contractor_templates SET is_default = FALSE WHERE template_type = ${tpl.template_type} AND (company_id = ${cid} ${isPlatform ? sql`OR is_global = TRUE` : sql``})`);
+      // Clear existing defaults for same type scoped to this company only
+      await db.execute(sql`UPDATE contractor_templates SET is_default = FALSE WHERE template_type = ${tpl.template_type} AND company_id = ${cid}`);
+      if (isPlatform) {
+        // Platform admins may also clear global defaults for this type
+        await db.execute(sql`UPDATE contractor_templates SET is_default = FALSE WHERE template_type = ${tpl.template_type} AND is_global = TRUE`);
+      }
       const result = await db.execute(sql`UPDATE contractor_templates SET is_default = TRUE WHERE id = ${req.params.id} RETURNING *`);
       res.json(result.rows[0]);
     } catch (e: any) { res.status(500).json({ message: "Failed to set default template: " + e.message }); }
+  });
+
+  // ── Proposal Archive ──────────────────────────────────────────────────────
+  app.post("/api/contractor-proposals/:id/archive", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      if (!propRes.rows[0]) return res.status(404).json({ message: "Proposal not found" });
+      const prop = propRes.rows[0] as any;
+      if (!isPlatform && user?.companyId && prop.company_id !== user.companyId) {
+        return res.status(403).json({ message: "Access denied: proposal belongs to another company" });
+      }
+      if (["active", "signed", "fully_signed"].includes(prop.status)) {
+        return res.status(400).json({ message: "Cannot archive an active/signed proposal" });
+      }
+      await db.execute(sql`UPDATE contractor_proposals SET is_archived = TRUE, archived_at = NOW() WHERE id = ${req.params.id}`);
+      res.json({ success: true, id: req.params.id });
+    } catch (e: any) { res.status(500).json({ message: "Failed to archive proposal: " + e.message }); }
+  });
+
+  // ── Contract Archive ──────────────────────────────────────────────────────
+  app.post("/api/contractor-contracts/:id/archive", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const contRes = await db.execute(sql`SELECT * FROM contractor_contracts WHERE id = ${req.params.id}`);
+      if (!contRes.rows[0]) return res.status(404).json({ message: "Contract not found" });
+      const cont = contRes.rows[0] as any;
+      if (!isPlatform && user?.companyId && cont.company_id !== user.companyId) {
+        return res.status(403).json({ message: "Access denied: contract belongs to another company" });
+      }
+      if (["active", "signed", "fully_signed"].includes(cont.status)) {
+        return res.status(400).json({ message: "Cannot archive an active/signed contract — void it first" });
+      }
+      await db.execute(sql`UPDATE contractor_contracts SET is_archived = TRUE, archived_at = NOW() WHERE id = ${req.params.id}`);
+      res.json({ success: true, id: req.params.id });
+    } catch (e: any) { res.status(500).json({ message: "Failed to archive contract: " + e.message }); }
   });
 
 

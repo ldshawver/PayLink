@@ -3747,14 +3747,17 @@ function DocumentsSection() {
 
   const archiveMutation = useMutation({
     mutationFn: async (doc: {id: string; type: string}) => {
-      const endpoint = doc.type === "contract"
-        ? `/api/contractor-contracts/${doc.id}`
+      const base = doc.type === "contract"
+        ? `/api/contractor-contracts/${doc.id}/archive`
         : doc.type === "proposal"
-        ? `/api/contractor-proposals/${doc.id}`
+        ? `/api/contractor-proposals/${doc.id}/archive`
         : null;
-      if (!endpoint) throw new Error("Archive not available");
-      const r = await fetch(endpoint, { method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ isArchived: true }) });
-      if (!r.ok) throw new Error("Archive failed");
+      if (!base) throw new Error("Archive not available for this document type");
+      const r = await fetch(base, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" } });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        throw new Error(data.message || "Archive failed");
+      }
       return r.json();
     },
     onSuccess: () => {
