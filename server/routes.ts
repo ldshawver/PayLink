@@ -8705,7 +8705,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         AND sent_at < NOW() - INTERVAL '${sql.raw(String(contractSigOverdueDays))} days'
       `);
       for (const c of sigOverdue.rows as any[]) {
-        const existing = await db.execute(sql`SELECT id FROM contractor_reminders WHERE entity_type = 'contract' AND entity_id = ${c.id} AND reminder_type = 'signature' AND status = 'pending'`);
+        // Dedup: skip if a reminder for this entity+type is pending OR was sent within last 24h
+        const existing = await db.execute(sql`
+          SELECT id FROM contractor_reminders
+          WHERE entity_type = 'contract' AND entity_id = ${c.id} AND reminder_type = 'signature'
+          AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
+        `);
         if (!existing.rows.length) {
           await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status) VALUES (${c.contractor_id}, ${cid}, 'contract', ${c.id}, 'signature', ${"Signature overdue: " + (c.title || c.contract_number || c.id)}, 'Contract signature is overdue. Follow up with the contractor.', ${now.toISOString()}, 'in_app', 'pending')`);
           created++;
@@ -8719,7 +8724,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         AND end_date BETWEEN NOW() AND NOW() + INTERVAL '${sql.raw(String(contractExpiryWarningDays))} days'
       `);
       for (const c of expiring.rows as any[]) {
-        const existing = await db.execute(sql`SELECT id FROM contractor_reminders WHERE entity_type = 'contract' AND entity_id = ${c.id} AND reminder_type = 'expiry' AND status = 'pending'`);
+        const existing = await db.execute(sql`
+          SELECT id FROM contractor_reminders
+          WHERE entity_type = 'contract' AND entity_id = ${c.id} AND reminder_type = 'expiry'
+          AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
+        `);
         if (!existing.rows.length) {
           await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status) VALUES (${c.contractor_id}, ${cid}, 'contract', ${c.id}, 'expiry', ${"Contract expiring soon: " + (c.title || c.contract_number || c.id)}, ${"Contract expires on " + c.end_date}, ${now.toISOString()}, 'in_app', 'pending')`);
           created++;
@@ -8733,7 +8742,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         AND ci.due_date BETWEEN NOW() AND NOW() + INTERVAL '${sql.raw(String(invoiceDueReminderDays))} days'
       `);
       for (const inv of invoicesDue.rows as any[]) {
-        const existing = await db.execute(sql`SELECT id FROM contractor_reminders WHERE entity_type = 'invoice' AND entity_id = ${inv.id} AND reminder_type = 'payment' AND status = 'pending'`);
+        const existing = await db.execute(sql`
+          SELECT id FROM contractor_reminders
+          WHERE entity_type = 'invoice' AND entity_id = ${inv.id} AND reminder_type = 'payment'
+          AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
+        `);
         if (!existing.rows.length) {
           await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status) VALUES (${inv.contractor_id}, ${cid}, 'invoice', ${inv.id}, 'payment', ${"Invoice due soon: #" + (inv.invoice_number || inv.id.slice(0,8))}, ${"Due on " + inv.due_date}, ${now.toISOString()}, 'in_app', 'pending')`);
           created++;
@@ -8747,7 +8760,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         AND ci.due_date < NOW() - INTERVAL '${sql.raw(String(invoiceOverdueReminderDays))} days'
       `);
       for (const inv of invoicesOverdue.rows as any[]) {
-        const existing = await db.execute(sql`SELECT id FROM contractor_reminders WHERE entity_type = 'invoice' AND entity_id = ${inv.id} AND reminder_type = 'follow_up' AND status = 'pending'`);
+        const existing = await db.execute(sql`
+          SELECT id FROM contractor_reminders
+          WHERE entity_type = 'invoice' AND entity_id = ${inv.id} AND reminder_type = 'follow_up'
+          AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
+        `);
         if (!existing.rows.length) {
           await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status) VALUES (${inv.contractor_id}, ${cid}, 'invoice', ${inv.id}, 'follow_up', ${"Invoice overdue: #" + (inv.invoice_number || inv.id.slice(0,8))}, ${"Was due on " + inv.due_date}, ${now.toISOString()}, 'in_app', 'pending')`);
           created++;

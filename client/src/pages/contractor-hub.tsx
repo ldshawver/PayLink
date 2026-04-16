@@ -213,7 +213,7 @@ function fmtRelativeTime(dateStr: string): string {
 
 // ─── Notification Bell ────────────────────────────────────────────────────────
 
-function NotificationBell({ onNavigate }: { onNavigate: (section: HubSection) => void }) {
+function NotificationBell({ onNavigate }: { onNavigate: (section: HubSection, entityId?: string) => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -309,7 +309,8 @@ function NotificationBell({ onNavigate }: { onNavigate: (section: HubSection) =>
                         if (n.actionUrl) {
                           const url = new URL(n.actionUrl, window.location.href);
                           const section = url.searchParams.get("section") as HubSection | null;
-                          if (section) onNavigate(section);
+                          const entityId = url.searchParams.get("id") || n.entityId || undefined;
+                          if (section) onNavigate(section, entityId);
                         }
                         setOpen(false);
                       }}
@@ -3515,7 +3516,7 @@ function CreateInvoiceFromContractDialog({
 
 // ─── Contracts Section ────────────────────────────────────────────────────────
 
-function ContractsSection({ isAdmin }: { isAdmin: boolean }) {
+function ContractsSection({ isAdmin, reminderEntityIds = new Set() }: { isAdmin: boolean; reminderEntityIds?: Set<string | null | undefined> }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
@@ -3620,6 +3621,11 @@ function ContractsSection({ isAdmin }: { isAdmin: boolean }) {
                       <p className="font-medium text-sm">{c.title || c.contractNumber || "Contract"}</p>
                       <ContractBadge status={c.status} />
                       {isExpiring && <span className="text-xs bg-orange-100 text-orange-700 rounded px-1.5 py-0.5">Exp. {daysLeft}d</span>}
+                      {reminderEntityIds.has(c.id) && (
+                        <span className="inline-flex items-center gap-1 text-xs bg-amber-100 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 rounded px-1.5 py-0.5" data-testid={`badge-reminder-contract-${c.id}`}>
+                          <Clock className="h-3 w-3" /> Reminder
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
                       {c.contractNumber && <span className="font-mono">{c.contractNumber}</span>}
@@ -4356,7 +4362,7 @@ function DocumentsSection() {
 
 // ─── Messages Section ─────────────────────────────────────────────────────────
 
-function MessagesSection({ onNavigate }: { onNavigate: (s: HubSection) => void }) {
+function MessagesSection({ onNavigate }: { onNavigate: (s: HubSection, entityId?: string) => void }) {
   const [typeFilter, setTypeFilter] = useState("all");
   const [readFilter, setReadFilter] = useState("all");
 
@@ -4461,7 +4467,8 @@ function MessagesSection({ onNavigate }: { onNavigate: (s: HubSection) => void }
                   if (n.actionUrl) {
                     const url = new URL(n.actionUrl, window.location.href);
                     const section = url.searchParams.get("section") as HubSection | null;
-                    if (section) onNavigate(section);
+                    const entityId = url.searchParams.get("id") || n.entityId || undefined;
+                    if (section) onNavigate(section, entityId);
                   }
                 }}
               >
@@ -5520,12 +5527,31 @@ export default function ContractorHubPage() {
   });
   const unreadMessages = navNotifications.filter((n: ContractorNotification) => !n.isRead).length;
 
-  function handleSectionChange(s: HubSection) {
+  // Pending reminders for inline badges
+  const { data: allPendingReminders = [] } = useQuery<ContractorReminder[]>({
+    queryKey: ["/api/contractor-reminders", "pending"],
+    queryFn: async () => {
+      const r = await fetch("/api/contractor-reminders?status=pending", { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+    select: (data: any) => snakeToCamel(data) as ContractorReminder[],
+    refetchInterval: 60000,
+  });
+  const reminderEntityIds = new Set(allPendingReminders.map(r => r.entityId).filter(Boolean));
+
+  function handleSectionChange(s: HubSection, entityId?: string) {
     setSection(s);
     setSearch("");
     setStatusFilter("all");
     setCompanyFilter("all");
     setSortBy("date_desc");
+    if (entityId) {
+      // Auto-select the specific entity after navigating to the section
+      if (s === "proposals") {
+        const found = proposals.find(p => p.id === entityId);
+        if (found) setSelectedProposal(found);
+      }
+    }
   }
 
   function openBuilderForNew() {
@@ -5762,7 +5788,7 @@ export default function ContractorHubPage() {
             )}
 
             {/* Contracts */}
-            {section === "contracts" && <ContractsSection isAdmin={isAdmin} />}
+            {section === "contracts" && <ContractsSection isAdmin={isAdmin} reminderEntityIds={reminderEntityIds} />}
 
             {/* Invoices */}
             {section === "invoices" && (
@@ -5810,6 +5836,11 @@ export default function ContractorHubPage() {
                                 {isBlocked && (
                                   <span className="inline-flex items-center gap-1 text-xs text-orange-600 bg-orange-50 dark:bg-orange-950/20 rounded px-1.5 py-0.5">
                                     <Lock className="h-3 w-3" /> Proposal not approved
+                                  </span>
+                                )}
+                                {reminderEntityIds.has(invoice.id) && (
+                                  <span className="inline-flex items-center gap-1 text-xs bg-amber-100 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 rounded px-1.5 py-0.5" data-testid={`badge-reminder-invoice-${invoice.id}`}>
+                                    <Clock className="h-3 w-3" /> Reminder
                                   </span>
                                 )}
                               </div>
