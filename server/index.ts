@@ -2782,6 +2782,21 @@ Thank you,
     `);
   }
 
+  // Fix: ensure the platform 'admin' user is never scoped to a company.
+  // If the production admin row has role='admin' or has a companyId set,
+  // correct it so all workers are visible across all companies.
+  try {
+    const { db: dbFix } = await import("./db");
+    await dbFix.$client.query(
+      `UPDATE users SET role = 'platform_super_admin', company_id = NULL
+       WHERE username = 'admin'
+         AND (role = 'admin' OR (role = 'platform_super_admin' AND company_id IS NOT NULL))`
+    );
+    console.log("Auto-migration OK: admin user platform scope fix");
+  } catch (e) {
+    console.log("Auto-migration skipped (admin platform scope fix):", (e as Error).message);
+  }
+
   const { seedDatabase } = await import("./seed");
   try {
     await seedDatabase();

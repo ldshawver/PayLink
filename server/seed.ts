@@ -30,21 +30,31 @@ async function ensureAdminUser() {
       if (process.env.ADMIN_PASSWORD) {
         const hashedPassword = await bcrypt.hash(process.env.ADMIN_PASSWORD, 10);
         const updates: Record<string, any> = { password: hashedPassword };
-        if (adminUser.role === "admin" && !adminUser.companyId) {
+        if (adminUser.role === "admin" || adminUser.role === "platform_super_admin") {
           updates.role = "platform_super_admin";
-          console.log("Admin user upgraded from 'admin' to 'platform_super_admin' (no company assigned)");
+          updates.companyId = null;
+          console.log("Admin user ensured as platform_super_admin with no company scope");
         }
         await db.update(users).set(updates).where(eq(users.username, "admin"));
         console.log("Admin user password reset via ADMIN_PASSWORD env var");
       } else if (process.env.NODE_ENV === "production") {
-        console.log("Admin user exists, skipping password reset (production mode)");
+        // In production without ADMIN_PASSWORD, still ensure role and companyId are correct
+        const updates: Record<string, any> = {};
+        if (adminUser.role === "admin" || (adminUser.role === "platform_super_admin" && adminUser.companyId)) {
+          updates.role = "platform_super_admin";
+          updates.companyId = null;
+          console.log("Admin user role/companyId corrected to platform_super_admin with no company scope");
+          await db.update(users).set(updates).where(eq(users.username, "admin"));
+        } else {
+          console.log("Admin user exists, skipping update (production mode)");
+        }
       } else {
         const hashedPassword = await bcrypt.hash("admin", 10);
         const updates: Record<string, any> = { password: hashedPassword };
-        // Upgrade legacy "admin" role to platform_super_admin if the user has no tenant company
-        if (adminUser.role === "admin" && !adminUser.companyId) {
+        if (adminUser.role === "admin" || (adminUser.role === "platform_super_admin" && adminUser.companyId)) {
           updates.role = "platform_super_admin";
-          console.log("Admin user upgraded from 'admin' to 'platform_super_admin' (no company assigned)");
+          updates.companyId = null;
+          console.log("Admin user ensured as platform_super_admin with no company scope");
         }
         await db.update(users).set(updates).where(eq(users.username, "admin"));
         console.log("Admin user password reset to default (dev mode)");
