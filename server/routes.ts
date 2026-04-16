@@ -6706,16 +6706,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         // Admins see all proposals targeted at their company
         const result = showArchived
           ? await db.execute(sql`
-              SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email
+              SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email,
+                     co.name as company_name
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
+              LEFT JOIN companies co ON co.id = cp.company_id
               WHERE cp.company_id = ${companyId}
               ORDER BY cp.created_at DESC
             `)
           : await db.execute(sql`
-              SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email
+              SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email,
+                     co.name as company_name
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
+              LEFT JOIN companies co ON co.id = cp.company_id
               WHERE cp.company_id = ${companyId}
                 AND (cp.is_archived IS NOT TRUE)
               ORDER BY cp.created_at DESC
@@ -6727,33 +6731,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!workerId) return res.json([]);
         const result = showArchived
           ? await db.execute(sql`
-              SELECT cp.*, w.first_name, w.last_name, w.worker_type
+              SELECT cp.*, w.first_name, w.last_name, w.worker_type,
+                     co.name as company_name
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
+              LEFT JOIN companies co ON co.id = cp.company_id
               WHERE cp.contractor_id = ${workerId}
               ORDER BY cp.created_at DESC
             `)
           : await db.execute(sql`
-              SELECT cp.*, w.first_name, w.last_name, w.worker_type
+              SELECT cp.*, w.first_name, w.last_name, w.worker_type,
+                     co.name as company_name
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
+              LEFT JOIN companies co ON co.id = cp.company_id
               WHERE cp.contractor_id = ${workerId}
                 AND (cp.is_archived IS NOT TRUE)
               ORDER BY cp.created_at DESC
             `);
         rows = result.rows ?? (result as any);
-      }
-      // Enrich rows with company_name via per-id lookup
-      const companyIdSet = [...new Set((rows as any[]).map((r: any) => r.company_id).filter(Boolean))];
-      const nameMap: Record<string, string> = {};
-      for (const cid of companyIdSet) {
-        try {
-          const coRes = await db.execute(sql`SELECT id, name FROM companies WHERE id = ${cid}`);
-          if (coRes.rows[0]) nameMap[(coRes.rows[0] as any).id] = (coRes.rows[0] as any).name;
-        } catch {}
-      }
-      if (Object.keys(nameMap).length > 0) {
-        rows = (rows as any[]).map((r: any) => ({ ...r, company_name: nameMap[r.company_id] || r.company_name || null }));
       }
       res.json(rows);
     } catch (e) { res.status(500).json({ message: "Failed to fetch proposals" }); }
@@ -7627,12 +7623,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         let result;
         if (isPlatform && !cid) {
           result = showArchivedC
-            ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id ORDER BY cc.created_at DESC LIMIT 500`)
-            : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.is_archived IS NOT TRUE ORDER BY cc.created_at DESC LIMIT 500`);
+            ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id ORDER BY cc.created_at DESC LIMIT 500`)
+            : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.is_archived IS NOT TRUE ORDER BY cc.created_at DESC LIMIT 500`);
         } else {
           result = showArchivedC
-            ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.company_id = ${cid} ORDER BY cc.created_at DESC`)
-            : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id WHERE cc.company_id = ${cid} AND cc.is_archived IS NOT TRUE ORDER BY cc.created_at DESC`);
+            ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.company_id = ${cid} ORDER BY cc.created_at DESC`)
+            : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.company_id = ${cid} AND cc.is_archived IS NOT TRUE ORDER BY cc.created_at DESC`);
         }
         rows = result.rows;
       } else {
@@ -7641,21 +7637,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const wId = (wRes.rows[0] as any)?.worker_id;
         if (!wId) return res.json([]);
         const result = showArchivedC
-          ? await db.execute(sql`SELECT * FROM contractor_contracts WHERE contractor_id = ${wId} ORDER BY created_at DESC`)
-          : await db.execute(sql`SELECT * FROM contractor_contracts WHERE contractor_id = ${wId} AND is_archived IS NOT TRUE ORDER BY created_at DESC`);
+          ? await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.contractor_id = ${wId} ORDER BY cc.created_at DESC`)
+          : await db.execute(sql`SELECT cc.*, w.first_name || ' ' || w.last_name AS contractor_name, co.name AS company_name FROM contractor_contracts cc LEFT JOIN workers w ON w.id = cc.contractor_id LEFT JOIN companies co ON co.id = cc.company_id WHERE cc.contractor_id = ${wId} AND cc.is_archived IS NOT TRUE ORDER BY cc.created_at DESC`);
         rows = result.rows;
-      }
-      // Enrich rows with company_name via per-id lookup
-      const cidSet = [...new Set((rows as any[]).filter((r: any) => r.company_id && !r.company_name).map((r: any) => r.company_id))];
-      const nm: Record<string, string> = {};
-      for (const cid of cidSet) {
-        try {
-          const coRes = await db.execute(sql`SELECT id, name FROM companies WHERE id = ${cid}`);
-          if (coRes.rows[0]) nm[(coRes.rows[0] as any).id] = (coRes.rows[0] as any).name;
-        } catch {}
-      }
-      if (Object.keys(nm).length > 0) {
-        rows = (rows as any[]).map((r: any) => ({ ...r, company_name: r.company_name || nm[r.company_id] || null }));
       }
       res.json(rows);
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch contracts" }); }

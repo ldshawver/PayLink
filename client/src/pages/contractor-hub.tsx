@@ -3974,11 +3974,39 @@ function DocumentsSection() {
                     onClick={() => handleDownload(doc)} data-testid={`btn-download-doc-${doc.id}`}>
                     <Download className="h-3.5 w-3.5" />
                   </Button>
-                  {/* Print — all types (opens download URL so browser can print) */}
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Print (open in new tab)"
-                    onClick={() => {
+                  {/* Print — fetches doc data and renders a print-friendly HTML page */}
+                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Print document"
+                    onClick={async () => {
                       const base = DOC_DOWNLOAD_ENDPOINTS[doc.type];
-                      if (base) window.open(`${base}/${doc.id}/download`, "_blank");
+                      if (!base) return;
+                      try {
+                        const r = await fetch(`${base}/${doc.id}/download`, { credentials: "include" });
+                        const data = r.ok ? await r.json().catch(() => null) : null;
+                        const win = window.open("", "_blank");
+                        if (win) {
+                          const d = data || {};
+                          win.document.write(`<!DOCTYPE html><html><head><title>PayLink — ${doc.title}</title><style>
+                            body{font-family:sans-serif;max-width:800px;margin:40px auto;color:#111;padding:20px}
+                            h1{font-size:1.4rem;border-bottom:2px solid #0d9488;padding-bottom:8px;margin-bottom:20px}
+                            table{width:100%;border-collapse:collapse;margin:16px 0}
+                            th,td{text-align:left;padding:8px 12px;border:1px solid #ddd;font-size:.9rem}
+                            th{background:#f4f4f4;font-weight:600}.meta{color:#555;font-size:.85rem;margin:4px 0}
+                            @media print{body{margin:0}}
+                          </style></head><body>
+                            <h1>${doc.title}</h1>
+                            <p class="meta">Type: ${doc.type} &nbsp;|&nbsp; Status: ${doc.status} &nbsp;|&nbsp; Date: ${new Date(doc.date).toLocaleDateString()}</p>
+                            ${doc.amount ? `<p class="meta">Amount: ${doc.amount}</p>` : ""}
+                            ${doc.companyName ? `<p class="meta">Company: ${doc.companyName}</p>` : ""}
+                            ${doc.contractorName ? `<p class="meta">Contractor: ${doc.contractorName}</p>` : ""}
+                            <table><tbody>
+                              ${Object.entries(d).filter(([k]) => !["id","created_at","updated_at","body_json","line_items"].includes(k))
+                                .map(([k,v]) => `<tr><th>${k.replace(/_/g," ")}</th><td>${v != null && v !== "" ? String(v).slice(0,200) : "—"}</td></tr>`).join("")}
+                            </tbody></table>
+                            <script>window.print();<\/script>
+                          </body></html>`);
+                          win.document.close();
+                        }
+                      } catch { toast({ title: "Print failed", variant: "destructive" }); }
                     }}
                     data-testid={`btn-print-doc-${doc.id}`}>
                     <Printer className="h-3.5 w-3.5" />
@@ -4407,6 +4435,7 @@ function SettingsSection() {
   const { data: currentUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const isAdmin = currentUser?.role === "admin" || currentUser?.role === "manager" ||
     (currentUser?.role || "").startsWith("tenant_") || (currentUser?.role || "").startsWith("platform_");
+  const isPlatformUser = (currentUser?.role || "").startsWith("platform_");
 
   const { data: smtpConfig } = useQuery<{host?: string; enabled?: boolean} | null>({
     queryKey: ["/api/admin/smtp-config"],
@@ -4595,16 +4624,22 @@ function SettingsSection() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {!tpl.is_default && tpl.is_active && (
-                      <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setDefaultTplMutation.mutate(tpl.id)} data-testid={`btn-set-default-${tpl.id}`}>Set Default</Button>
+                    {(tpl.is_global || !tpl.company_id) && !isPlatformUser ? (
+                      <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground" title="Global template — read-only for tenant admins">Global</span>
+                    ) : (
+                      <>
+                        {!tpl.is_default && tpl.is_active && (
+                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setDefaultTplMutation.mutate(tpl.id)} data-testid={`btn-set-default-${tpl.id}`}>Set Default</Button>
+                        )}
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setTplForm({ ...tpl, templateType: tpl.template_type }); setTplDialog({ open: true, tpl }); }} data-testid={`btn-edit-tpl-${tpl.id}`}>
+                          <Edit className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground"
+                          onClick={() => toggleTplMutation.mutate({ id: tpl.id, isActive: !tpl.is_active })} data-testid={`btn-toggle-tpl-${tpl.id}`}>
+                          {tpl.is_active ? <XCircle className="h-3.5 w-3.5" /> : <CheckCircle className="h-3.5 w-3.5" />}
+                        </Button>
+                      </>
                     )}
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setTplForm({ ...tpl, templateType: tpl.template_type }); setTplDialog({ open: true, tpl }); }} data-testid={`btn-edit-tpl-${tpl.id}`}>
-                      <Edit className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground"
-                      onClick={() => toggleTplMutation.mutate({ id: tpl.id, isActive: !tpl.is_active })} data-testid={`btn-toggle-tpl-${tpl.id}`}>
-                      {tpl.is_active ? <XCircle className="h-3.5 w-3.5" /> : <CheckCircle className="h-3.5 w-3.5" />}
-                    </Button>
                   </div>
                 </div>
               ))}
