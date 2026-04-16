@@ -3516,7 +3516,7 @@ function CreateInvoiceFromContractDialog({
 
 // ─── Contracts Section ────────────────────────────────────────────────────────
 
-function ContractsSection({ isAdmin, reminderEntityIds = new Set() }: { isAdmin: boolean; reminderEntityIds?: Set<string | null | undefined> }) {
+function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelectedId }: { isAdmin: boolean; reminderEntityIds?: Set<string | null | undefined>; initialSelectedId?: string | null }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
@@ -3530,6 +3530,13 @@ function ContractsSection({ isAdmin, reminderEntityIds = new Set() }: { isAdmin:
   });
 
   const contracts: Contract[] = rawContracts.map(c => snakeToCamel(c) as Contract);
+
+  useEffect(() => {
+    if (initialSelectedId && contracts.length > 0 && !selectedContract) {
+      const found = contracts.find(c => c.id === initialSelectedId);
+      if (found) setSelectedContract(found);
+    }
+  }, [initialSelectedId, contracts]);
 
   const now = Date.now();
   const reminders = contracts.filter(c => {
@@ -5539,6 +5546,8 @@ export default function ContractorHubPage() {
   });
   const reminderEntityIds = new Set(allPendingReminders.map(r => r.entityId).filter(Boolean));
 
+  const [deepLinkContractId, setDeepLinkContractId] = useState<string | null>(null);
+
   function handleSectionChange(s: HubSection, entityId?: string) {
     setSection(s);
     setSearch("");
@@ -5546,11 +5555,19 @@ export default function ContractorHubPage() {
     setCompanyFilter("all");
     setSortBy("date_desc");
     if (entityId) {
-      // Auto-select the specific entity after navigating to the section
       if (s === "proposals") {
         const found = proposals.find(p => p.id === entityId);
         if (found) setSelectedProposal(found);
       }
+      if (s === "invoices") {
+        const found = invoices.find(i => i.id === entityId);
+        if (found) setSelectedInvoice(found);
+      }
+      if (s === "contracts") {
+        setDeepLinkContractId(entityId);
+      }
+    } else {
+      setDeepLinkContractId(null);
     }
   }
 
@@ -5788,7 +5805,7 @@ export default function ContractorHubPage() {
             )}
 
             {/* Contracts */}
-            {section === "contracts" && <ContractsSection isAdmin={isAdmin} reminderEntityIds={reminderEntityIds} />}
+            {section === "contracts" && <ContractsSection isAdmin={isAdmin} reminderEntityIds={reminderEntityIds} initialSelectedId={deepLinkContractId} />}
 
             {/* Invoices */}
             {section === "invoices" && (

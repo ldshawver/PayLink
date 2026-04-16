@@ -8141,6 +8141,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         actorUserId: req.session.userId, companyId: inv.companyId,
         note: overrideReason,
       });
+      // Notify admin/manager of override request via contractor notifications
+      createContractorNotification({ companyId: inv.companyId, notificationType: "invoice_override_requested", title: `Override Requested: Invoice #${(inv as any).invoiceNumber || req.params.id.slice(0, 8)}`, body: overrideReason || "A contractor has requested a payment override for an invoice.", entityType: "invoice", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=invoices&id=${req.params.id}` }).catch(() => {});
       // Notify admin/manager of override request
       try {
         const { sendContractEventEmail } = await import("./notifications.js");
@@ -8712,7 +8714,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
         `);
         if (!existing.rows.length) {
-          await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status) VALUES (${c.contractor_id}, ${cid}, 'contract', ${c.id}, 'signature', ${"Signature overdue: " + (c.title || c.contract_number || c.id)}, 'Contract signature is overdue. Follow up with the contractor.', ${now.toISOString()}, 'in_app', 'pending')`);
+          await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at) VALUES (${c.contractor_id}, ${cid}, 'contract', ${c.id}, 'signature', ${"Signature overdue: " + (c.title || c.contract_number || c.id)}, 'Contract signature is overdue. Follow up with the contractor.', ${now.toISOString()}, 'in_app', 'pending', NOW())`);
           created++;
         }
       }
@@ -8730,7 +8732,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
         `);
         if (!existing.rows.length) {
-          await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status) VALUES (${c.contractor_id}, ${cid}, 'contract', ${c.id}, 'expiry', ${"Contract expiring soon: " + (c.title || c.contract_number || c.id)}, ${"Contract expires on " + c.end_date}, ${now.toISOString()}, 'in_app', 'pending')`);
+          await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at) VALUES (${c.contractor_id}, ${cid}, 'contract', ${c.id}, 'expiry', ${"Contract expiring soon: " + (c.title || c.contract_number || c.id)}, ${"Contract expires on " + c.end_date}, ${now.toISOString()}, 'in_app', 'pending', NOW())`);
           created++;
         }
       }
@@ -8748,7 +8750,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
         `);
         if (!existing.rows.length) {
-          await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status) VALUES (${inv.contractor_id}, ${cid}, 'invoice', ${inv.id}, 'payment', ${"Invoice due soon: #" + (inv.invoice_number || inv.id.slice(0,8))}, ${"Due on " + inv.due_date}, ${now.toISOString()}, 'in_app', 'pending')`);
+          await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at) VALUES (${inv.contractor_id}, ${cid}, 'invoice', ${inv.id}, 'payment', ${"Invoice due soon: #" + (inv.invoice_number || inv.id.slice(0,8))}, ${"Due on " + inv.due_date}, ${now.toISOString()}, 'in_app', 'pending', NOW())`);
           created++;
         }
       }
@@ -8766,7 +8768,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
         `);
         if (!existing.rows.length) {
-          await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status) VALUES (${inv.contractor_id}, ${cid}, 'invoice', ${inv.id}, 'follow_up', ${"Invoice overdue: #" + (inv.invoice_number || inv.id.slice(0,8))}, ${"Was due on " + inv.due_date}, ${now.toISOString()}, 'in_app', 'pending')`);
+          await db.execute(sql`INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at) VALUES (${inv.contractor_id}, ${cid}, 'invoice', ${inv.id}, 'follow_up', ${"Invoice overdue: #" + (inv.invoice_number || inv.id.slice(0,8))}, ${"Was due on " + inv.due_date}, ${now.toISOString()}, 'in_app', 'pending', NOW())`);
           created++;
         }
       }
