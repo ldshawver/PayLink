@@ -47,10 +47,9 @@ export function TenantFeaturesPanel() {
   const companyId = user?.companyId;
 
   const { data: features = [], isLoading } = useQuery<TenantFeatureRow[]>({
-    queryKey: ["/api/feature-registry/tenant", companyId],
+    queryKey: ["/api/feature-registry/my-features"],
     queryFn: () =>
-      fetch(`/api/feature-registry/tenant/${companyId}`, { credentials: "include" }).then(r => r.json()),
-    enabled: !!companyId,
+      fetch("/api/feature-registry/my-features", { credentials: "include" }).then(r => r.json()),
   });
 
   // Group by module

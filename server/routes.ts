@@ -2571,7 +2571,7 @@ export async function registerRoutes(
 
   // ── Stripe Treasury Routes ─────────────────────────────────────────────────
 
-  app.get("/api/treasury/status", requireAuth, requireRole("admin"), async (req, res) => {
+  app.get("/api/treasury/status", requireAuth, requireRole("admin"), requireFeature("tenant.finance.treasury"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user?.companyId) return res.status(400).json({ message: "No company associated with this account" });
@@ -6278,7 +6278,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // CONTRACTOR INVOICE MODULE
   // ══════════════════════════════════════════════════════════════════════════
 
-  app.get("/api/contractor-invoices", requireAuth, async (req, res) => {
+  app.get("/api/contractor-invoices", requireAuth, requireFeature("tenant.finance.contractor-hub"), async (req, res) => {
     try {
       const { companyId, contractorId, status, showArchived } = req.query as Record<string, string>;
       const showArchivedBool = showArchived === "true";
@@ -6696,7 +6696,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── CONTRACTOR PROPOSALS ──────────────────────────────────────────────────
 
   // GET /api/contractor-proposals — contractors see own; admins/managers see company inbound
-  app.get("/api/contractor-proposals", requireAuth, async (req, res) => {
+  app.get("/api/contractor-proposals", requireAuth, requireFeature("tenant.finance.contractor-hub"), async (req, res) => {
     try {
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
@@ -12691,7 +12691,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Shift Marketplace Listings ────────────────────────────────────────────
-  app.get("/api/marketplace/listings", requireAuth, async (req, res) => {
+  app.get("/api/marketplace/listings", requireAuth, requireFeature("tenant.schedule.marketplace"), async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
       const status = req.query.status as string | undefined;
@@ -17866,7 +17866,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Trade / Non-Cash Compensation ─────────────────────────────────────────
-  app.get("/api/trade-transactions", requireAuth, async (req: any, res) => {
+  app.get("/api/trade-transactions", requireAuth, requireFeature("tenant.finance.trade-compensation"), async (req: any, res) => {
     try {
       const { companyId, status, year } = req.query;
       if (!companyId) return res.status(400).json({ message: "companyId required" });
@@ -21958,6 +21958,53 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       res.json({ success: true, count: features.length });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // GET /api/feature-registry/my-features — tenant's own feature entitlements (accessible to any authenticated tenant user)
+  app.get("/api/feature-registry/my-features", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId!);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+
+      // Platform users get everything enabled
+      if (user.role?.startsWith("platform_")) {
+        const allFeatures = await db.execute(sql`SELECT * FROM feature_registry ORDER BY sort_order, module`);
+        const rows = (allFeatures.rows ?? allFeatures) as any[];
+        return res.json(rows.map((r: any) => ({
+          ...r,
+          overrideEnabled: null,
+          overrideExpiresAt: null,
+          overrideNotes: null,
+          effectiveEnabled: true,
+        })));
+      }
+
+      const companyId = user.companyId;
+      if (!companyId) return res.status(400).json({ message: "No company context" });
+
+      const result = await db.execute(sql`
+        SELECT
+          fr.id, fr.feature_key AS "featureKey", fr.module, fr.feature_name AS "featureName",
+          fr.layer, fr.tier, fr.description, fr.default_on AS "defaultOn",
+          fr.is_beta AS "isBeta", fr.billing_impact AS "billingImpact", fr.sort_order AS "sortOrder",
+          fo.enabled AS "overrideEnabled",
+          fo.expires_at AS "overrideExpiresAt",
+          fo.notes AS "overrideNotes",
+          CASE
+            WHEN fo.enabled IS NULL THEN fr.default_on
+            WHEN fo.expires_at IS NOT NULL AND fo.expires_at < NOW() THEN fr.default_on
+            ELSE fo.enabled
+          END AS "effectiveEnabled"
+        FROM feature_registry fr
+        LEFT JOIN feature_overrides fo ON fo.feature_key = fr.feature_key AND fo.company_id = ${companyId}
+        WHERE fr.layer = 'tenant'
+        ORDER BY fr.sort_order, fr.module
+      `);
+      const rows = (result.rows ?? result) as any[];
+      res.json(rows);
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }

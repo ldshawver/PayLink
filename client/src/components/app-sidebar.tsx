@@ -96,12 +96,14 @@ import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
 import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
 import { canAccessPlatformConsole, isManagerOrAbove, isTenantAdminRole, expandRoleForLegacyGuards } from "@/lib/roles";
+import { useFeatureFlags } from "@/lib/featureFlags";
 
 type NavItem = {
   title: string;
   url: string;
   icon: any;
   roles?: string[];
+  featureKey?: string;
 };
 
 type NavSection = {
@@ -110,6 +112,7 @@ type NavSection = {
   url: string;
   roles?: string[];
   items: NavItem[];
+  featureKey?: string;
 };
 
 type NavGroup = {
@@ -164,7 +167,7 @@ const TENANT_NAV: NavGroup[] = [
           { title: "Scheduled Shifts", url: "/app/schedule?tab=shifts", icon: CalendarRange },
           { title: "Recurring Schedule", url: "/app/schedule?tab=recurring", icon: Repeat, roles: ["admin", "manager"] },
           { title: "Recurring Templates", url: "/app/schedule?tab=templates", icon: FileText, roles: ["admin", "manager"] },
-          { title: "Shift Marketplace", url: "/app/schedule?tab=marketplace", icon: Repeat },
+          { title: "Shift Marketplace", url: "/app/schedule?tab=marketplace", icon: Repeat, featureKey: "tenant.schedule.marketplace" },
         ],
       },
       {
@@ -262,7 +265,7 @@ const TENANT_NAV: NavGroup[] = [
           { title: "Remittance Agencies", url: "/app/payroll?tab=remittance-agencies", icon: Building },
           { title: "Remittance Sources", url: "/app/payroll?tab=remittance-sources", icon: Globe },
           { title: "Payroll Audit", url: "/app/payroll-audit", icon: ShieldCheck },
-          { title: "Stripe Treasury", url: "/app/treasury", icon: Landmark },
+          { title: "Stripe Treasury", url: "/app/treasury", icon: Landmark, featureKey: "tenant.finance.treasury" },
         ],
       },
     ],
@@ -307,6 +310,7 @@ const TENANT_NAV: NavGroup[] = [
         icon: Briefcase,
         url: "/app/contractor-hub",
         roles: ["admin"],
+        featureKey: "tenant.finance.contractor-hub",
         items: [],
       },
       {
@@ -314,6 +318,7 @@ const TENANT_NAV: NavGroup[] = [
         icon: ArrowLeftRight,
         url: "/app/trade-compensation",
         roles: ["admin", "manager"],
+        featureKey: "tenant.finance.trade-compensation",
         items: [
           { title: "Transactions", url: "/app/trade-compensation", icon: ArrowLeftRight },
         ],
@@ -510,6 +515,7 @@ function LogoutButton() {
 export function AppSidebar() {
   const [location] = useLocation();
   const { user } = useAuth();
+  const { flags: featureFlags } = useFeatureFlags();
 
   const search = useSearch();
   const locationPath = location;
@@ -525,6 +531,15 @@ export function AppSidebar() {
     // (tenant_admin, tenant_manager, etc.) match against legacy role guards ("admin", "manager")
     const effectiveRoles = expandRoleForLegacyGuards(userRole);
     return roles.some(r => effectiveRoles.includes(r));
+  };
+
+  const hasFeature = (featureKey?: string) => {
+    if (!featureKey) return true;
+    // Platform users always see everything
+    if (userRole.startsWith("platform_")) return true;
+    // Default true (forward-compatible) when flags not loaded yet
+    if (!featureFlags || !(featureKey in featureFlags)) return true;
+    return featureFlags[featureKey] === true;
   };
 
   const isActive = (url: string) => {
@@ -543,7 +558,8 @@ export function AppSidebar() {
 
   function renderSection(section: NavSection) {
     if (!hasAccess(section.roles)) return null;
-    const visibleItems = section.items.filter(i => hasAccess(i.roles));
+    if (!hasFeature(section.featureKey)) return null;
+    const visibleItems = section.items.filter(i => hasAccess(i.roles) && hasFeature(i.featureKey));
 
     if (visibleItems.length === 0) {
       return (
