@@ -4160,3 +4160,59 @@ export const smsConfig = pgTable("sms_config", {
 export const insertSmsConfigSchema = createInsertSchema(smsConfig).omit({ id: true, updatedAt: true });
 export type SmsConfig = typeof smsConfig.$inferSelect;
 export type InsertSmsConfig = z.infer<typeof insertSmsConfigSchema>;
+
+// ── Feature Registry ──────────────────────────────────────────────────────────
+// Canonical list of all product features, managed by platform admins.
+export const featureRegistry = pgTable("feature_registry", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  featureKey: text("feature_key").notNull().unique(),
+  module: text("module").notNull(),
+  featureName: text("feature_name").notNull(),
+  layer: text("layer").notNull(), // "platform" | "tenant" | "employee"
+  tier: text("tier").notNull().default("all"), // "starter" | "professional" | "enterprise" | "all"
+  description: text("description"),
+  defaultOn: boolean("default_on").notNull().default(true),
+  isBeta: boolean("is_beta").notNull().default(false),
+  billingImpact: boolean("billing_impact").notNull().default(false),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertFeatureRegistrySchema = createInsertSchema(featureRegistry).omit({ id: true, createdAt: true });
+export type FeatureRegistry = typeof featureRegistry.$inferSelect;
+export type InsertFeatureRegistry = z.infer<typeof insertFeatureRegistrySchema>;
+
+// Per-tenant feature overrides (enables/disables a feature for a specific company).
+export const featureOverrides = pgTable("feature_overrides", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  featureKey: text("feature_key").notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  expiresAt: timestamp("expires_at"),
+  notes: text("notes"),
+  enabledBy: varchar("enabled_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertFeatureOverridesSchema = createInsertSchema(featureOverrides).omit({ id: true, createdAt: true, updatedAt: true });
+export type FeatureOverride = typeof featureOverrides.$inferSelect;
+export type InsertFeatureOverride = z.infer<typeof insertFeatureOverridesSchema>;
+
+// Audit log for all feature activation/deactivation events.
+export const featureActivationLog = pgTable("feature_activation_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id"),
+  companyName: text("company_name"),
+  featureKey: text("feature_key").notNull(),
+  action: text("action").notNull(), // "enabled" | "disabled" | "expiry_updated"
+  performedBy: varchar("performed_by"),
+  performedByName: text("performed_by_name"),
+  notes: text("notes"),
+  expiresAt: timestamp("expires_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertFeatureActivationLogSchema = createInsertSchema(featureActivationLog).omit({ id: true, createdAt: true });
+export type FeatureActivationLog = typeof featureActivationLog.$inferSelect;
+export type InsertFeatureActivationLog = z.infer<typeof insertFeatureActivationLogSchema>;

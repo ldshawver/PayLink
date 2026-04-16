@@ -2704,6 +2704,81 @@ Thank you,
     await run("contractor_contracts.archived_at", sql`ALTER TABLE contractor_contracts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
     await run("contractor_invoices.is_archived", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT FALSE`);
     await run("contractor_invoices.archived_at", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+
+    // ── Feature Registry (Task #39) ──────────────────────────────────────────
+    await run("feature_registry table", sql`CREATE TABLE IF NOT EXISTS feature_registry (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      feature_key TEXT NOT NULL UNIQUE,
+      module TEXT NOT NULL,
+      feature_name TEXT NOT NULL,
+      layer TEXT NOT NULL,
+      tier TEXT NOT NULL DEFAULT 'all',
+      description TEXT,
+      default_on BOOLEAN NOT NULL DEFAULT TRUE,
+      is_beta BOOLEAN NOT NULL DEFAULT FALSE,
+      billing_impact BOOLEAN NOT NULL DEFAULT FALSE,
+      sort_order INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await run("feature_overrides table", sql`CREATE TABLE IF NOT EXISTS feature_overrides (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL,
+      feature_key TEXT NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      expires_at TIMESTAMPTZ,
+      notes TEXT,
+      enabled_by VARCHAR,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(company_id, feature_key)
+    )`);
+
+    await run("feature_activation_log table", sql`CREATE TABLE IF NOT EXISTS feature_activation_log (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR,
+      company_name TEXT,
+      feature_key TEXT NOT NULL,
+      action TEXT NOT NULL,
+      performed_by VARCHAR,
+      performed_by_name TEXT,
+      notes TEXT,
+      expires_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    // Seed core tenant features into feature_registry
+    await run("feature_registry seed", sql`
+      INSERT INTO feature_registry (feature_key, module, feature_name, layer, tier, description, default_on, is_beta, billing_impact, sort_order)
+      VALUES
+        ('tenant.home.dashboard',          'Home',                    'Dashboard',                 'tenant', 'all',          'Main dashboard with KPIs and activity feed',                              TRUE,  FALSE, FALSE, 10),
+        ('tenant.home.messages',           'Home',                    'Message Center',            'tenant', 'starter',      'Internal messaging and broadcasts to workers',                            TRUE,  FALSE, FALSE, 20),
+        ('tenant.attendance.timesheet',    'My Work',                 'Timesheets',                'tenant', 'starter',      'Employee timesheets and manager review workflows',                         TRUE,  FALSE, FALSE, 30),
+        ('tenant.attendance.time-off',     'My Work',                 'Time Off',                  'tenant', 'starter',      'Time-off requests and approval flows',                                    TRUE,  FALSE, FALSE, 40),
+        ('tenant.schedule.view',           'My Work',                 'Scheduling',                'tenant', 'starter',      'Employee schedules, shift publishing, and personal calendar',              TRUE,  FALSE, FALSE, 50),
+        ('tenant.schedule.marketplace',    'My Work',                 'Shift Marketplace',         'tenant', 'professional', 'Shift swapping and open-shift bidding marketplace',                       TRUE,  FALSE, FALSE, 60),
+        ('tenant.expenses.manage',         'My Work',                 'Expenses',                  'tenant', 'professional', 'Expense submission, photo receipts, AI scanning, and approval',           TRUE,  FALSE, FALSE, 70),
+        ('tenant.employee.directory',      'Workforce',               'Employee Directory',        'tenant', 'starter',      'Full employee roster with profiles, pay, and custom fields',              TRUE,  FALSE, FALSE, 80),
+        ('tenant.hr.reviews',              'HR',                      'Performance Reviews',       'tenant', 'professional', 'Structured performance review cycles with KPI tracking',                   FALSE, FALSE, FALSE, 90),
+        ('tenant.hr.qualifications',       'HR',                      'Qualifications & Skills',   'tenant', 'professional', 'Track employee certifications, licenses, and skills',                      TRUE,  FALSE, FALSE, 100),
+        ('tenant.payroll.process',         'Payroll',                 'Process Payroll',           'tenant', 'starter',      'Multi-step payroll wizard, direct deposit, and tax form generation',       TRUE,  FALSE, TRUE,  110),
+        ('tenant.payroll.audit',           'Payroll',                 'Payroll Audit',             'tenant', 'professional', 'Payroll run audit trail and discrepancy reports',                          TRUE,  FALSE, FALSE, 120),
+        ('tenant.finance.invoicing',       'Finance',                 'Business Invoicing',        'tenant', 'professional', 'Create and send invoices to customers',                                   TRUE,  FALSE, TRUE,  130),
+        ('tenant.finance.biz-docs',        'Finance',                 'Proposals & Contracts',     'tenant', 'professional', 'Unified proposals, contracts, and document lifecycle management',          TRUE,  FALSE, TRUE,  140),
+        ('tenant.finance.contractor-hub',  'Finance',                 'Contractor Hub',            'tenant', 'enterprise',   'Contractor proposals, contracts, invoices, and payment management',       TRUE,  FALSE, TRUE,  150),
+        ('tenant.finance.trade-compensation','Finance',               'Trade Compensation',        'tenant', 'enterprise',   'Non-cash and barter compensation tracking and payroll integration',       FALSE, TRUE,  TRUE,  160),
+        ('tenant.finance.treasury',        'Finance',                 'Stripe Treasury',           'tenant', 'enterprise',   'Embedded banking for payroll ACH disbursements via Stripe Treasury',      FALSE, TRUE,  TRUE,  170),
+        ('tenant.finance.customers',       'Finance',                 'Customers & Vendors',       'tenant', 'starter',      'Customer and vendor contact management',                                  TRUE,  FALSE, FALSE, 180),
+        ('tenant.docs.company-documents',  'Documents',               'Company Documents',         'tenant', 'professional', 'Centralized document storage with versioning and e-signatures',           TRUE,  FALSE, FALSE, 190),
+        ('tenant.docs.e-signatures',       'Documents',               'E-Signatures',              'tenant', 'enterprise',   'Request and collect legally binding e-signatures on documents',           TRUE,  FALSE, FALSE, 200),
+        ('tenant.reports.payroll',         'Reports',                 'Payroll Reports',           'tenant', 'starter',      'Pre-built payroll and labor cost reports with CSV export',                TRUE,  FALSE, FALSE, 210),
+        ('tenant.reports.hr',              'Reports',                 'HR Reports',                'tenant', 'professional', 'Headcount, turnover, and workforce analytics reports',                    TRUE,  FALSE, FALSE, 220),
+        ('tenant.system.settings',         'System Admin',            'System Settings',           'tenant', 'all',          'Tenant-level configuration: notifications, policies, integrations',       TRUE,  FALSE, FALSE, 230),
+        ('tenant.system.alert-templates',  'System Admin',            'Alert Templates',           'tenant', 'professional', 'Customizable email and SMS notification templates',                        TRUE,  FALSE, FALSE, 240),
+        ('tenant.kpi.goals',               'Reports',                 'KPI Goals',                 'tenant', 'professional', 'Set and track weekly labor and revenue goals against actuals',            TRUE,  FALSE, FALSE, 250),
+        ('tenant.inventory.manage',        'Operations',              'Inventory',                 'tenant', 'enterprise',   'Basic inventory tracking and assignment per location',                    FALSE, TRUE,  FALSE, 260)
+      ON CONFLICT (feature_key) DO NOTHING
+    `);
   }
 
   const { seedDatabase } = await import("./seed");

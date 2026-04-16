@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { TenantFeaturesPanel } from "@/components/tenant-features-panel";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -4343,6 +4344,7 @@ export default function CompanyPage() {
             <TabsTrigger value="currencies" data-testid="tab-currencies">Currencies</TabsTrigger>
             <TabsTrigger value="import" data-testid="tab-import">Import</TabsTrigger>
             <TabsTrigger value="quickstart" data-testid="tab-quickstart">Quick Start</TabsTrigger>
+            <TabsTrigger value="features" data-testid="tab-features">Features</TabsTrigger>
           </TabsList>
         </div>
 
@@ -4362,6 +4364,11 @@ export default function CompanyPage() {
         <TabsContent value="currencies"><CurrenciesTab /></TabsContent>
         <TabsContent value="import"><ImportTab /></TabsContent>
         <TabsContent value="quickstart"><QuickStartTab /></TabsContent>
+        <TabsContent value="features">
+          <div className="py-2">
+            <TenantFeaturesPanel />
+          </div>
+        </TabsContent>
       </Tabs>
     </div>
   );

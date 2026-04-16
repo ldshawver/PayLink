@@ -1,264 +1,832 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, Info } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Search, CheckCircle2, XCircle, Clock, AlertTriangle, ShieldCheck,
+  Building2, Layers, Zap, History, ChevronRight, ToggleLeft, ToggleRight, Info,
+  RefreshCw, Filter
+} from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
+import { useAuth } from "@/hooks/use-auth";
 
-type FeatureEntry = {
+// ── Types ────────────────────────────────────────────────────────────────────
+
+interface FeatureEntry {
   id: string;
   featureKey: string;
-  route: string;
   module: string;
-  feature: string;
-  layer: "platform" | "tenant" | "employee";
-  deptOwner: string;
-  permissionKeys: string;
-  scopeType: "platform" | "tenant" | "branch" | "department" | "direct_reports" | "self";
-  visibility: string;
-  editRights: string;
-  approvalRights: string;
-  auditRequired: boolean;
-  tenantIsolated: boolean;
-  sensitiveData: boolean;
-  billingImpact: boolean;
-  dependencies: string;
-};
-
-const FEATURES: FeatureEntry[] = [
-  // ── Platform Console ───────────────────────────────────────────────────────
-  { id: "p01", featureKey: "platform.sales.deal-pipeline", route: "/platform/deal-pipeline", module: "Sales & Licensing", feature: "Deal Pipeline", layer: "platform", deptOwner: "Sales / CSM", permissionKeys: "platform.console.access, platform.sales.view, platform.sales.edit", scopeType: "platform", visibility: "Platform Admins only", editRights: "Admin + CSM", approvalRights: "CSM Lead", auditRequired: true, tenantIsolated: false, sensitiveData: false, billingImpact: true, dependencies: "CRM" },
-  { id: "p02", featureKey: "platform.sales.license-requests", route: "/platform/license-requests", module: "Sales & Licensing", feature: "License Requests", layer: "platform", deptOwner: "Legal / IT", permissionKeys: "platform.console.access, platform.licensing.view, platform.licensing.approve", scopeType: "platform", visibility: "Platform Admins only", editRights: "Admin only", approvalRights: "Platform Owner", auditRequired: true, tenantIsolated: false, sensitiveData: false, billingImpact: true, dependencies: "Deal Pipeline" },
-  { id: "p03", featureKey: "platform.sales.agreements", route: "/platform/agreements", module: "Sales & Licensing", feature: "Agreement Templates", layer: "platform", deptOwner: "Legal", permissionKeys: "platform.console.access, platform.agreements.view, platform.agreements.edit", scopeType: "platform", visibility: "Platform Admins only", editRights: "Admin only", approvalRights: "Legal Team", auditRequired: true, tenantIsolated: false, sensitiveData: true, billingImpact: false, dependencies: "License Requests" },
-  { id: "p04", featureKey: "platform.sales.signed-agreements", route: "/platform/agreements?tab=agreements", module: "Sales & Licensing", feature: "Signed Agreements", layer: "platform", deptOwner: "Legal", permissionKeys: "platform.console.access, platform.agreements.view", scopeType: "platform", visibility: "Platform Admins only", editRights: "Read-only", approvalRights: "Legal Team", auditRequired: true, tenantIsolated: false, sensitiveData: true, billingImpact: false, dependencies: "Agreements Templates" },
-  { id: "p05", featureKey: "platform.cs.onboarding-projects", route: "/platform/onboarding-projects", module: "Implementation", feature: "Onboarding Projects", layer: "platform", deptOwner: "Customer Success", permissionKeys: "platform.console.access, platform.implementation.view, platform.implementation.edit", scopeType: "tenant", visibility: "Platform Admins + CS Team", editRights: "CS Lead + Admin", approvalRights: "CS Lead", auditRequired: true, tenantIsolated: false, sensitiveData: false, billingImpact: false, dependencies: "Deal Pipeline" },
-  { id: "p06", featureKey: "platform.cs.onboarding-templates", route: "/platform/onboarding-templates", module: "Implementation", feature: "Onboarding Templates", layer: "platform", deptOwner: "Customer Success", permissionKeys: "platform.console.access, platform.implementation.configure", scopeType: "platform", visibility: "Platform Admins only", editRights: "Admin only", approvalRights: "None", auditRequired: false, tenantIsolated: false, sensitiveData: false, billingImpact: false, dependencies: "Onboarding Projects" },
-  { id: "p07", featureKey: "platform.cs.engagement-feed", route: "/platform/engagement-feed", module: "Implementation", feature: "Engagement Feed", layer: "platform", deptOwner: "Customer Success", permissionKeys: "platform.console.access, platform.implementation.view", scopeType: "platform", visibility: "Platform Admins + CS Team", editRights: "CS Team", approvalRights: "None", auditRequired: false, tenantIsolated: false, sensitiveData: false, billingImpact: false, dependencies: "Onboarding Projects" },
-  { id: "p08", featureKey: "platform.cs.contractor-onboarding", route: "/platform/contractor-onboarding", module: "Implementation", feature: "Contractor Onboarding", layer: "platform", deptOwner: "Operations", permissionKeys: "platform.console.access, platform.implementation.edit", scopeType: "tenant", visibility: "Platform Admins only", editRights: "Admin", approvalRights: "Admin", auditRequired: true, tenantIsolated: false, sensitiveData: true, billingImpact: false, dependencies: "Agreements" },
-  { id: "p09", featureKey: "platform.admin.provisioning", route: "/platform/provisioning", module: "Provisioning & Controls", feature: "Provisioning & Tenant Setup", layer: "platform", deptOwner: "Engineering / DevOps", permissionKeys: "platform.console.access, platform.provisioning.manage, platform.provisioning.execute", scopeType: "platform", visibility: "Platform Admins only", editRights: "Admin only", approvalRights: "Platform Owner", auditRequired: true, tenantIsolated: false, sensitiveData: true, billingImpact: true, dependencies: "License Requests" },
-  { id: "p10", featureKey: "platform.admin.permissions", route: "/platform/permissions", module: "Provisioning & Controls", feature: "Platform Permissions", layer: "platform", deptOwner: "Security", permissionKeys: "platform.console.access, platform.permissions.manage", scopeType: "platform", visibility: "Platform Admins only", editRights: "Admin only", approvalRights: "Platform Owner", auditRequired: true, tenantIsolated: false, sensitiveData: true, billingImpact: false, dependencies: "Provisioning" },
-  { id: "p11", featureKey: "platform.oversight.audit-log", route: "/platform/audit-log", module: "Oversight", feature: "Platform Audit Log", layer: "platform", deptOwner: "Security / Legal", permissionKeys: "platform.console.access, platform.audit.read", scopeType: "platform", visibility: "Admin + Auditor", editRights: "Read-only", approvalRights: "None", auditRequired: true, tenantIsolated: false, sensitiveData: true, billingImpact: false, dependencies: "All modules" },
-  { id: "p12", featureKey: "platform.finance.billing", route: "/platform/billing", module: "Platform Finance", feature: "Platform Billing", layer: "platform", deptOwner: "Finance", permissionKeys: "platform.console.access, platform.billing.view, platform.billing.manage", scopeType: "platform", visibility: "Platform Admins + Billing role", editRights: "Admin only", approvalRights: "Platform Owner", auditRequired: true, tenantIsolated: false, sensitiveData: true, billingImpact: true, dependencies: "Stripe" },
-  { id: "p13", featureKey: "platform.oversight.feature-registry", route: "/platform/feature-registry", module: "Oversight", feature: "Feature Registry", layer: "platform", deptOwner: "Product", permissionKeys: "platform.console.access, platform.feature-registry.view", scopeType: "platform", visibility: "Platform Admins only", editRights: "Product team", approvalRights: "Product Owner", auditRequired: false, tenantIsolated: false, sensitiveData: false, billingImpact: false, dependencies: "None" },
-
-  // ── Tenant App ─────────────────────────────────────────────────────────────
-  { id: "t01", featureKey: "tenant.home.dashboard", route: "/app", module: "Home", feature: "Dashboard", layer: "tenant", deptOwner: "All / HR", permissionKeys: "tenant.dashboard.view", scopeType: "tenant", visibility: "All users", editRights: "None (read-only)", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "All modules" },
-  { id: "t02", featureKey: "tenant.home.messages", route: "/app/messages", module: "Home", feature: "Messages / Message Center", layer: "tenant", deptOwner: "HR / Management", permissionKeys: "tenant.messages.view, tenant.messages.broadcast", scopeType: "tenant", visibility: "All users (send: Admin/Manager)", editRights: "Admin + Manager (broadcast)", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Workers, SMTP, Twilio" },
-  { id: "t03", featureKey: "tenant.attendance.timesheet", route: "/app/attendance", module: "My Work", feature: "Timesheet", layer: "tenant", deptOwner: "HR / Operations", permissionKeys: "tenant.attendance.view.self, tenant.attendance.view.team, tenant.attendance.edit.team", scopeType: "direct_reports", visibility: "All (own), Manager (team)", editRights: "Manager (team), Admin", approvalRights: "Manager", auditRequired: true, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Time Clock, Schedules" },
-  { id: "t04", featureKey: "tenant.attendance.punches", route: "/app/attendance?tab=punches", module: "My Work", feature: "Time Punches", layer: "tenant", deptOwner: "Operations", permissionKeys: "tenant.punches.view.self, tenant.punches.edit.team", scopeType: "direct_reports", visibility: "All (own), Manager (team)", editRights: "Manager + Admin", approvalRights: "Manager", auditRequired: true, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Stations, Schedules" },
-  { id: "t05", featureKey: "tenant.attendance.accrual-balances", route: "/app/attendance?tab=accrual-balances", module: "My Work", feature: "Accrual Balances", layer: "tenant", deptOwner: "HR", permissionKeys: "tenant.accruals.view.self, tenant.accruals.view.team", scopeType: "self", visibility: "All (own)", editRights: "Admin only", approvalRights: "Manager", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Accrual Policies" },
-  { id: "t06", featureKey: "tenant.attendance.pending-approvals", route: "/app/attendance?tab=pending-approvals", module: "My Work", feature: "Pending Approvals", layer: "tenant", deptOwner: "HR / Management", permissionKeys: "tenant.attendance.approve.team", scopeType: "direct_reports", visibility: "Admin + Manager", editRights: "Admin + Manager", approvalRights: "Manager", auditRequired: true, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Attendance" },
-  { id: "t07", featureKey: "tenant.attendance.time-off", route: "/app/attendance?tab=time-off", module: "My Work", feature: "Time Off", layer: "tenant", deptOwner: "HR", permissionKeys: "tenant.time-off.request.self, tenant.time-off.approve.team", scopeType: "direct_reports", visibility: "All (own), Manager (team)", editRights: "Self (request), Manager (approve)", approvalRights: "Manager", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Absence Policies" },
-  { id: "t08", featureKey: "tenant.schedule.view", route: "/app/schedule", module: "My Work", feature: "Schedule", layer: "tenant", deptOwner: "Operations", permissionKeys: "tenant.schedule.view.self, tenant.schedule.manage.team", scopeType: "branch", visibility: "All (own), Manager (team)", editRights: "Manager", approvalRights: "Manager", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Departments, Positions" },
-  { id: "t09", featureKey: "tenant.schedule.marketplace", route: "/app/schedule?tab=marketplace", module: "My Work", feature: "Shift Marketplace", layer: "tenant", deptOwner: "Operations", permissionKeys: "tenant.schedule.marketplace.view, tenant.schedule.marketplace.publish", scopeType: "tenant", visibility: "All", editRights: "Admin + Manager (publish)", approvalRights: "Manager", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Schedule" },
-  { id: "t10", featureKey: "tenant.expenses.manage", route: "/app/expenses", module: "My Work", feature: "Expenses & Invoices", layer: "tenant", deptOwner: "Finance", permissionKeys: "tenant.expenses.submit.self, tenant.expenses.approve.team", scopeType: "direct_reports", visibility: "All (own), Admin/Manager (team)", editRights: "Self (submit), Admin/Manager (approve)", approvalRights: "Manager", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: true, dependencies: "Workers" },
-  { id: "t11", featureKey: "tenant.employee.directory", route: "/app/employee", module: "Workforce", feature: "Employee Directory", layer: "tenant", deptOwner: "HR", permissionKeys: "tenant.employees.view, tenant.employees.edit, tenant.employees.create", scopeType: "tenant", visibility: "Admin + Manager", editRights: "Admin + Manager", approvalRights: "Admin", auditRequired: true, tenantIsolated: true, sensitiveData: true, billingImpact: true, dependencies: "None" },
-  { id: "t12", featureKey: "tenant.employee.user-accounts", route: "/app/employee?tab=user-accounts", module: "Workforce", feature: "User Accounts", layer: "tenant", deptOwner: "IT / HR", permissionKeys: "tenant.users.manage", scopeType: "tenant", visibility: "Admin only", editRights: "Admin only", approvalRights: "Admin", auditRequired: true, tenantIsolated: true, sensitiveData: true, billingImpact: true, dependencies: "Workers" },
-  { id: "t13", featureKey: "tenant.employee.wages", route: "/app/employee?tab=wages", module: "Workforce", feature: "Wages & Pay Methods", layer: "tenant", deptOwner: "Finance / HR", permissionKeys: "tenant.wages.view, tenant.wages.edit", scopeType: "tenant", visibility: "Admin + Manager", editRights: "Admin", approvalRights: "Admin", auditRequired: true, tenantIsolated: true, sensitiveData: true, billingImpact: true, dependencies: "Workers" },
-  { id: "t14", featureKey: "tenant.hr.reviews", route: "/app/hr?tab=reviews", module: "HR", feature: "Performance Reviews", layer: "tenant", deptOwner: "HR", permissionKeys: "tenant.hr.reviews.view.self, tenant.hr.reviews.manage.team", scopeType: "direct_reports", visibility: "Admin/Manager + own", editRights: "Admin + Manager", approvalRights: "Manager", auditRequired: false, tenantIsolated: true, sensitiveData: true, billingImpact: false, dependencies: "Workers, KPI Groups" },
-  { id: "t15", featureKey: "tenant.hr.qualifications", route: "/app/hr?tab=qualifications", module: "HR", feature: "Qualifications & Skills", layer: "tenant", deptOwner: "HR", permissionKeys: "tenant.hr.qualifications.manage", scopeType: "tenant", visibility: "Admin + Manager", editRights: "Admin", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Workers" },
-  { id: "t16", featureKey: "tenant.hr.education", route: "/app/hr?tab=education", module: "HR", feature: "Education & Licenses", layer: "tenant", deptOwner: "HR", permissionKeys: "tenant.hr.education.manage", scopeType: "tenant", visibility: "Admin + Manager", editRights: "Admin", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Workers" },
-  { id: "t17", featureKey: "tenant.payroll.process", route: "/app/payroll?tab=process", module: "Payroll", feature: "Process Payroll", layer: "tenant", deptOwner: "Finance / HR", permissionKeys: "tenant.payroll.process, tenant.payroll.approve", scopeType: "tenant", visibility: "Admin + Manager", editRights: "Admin", approvalRights: "Admin", auditRequired: true, tenantIsolated: true, sensitiveData: true, billingImpact: true, dependencies: "Workers, Pay Periods, Taxes" },
-  { id: "t18", featureKey: "tenant.payroll.pay-stubs", route: "/app/payroll?tab=pay-stubs", module: "Payroll", feature: "Pay Stubs (All)", layer: "tenant", deptOwner: "Finance", permissionKeys: "tenant.paystubs.view.team, tenant.paystubs.manage", scopeType: "tenant", visibility: "Admin/Manager (all), Employee (own)", editRights: "Admin only", approvalRights: "Admin", auditRequired: true, tenantIsolated: true, sensitiveData: true, billingImpact: false, dependencies: "Payroll Runs" },
-  { id: "t19", featureKey: "tenant.payroll.taxes", route: "/app/payroll?tab=taxes-deductions", module: "Payroll", feature: "Taxes & Deductions", layer: "tenant", deptOwner: "Finance", permissionKeys: "tenant.payroll.taxes.configure", scopeType: "tenant", visibility: "Admin only", editRights: "Admin", approvalRights: "Admin", auditRequired: true, tenantIsolated: true, sensitiveData: true, billingImpact: false, dependencies: "Payroll" },
-  { id: "t20", featureKey: "tenant.payroll.audit", route: "/app/payroll-audit", module: "Payroll", feature: "Payroll Audit", layer: "tenant", deptOwner: "Finance / Audit", permissionKeys: "tenant.payroll.audit.read", scopeType: "tenant", visibility: "Admin + Manager", editRights: "Read-only", approvalRights: "None", auditRequired: true, tenantIsolated: true, sensitiveData: true, billingImpact: false, dependencies: "Payroll Runs" },
-  { id: "t21", featureKey: "tenant.policy.groups", route: "/app/policy?tab=groups", module: "Policies & Rules", feature: "Policy Groups", layer: "tenant", deptOwner: "HR / Operations", permissionKeys: "tenant.policy.configure", scopeType: "tenant", visibility: "Admin only", editRights: "Admin", approvalRights: "Admin", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "None" },
-  { id: "t22", featureKey: "tenant.policy.pay-codes", route: "/app/policy?tab=pay-codes", module: "Policies & Rules", feature: "Pay Codes & Formulas", layer: "tenant", deptOwner: "Finance", permissionKeys: "tenant.policy.pay-codes.configure", scopeType: "tenant", visibility: "Admin only", editRights: "Admin", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Policy Groups" },
-  { id: "t23", featureKey: "tenant.finance.invoicing", route: "/app/invoices", module: "Finance", feature: "Invoicing (Business)", layer: "tenant", deptOwner: "Finance / Sales", permissionKeys: "tenant.invoices.view, tenant.invoices.create, tenant.invoices.approve", scopeType: "tenant", visibility: "Admin + Manager", editRights: "Admin + Manager", approvalRights: "Admin", auditRequired: true, tenantIsolated: true, sensitiveData: false, billingImpact: true, dependencies: "Customers" },
-  { id: "t24", featureKey: "tenant.finance.biz-docs", route: "/app/biz-docs", module: "Finance", feature: "Invoices & Proposals", layer: "tenant", deptOwner: "Finance", permissionKeys: "tenant.biz-docs.view, tenant.biz-docs.create", scopeType: "tenant", visibility: "Admin + Manager", editRights: "Admin + Manager", approvalRights: "Admin", auditRequired: true, tenantIsolated: true, sensitiveData: false, billingImpact: true, dependencies: "Customers, Workers" },
-  { id: "t25", featureKey: "tenant.finance.contractor-hub", route: "/app/contractor-hub", module: "Finance", feature: "Contractor Hub", layer: "tenant", deptOwner: "Finance / Operations", permissionKeys: "tenant.contractor-hub.view, tenant.contractor-hub.approve", scopeType: "tenant", visibility: "Admin/Manager + Contractor (own)", editRights: "Contractor (proposals), Admin (payments)", approvalRights: "Admin", auditRequired: true, tenantIsolated: true, sensitiveData: true, billingImpact: true, dependencies: "Workers, Contractors" },
-  { id: "t26", featureKey: "tenant.finance.trade-compensation", route: "/app/trade-compensation", module: "Finance", feature: "Trade Compensation", layer: "tenant", deptOwner: "Finance", permissionKeys: "tenant.trade.manage, tenant.trade.approve", scopeType: "tenant", visibility: "Admin + Manager", editRights: "Admin", approvalRights: "Admin", auditRequired: true, tenantIsolated: true, sensitiveData: true, billingImpact: true, dependencies: "Workers, Payroll" },
-  { id: "t27", featureKey: "tenant.finance.customers", route: "/app/customers", module: "Finance", feature: "Customers & Vendors", layer: "tenant", deptOwner: "Sales / Admin", permissionKeys: "tenant.customers.view, tenant.customers.manage", scopeType: "tenant", visibility: "Admin + Manager", editRights: "Admin + Manager", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "None" },
-  { id: "t28", featureKey: "tenant.org.company", route: "/app/company", module: "Organization", feature: "Company Information", layer: "tenant", deptOwner: "Admin", permissionKeys: "tenant.company.view, tenant.company.configure", scopeType: "tenant", visibility: "Admin + Manager (view)", editRights: "Admin", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "None" },
-  { id: "t29", featureKey: "tenant.org.departments", route: "/app/company?tab=departments", module: "Organization", feature: "Departments / Divisions / Branches", layer: "tenant", deptOwner: "Admin", permissionKeys: "tenant.org.configure", scopeType: "tenant", visibility: "Admin + Manager", editRights: "Admin", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Company" },
-  { id: "t30", featureKey: "tenant.docs.company-documents", route: "/app/company-documents", module: "Documents & Compliance", feature: "Company Documents", layer: "tenant", deptOwner: "Legal / HR", permissionKeys: "tenant.documents.view, tenant.documents.manage, tenant.documents.approve", scopeType: "tenant", visibility: "Admin + Manager", editRights: "Admin", approvalRights: "Admin", auditRequired: true, tenantIsolated: true, sensitiveData: true, billingImpact: false, dependencies: "None" },
-  { id: "t31", featureKey: "tenant.docs.e-signatures", route: "/app/company-documents?tab=documents", module: "Documents & Compliance", feature: "Document E-Signatures", layer: "tenant", deptOwner: "Legal", permissionKeys: "tenant.documents.sign, tenant.documents.request-signature", scopeType: "tenant", visibility: "Admin + Manager + Signers", editRights: "Admin", approvalRights: "Admin", auditRequired: true, tenantIsolated: true, sensitiveData: true, billingImpact: false, dependencies: "Company Documents" },
-  { id: "t32", featureKey: "tenant.reports.payroll", route: "/app/reports?tab=payroll", module: "Reports", feature: "Payroll Reports", layer: "tenant", deptOwner: "Finance", permissionKeys: "tenant.reports.payroll.view, tenant.reports.export", scopeType: "tenant", visibility: "Admin + Manager", editRights: "None (read-only)", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: true, billingImpact: false, dependencies: "Payroll" },
-  { id: "t33", featureKey: "tenant.reports.hr", route: "/app/reports?tab=hr", module: "Reports", feature: "HR & Employee Reports", layer: "tenant", deptOwner: "HR", permissionKeys: "tenant.reports.hr.view, tenant.reports.export", scopeType: "tenant", visibility: "Admin + Manager", editRights: "None (read-only)", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: true, billingImpact: false, dependencies: "Workers, HR" },
-  { id: "t34", featureKey: "tenant.system.settings", route: "/app/settings", module: "System Admin", feature: "Settings", layer: "tenant", deptOwner: "IT / Admin", permissionKeys: "tenant.settings.configure", scopeType: "tenant", visibility: "Admin only", editRights: "Admin", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "None" },
-  { id: "t35", featureKey: "tenant.system.alert-templates", route: "/app/notification-templates", module: "System Admin", feature: "Alert Templates", layer: "tenant", deptOwner: "IT / HR", permissionKeys: "tenant.notifications.configure", scopeType: "tenant", visibility: "Admin only", editRights: "Admin", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Notifications" },
-  { id: "t36", featureKey: "tenant.finance.treasury", route: "/app/treasury", module: "Payroll", feature: "Stripe Treasury", layer: "tenant", deptOwner: "Finance", permissionKeys: "tenant.treasury.view, tenant.treasury.manage", scopeType: "tenant", visibility: "Admin only", editRights: "Admin", approvalRights: "Admin", auditRequired: true, tenantIsolated: true, sensitiveData: true, billingImpact: true, dependencies: "Stripe" },
-
-  // ── Employee Portal ────────────────────────────────────────────────────────
-  { id: "e01", featureKey: "employee.profile.view", route: "/app/my-profile", module: "Employee Portal", feature: "My Profile", layer: "employee", deptOwner: "HR / Self", permissionKeys: "self.profile.view, self.profile.edit", scopeType: "self", visibility: "Self only", editRights: "Self", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: true, billingImpact: false, dependencies: "Workers" },
-  { id: "e02", featureKey: "employee.schedule.personal", route: "/app/schedule?tab=schedules", module: "Employee Portal", feature: "Personal Schedule", layer: "employee", deptOwner: "Operations", permissionKeys: "self.schedule.view", scopeType: "self", visibility: "Self only", editRights: "None (read-only)", approvalRights: "Manager", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Schedule" },
-  { id: "e03", featureKey: "employee.attendance.punches", route: "/app/attendance?tab=punches", module: "Employee Portal", feature: "Personal Punches / Clock In-Out", layer: "employee", deptOwner: "Operations", permissionKeys: "self.punches.view, self.clock.action", scopeType: "self", visibility: "Self only", editRights: "None (Manager adjusts)", approvalRights: "Manager", auditRequired: true, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Stations, Schedules" },
-  { id: "e04", featureKey: "employee.attendance.timesheet", route: "/app/attendance?tab=timesheet", module: "Employee Portal", feature: "Personal Timesheets", layer: "employee", deptOwner: "HR", permissionKeys: "self.timesheet.view", scopeType: "self", visibility: "Self only", editRights: "None (read-only)", approvalRights: "Manager", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Attendance" },
-  { id: "e05", featureKey: "employee.attendance.time-off", route: "/app/attendance?tab=time-off", module: "Employee Portal", feature: "Time Off Requests", layer: "employee", deptOwner: "HR", permissionKeys: "self.time-off.request", scopeType: "self", visibility: "Self only", editRights: "Self (submit only)", approvalRights: "Manager", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Absence Policies" },
-  { id: "e06", featureKey: "employee.payroll.pay-stubs", route: "/app/my-profile?tab=paystubs", module: "Employee Portal", feature: "Pay Stubs (Personal)", layer: "employee", deptOwner: "Finance", permissionKeys: "self.paystubs.view", scopeType: "self", visibility: "Self only", editRights: "None (read-only)", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: true, billingImpact: false, dependencies: "Payroll" },
-  { id: "e07", featureKey: "employee.docs.personal", route: "/app/my-profile?tab=documents", module: "Employee Portal", feature: "Personal Documents", layer: "employee", deptOwner: "HR / Legal", permissionKeys: "self.documents.view, self.documents.acknowledge", scopeType: "self", visibility: "Self + Admin/HR", editRights: "Self (acknowledge), Admin (assign)", approvalRights: "Admin", auditRequired: false, tenantIsolated: true, sensitiveData: true, billingImpact: false, dependencies: "Company Documents" },
-  { id: "e08", featureKey: "employee.notifications.settings", route: "/app/notification-settings", module: "Employee Portal", feature: "Notification Settings", layer: "employee", deptOwner: "IT / HR", permissionKeys: "self.notifications.configure", scopeType: "self", visibility: "Self only", editRights: "Self (preferences)", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Alert Templates" },
-  { id: "e09", featureKey: "employee.messages.personal", route: "/app/messages", module: "Employee Portal", feature: "Messages (Personal Inbox)", layer: "employee", deptOwner: "HR / Management", permissionKeys: "self.messages.view, self.messages.reply", scopeType: "self", visibility: "Self only", editRights: "Self (reply only)", approvalRights: "None", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Staff Messages" },
-  { id: "e10", featureKey: "employee.expenses.submit", route: "/app/expenses", module: "Employee Portal", feature: "Expense Submission", layer: "employee", deptOwner: "Finance", permissionKeys: "self.expenses.submit", scopeType: "self", visibility: "Self only", editRights: "Self (submit)", approvalRights: "Manager", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Expenses" },
-  { id: "e11", featureKey: "employee.schedule.marketplace", route: "/app/schedule?tab=marketplace", module: "Employee Portal", feature: "Shift Marketplace (Personal)", layer: "employee", deptOwner: "Operations", permissionKeys: "self.schedule.marketplace.request", scopeType: "self", visibility: "Self — available shifts", editRights: "Self (request shifts)", approvalRights: "Manager", auditRequired: false, tenantIsolated: true, sensitiveData: false, billingImpact: false, dependencies: "Schedule" },
-];
-
-const LAYER_CONFIG = {
-  platform: { label: "Platform Console", color: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300", dot: "bg-amber-500" },
-  tenant:   { label: "Tenant App",       color: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300",   dot: "bg-blue-500" },
-  employee: { label: "Employee Portal",  color: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300", dot: "bg-green-500" },
-};
-
-const SCOPE_CONFIG: Record<string, string> = {
-  "platform":       "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
-  "tenant":         "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
-  "branch":         "bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
-  "department":     "bg-violet-50 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
-  "direct_reports": "bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300",
-  "self":           "bg-teal-50 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300",
-};
-
-function Flag({ value, yes, no }: { value: boolean; yes?: string; no?: string }) {
-  if (value) return <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 text-xs font-bold">{yes ?? "✓"}</span>;
-  return <span className="text-muted-foreground/30 text-xs">{no ?? "—"}</span>;
+  featureName: string;
+  layer: string;
+  tier: string;
+  description: string | null;
+  defaultOn: boolean | string;
+  isBeta: boolean | string;
+  billingImpact: boolean | string;
+  sortOrder: number;
+  createdAt: string;
 }
 
+interface TenantFeatureEntry extends FeatureEntry {
+  overrideEnabled: boolean | null;
+  overrideExpiresAt: string | null;
+  overrideNotes: string | null;
+  overrideId: string | null;
+  effectiveEnabled: boolean | string;
+}
+
+interface Company {
+  id: string;
+  name: string;
+}
+
+interface ActivationLogEntry {
+  id: string;
+  companyId: string | null;
+  companyName: string | null;
+  featureKey: string;
+  action: string;
+  performedByName: string | null;
+  notes: string | null;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const bool = (v: boolean | string | null | undefined): boolean =>
+  v === true || v === "true" || v === "t";
+
+function TierBadge({ tier }: { tier: string }) {
+  const colors: Record<string, string> = {
+    starter: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+    professional: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+    enterprise: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+    all: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400",
+  };
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${colors[tier] ?? colors.all}`}>
+      {tier}
+    </span>
+  );
+}
+
+function EffectiveStatus({ effective, hasOverride, expiresAt }: {
+  effective: boolean; hasOverride: boolean; expiresAt?: string | null;
+}) {
+  const isExpired = expiresAt ? new Date(expiresAt) < new Date() : false;
+  if (isExpired) return (
+    <span className="flex items-center gap-1 text-amber-600 text-xs">
+      <Clock className="h-3.5 w-3.5" /> expired override
+    </span>
+  );
+  if (!effective) return (
+    <span className="flex items-center gap-1 text-red-500 text-xs font-medium">
+      <XCircle className="h-3.5 w-3.5" /> disabled{hasOverride && " (override)"}
+    </span>
+  );
+  return (
+    <span className="flex items-center gap-1 text-emerald-600 text-xs font-medium">
+      <CheckCircle2 className="h-3.5 w-3.5" /> enabled{hasOverride && " (override)"}
+    </span>
+  );
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+
 export default function FeatureRegistryPage() {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const isPlatformAdmin =
+    user?.role === "platform_super_admin" || user?.role === "platform_admin";
+
+  const [tab, setTab] = useState("registry");
   const [search, setSearch] = useState("");
-  const [layerFilter, setLayerFilter] = useState("all");
   const [moduleFilter, setModuleFilter] = useState("all");
+  const [tierFilter, setTierFilter] = useState("all");
+  const [layerFilter, setLayerFilter] = useState("tenant");
 
-  const allModules = Array.from(new Set(FEATURES.map(f => f.module))).sort();
-
-  const filtered = FEATURES.filter(f => {
-    const matchSearch = !search || [f.module, f.feature, f.featureKey, f.deptOwner, f.permissionKeys, f.dependencies]
-      .some(v => v.toLowerCase().includes(search.toLowerCase()));
-    const matchLayer = layerFilter === "all" || f.layer === layerFilter;
-    const matchModule = moduleFilter === "all" || f.module === moduleFilter;
-    return matchSearch && matchLayer && matchModule;
+  // Registry query
+  const { data: registry = [], isLoading: regLoading, refetch: refetchRegistry } = useQuery<FeatureEntry[]>({
+    queryKey: ["/api/feature-registry"],
   });
 
-  const counts = {
-    platform: FEATURES.filter(f => f.layer === "platform").length,
-    tenant: FEATURES.filter(f => f.layer === "tenant").length,
-    employee: FEATURES.filter(f => f.layer === "employee").length,
-  };
+  // Tenant list — load always so the wizard can reference companies from any tab
+  const { data: companies = [] } = useQuery<Company[]>({
+    queryKey: ["/api/companies"],
+  });
+
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
+
+  // Tenant feature set
+  const { data: tenantFeatures = [], isLoading: tfLoading, refetch: refetchTenantFeatures } = useQuery<TenantFeatureEntry[]>({
+    queryKey: ["/api/feature-registry/tenant", selectedCompanyId],
+    queryFn: () => fetch(`/api/feature-registry/tenant/${selectedCompanyId}`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!selectedCompanyId && tab === "tenants",
+  });
+
+  // Activation log
+  const [logCompany, setLogCompany] = useState("");
+  const { data: activationLog = [], isLoading: logLoading, refetch: refetchLog } = useQuery<ActivationLogEntry[]>({
+    queryKey: ["/api/feature-registry/log", logCompany],
+    queryFn: () => {
+      const url = logCompany
+        ? `/api/feature-registry/log?companyId=${logCompany}`
+        : "/api/feature-registry/log";
+      return fetch(url, { credentials: "include" }).then(r => r.json());
+    },
+    enabled: tab === "log",
+  });
+
+  // ── Activation wizard state ──────────────────────────────────────────────
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
+  const [wizardCompanyId, setWizardCompanyId] = useState("");
+  const [wizardFeatureKey, setWizardFeatureKey] = useState("");
+  const [wizardEnabled, setWizardEnabled] = useState(true);
+  const [wizardExpiry, setWizardExpiry] = useState("");
+  const [wizardNotes, setWizardNotes] = useState("");
+
+  function openWizard(companyId?: string, featureKey?: string, currentlyEnabled?: boolean) {
+    setWizardCompanyId(companyId ?? selectedCompanyId ?? "");
+    setWizardFeatureKey(featureKey ?? "");
+    setWizardEnabled(typeof currentlyEnabled === "boolean" ? !currentlyEnabled : true);
+    setWizardExpiry("");
+    setWizardNotes("");
+    setWizardStep(1);
+    setWizardOpen(true);
+  }
+
+  const activateMutation = useMutation({
+    mutationFn: (payload: { companyId: string; featureKey: string; enabled: boolean; expiresAt?: string; notes?: string }) =>
+      apiRequest("POST", "/api/feature-registry/activate", payload),
+    onSuccess: () => {
+      toast({ title: "Feature updated", description: `Feature "${wizardFeatureKey}" has been ${wizardEnabled ? "enabled" : "disabled"} for the selected tenant.` });
+      qc.invalidateQueries({ queryKey: ["/api/feature-registry/tenant", wizardCompanyId] });
+      qc.invalidateQueries({ queryKey: ["/api/feature-registry/log"] });
+      setWizardOpen(false);
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message ?? "Failed to update feature", variant: "destructive" });
+    },
+  });
+
+  function handleWizardConfirm() {
+    activateMutation.mutate({
+      companyId: wizardCompanyId,
+      featureKey: wizardFeatureKey,
+      enabled: wizardEnabled,
+      expiresAt: wizardExpiry || undefined,
+      notes: wizardNotes || undefined,
+    });
+  }
+
+  // ── Filtering ──────────────────────────────────────────────────────────────
+
+  const modules = useMemo(() => {
+    const set = new Set(registry.map(f => f.module));
+    return Array.from(set).sort();
+  }, [registry]);
+
+  const filteredRegistry = useMemo(() => {
+    return registry.filter(f => {
+      if (layerFilter !== "all" && f.layer !== layerFilter) return false;
+      if (moduleFilter !== "all" && f.module !== moduleFilter) return false;
+      if (tierFilter !== "all" && f.tier !== tierFilter) return false;
+      if (search) {
+        const q = search.toLowerCase();
+        return f.featureName?.toLowerCase().includes(q) ||
+          f.featureKey?.toLowerCase().includes(q) ||
+          f.module?.toLowerCase().includes(q) ||
+          f.description?.toLowerCase().includes(q);
+      }
+      return true;
+    });
+  }, [registry, search, moduleFilter, tierFilter, layerFilter]);
+
+  const tenantModules = useMemo(() => {
+    const set = new Set(tenantFeatures.map(f => f.module));
+    return Array.from(set).sort();
+  }, [tenantFeatures]);
+
+  const [tenantSearch, setTenantSearch] = useState("");
+  const [tenantModFilter, setTenantModFilter] = useState("all");
+  const [tenantTierFilter, setTenantTierFilter] = useState("all");
+
+  const filteredTenantFeatures = useMemo(() => {
+    return tenantFeatures.filter(f => {
+      if (tenantModFilter !== "all" && f.module !== tenantModFilter) return false;
+      if (tenantTierFilter !== "all" && f.tier !== tenantTierFilter) return false;
+      if (tenantSearch) {
+        const q = tenantSearch.toLowerCase();
+        return f.featureName?.toLowerCase().includes(q) ||
+          f.featureKey?.toLowerCase().includes(q);
+      }
+      return true;
+    });
+  }, [tenantFeatures, tenantSearch, tenantModFilter, tenantTierFilter]);
+
+  const selectedCompany = companies.find(c => c.id === selectedCompanyId);
+
+  // ── Wizard feature info ───────────────────────────────────────────────────
+  const wizardFeature = registry.find(f => f.featureKey === wizardFeatureKey);
+  const wizardCompany = companies.find(c => c.id === wizardCompanyId);
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div className="flex flex-col gap-6 p-6 max-w-screen-xl mx-auto">
       {/* Header */}
-      <div className="px-6 py-4 border-b shrink-0">
-        <div className="flex items-start justify-between flex-wrap gap-4">
-          <div>
-            <h1 className="text-lg font-semibold">Feature Registry</h1>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {FEATURES.length} features — permission keys, scope model, tenant isolation, and data sensitivity mapped for governance enforcement
-            </p>
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            {Object.entries(counts).map(([layer, count]) => {
-              const cfg = LAYER_CONFIG[layer as keyof typeof LAYER_CONFIG];
-              return (
-                <span key={layer} className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${cfg.color}`}>
-                  <span className={`h-2 w-2 rounded-full ${cfg.dot}`} />
-                  {cfg.label}: {count}
-                </span>
-              );
-            })}
-          </div>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <Layers className="h-6 w-6 text-teal-600" />
+            Feature Registry
+          </h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Platform-level feature catalogue. Enable or disable features per tenant with expiry and audit trail.
+          </p>
         </div>
-
-        {/* Filters */}
-        <div className="flex gap-2 mt-3 flex-wrap">
-          <div className="relative flex-1 min-w-48">
-            <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
-            <Input value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Search feature key, permission, module, owner..." className="pl-8 h-8 text-sm" data-testid="input-registry-search" />
-          </div>
-          <Select value={layerFilter} onValueChange={setLayerFilter}>
-            <SelectTrigger className="h-8 w-40 text-sm" data-testid="select-layer-filter"><SelectValue placeholder="All Layers" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Layers</SelectItem>
-              <SelectItem value="platform">Platform Console</SelectItem>
-              <SelectItem value="tenant">Tenant App</SelectItem>
-              <SelectItem value="employee">Employee Portal</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={moduleFilter} onValueChange={setModuleFilter}>
-            <SelectTrigger className="h-8 w-48 text-sm" data-testid="select-module-filter"><SelectValue placeholder="All Modules" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Modules</SelectItem>
-              {allModules.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Column legend */}
-        <div className="flex gap-4 mt-2 text-[10px] text-muted-foreground flex-wrap">
-          <span className="flex items-center gap-1"><span className="inline-flex items-center justify-center h-4 w-4 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 font-bold">✓</span> = Required / Yes</span>
-          <span>Scope = data boundary (platform → self)</span>
-          <span>Tenant Iso. = data never crosses tenant boundary</span>
-          <span>PII/Sensitive = contains personal or financial data</span>
-          <span>Billing = action has billing/cost implications</span>
-        </div>
+        {isPlatformAdmin && (
+          <Button
+            data-testid="button-open-activation-wizard"
+            onClick={() => openWizard()}
+            className="shrink-0"
+          >
+            <Zap className="h-4 w-4 mr-2" />
+            Activate Feature
+          </Button>
+        )}
       </div>
 
-      {/* Table */}
-      <div className="flex-1 overflow-auto">
-        <table className="w-full text-xs min-w-[1600px]">
-          <thead className="sticky top-0 bg-muted/80 backdrop-blur z-10">
-            <tr>
-              <th className="text-left p-2 font-semibold text-muted-foreground w-36">Feature Key</th>
-              <th className="text-left p-2 font-semibold text-muted-foreground w-28">Route</th>
-              <th className="text-left p-2 font-semibold text-muted-foreground w-24">Module</th>
-              <th className="text-left p-2 font-semibold text-muted-foreground w-36">Feature</th>
-              <th className="text-left p-2 font-semibold text-muted-foreground w-28">Layer</th>
-              <th className="text-left p-2 font-semibold text-muted-foreground w-24">Dept Owner</th>
-              <th className="text-left p-2 font-semibold text-muted-foreground w-44">Permission Keys</th>
-              <th className="text-left p-2 font-semibold text-muted-foreground w-24">Scope</th>
-              <th className="text-left p-2 font-semibold text-muted-foreground w-32">Visibility</th>
-              <th className="text-left p-2 font-semibold text-muted-foreground w-28">Edit Rights</th>
-              <th className="text-left p-2 font-semibold text-muted-foreground w-24">Approval</th>
-              <th className="text-center p-2 font-semibold text-muted-foreground w-16">Audit</th>
-              <th className="text-center p-2 font-semibold text-muted-foreground w-16">Ten. Iso.</th>
-              <th className="text-center p-2 font-semibold text-muted-foreground w-16">PII</th>
-              <th className="text-center p-2 font-semibold text-muted-foreground w-16">Billing</th>
-              <th className="text-left p-2 font-semibold text-muted-foreground">Dependencies</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {filtered.length === 0 && (
-              <tr><td colSpan={16} className="text-center py-10 text-muted-foreground">No features match your filter</td></tr>
-            )}
-            {filtered.map(f => {
-              const layerCfg = LAYER_CONFIG[f.layer];
-              const scopeClass = SCOPE_CONFIG[f.scopeType] || "";
-              return (
-                <tr key={f.id} className="hover:bg-muted/30 transition-colors" data-testid={`row-feature-${f.id}`}>
-                  <td className="p-2 font-mono text-[10px] text-muted-foreground">{f.featureKey}</td>
-                  <td className="p-2 font-mono text-[10px] text-muted-foreground truncate max-w-[7rem]">{f.route}</td>
-                  <td className="p-2 font-medium text-foreground">{f.module}</td>
-                  <td className="p-2 text-foreground font-medium">{f.feature}</td>
-                  <td className="p-2">
-                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium ${layerCfg.color}`}>
-                      <span className={`h-1.5 w-1.5 rounded-full ${layerCfg.dot}`} />
-                      {layerCfg.label}
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList className="mb-2">
+          <TabsTrigger value="registry" data-testid="tab-registry">
+            <ShieldCheck className="h-4 w-4 mr-1.5" />Registry ({registry.length})
+          </TabsTrigger>
+          <TabsTrigger value="tenants" data-testid="tab-tenants">
+            <Building2 className="h-4 w-4 mr-1.5" />Per Tenant
+          </TabsTrigger>
+          <TabsTrigger value="log" data-testid="tab-activation-log">
+            <History className="h-4 w-4 mr-1.5" />Activation Log
+          </TabsTrigger>
+        </TabsList>
+
+        {/* ── Registry Tab ─────────────────────────────────────────────────── */}
+        <TabsContent value="registry">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Filter className="h-4 w-4" /> Filter & Search
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap gap-3 mb-4">
+                <div className="relative flex-1 min-w-[200px]">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    data-testid="input-registry-search"
+                    placeholder="Search features..."
+                    className="pl-8"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                  />
+                </div>
+                <Select value={layerFilter} onValueChange={setLayerFilter}>
+                  <SelectTrigger className="w-36" data-testid="select-layer-filter">
+                    <SelectValue placeholder="Layer" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All layers</SelectItem>
+                    <SelectItem value="platform">Platform</SelectItem>
+                    <SelectItem value="tenant">Tenant</SelectItem>
+                    <SelectItem value="employee">Employee</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={moduleFilter} onValueChange={setModuleFilter}>
+                  <SelectTrigger className="w-44" data-testid="select-module-filter">
+                    <SelectValue placeholder="Module" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All modules</SelectItem>
+                    {modules.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Select value={tierFilter} onValueChange={setTierFilter}>
+                  <SelectTrigger className="w-36" data-testid="select-tier-filter">
+                    <SelectValue placeholder="Tier" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All tiers</SelectItem>
+                    <SelectItem value="starter">Starter</SelectItem>
+                    <SelectItem value="professional">Professional</SelectItem>
+                    <SelectItem value="enterprise">Enterprise</SelectItem>
+                    <SelectItem value="all">All (always on)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button variant="ghost" size="icon" onClick={() => refetchRegistry()} title="Refresh">
+                  <RefreshCw className="h-4 w-4" />
+                </Button>
+              </div>
+
+              {regLoading ? (
+                <div className="text-muted-foreground text-sm py-8 text-center">Loading registry…</div>
+              ) : filteredRegistry.length === 0 ? (
+                <div className="text-muted-foreground text-sm py-8 text-center">No features match your filters.</div>
+              ) : (
+                <div className="overflow-x-auto rounded border">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/50 text-muted-foreground">
+                      <tr>
+                        <th className="text-left px-3 py-2 font-medium">Feature</th>
+                        <th className="text-left px-3 py-2 font-medium">Module</th>
+                        <th className="text-left px-3 py-2 font-medium">Tier</th>
+                        <th className="text-left px-3 py-2 font-medium">Layer</th>
+                        <th className="text-left px-3 py-2 font-medium">Default</th>
+                        <th className="text-left px-3 py-2 font-medium">Flags</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredRegistry.map((f, i) => (
+                        <tr
+                          key={f.id}
+                          data-testid={`row-feature-${f.featureKey}`}
+                          className={`border-t hover:bg-muted/30 transition-colors ${i % 2 === 0 ? "" : "bg-muted/10"}`}
+                        >
+                          <td className="px-3 py-2">
+                            <div className="font-medium">{f.featureName}</div>
+                            <div className="text-xs text-muted-foreground font-mono">{f.featureKey}</div>
+                            {f.description && (
+                              <div className="text-xs text-muted-foreground mt-0.5 max-w-xs truncate" title={f.description}>{f.description}</div>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-muted-foreground">{f.module}</td>
+                          <td className="px-3 py-2"><TierBadge tier={f.tier} /></td>
+                          <td className="px-3 py-2">
+                            <Badge variant="outline" className="capitalize text-xs">{f.layer}</Badge>
+                          </td>
+                          <td className="px-3 py-2">
+                            {bool(f.defaultOn) ? (
+                              <span className="text-emerald-600 text-xs font-medium flex items-center gap-1">
+                                <CheckCircle2 className="h-3.5 w-3.5" /> on
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground text-xs flex items-center gap-1">
+                                <XCircle className="h-3.5 w-3.5" /> off
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex gap-1 flex-wrap">
+                              {bool(f.isBeta) && <Badge variant="secondary" className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">beta</Badge>}
+                              {bool(f.billingImpact) && <Badge variant="secondary" className="text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">billing</Badge>}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground mt-2">
+                Showing {filteredRegistry.length} of {registry.length} features
+              </p>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── Per Tenant Tab ───────────────────────────────────────────────── */}
+        <TabsContent value="tenants">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Manage Features Per Tenant</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap gap-3 mb-4">
+                <Select
+                  value={selectedCompanyId}
+                  onValueChange={v => { setSelectedCompanyId(v); setTenantSearch(""); setTenantModFilter("all"); setTenantTierFilter("all"); }}
+                >
+                  <SelectTrigger className="w-64" data-testid="select-company">
+                    <Building2 className="h-4 w-4 mr-2 text-muted-foreground" />
+                    <SelectValue placeholder="Select a tenant…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {companies.map(c => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                {selectedCompanyId && (
+                  <>
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        data-testid="input-tenant-feature-search"
+                        placeholder="Search features…"
+                        className="pl-8 w-48"
+                        value={tenantSearch}
+                        onChange={e => setTenantSearch(e.target.value)}
+                      />
+                    </div>
+                    <Select value={tenantModFilter} onValueChange={setTenantModFilter}>
+                      <SelectTrigger className="w-40" data-testid="select-tenant-module-filter">
+                        <SelectValue placeholder="Module" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All modules</SelectItem>
+                        {tenantModules.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <Select value={tenantTierFilter} onValueChange={setTenantTierFilter}>
+                      <SelectTrigger className="w-36" data-testid="select-tenant-tier-filter">
+                        <SelectValue placeholder="Tier" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All tiers</SelectItem>
+                        <SelectItem value="starter">Starter</SelectItem>
+                        <SelectItem value="professional">Professional</SelectItem>
+                        <SelectItem value="enterprise">Enterprise</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Button variant="ghost" size="icon" onClick={() => refetchTenantFeatures()}>
+                      <RefreshCw className="h-4 w-4" />
+                    </Button>
+                  </>
+                )}
+              </div>
+
+              {!selectedCompanyId ? (
+                <div className="text-center text-muted-foreground py-12">
+                  <Building2 className="h-10 w-10 mx-auto mb-2 opacity-30" />
+                  <p>Select a tenant to view and manage their feature set.</p>
+                </div>
+              ) : tfLoading ? (
+                <div className="text-center text-muted-foreground py-8">Loading features for {selectedCompany?.name}…</div>
+              ) : filteredTenantFeatures.length === 0 ? (
+                <div className="text-center text-muted-foreground py-8">No features match your filters.</div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-sm text-muted-foreground">
+                      {selectedCompany?.name} — {filteredTenantFeatures.filter(f => bool(f.effectiveEnabled)).length} of {filteredTenantFeatures.length} features enabled
                     </span>
-                  </td>
-                  <td className="p-2 text-muted-foreground">{f.deptOwner}</td>
-                  <td className="p-2 font-mono text-[10px] text-muted-foreground leading-relaxed">{f.permissionKeys.split(", ").map(k => <div key={k}>{k}</div>)}</td>
-                  <td className="p-2">
-                    <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${scopeClass}`}>{f.scopeType}</span>
-                  </td>
-                  <td className="p-2 text-muted-foreground">{f.visibility}</td>
-                  <td className="p-2 text-muted-foreground">{f.editRights}</td>
-                  <td className="p-2 text-muted-foreground">{f.approvalRights}</td>
-                  <td className="p-2 text-center"><Flag value={f.auditRequired} /></td>
-                  <td className="p-2 text-center"><Flag value={f.tenantIsolated} /></td>
-                  <td className="p-2 text-center"><Flag value={f.sensitiveData} /></td>
-                  <td className="p-2 text-center"><Flag value={f.billingImpact} /></td>
-                  <td className="p-2 text-muted-foreground">{f.dependencies}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                    {isPlatformAdmin && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid="button-open-wizard-from-tenant"
+                        onClick={() => openWizard(selectedCompanyId)}
+                      >
+                        <Zap className="h-3.5 w-3.5 mr-1.5" />
+                        Bulk Activate
+                      </Button>
+                    )}
+                  </div>
+                  <div className="overflow-x-auto rounded border">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50 text-muted-foreground">
+                        <tr>
+                          <th className="text-left px-3 py-2 font-medium">Feature</th>
+                          <th className="text-left px-3 py-2 font-medium">Module</th>
+                          <th className="text-left px-3 py-2 font-medium">Tier</th>
+                          <th className="text-left px-3 py-2 font-medium">Status</th>
+                          {isPlatformAdmin && <th className="text-left px-3 py-2 font-medium">Action</th>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredTenantFeatures.map((f, i) => {
+                          const effective = bool(f.effectiveEnabled);
+                          const hasOverride = f.overrideId !== null;
+                          return (
+                            <tr
+                              key={f.id}
+                              data-testid={`row-tenant-feature-${f.featureKey}`}
+                              className={`border-t hover:bg-muted/30 ${i % 2 === 0 ? "" : "bg-muted/10"}`}
+                            >
+                              <td className="px-3 py-2">
+                                <div className="font-medium">{f.featureName}</div>
+                                <div className="text-xs text-muted-foreground font-mono">{f.featureKey}</div>
+                                {f.overrideNotes && (
+                                  <div className="text-xs text-amber-600 mt-0.5 italic">{f.overrideNotes}</div>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-muted-foreground text-xs">{f.module}</td>
+                              <td className="px-3 py-2"><TierBadge tier={f.tier} /></td>
+                              <td className="px-3 py-2">
+                                <EffectiveStatus
+                                  effective={effective}
+                                  hasOverride={hasOverride}
+                                  expiresAt={f.overrideExpiresAt}
+                                />
+                                {f.overrideExpiresAt && !bool(f.effectiveEnabled) === false && (
+                                  <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
+                                    <Clock className="h-3 w-3" />
+                                    expires {new Date(f.overrideExpiresAt).toLocaleDateString()}
+                                  </div>
+                                )}
+                              </td>
+                              {isPlatformAdmin && (
+                                <td className="px-3 py-2">
+                                  <Button
+                                    size="sm"
+                                    variant={effective ? "outline" : "default"}
+                                    className="h-7 text-xs"
+                                    data-testid={`button-toggle-feature-${f.featureKey}`}
+                                    onClick={() => openWizard(selectedCompanyId, f.featureKey, effective)}
+                                  >
+                                    {effective ? (
+                                      <><ToggleRight className="h-3.5 w-3.5 mr-1 text-emerald-600" />Disable</>
+                                    ) : (
+                                      <><ToggleLeft className="h-3.5 w-3.5 mr-1" />Enable</>
+                                    )}
+                                  </Button>
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-      {/* Footer */}
-      <div className="px-6 py-2 border-t bg-muted/20 flex items-center justify-between text-xs text-muted-foreground shrink-0">
-        <span>Showing {filtered.length} of {FEATURES.length} features</span>
-        <span>Last updated: {new Date().toLocaleDateString()}</span>
-      </div>
+        {/* ── Activation Log Tab ───────────────────────────────────────────── */}
+        <TabsContent value="log">
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-4">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <History className="h-4 w-4" /> Activation Audit Log
+                </CardTitle>
+                <div className="flex gap-2">
+                  <Select value={logCompany} onValueChange={setLogCompany}>
+                    <SelectTrigger className="w-52" data-testid="select-log-company">
+                      <SelectValue placeholder="All tenants" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">All tenants</SelectItem>
+                      {companies.map(c => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button variant="ghost" size="icon" onClick={() => refetchLog()}>
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {logLoading ? (
+                <div className="text-muted-foreground text-sm py-8 text-center">Loading log…</div>
+              ) : activationLog.length === 0 ? (
+                <div className="text-muted-foreground text-sm py-8 text-center">
+                  <History className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                  No activation events recorded yet.
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded border">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/50 text-muted-foreground">
+                      <tr>
+                        <th className="text-left px-3 py-2 font-medium">When</th>
+                        <th className="text-left px-3 py-2 font-medium">Feature</th>
+                        <th className="text-left px-3 py-2 font-medium">Tenant</th>
+                        <th className="text-left px-3 py-2 font-medium">Action</th>
+                        <th className="text-left px-3 py-2 font-medium">By</th>
+                        <th className="text-left px-3 py-2 font-medium">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activationLog.map((entry, i) => (
+                        <tr
+                          key={entry.id}
+                          data-testid={`row-log-${entry.id}`}
+                          className={`border-t ${i % 2 === 0 ? "" : "bg-muted/10"}`}
+                        >
+                          <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                            {new Date(entry.createdAt).toLocaleString()}
+                          </td>
+                          <td className="px-3 py-2 font-mono text-xs">{entry.featureKey}</td>
+                          <td className="px-3 py-2 text-xs">{entry.companyName ?? "—"}</td>
+                          <td className="px-3 py-2">
+                            {entry.action === "enabled" ? (
+                              <span className="flex items-center gap-1 text-emerald-600 text-xs font-medium">
+                                <CheckCircle2 className="h-3.5 w-3.5" />enabled
+                              </span>
+                            ) : entry.action === "disabled" ? (
+                              <span className="flex items-center gap-1 text-red-500 text-xs font-medium">
+                                <XCircle className="h-3.5 w-3.5" />disabled
+                              </span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">{entry.action}</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-xs">{entry.performedByName ?? "—"}</td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground max-w-[200px] truncate" title={entry.notes ?? ""}>{entry.notes ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {/* ── Activation Wizard Dialog ─────────────────────────────────────── */}
+      <Dialog open={wizardOpen} onOpenChange={setWizardOpen}>
+        <DialogContent className="sm:max-w-lg" data-testid="dialog-activation-wizard">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Zap className="h-5 w-5 text-teal-600" />
+              {wizardStep === 1 ? "Step 1: Select Feature & Action" :
+               wizardStep === 2 ? "Step 2: Set Options" :
+               "Step 3: Confirm Activation"}
+            </DialogTitle>
+          </DialogHeader>
+
+          {/* Step indicator */}
+          <div className="flex items-center gap-2 mb-4">
+            {[1, 2, 3].map(s => (
+              <div key={s} className="flex items-center gap-1">
+                <div className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${
+                  s < wizardStep ? "bg-teal-600 text-white" :
+                  s === wizardStep ? "bg-teal-100 text-teal-700 ring-2 ring-teal-600" :
+                  "bg-muted text-muted-foreground"
+                }`}>{s < wizardStep ? "✓" : s}</div>
+                {s < 3 && <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+              </div>
+            ))}
+          </div>
+
+          {/* Step 1 */}
+          {wizardStep === 1 && (
+            <div className="space-y-4">
+              <div>
+                <Label className="mb-1.5 block">Tenant</Label>
+                <Select value={wizardCompanyId} onValueChange={setWizardCompanyId}>
+                  <SelectTrigger data-testid="wizard-select-company">
+                    <SelectValue placeholder="Select tenant…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {companies.map(c => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="mb-1.5 block">Feature</Label>
+                <select
+                  data-testid="wizard-select-feature"
+                  value={wizardFeatureKey}
+                  onChange={e => setWizardFeatureKey(e.target.value)}
+                  className="w-full border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                >
+                  <option value="">Select a feature…</option>
+                  {registry.filter(f => f.layer === "tenant").map(f => (
+                    <option key={f.featureKey} value={f.featureKey}>
+                      {f.featureName} — {f.module}
+                    </option>
+                  ))}
+                </select>
+                {wizardFeature && (
+                  <p className="text-xs text-muted-foreground mt-1 flex items-start gap-1">
+                    <Info className="h-3 w-3 mt-0.5 shrink-0" />
+                    {wizardFeature.description}
+                  </p>
+                )}
+              </div>
+              <div>
+                <Label className="mb-1.5 block">Action</Label>
+                <div className="flex items-center gap-3 p-3 rounded border bg-muted/20">
+                  <Switch
+                    checked={wizardEnabled}
+                    onCheckedChange={setWizardEnabled}
+                    data-testid="wizard-switch-enabled"
+                  />
+                  <span className={`text-sm font-medium ${wizardEnabled ? "text-emerald-600" : "text-red-500"}`}>
+                    {wizardEnabled ? "Enable this feature" : "Disable this feature"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Step 2 */}
+          {wizardStep === 2 && (
+            <div className="space-y-4">
+              <div>
+                <Label className="mb-1.5 block">Expiry Date (optional)</Label>
+                <Input
+                  type="date"
+                  value={wizardExpiry}
+                  onChange={e => setWizardExpiry(e.target.value)}
+                  data-testid="wizard-input-expiry"
+                  min={new Date().toISOString().slice(0, 10)}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  If set, the override expires on this date and reverts to the feature's default state.
+                </p>
+              </div>
+              <div>
+                <Label className="mb-1.5 block">Notes (optional)</Label>
+                <Textarea
+                  placeholder="e.g. Trial period for 30 days, activated per sales request #1234"
+                  value={wizardNotes}
+                  onChange={e => setWizardNotes(e.target.value)}
+                  rows={3}
+                  data-testid="wizard-input-notes"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Step 3 */}
+          {wizardStep === 3 && (
+            <div className="space-y-3">
+              <div className="rounded-lg border p-4 bg-muted/20 space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Tenant</span>
+                  <span className="font-medium">{wizardCompany?.name ?? wizardCompanyId}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Feature</span>
+                  <span className="font-medium">{wizardFeature?.featureName ?? wizardFeatureKey}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Action</span>
+                  <span className={`font-semibold ${wizardEnabled ? "text-emerald-600" : "text-red-500"}`}>
+                    {wizardEnabled ? "ENABLE" : "DISABLE"}
+                  </span>
+                </div>
+                {wizardExpiry && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Expires</span>
+                    <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5 text-amber-500" />{new Date(wizardExpiry).toLocaleDateString()}</span>
+                  </div>
+                )}
+                {wizardNotes && (
+                  <div className="pt-2 border-t">
+                    <span className="text-muted-foreground block mb-1">Notes</span>
+                    <span className="italic text-muted-foreground">{wizardNotes}</span>
+                  </div>
+                )}
+              </div>
+              {wizardFeature && bool(wizardFeature.billingImpact) && (
+                <div className="flex items-start gap-2 p-3 rounded bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 text-sm border border-amber-200 dark:border-amber-800">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  This feature has billing impact. Activating it may affect invoicing and subscription charges.
+                </div>
+              )}
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 pt-2">
+            {wizardStep > 1 && (
+              <Button variant="outline" onClick={() => setWizardStep(s => s - 1)}>
+                Back
+              </Button>
+            )}
+            {wizardStep < 3 ? (
+              <Button
+                onClick={() => setWizardStep(s => s + 1)}
+                disabled={!wizardCompanyId || !wizardFeatureKey}
+                data-testid="wizard-button-next"
+              >
+                Next <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            ) : (
+              <Button
+                onClick={handleWizardConfirm}
+                disabled={activateMutation.isPending}
+                data-testid="wizard-button-confirm"
+                className={wizardEnabled ? "bg-teal-600 hover:bg-teal-700" : "bg-red-600 hover:bg-red-700"}
+              >
+                {activateMutation.isPending ? "Saving…" : `Confirm ${wizardEnabled ? "Enable" : "Disable"}`}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

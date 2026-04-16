@@ -21789,5 +21789,235 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  // ── Feature Registry API (Task #39) ────────────────────────────────────────
+
+  // GET /api/feature-registry — list all features (platform roles only)
+  app.get("/api/feature-registry", requireAuth, requirePlatformRole(), async (req, res) => {
+    try {
+      const features = await db.execute(sql`
+        SELECT * FROM feature_registry ORDER BY sort_order ASC, module ASC, feature_name ASC
+      `);
+      res.json(features.rows ?? features);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // GET /api/feature-registry/tenant/:companyId — feature set for a tenant (overrides merged with defaults)
+  app.get("/api/feature-registry/tenant/:companyId", requireAuth, requirePlatformRole(), async (req, res) => {
+    try {
+      const { companyId } = req.params;
+      const result = await db.execute(sql`
+        SELECT fr.*,
+               fo.enabled AS override_enabled,
+               fo.expires_at AS override_expires_at,
+               fo.notes AS override_notes,
+               fo.id AS override_id,
+               CASE
+                 WHEN fo.id IS NULL THEN fr.default_on
+                 WHEN fo.expires_at IS NOT NULL AND fo.expires_at < NOW() THEN fr.default_on
+                 ELSE fo.enabled
+               END AS effective_enabled
+        FROM feature_registry fr
+        LEFT JOIN feature_overrides fo ON fo.feature_key = fr.feature_key AND fo.company_id = ${companyId}
+        WHERE fr.layer = 'tenant'
+        ORDER BY fr.sort_order ASC, fr.module ASC
+      `);
+      res.json(result.rows ?? result);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // GET /api/feature-flags — current tenant's feature flags (for use by useFeatureFlag hook)
+  app.get("/api/feature-flags", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId!);
+      const companyId = user?.companyId;
+      if (!companyId) {
+        // Platform users get all features
+        return res.json({ all: true, flags: {} });
+      }
+      const result = await db.execute(sql`
+        SELECT fr.feature_key,
+               CASE
+                 WHEN fo.id IS NULL THEN fr.default_on
+                 WHEN fo.expires_at IS NOT NULL AND fo.expires_at < NOW() THEN fr.default_on
+                 ELSE fo.enabled
+               END AS enabled
+        FROM feature_registry fr
+        LEFT JOIN feature_overrides fo ON fo.feature_key = fr.feature_key AND fo.company_id = ${companyId}
+        WHERE fr.layer = 'tenant'
+      `);
+      const rows = result.rows ?? (result as any);
+      const flags: Record<string, boolean> = {};
+      for (const row of rows) {
+        flags[row.feature_key] = row.enabled === true || row.enabled === 'true';
+      }
+      res.json({ all: false, flags });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // GET /api/feature-registry/log — activation audit log (platform admins)
+  app.get("/api/feature-registry/log", requireAuth, requirePlatformRole(), async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string | undefined;
+      const featureKey = req.query.featureKey as string | undefined;
+      let q = sql`SELECT * FROM feature_activation_log WHERE 1=1`;
+      if (companyId) q = sql`${q} AND company_id = ${companyId}`;
+      if (featureKey) q = sql`${q} AND feature_key = ${featureKey}`;
+      q = sql`${q} ORDER BY created_at DESC LIMIT 200`;
+      const result = await db.execute(q);
+      res.json(result.rows ?? result);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // POST /api/feature-registry/activate — enable or disable a feature for a tenant
+  app.post("/api/feature-registry/activate", requireAuth, requirePlatformRole(), async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId!);
+      const isPlatformAdmin = user?.role === "platform_super_admin" || user?.role === "platform_admin";
+      if (!isPlatformAdmin) {
+        return res.status(403).json({ message: "platform_super_admin or platform_admin role required to activate features" });
+      }
+      const { companyId, featureKey, enabled, expiresAt, notes } = req.body as {
+        companyId: string; featureKey: string; enabled: boolean; expiresAt?: string; notes?: string;
+      };
+      if (!companyId || !featureKey || typeof enabled !== "boolean") {
+        return res.status(400).json({ message: "companyId, featureKey, and enabled (boolean) are required" });
+      }
+
+      // Fetch company name for audit log
+      const company = await storage.getCompany(companyId);
+      const companyName = company?.name ?? companyId;
+      const performerName = `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim() || user?.username || "unknown";
+
+      // Upsert the override
+      await db.execute(sql`
+        INSERT INTO feature_overrides (company_id, feature_key, enabled, expires_at, notes, enabled_by, updated_at)
+        VALUES (${companyId}, ${featureKey}, ${enabled}, ${expiresAt ?? null}, ${notes ?? null}, ${user?.id ?? null}, NOW())
+        ON CONFLICT (company_id, feature_key) DO UPDATE SET
+          enabled = EXCLUDED.enabled,
+          expires_at = EXCLUDED.expires_at,
+          notes = EXCLUDED.notes,
+          enabled_by = EXCLUDED.enabled_by,
+          updated_at = NOW()
+      `);
+
+      // Write audit log entry
+      const action = enabled ? "enabled" : "disabled";
+      await db.execute(sql`
+        INSERT INTO feature_activation_log (company_id, company_name, feature_key, action, performed_by, performed_by_name, notes, expires_at)
+        VALUES (${companyId}, ${companyName}, ${featureKey}, ${action}, ${user?.id ?? null}, ${performerName}, ${notes ?? null}, ${expiresAt ?? null})
+      `);
+
+      res.json({ success: true, companyId, featureKey, enabled, expiresAt: expiresAt ?? null });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // POST /api/feature-registry/bulk-activate — enable/disable multiple features for a tenant at once
+  app.post("/api/feature-registry/bulk-activate", requireAuth, requirePlatformRole(), async (req, res) => {
+    try {
+      const user = await storage.getUser((req.session as any).userId!);
+      const isPlatformAdmin = user?.role === "platform_super_admin" || user?.role === "platform_admin";
+      if (!isPlatformAdmin) {
+        return res.status(403).json({ message: "platform_super_admin or platform_admin role required" });
+      }
+      const { companyId, features, notes } = req.body as {
+        companyId: string;
+        features: Array<{ featureKey: string; enabled: boolean; expiresAt?: string }>;
+        notes?: string;
+      };
+      if (!companyId || !Array.isArray(features) || features.length === 0) {
+        return res.status(400).json({ message: "companyId and features[] are required" });
+      }
+
+      const company = await storage.getCompany(companyId);
+      const companyName = company?.name ?? companyId;
+      const performerName = `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim() || user?.username || "unknown";
+
+      for (const f of features) {
+        await db.execute(sql`
+          INSERT INTO feature_overrides (company_id, feature_key, enabled, expires_at, notes, enabled_by, updated_at)
+          VALUES (${companyId}, ${f.featureKey}, ${f.enabled}, ${f.expiresAt ?? null}, ${notes ?? null}, ${user?.id ?? null}, NOW())
+          ON CONFLICT (company_id, feature_key) DO UPDATE SET
+            enabled = EXCLUDED.enabled, expires_at = EXCLUDED.expires_at, notes = EXCLUDED.notes,
+            enabled_by = EXCLUDED.enabled_by, updated_at = NOW()
+        `);
+        const action = f.enabled ? "enabled" : "disabled";
+        await db.execute(sql`
+          INSERT INTO feature_activation_log (company_id, company_name, feature_key, action, performed_by, performed_by_name, notes, expires_at)
+          VALUES (${companyId}, ${companyName}, ${f.featureKey}, ${action}, ${user?.id ?? null}, ${performerName}, ${notes ?? null}, ${f.expiresAt ?? null})
+        `);
+      }
+
+      res.json({ success: true, count: features.length });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  /**
+   * requireFeature(featureKey) — Express middleware factory.
+   * Checks if the current session's company has the feature enabled.
+   * Skips the check for platform users (they always have access).
+   *
+   * Usage: app.get("/api/...", requireAuth, requireFeature("tenant.finance.contractor-hub"), handler)
+   */
+  function requireFeature(featureKey: string) {
+    return async (req: any, res: any, next: any) => {
+      try {
+        const user = await storage.getUser(req.session?.userId);
+        if (!user) return res.status(401).json({ message: "Not authenticated" });
+
+        // Platform users bypass feature gates
+        if (user.role?.startsWith("platform_")) return next();
+
+        const companyId = user.companyId;
+        if (!companyId) return res.status(400).json({ message: "No company context" });
+
+        // Check override first, then fall back to feature default
+        const result = await db.execute(sql`
+          SELECT fr.default_on,
+                 fo.enabled AS override_enabled,
+                 fo.expires_at AS override_expires_at
+          FROM feature_registry fr
+          LEFT JOIN feature_overrides fo ON fo.feature_key = fr.feature_key AND fo.company_id = ${companyId}
+          WHERE fr.feature_key = ${featureKey}
+          LIMIT 1
+        `);
+        const rows = result.rows ?? (result as any);
+        if (rows.length === 0) {
+          // Feature not in registry — allow by default (forward-compatible)
+          return next();
+        }
+        const row = rows[0];
+        let effective: boolean;
+        if (row.override_enabled == null) {
+          effective = row.default_on === true || row.default_on === 'true';
+        } else if (row.override_expires_at && new Date(row.override_expires_at) < new Date()) {
+          effective = row.default_on === true || row.default_on === 'true';
+        } else {
+          effective = row.override_enabled === true || row.override_enabled === 'true';
+        }
+
+        if (!effective) {
+          return res.status(403).json({ message: `Feature '${featureKey}' is not enabled for your organization` });
+        }
+        next();
+      } catch (e: any) {
+        res.status(500).json({ message: e.message });
+      }
+    };
+  }
+  // Export the helper so it can be used in route definitions above (if needed in future modules)
+  (app as any)._requireFeature = requireFeature;
+
   return httpServer;
 }
