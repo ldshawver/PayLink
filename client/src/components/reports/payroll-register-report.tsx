@@ -105,8 +105,14 @@ export function PayrollRegisterReport({ run, items, company, workers }: PayrollR
     exportReportCSV(`payroll-register-${run.periodStart}-${run.periodEnd}.csv`, headers, csvRows);
   };
 
+  const printTitle = [
+    "Payroll Register",
+    company?.name,
+    run.periodStart && run.periodEnd ? `${run.periodStart} – ${run.periodEnd}` : null,
+  ].filter(Boolean).join(" · ");
+
   return (
-    <ReportShell onExportCSV={handleCSV} csvLabel="Export Register CSV">
+    <ReportShell onExportCSV={handleCSV} csvLabel="Export Register CSV" printTitle={printTitle}>
       <ReportHeader
         title="Payroll Register"
         subtitle={`${company?.name || "—"} · Pay Period ${period}`}

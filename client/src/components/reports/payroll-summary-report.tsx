@@ -108,8 +108,10 @@ export function PayrollSummaryReport({ run, items, company, workers }: PayrollSu
   const payDate = run.payDate || "—";
   const runStatus = (run.status || "draft").charAt(0).toUpperCase() + (run.status || "draft").slice(1);
 
+  const printTitle = ["Payroll Summary", companyName !== "—" ? companyName : null, period !== "—" ? period : null].filter(Boolean).join(" · ");
+
   return (
-    <ReportShell onExportCSV={handleCSV} csvLabel="Export CSV">
+    <ReportShell onExportCSV={handleCSV} csvLabel="Export CSV" printTitle={printTitle}>
       <ReportHeader
         title="Payroll Summary"
         subtitle={`${companyName} · Pay Period ${period}`}

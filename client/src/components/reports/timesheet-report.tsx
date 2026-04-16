@@ -88,8 +88,10 @@ export function TimesheetReport({ entries, workers, company, dateFrom, dateTo }:
     exportReportCSV(`timesheet-${dateFrom}-${dateTo}.csv`, headers, csvRows);
   };
 
+  const printTitle = ["Timesheet Detail Report", company?.name || "All Companies", period].filter(Boolean).join(" · ");
+
   return (
-    <ReportShell onExportCSV={handleCSV} csvLabel="Export Timesheet CSV">
+    <ReportShell onExportCSV={handleCSV} csvLabel="Export Timesheet CSV" printTitle={printTitle}>
       <ReportHeader
         title="Timesheet Detail Report"
         subtitle={`${company?.name || "All companies"} · ${period}`}

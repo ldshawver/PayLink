@@ -36,10 +36,29 @@
    * Only applies when a .report-print-container is in the DOM.
    * Uses :has() to conditionally hide the body — this way the existing
    * print-check page (/app/print-check) is unaffected.
-   * Works inside dialogs/portals because visibility is inherited.
+   *
+   * Problem: report is inside a Radix Dialog (position:fixed, overflow-y:auto,
+   * max-height:90vh). That dialog becomes the containing block for the
+   * absolute-positioned container AND clips overflow — so only the visible
+   * portion (header) prints.
+   *
+   * Fix: during print, reset the dialog to position:static + overflow:visible
+   * so the containing block becomes <body> (position:relative), allowing
+   * the container to anchor at page top and flow across unlimited pages.
    */
   body:has(.report-print-container) {
     visibility: hidden;
+    position: relative; /* Establish body as the containing block for abs positioning */
+  }
+  /* Strip all dialog scroll/position constraints so the container can escape */
+  body:has(.report-print-container) [role="dialog"] {
+    position: static !important;
+    max-height: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    overflow-y: visible !important;
+    transform: none !important;
+    inset: unset !important;
   }
   .report-print-container {
     visibility: visible;
@@ -47,6 +66,7 @@
     top: 0 !important;
     left: 0 !important;
     width: 100% !important;
+    overflow: visible !important;
     background: white !important;
     padding: 0.75in !important;
     box-shadow: none !important;

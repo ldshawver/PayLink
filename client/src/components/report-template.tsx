@@ -45,10 +45,23 @@ interface ReportShellProps {
   onExportCSV?: () => void;
   csvLabel?: string;
   noDialog?: boolean;
+  printTitle?: string;
 }
 
-export function ReportShell({ children, onExportCSV, csvLabel = "Export CSV" }: ReportShellProps) {
-  const handlePrint = () => window.print();
+export function ReportShell({ children, onExportCSV, csvLabel = "Export CSV", printTitle }: ReportShellProps) {
+  const handlePrint = () => {
+    const prev = document.title;
+    if (printTitle) {
+      document.title = printTitle;
+      // afterprint restores the title whether the user prints or cancels
+      const restore = () => {
+        document.title = prev;
+        window.removeEventListener("afterprint", restore);
+      };
+      window.addEventListener("afterprint", restore);
+    }
+    window.print();
+  };
 
   return (
     <div className="flex flex-col gap-3">
