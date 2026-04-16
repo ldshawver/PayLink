@@ -21817,6 +21817,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(400).json({ message: "companyId, featureKey, and enabled (boolean) are required" });
       }
 
+      // Validate featureKey exists in registry
+      const fkCheck = await db.execute(sql`SELECT id FROM feature_registry WHERE feature_key = ${featureKey} LIMIT 1`);
+      if ((fkCheck.rows ?? fkCheck).length === 0) {
+        return res.status(400).json({ message: `Unknown featureKey: ${featureKey}` });
+      }
+
       // Fetch company name for audit log
       const company = await storage.getCompany(companyId);
       const companyName = company?.name ?? companyId;

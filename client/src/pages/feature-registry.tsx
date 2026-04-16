@@ -113,7 +113,7 @@ export default function FeatureRegistryPage() {
   const [tab, setTab] = useState("registry");
   const [search, setSearch] = useState("");
   const [moduleFilter, setModuleFilter] = useState("all");
-  const [tierFilter, setTierFilter] = useState("all");
+  const [tierFilter, setTierFilter] = useState("__all__");
   const [layerFilter, setLayerFilter] = useState("tenant");
 
   // Registry query
@@ -202,7 +202,7 @@ export default function FeatureRegistryPage() {
     return registry.filter(f => {
       if (layerFilter !== "all" && f.layer !== layerFilter) return false;
       if (moduleFilter !== "all" && f.module !== moduleFilter) return false;
-      if (tierFilter !== "all" && f.tier !== tierFilter) return false;
+      if (tierFilter !== "__all__" && f.tier !== tierFilter) return false;
       if (search) {
         const q = search.toLowerCase();
         return f.featureName?.toLowerCase().includes(q) ||
@@ -327,7 +327,7 @@ export default function FeatureRegistryPage() {
                     <SelectValue placeholder="Tier" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All tiers</SelectItem>
+                    <SelectItem value="__all__">All tiers</SelectItem>
                     <SelectItem value="starter">Starter</SelectItem>
                     <SelectItem value="professional">Professional</SelectItem>
                     <SelectItem value="enterprise">Enterprise</SelectItem>
