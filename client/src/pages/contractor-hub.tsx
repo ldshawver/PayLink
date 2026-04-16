@@ -3696,7 +3696,7 @@ function DocumentsSection() {
     ...invoices.map(i => ({
       id: i.id, type: "invoice", title: i.title || `Invoice #${i.invoiceNumber || i.id.slice(0,8)}`,
       status: i.status, date: i.createdAt, amount: i.amount,
-      immutable: isImmutable("invoice", i.status), hasVersions: true,
+      immutable: isImmutable("invoice", i.status), hasVersions: false,
       contractorId: i.contractorId,
       companyId: (i as any).companyId,
       companyName: (i as any).companyName,
@@ -3995,31 +3995,36 @@ function DocumentsSection() {
                     onClick={async () => {
                       const base = DOC_DOWNLOAD_ENDPOINTS[doc.type];
                       if (!base) return;
+                      // HTML-escape helper to prevent XSS from user-controlled data
+                      const esc = (s: unknown) => String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
                       try {
                         const r = await fetch(`${base}/${doc.id}/download`, { credentials: "include" });
                         const data = r.ok ? await r.json().catch(() => null) : null;
                         const win = window.open("", "_blank");
                         if (win) {
                           const d = data || {};
-                          win.document.write(`<!DOCTYPE html><html><head><title>PayLink — ${doc.title}</title><style>
-                            body{font-family:sans-serif;max-width:800px;margin:40px auto;color:#111;padding:20px}
-                            h1{font-size:1.4rem;border-bottom:2px solid #0d9488;padding-bottom:8px;margin-bottom:20px}
-                            table{width:100%;border-collapse:collapse;margin:16px 0}
-                            th,td{text-align:left;padding:8px 12px;border:1px solid #ddd;font-size:.9rem}
-                            th{background:#f4f4f4;font-weight:600}.meta{color:#555;font-size:.85rem;margin:4px 0}
-                            @media print{body{margin:0}}
-                          </style></head><body>
-                            <h1>${doc.title}</h1>
-                            <p class="meta">Type: ${doc.type} &nbsp;|&nbsp; Status: ${doc.status} &nbsp;|&nbsp; Date: ${new Date(doc.date).toLocaleDateString()}</p>
-                            ${doc.amount ? `<p class="meta">Amount: ${doc.amount}</p>` : ""}
-                            ${doc.companyName ? `<p class="meta">Company: ${doc.companyName}</p>` : ""}
-                            ${doc.contractorName ? `<p class="meta">Contractor: ${doc.contractorName}</p>` : ""}
-                            <table><tbody>
-                              ${Object.entries(d).filter(([k]) => !["id","created_at","updated_at","body_json","line_items"].includes(k))
-                                .map(([k,v]) => `<tr><th>${k.replace(/_/g," ")}</th><td>${v != null && v !== "" ? String(v).slice(0,200) : "—"}</td></tr>`).join("")}
-                            </tbody></table>
-                            <script>window.print();<\/script>
-                          </body></html>`);
+                          const rows = Object.entries(d)
+                            .filter(([k]) => !["id","created_at","updated_at","body_json","line_items"].includes(k))
+                            .map(([k,v]) => `<tr><th>${esc(k.replace(/_/g," "))}</th><td>${v != null && v !== "" ? esc(String(v).slice(0,200)) : "—"}</td></tr>`)
+                            .join("");
+                          win.document.write([
+                            `<!DOCTYPE html><html><head><title>PayLink \u2014 ${esc(doc.title)}</title><style>`,
+                            `body{font-family:sans-serif;max-width:800px;margin:40px auto;color:#111;padding:20px}`,
+                            `h1{font-size:1.4rem;border-bottom:2px solid #0d9488;padding-bottom:8px;margin-bottom:20px}`,
+                            `table{width:100%;border-collapse:collapse;margin:16px 0}`,
+                            `th,td{text-align:left;padding:8px 12px;border:1px solid #ddd;font-size:.9rem}`,
+                            `th{background:#f4f4f4;font-weight:600}.meta{color:#555;font-size:.85rem;margin:4px 0}`,
+                            `@media print{body{margin:0}}`,
+                            `</style></head><body>`,
+                            `<h1>${esc(doc.title)}</h1>`,
+                            `<p class="meta">Type: ${esc(doc.type)} &nbsp;|&nbsp; Status: ${esc(doc.status)} &nbsp;|&nbsp; Date: ${esc(new Date(doc.date).toLocaleDateString())}</p>`,
+                            doc.amount ? `<p class="meta">Amount: ${esc(String(doc.amount))}</p>` : "",
+                            doc.companyName ? `<p class="meta">Company: ${esc(String(doc.companyName))}</p>` : "",
+                            (doc as any).contractorName ? `<p class="meta">Contractor: ${esc(String((doc as any).contractorName))}</p>` : "",
+                            `<table><tbody>${rows}</tbody></table>`,
+                            `<script>window.print();<\/script>`,
+                            `</body></html>`,
+                          ].join(""));
                           win.document.close();
                         }
                       } catch { toast({ title: "Print failed", variant: "destructive" }); }
