@@ -869,15 +869,6 @@ export async function registerRoutes(
         effectiveCompanyId = qCompanyId;
       }
       let workers = await storage.getWorkers(effectiveCompanyId);
-      // Pure managers/supervisors: further scope to direct reports + self
-      if (user && !isAdminRole(user.role) && isManagerRole(user.role) && user.workerId) {
-        const subResult = await db.execute(
-          sql`SELECT id FROM workers WHERE manager_id = ${user.workerId} AND company_id = ${user.companyId}`
-        );
-        const subIds = new Set(subResult.rows.map((r) => (r as { id: string }).id));
-        subIds.add(user.workerId);
-        workers = workers.filter((w) => subIds.has((w as { id: string }).id));
-      }
       res.json(workers);
     } catch (error) {
       console.error("Failed to fetch workers:", error);
@@ -3042,15 +3033,6 @@ export async function registerRoutes(
       } else if (user?.companyId) {
         // All tenant users (managers, admins, etc.) are scoped to their own company
         punches = punches.filter(p => p.companyId === user!.companyId);
-        // Pure managers/supervisors: further scoped to direct reports + self
-        if (!isAdminRole(user.role) && isManagerRole(user.role) && user.workerId) {
-          const subResult = await db.execute(
-            sql`SELECT id FROM workers WHERE manager_id = ${user.workerId} AND company_id = ${user.companyId}`
-          );
-          const subIds = new Set(subResult.rows.map((r) => (r as { id: string }).id));
-          subIds.add(user.workerId);
-          punches = punches.filter(p => subIds.has(p.workerId));
-        }
       }
       // Platform admins (no companyId): can filter by query param
       const { companyId: qCompanyId, workerId: qWorkerId } = req.query;
@@ -3603,15 +3585,6 @@ export async function registerRoutes(
       } else if (user?.companyId) {
         // All other tenant users (managers, admins) are scoped to their company
         entries = entries.filter(e => e.companyId === user!.companyId);
-        // Additionally, pure managers/supervisors are further scoped to direct reports
-        if (!isAdminRole(user.role) && isManagerRole(user.role) && user.workerId) {
-          const subordinates = await db.execute(
-            sql`SELECT id FROM workers WHERE manager_id = ${user.workerId} AND company_id = ${user.companyId}`
-          );
-          const subIds = new Set(subordinates.rows.map((r: any) => r.id));
-          subIds.add(user.workerId); // include self
-          entries = entries.filter(e => subIds.has(e.workerId));
-        }
       }
       // Optional query filters (platform admins may pass companyId to scope)
       const { startDate, endDate, companyId, workerId } = req.query;
@@ -20349,19 +20322,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isAdmin = isAdminRole(user.role);
 
       // Build the set of worker IDs this session user may see
-      let allowedWorkerIds: string[] | null = null; // null = all company workers (admin)
+      let allowedWorkerIds: string[] | null = null; // null = all company workers
       if (!isAdmin && !isManager) {
         // Employee: only themselves
         if (!user.workerId) return res.json([]);
         allowedWorkerIds = [user.workerId];
-      } else if (!isAdmin && isManager && user.workerId) {
-        // Manager/Supervisor: self + direct reports
-        const subordinateRows = await db.execute(sql`
-          SELECT id FROM workers WHERE company_id = ${companyId} AND manager_id = ${user.workerId} AND is_active = TRUE
-        `);
-        allowedWorkerIds = [user.workerId, ...subordinateRows.rows.map((r) => (r as { id: string }).id)];
       }
-      // isAdmin → allowedWorkerIds stays null (no filter = all company)
+      // Managers and admins see all company workers (no further restriction)
 
       const items: any[] = [];
       const today = new Date().toISOString().split("T")[0];
@@ -20853,14 +20820,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const companyId = user.companyId;
       const isAdmin = isAdminRole(user.role);
 
-      // Build allowed worker scope for manager hierarchy
-      let allowedWorkerIds: string[] | null = null;
-      if (!isAdmin && user.workerId) {
-        const subordinateRows = await db.execute(sql`
-          SELECT id FROM workers WHERE company_id = ${companyId} AND manager_id = ${user.workerId} AND is_active = TRUE
-        `);
-        allowedWorkerIds = [user.workerId, ...subordinateRows.rows.map((r) => (r as { id: string }).id)];
-      }
+      // Managers and admins see all company workers
+      let allowedWorkerIds: string[] | null = null; // null = all company workers (no filter)
 
       const items: any[] = [];
 
