@@ -926,11 +926,47 @@ function TimesheetTab() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="grid gap-1.5">
                   <Label>Clock In</Label>
-                  <Input type="datetime-local" value={editForm.clockIn} onChange={e => setEditForm(f => ({ ...f, clockIn: e.target.value }))} data-testid="input-edit-clockin" />
+                  <Input type="datetime-local" value={editForm.clockIn} onChange={e => {
+                    const clockIn = e.target.value;
+                    setEditForm(f => {
+                      const updated = { ...f, clockIn };
+                      if (clockIn && f.clockOut) {
+                        const diff = new Date(f.clockOut).getTime() - new Date(clockIn).getTime();
+                        if (diff > 0) {
+                          const breakHrs = (parseInt(f.breakMinutes) || 0) / 60;
+                          const total = Math.max(0, diff / 3600000 - breakHrs);
+                          const ot = total > 8 ? Math.min(total - 8, 4) : 0;
+                          const dt = total > 12 ? total - 12 : 0;
+                          updated.totalHours = total.toFixed(2);
+                          updated.overtimeHours = ot.toFixed(2);
+                          updated.doubleTimeHours = dt.toFixed(2);
+                        }
+                      }
+                      return updated;
+                    });
+                  }} data-testid="input-edit-clockin" />
                 </div>
                 <div className="grid gap-1.5">
                   <Label>Clock Out</Label>
-                  <Input type="datetime-local" value={editForm.clockOut} onChange={e => setEditForm(f => ({ ...f, clockOut: e.target.value }))} data-testid="input-edit-clockout" />
+                  <Input type="datetime-local" value={editForm.clockOut} onChange={e => {
+                    const clockOut = e.target.value;
+                    setEditForm(f => {
+                      const updated = { ...f, clockOut };
+                      if (f.clockIn && clockOut) {
+                        const diff = new Date(clockOut).getTime() - new Date(f.clockIn).getTime();
+                        if (diff > 0) {
+                          const breakHrs = (parseInt(f.breakMinutes) || 0) / 60;
+                          const total = Math.max(0, diff / 3600000 - breakHrs);
+                          const ot = total > 8 ? Math.min(total - 8, 4) : 0;
+                          const dt = total > 12 ? total - 12 : 0;
+                          updated.totalHours = total.toFixed(2);
+                          updated.overtimeHours = ot.toFixed(2);
+                          updated.doubleTimeHours = dt.toFixed(2);
+                        }
+                      }
+                      return updated;
+                    });
+                  }} data-testid="input-edit-clockout" />
                 </div>
               </div>
               <div className="grid gap-1.5">

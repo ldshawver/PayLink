@@ -3718,6 +3718,37 @@ export async function registerRoutes(
       const data = { ...req.body };
       if (data.clockIn) data.clockIn = new Date(data.clockIn);
       if (data.clockOut) data.clockOut = new Date(data.clockOut);
+
+      // Auto-recalculate totalHours (and OT/DT) when clockIn or clockOut change.
+      // Always recompute — never trust a stale totalHours sent from the client
+      // when the clock times have been updated.
+      const newClockIn = data.clockIn instanceof Date ? data.clockIn : existing.clockIn;
+      const newClockOut = data.clockOut instanceof Date ? data.clockOut : existing.clockOut;
+      if ((data.clockIn || data.clockOut) && newClockIn && newClockOut) {
+        const diffMs = new Date(newClockOut).getTime() - new Date(newClockIn).getTime();
+        if (diffMs > 0) {
+          const breakMins = data.breakMinutes !== undefined ? Number(data.breakMinutes) : (existing.breakMinutes || 0);
+          const workedHrs = Math.max(0, diffMs / (1000 * 60 * 60) - breakMins / 60);
+          // Load company OT threshold for this entry
+          const entryCompany = existing.companyId
+            ? await storage.getCompany(existing.companyId).catch(() => null)
+            : null;
+          const dailyOTThreshold = parseFloat(String((entryCompany as any)?.overtimeThreshold ?? 8));
+          const doubleTimeThreshold = 12;
+          let overtimeHrs = 0;
+          let doubleTimeHrs = 0;
+          if (workedHrs > doubleTimeThreshold) {
+            doubleTimeHrs = workedHrs - doubleTimeThreshold;
+            overtimeHrs = doubleTimeThreshold - dailyOTThreshold;
+          } else if (workedHrs > dailyOTThreshold) {
+            overtimeHrs = workedHrs - dailyOTThreshold;
+          }
+          data.totalHours = workedHrs.toFixed(2);
+          data.overtimeHours = overtimeHrs.toFixed(2);
+          data.doubleTimeHours = doubleTimeHrs.toFixed(2);
+        }
+      }
+
       const entry = await storage.updateTimeEntry(req.params.id, data);
       if (!entry) {
         return res.status(404).json({ message: "Time entry not found" });
