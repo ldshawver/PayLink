@@ -1904,6 +1904,20 @@ export async function registerRoutes(
         });
       }
 
+      // Auto-convert approved punches → time entries before the gate runs.
+      // This way "approving timecards" in the attendance view is sufficient;
+      // users don't need a separate manual "convert punches" step.
+      try {
+        const autoConvert = await storage.convertPunchesToTimeEntries(
+          run.companyId, run.periodStart, run.periodEnd
+        );
+        if (autoConvert.created > 0) {
+          console.log(`[PAYROLL] Auto-converted ${autoConvert.created} punch group(s) to time entries for period ${run.periodStart}–${run.periodEnd}`);
+        }
+      } catch (convertErr) {
+        console.warn("[PAYROLL] Auto-convert punches warning (non-fatal):", convertErr);
+      }
+
       const entries = await storage.getTimeEntriesByDateRange(
         run.companyId, run.periodStart, run.periodEnd
       );
@@ -1956,7 +1970,7 @@ export async function registerRoutes(
           // Only block if ALL hourly workers have zero entries (likely forgot to approve/convert)
           gateErrors.push({
             code: "no_time_entries",
-            message: `No approved time entries found for this pay period (${run.periodStart} – ${run.periodEnd}). Hourly workers would receive $0. Approve timecards first.`,
+            message: `No time entries found for this pay period (${run.periodStart} – ${run.periodEnd}). If employees used the time clock, go to Attendance → Timesheets, approve the punches, then return here and try again. If you entered hours manually, create time entries in the Timesheets tab first.`,
             fixPath: "/app/attendance?tab=timesheet",
           });
         }
