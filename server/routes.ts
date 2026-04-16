@@ -8018,6 +8018,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         VALUES (${req.params.id}, ${workerId || null}, ${userId || null}, ${name}, ${email || null}, ${signerRole}, 'pending', ${order})
         RETURNING *
       `);
+      // Create in-app notification for the signer (if they have a worker record)
+      if (workerId || userId) {
+        createContractorNotification({ workerId: workerId || null, userId: userId || null, companyId: contract.company_id, notificationType: "signature_requested", title: `Signature Requested: ${contract.title}`, body: `You have been added as a signer on contract "${contract.title}". Please review and sign.`, entityType: "contract", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=contracts&id=${req.params.id}` }).catch(() => {});
+      }
       // Send signature request notification to the signer if email is provided
       if (email) {
         try {
@@ -8772,7 +8776,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const sigOverdue = await db.execute(sql`
         SELECT id, contract_number, title, contractor_id, sent_at FROM contractor_contracts
         WHERE company_id = ${cid} AND status IN ('sent','partially_signed') AND sent_at IS NOT NULL
-        AND sent_at < NOW() - (${contractSigOverdueDays} * INTERVAL '1 day')
+        AND sent_at::timestamptz < NOW() - (${contractSigOverdueDays} * INTERVAL '1 day')
       `);
       for (const c of sigOverdue.rows as any[]) {
         // Dedup: skip if a reminder for this entity+type is pending OR was sent within last 24h
@@ -8793,7 +8797,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const expiring = await db.execute(sql`
         SELECT id, contract_number, title, contractor_id, end_date FROM contractor_contracts
         WHERE company_id = ${cid} AND status IN ('active','fully_signed') AND end_date IS NOT NULL
-        AND end_date BETWEEN NOW() AND NOW() + (${contractExpiryWarningDays} * INTERVAL '1 day')
+        AND end_date::date BETWEEN CURRENT_DATE AND CURRENT_DATE + (${contractExpiryWarningDays} * INTERVAL '1 day')::interval
       `);
       for (const c of expiring.rows as any[]) {
         const existing = await db.execute(sql`
@@ -8812,7 +8816,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const invoicesDue = await db.execute(sql`
         SELECT ci.id, ci.invoice_number, ci.contractor_id, ci.due_date FROM contractor_invoices ci
         WHERE ci.company_id = ${cid} AND ci.status NOT IN ('paid','void','cancelled')
-        AND ci.due_date BETWEEN NOW() AND NOW() + (${invoiceDueReminderDays} * INTERVAL '1 day')
+        AND ci.due_date::date BETWEEN CURRENT_DATE AND CURRENT_DATE + (${invoiceDueReminderDays} * INTERVAL '1 day')::interval
       `);
       for (const inv of invoicesDue.rows as any[]) {
         const existing = await db.execute(sql`
@@ -8831,7 +8835,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const invoicesOverdue = await db.execute(sql`
         SELECT ci.id, ci.invoice_number, ci.contractor_id, ci.due_date FROM contractor_invoices ci
         WHERE ci.company_id = ${cid} AND ci.status NOT IN ('paid','void','cancelled')
-        AND ci.due_date < NOW() - (${invoiceOverdueReminderDays} * INTERVAL '1 day')
+        AND ci.due_date::date < CURRENT_DATE - (${invoiceOverdueReminderDays} * INTERVAL '1 day')::interval
       `);
       for (const inv of invoicesOverdue.rows as any[]) {
         const existing = await db.execute(sql`

@@ -6,6 +6,7 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import path from "path";
 import fs from "fs";
+import { runContractorReminderScheduler } from "./contractor-scheduler";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -2852,6 +2853,22 @@ Thank you,
     },
     () => {
       log(`serving on ${host}:${port}`);
+
+      // Run contractor reminder scheduler once at startup (with a short delay),
+      // then periodically every 6 hours
+      const SCHEDULER_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+      setTimeout(() => {
+        runContractorReminderScheduler().catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.warn("[ContractorScheduler] Startup run error:", msg);
+        });
+        setInterval(() => {
+          runContractorReminderScheduler().catch((e: unknown) => {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.warn("[ContractorScheduler] Periodic run error:", msg);
+          });
+        }, SCHEDULER_INTERVAL_MS);
+      }, 10000); // 10s delay after startup to allow DB migrations to complete
     },
   );
 })();

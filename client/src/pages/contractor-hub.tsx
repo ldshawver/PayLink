@@ -605,10 +605,13 @@ function DashboardSection({ proposals, invoices, contracts, isAdmin, onNavigate 
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     {r.entityType === "contract" && (
-                      <Button size="sm" variant="ghost" className="h-6 text-xs text-amber-700 px-1.5" onClick={() => onNavigate("contracts")} data-testid={`btn-reminder-view-${r.id}`}>View</Button>
+                      <Button size="sm" variant="ghost" className="h-6 text-xs text-amber-700 px-1.5" onClick={() => onNavigate("contracts", r.entityId || undefined)} data-testid={`btn-reminder-view-${r.id}`}>View</Button>
                     )}
                     {r.entityType === "invoice" && (
-                      <Button size="sm" variant="ghost" className="h-6 text-xs text-amber-700 px-1.5" onClick={() => onNavigate("invoices")} data-testid={`btn-reminder-view-${r.id}`}>View</Button>
+                      <Button size="sm" variant="ghost" className="h-6 text-xs text-amber-700 px-1.5" onClick={() => onNavigate("invoices", r.entityId || undefined)} data-testid={`btn-reminder-view-${r.id}`}>View</Button>
+                    )}
+                    {r.entityType === "proposal" && (
+                      <Button size="sm" variant="ghost" className="h-6 text-xs text-amber-700 px-1.5" onClick={() => onNavigate("proposals", r.entityId || undefined)} data-testid={`btn-reminder-view-${r.id}`}>View</Button>
                     )}
                     <button
                       onClick={() => dismissReminderMutation.mutate(r.id)}
