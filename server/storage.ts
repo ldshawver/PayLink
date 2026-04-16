@@ -2802,11 +2802,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ── Contractor Invoices ───────────────────────────────────────────────
-  async getContractorInvoices(companyId?: string, contractorId?: string, status?: string): Promise<ContractorInvoice[]> {
+  async getContractorInvoices(companyId?: string, contractorId?: string, status?: string, showArchived = false): Promise<ContractorInvoice[]> {
     const conds: any[] = [];
     if (companyId) conds.push(eq(contractorInvoices.companyId, companyId));
     if (contractorId) conds.push(eq(contractorInvoices.contractorId, contractorId));
     if (status) conds.push(eq(contractorInvoices.status, status));
+    if (!showArchived) conds.push(eq(contractorInvoices.isArchived, false));
     const q = conds.length > 0 ? db.select().from(contractorInvoices).where(and(...conds)) : db.select().from(contractorInvoices);
     return q.orderBy(desc(contractorInvoices.createdAt));
   }

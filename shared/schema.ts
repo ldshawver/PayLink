@@ -1748,6 +1748,8 @@ export const contractorInvoices = pgTable("contractor_invoices", {
   aiConfidenceScore: numeric("ai_confidence_score"),
   duplicateHash: text("duplicate_hash"),
   notes: text("notes"),
+  isArchived: boolean("is_archived").default(false),
+  archivedAt: timestamp("archived_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

@@ -25,7 +25,7 @@ import {
   Settings, FileSignature, CreditCard, Package, ChevronDown, ChevronUp,
   ExternalLink, Info, AlertCircle, ThumbsUp, ThumbsDown, MessageCircle,
   Briefcase, Layers, SlidersHorizontal, ArrowUpDown, Globe, Phone, Mail,
-  Image, Paintbrush, CheckSquare, Search
+  Image, Paintbrush, CheckSquare, Search, Archive
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -3551,11 +3551,12 @@ function isImmutable(type: string, status: string) {
 }
 
 function VersionHistoryDrawer({ open, onClose, entityType, entityId, entityTitle }: {
-  open: boolean; onClose: () => void; entityType: "contract" | "proposal"; entityId: string; entityTitle: string;
+  open: boolean; onClose: () => void; entityType: string; entityId: string; entityTitle: string;
 }) {
+  const supportsVersions = entityType === "contract" || entityType === "proposal";
   const { data: versions = [], isLoading } = useQuery<any[]>({
     queryKey: [`/api/contractor-${entityType}s/${entityId}/versions`],
-    enabled: open && !!entityId,
+    enabled: open && !!entityId && supportsVersions,
     queryFn: async () => {
       const r = await fetch(`/api/contractor-${entityType}s/${entityId}/versions`, { credentials: "include" });
       return r.ok ? r.json() : [];
@@ -3572,7 +3573,13 @@ function VersionHistoryDrawer({ open, onClose, entityType, entityId, entityTitle
           <p className="text-xs text-muted-foreground truncate">{entityTitle}</p>
         </SheetHeader>
         <ScrollArea className="h-[calc(100vh-120px)] mt-4">
-          {isLoading ? (
+          {!supportsVersions ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <History className="h-8 w-8 mx-auto mb-2 opacity-30" />
+              <p className="text-sm font-medium">No version history</p>
+              <p className="text-xs mt-1">{entityType.charAt(0).toUpperCase() + entityType.slice(1)}s are single-revision documents. Each record represents a final artifact.</p>
+            </div>
+          ) : isLoading ? (
             <div className="flex items-center justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
           ) : versions.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
@@ -3610,20 +3617,23 @@ function DocumentsSection() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [showDateFilter, setShowDateFilter] = useState(false);
-  const [versionDrawer, setVersionDrawer] = useState<{type: "contract"|"proposal"; id: string; title: string} | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [versionDrawer, setVersionDrawer] = useState<{type: string; id: string; title: string} | null>(null);
   const [archiveConfirm, setArchiveConfirm] = useState<{id: string; type: string; title: string} | null>(null);
 
   const { data: proposals = [] } = useQuery<Proposal[]>({
-    queryKey: ["/api/contractor-proposals"],
+    queryKey: ["/api/contractor-proposals", showArchived],
+    queryFn: async () => { const r = await fetch(`/api/contractor-proposals${showArchived ? "?showArchived=true" : ""}`, { credentials: "include" }); return r.ok ? r.json() : []; },
     select: (d: any) => snakeToCamel(d),
   });
   const { data: contracts = [] } = useQuery<Contract[]>({
-    queryKey: ["/api/contractor-contracts"],
-    queryFn: async () => { const r = await fetch("/api/contractor-contracts", { credentials: "include" }); return r.ok ? r.json() : []; },
+    queryKey: ["/api/contractor-contracts", showArchived],
+    queryFn: async () => { const r = await fetch(`/api/contractor-contracts${showArchived ? "?showArchived=true" : ""}`, { credentials: "include" }); return r.ok ? r.json() : []; },
     select: (d: any) => snakeToCamel(d),
   });
   const { data: invoices = [] } = useQuery<Invoice[]>({
-    queryKey: ["/api/contractor-invoices"],
+    queryKey: ["/api/contractor-invoices", showArchived],
+    queryFn: async () => { const r = await fetch(`/api/contractor-invoices${showArchived ? "?showArchived=true" : ""}`, { credentials: "include" }); return r.ok ? r.json() : []; },
     select: (d: any) => snakeToCamel(d),
   });
   const { data: payments = [] } = useQuery<Payment[]>({
@@ -3686,7 +3696,7 @@ function DocumentsSection() {
     ...invoices.map(i => ({
       id: i.id, type: "invoice", title: i.title || `Invoice #${i.invoiceNumber || i.id.slice(0,8)}`,
       status: i.status, date: i.createdAt, amount: i.amount,
-      immutable: isImmutable("invoice", i.status), hasVersions: false,
+      immutable: isImmutable("invoice", i.status), hasVersions: true,
       contractorId: i.contractorId,
       companyId: (i as any).companyId,
       companyName: (i as any).companyName,
@@ -3772,6 +3782,8 @@ function DocumentsSection() {
         ? `/api/contractor-contracts/${doc.id}/archive`
         : doc.type === "proposal"
         ? `/api/contractor-proposals/${doc.id}/archive`
+        : doc.type === "invoice"
+        ? `/api/contractor-invoices/${doc.id}/archive`
         : null;
       if (!base) throw new Error("Archive not available for this document type");
       const r = await fetch(base, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" } });
@@ -3786,6 +3798,7 @@ function DocumentsSection() {
       setArchiveConfirm(null);
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-contracts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
     },
     onError: (e: any) => toast({ title: e?.message || "Archive failed", variant: "destructive" }),
   });
@@ -3870,6 +3883,9 @@ function DocumentsSection() {
           )}
           <Button size="sm" variant={showDateFilter ? "secondary" : "ghost"} className="h-8 text-xs" onClick={() => setShowDateFilter(v => !v)} data-testid="btn-toggle-date-filter">
             <Calendar className="h-3 w-3 mr-1" /> Date
+          </Button>
+          <Button size="sm" variant={showArchived ? "secondary" : "ghost"} className="h-8 text-xs" onClick={() => setShowArchived(v => !v)} data-testid="btn-toggle-archived">
+            <Archive className="h-3 w-3 mr-1" /> {showArchived ? "Hide Archived" : "Show Archived"}
           </Button>
         </div>
         {showDateFilter && (
@@ -4022,7 +4038,7 @@ function DocumentsSection() {
                         : <Mail className={cn("h-3.5 w-3.5", !emailProviderConfigured && "opacity-40")} />}
                     </Button>
                   )}
-                  {canArchive && !doc.immutable && (doc.type === "proposal" || doc.type === "contract") && (
+                  {canArchive && !doc.immutable && (doc.type === "proposal" || doc.type === "contract" || doc.type === "invoice") && (
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground" title="Archive"
                       onClick={() => setArchiveConfirm({ id: doc.id, type: doc.type, title: doc.title })}
                       data-testid={`btn-archive-doc-${doc.id}`}>

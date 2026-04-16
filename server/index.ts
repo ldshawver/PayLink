@@ -2702,6 +2702,8 @@ Thank you,
     await run("contractor_proposals.archived_at", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
     await run("contractor_contracts.is_archived", sql`ALTER TABLE contractor_contracts ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT FALSE`);
     await run("contractor_contracts.archived_at", sql`ALTER TABLE contractor_contracts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+    await run("contractor_invoices.is_archived", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT FALSE`);
+    await run("contractor_invoices.archived_at", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
   }
 
   const { seedDatabase } = await import("./seed");

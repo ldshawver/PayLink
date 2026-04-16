@@ -6280,13 +6280,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.get("/api/contractor-invoices", requireAuth, async (req, res) => {
     try {
-      const { companyId, contractorId, status } = req.query as Record<string, string>;
+      const { companyId, contractorId, status, showArchived } = req.query as Record<string, string>;
+      const showArchivedBool = showArchived === "true";
       const user = await storage.getUser(req.session.userId!);
-      const isManager = user?.role === "admin" || user?.role === "manager";
+      const isManager = user?.role === "admin" || user?.role === "manager" || (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_");
       if (isManager) {
-        res.json(await storage.getContractorInvoices(companyId, contractorId, status));
+        res.json(await storage.getContractorInvoices(companyId, contractorId, status, showArchivedBool));
       } else {
-        res.json(await storage.getContractorInvoices(companyId, user?.workerId || "none", status));
+        res.json(await storage.getContractorInvoices(companyId, user?.workerId || "none", status, showArchivedBool));
       }
     } catch (e) { res.status(500).json({ message: "Failed to fetch invoices" }); }
   });
@@ -8756,6 +8757,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to archive contract: " + e.message }); }
   });
 
+  // ── Invoice Archive ────────────────────────────────────────────────────────
+  app.post("/api/contractor-invoices/:id/archive", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const invRes = await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${req.params.id}`);
+      if (!invRes.rows[0]) return res.status(404).json({ message: "Invoice not found" });
+      const inv = invRes.rows[0] as any;
+      if (!isPlatform && user?.companyId && inv.company_id !== user.companyId) {
+        return res.status(403).json({ message: "Access denied: invoice belongs to another company" });
+      }
+      if (["paid", "closed"].includes(inv.status)) {
+        return res.status(400).json({ message: "Cannot archive a paid/closed invoice — it is immutable" });
+      }
+      await db.execute(sql`UPDATE contractor_invoices SET is_archived = TRUE, archived_at = NOW() WHERE id = ${req.params.id}`);
+      res.json({ success: true, id: req.params.id });
+    } catch (e: any) { res.status(500).json({ message: "Failed to archive invoice: " + e.message }); }
+  });
 
   // ── Contractor Invoice: create from proposal or contract with guardrail ────
   app.post("/api/contractor-invoices/from-proposal", requireAuth, requireRole("admin", "manager"), async (req, res) => {
