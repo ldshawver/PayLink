@@ -3630,9 +3630,15 @@ function DocumentsSection() {
     queryFn: async () => { const r = await fetch("/api/contractor-payments", { credentials: "include" }); return r.ok ? r.json() : []; },
   });
 
+  const [contractorFilter, setContractorFilter] = useState("all");
+  const [costCenterFilter, setCostCenterFilter] = useState("all");
+  const [emailSending, setEmailSending] = useState<string | null>(null);
+
   type DocRow = {
     id: string; type: string; title: string; status: string; date: string;
-    amount?: string; immutable: boolean; hasVersions: boolean; contractorId?: string;
+    amount?: string; immutable: boolean; hasVersions: boolean;
+    contractorId?: string; contractorName?: string; costCenter?: string;
+    signers?: Array<{name?: string; email?: string; signedAt?: string}>;
   };
 
   const allDocs: DocRow[] = [
@@ -3641,12 +3647,15 @@ function DocumentsSection() {
       status: p.status, date: p.createdAt, amount: p.amount,
       immutable: isImmutable("proposal", p.status), hasVersions: true,
       contractorId: p.contractorId,
+      contractorName: (p as any).contractorName,
+      costCenter: (p as any).costCenter,
     })),
     ...contracts.map(c => ({
-      id: c.id, type: "contract", title: c.title || (c as any).contractNumber || "Contract",
-      status: c.status, date: c.createdAt, amount: (c as any).totalValue || (c as any).value,
+      id: c.id, type: "contract", title: c.title || c.contractNumber || "Contract",
+      status: c.status, date: c.createdAt, amount: c.totalValue || c.value,
       immutable: isImmutable("contract", c.status), hasVersions: true,
-      contractorId: c.contractorId,
+      contractorId: c.contractorId, contractorName: c.contractorName,
+      signers: c.signers?.map(s => ({ name: (s as any).signerName, email: (s as any).signerEmail, signedAt: (s as any).signedAt })),
     })),
     ...invoices.map(i => ({
       id: i.id, type: "invoice", title: i.title || `Invoice #${i.invoiceNumber || i.id.slice(0,8)}`,
@@ -3661,14 +3670,42 @@ function DocumentsSection() {
     })),
   ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
+  const contractorOptions = [...new Set(allDocs.map(d => d.contractorId).filter(Boolean))].map(id => ({
+    id: id!, name: allDocs.find(d => d.contractorId === id)?.contractorName || id!.slice(0, 8),
+  }));
+  const costCenterOptions = [...new Set(allDocs.map(d => d.costCenter).filter(Boolean))];
+
   const filtered = allDocs.filter(d => {
     if (typeFilter !== "all" && d.type !== typeFilter) return false;
     if (statusFilter !== "all" && d.status !== statusFilter) return false;
+    if (contractorFilter !== "all" && d.contractorId !== contractorFilter) return false;
+    if (costCenterFilter !== "all" && d.costCenter !== costCenterFilter) return false;
     if (search && !d.title.toLowerCase().includes(search.toLowerCase())) return false;
     if (dateFrom && new Date(d.date) < new Date(dateFrom)) return false;
     if (dateTo && new Date(d.date) > new Date(dateTo + "T23:59:59")) return false;
     return true;
   });
+
+  async function handleEmailDoc(doc: DocRow) {
+    setEmailSending(doc.id);
+    try {
+      const endpoint = doc.type === "invoice"
+        ? `/api/contractor-invoices/${doc.id}/send-reminder`
+        : doc.type === "proposal"
+        ? `/api/contractor-proposals/${doc.id}/send`
+        : doc.type === "contract"
+        ? `/api/contractor-contracts/${doc.id}/send`
+        : null;
+      if (!endpoint) { toast({ title: "Email not available for this document type" }); return; }
+      const r = await fetch(endpoint, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.message); }
+      toast({ title: "Document sent via email" });
+    } catch (e: any) {
+      toast({ title: e?.message || "Email send failed", variant: "destructive" });
+    } finally {
+      setEmailSending(null);
+    }
+  }
 
   async function handleDownload(doc: DocRow) {
     try {
@@ -3743,6 +3780,28 @@ function DocumentsSection() {
               {statusOptions.map(s => <SelectItem key={s} value={s}>{s.replace(/_/g, " ")}</SelectItem>)}
             </SelectContent>
           </Select>
+          {contractorOptions.length > 0 && (
+            <Select value={contractorFilter} onValueChange={setContractorFilter}>
+              <SelectTrigger className="h-8 w-36 text-xs" data-testid="select-doc-contractor">
+                <SelectValue placeholder="All Contractors" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Contractors</SelectItem>
+                {contractorOptions.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
+          {costCenterOptions.length > 0 && (
+            <Select value={costCenterFilter} onValueChange={setCostCenterFilter}>
+              <SelectTrigger className="h-8 w-36 text-xs" data-testid="select-doc-cost-center">
+                <SelectValue placeholder="All Cost Centers" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Cost Centers</SelectItem>
+                {costCenterOptions.map(cc => <SelectItem key={cc} value={cc!}>{cc}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
           <Button size="sm" variant={showDateFilter ? "secondary" : "ghost"} className="h-8 text-xs" onClick={() => setShowDateFilter(v => !v)} data-testid="btn-toggle-date-filter">
             <Calendar className="h-3 w-3 mr-1" /> Date
           </Button>
@@ -3800,11 +3859,19 @@ function DocumentsSection() {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground flex-wrap">
                     <span className="capitalize">{doc.type}</span>
                     <span>·</span>
                     <span>{fmtDate(doc.date)}</span>
                     {doc.amount && <><span>·</span><span className="font-medium text-foreground">{fmt(doc.amount)}</span></>}
+                    {doc.contractorName && <><span>·</span><span>{doc.contractorName}</span></>}
+                    {doc.costCenter && <><span>·</span><span>CC: {doc.costCenter}</span></>}
+                    {doc.signers && doc.signers.length > 0 && (
+                      <span className="flex items-center gap-1" title={doc.signers.map(s => `${s.name || s.email}${s.signedAt ? " (signed " + fmtDate(s.signedAt) + ")" : " (pending)"}`).join(", ")}>
+                        · <CheckCheck className="h-3 w-3 text-green-600" />
+                        {doc.signers.filter(s => s.signedAt).length}/{doc.signers.length} signed
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -3819,6 +3886,15 @@ function DocumentsSection() {
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Download"
                       onClick={() => handleDownload(doc)} data-testid={`btn-download-doc-${doc.id}`}>
                       <Download className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  {(doc.type === "invoice" || doc.type === "proposal" || doc.type === "contract") && (
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Send via email"
+                      disabled={emailSending === doc.id}
+                      onClick={() => handleEmailDoc(doc)} data-testid={`btn-email-doc-${doc.id}`}>
+                      {emailSending === doc.id
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        : <Mail className="h-3.5 w-3.5" />}
                     </Button>
                   )}
                   {!doc.immutable && (doc.type === "proposal" || doc.type === "contract") && (
@@ -3902,6 +3978,7 @@ function BrandingSection() {
   const [dirty, setDirty] = useState(false);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [removeLogo, setRemoveLogo] = useState(false);
   const logoInputRef = useRef<HTMLInputElement>(null);
 
   const { data: currentUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
@@ -3945,6 +4022,8 @@ function BrandingSection() {
       const fd = new FormData();
       Object.entries(form).forEach(([k, v]) => v && fd.append(k, v));
       if (logoFile) fd.append("logo", logoFile);
+      // Explicitly signal logo removal — server MUST set logo_url/logo_path to NULL (not COALESCE)
+      if (removeLogo) fd.append("removeLogo", "true");
       const r = await fetch("/api/contractor-branding", { method: "POST", credentials: "include", body: fd });
       if (!r.ok) { const e = await r.json(); throw new Error(e.message); }
       return r.json();
@@ -3952,7 +4031,7 @@ function BrandingSection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-branding"] });
       toast({ title: "Branding saved" });
-      setDirty(false); setLogoFile(null);
+      setDirty(false); setLogoFile(null); setRemoveLogo(false);
     },
     onError: (e: any) => toast({ title: e?.message || "Save failed", variant: "destructive" }),
   });
@@ -3962,7 +4041,7 @@ function BrandingSection() {
   function handleLogoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setLogoFile(file); setDirty(true);
+    setLogoFile(file); setRemoveLogo(false); setDirty(true);
     const reader = new FileReader();
     reader.onload = ev => setLogoPreview(ev.target?.result as string);
     reader.readAsDataURL(file);
@@ -4010,8 +4089,8 @@ function BrandingSection() {
                 <Upload className="h-3.5 w-3.5 mr-1" /> {logoPreview ? "Change Logo" : "Upload Logo"}
               </Button>
               {logoPreview && (
-                <Button size="sm" variant="ghost" className="text-red-500 text-xs" onClick={() => { setLogoPreview(null); setLogoFile(null); setDirty(true); }} data-testid="btn-remove-logo">
-                  Remove
+                <Button size="sm" variant="ghost" className="text-red-500 text-xs" onClick={() => { setLogoPreview(null); setLogoFile(null); setRemoveLogo(true); setDirty(true); }} data-testid="btn-remove-logo">
+                  Remove Logo
                 </Button>
               )}
               <p className="text-xs text-muted-foreground">PNG, JPG or SVG · Max 2MB · Appears on proposals & invoices</p>
@@ -4173,6 +4252,7 @@ const PERMISSION_ACTIONS = [
   { key: "create_proposal", label: "Create Proposal" },
   { key: "submit_proposal", label: "Submit Proposal" },
   { key: "approve_proposal", label: "Approve Proposal" },
+  { key: "counter_proposal", label: "Counter Proposal" },
   { key: "generate_contract", label: "Generate Contract" },
   { key: "sign_contract", label: "Sign Contract" },
   { key: "create_invoice", label: "Create Invoice" },
@@ -4183,11 +4263,11 @@ const PERMISSION_ACTIONS = [
 ];
 
 const DEFAULT_MATRIX: Record<string, Record<string, boolean>> = {
-  contractor: { create_proposal: true, submit_proposal: true, approve_proposal: false, generate_contract: false, sign_contract: true, create_invoice: true, approve_invoice: false, record_payment: false, manage_templates: false, configure_workflow: false },
-  reviewer: { create_proposal: false, submit_proposal: false, approve_proposal: true, generate_contract: false, sign_contract: false, create_invoice: false, approve_invoice: false, record_payment: false, manage_templates: false, configure_workflow: false },
-  finance_approver: { create_proposal: false, submit_proposal: false, approve_proposal: false, generate_contract: false, sign_contract: false, create_invoice: false, approve_invoice: true, record_payment: true, manage_templates: false, configure_workflow: false },
-  tenant_admin: { create_proposal: true, submit_proposal: true, approve_proposal: true, generate_contract: true, sign_contract: true, create_invoice: true, approve_invoice: true, record_payment: true, manage_templates: true, configure_workflow: true },
-  global_admin: { create_proposal: true, submit_proposal: true, approve_proposal: true, generate_contract: true, sign_contract: true, create_invoice: true, approve_invoice: true, record_payment: true, manage_templates: true, configure_workflow: true },
+  contractor: { create_proposal: true, submit_proposal: true, approve_proposal: false, counter_proposal: true, generate_contract: false, sign_contract: true, create_invoice: true, approve_invoice: false, record_payment: false, manage_templates: false, configure_workflow: false },
+  reviewer: { create_proposal: false, submit_proposal: false, approve_proposal: true, counter_proposal: true, generate_contract: false, sign_contract: false, create_invoice: false, approve_invoice: false, record_payment: false, manage_templates: false, configure_workflow: false },
+  finance_approver: { create_proposal: false, submit_proposal: false, approve_proposal: false, counter_proposal: false, generate_contract: false, sign_contract: false, create_invoice: false, approve_invoice: true, record_payment: true, manage_templates: false, configure_workflow: false },
+  tenant_admin: { create_proposal: true, submit_proposal: true, approve_proposal: true, counter_proposal: true, generate_contract: true, sign_contract: true, create_invoice: true, approve_invoice: true, record_payment: true, manage_templates: true, configure_workflow: true },
+  global_admin: { create_proposal: true, submit_proposal: true, approve_proposal: true, counter_proposal: true, generate_contract: true, sign_contract: true, create_invoice: true, approve_invoice: true, record_payment: true, manage_templates: true, configure_workflow: true },
 };
 
 function SettingsSection() {
@@ -4205,6 +4285,19 @@ function SettingsSection() {
   const { data: currentUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const isAdmin = currentUser?.role === "admin" || currentUser?.role === "manager" ||
     (currentUser?.role || "").startsWith("tenant_") || (currentUser?.role || "").startsWith("platform_");
+
+  const { data: smtpConfig } = useQuery<{host?: string; enabled?: boolean} | null>({
+    queryKey: ["/api/admin/smtp-config"],
+    enabled: isAdmin,
+    queryFn: async () => { const r = await fetch("/api/admin/smtp-config", { credentials: "include" }); return r.ok ? r.json() : null; },
+  });
+  const { data: smsConfig } = useQuery<{sid?: string; enabled?: boolean} | null>({
+    queryKey: ["/api/admin/sms-config"],
+    enabled: isAdmin,
+    queryFn: async () => { const r = await fetch("/api/admin/sms-config", { credentials: "include" }); return r.ok ? r.json() : null; },
+  });
+  const emailConfigured = !!(smtpConfig?.host);
+  const smsConfigured = !!(smsConfig?.sid);
 
   const { data: templates = [], refetch: refetchTemplates } = useQuery<any[]>({
     queryKey: ["/api/contractor-templates/admin-all"],
@@ -4235,6 +4328,7 @@ function SettingsSection() {
         contractExpiryWarningDays: wfSettings.contractExpiryWarningDays ?? 14,
         invoiceDueReminderDays: wfSettings.invoiceDueReminderDays ?? 3,
         invoiceOverdueReminderDays: wfSettings.invoiceOverdueReminderDays ?? 1,
+        contractRenegotiationWarningDays: wfSettings.contractRenegotiationWarningDays ?? 14,
       });
       if (wfSettings.notificationRules && Object.keys(wfSettings.notificationRules).length > 0) {
         setNotifRules(wfSettings.notificationRules);
@@ -4408,6 +4502,7 @@ function SettingsSection() {
                   <Label>Minimum Reviewers</Label>
                   <Input type="number" min={1} max={10} value={wfForm.minReviewers ?? 1}
                     onChange={e => updWf("minReviewers", parseInt(e.target.value) || 1)} data-testid="input-min-reviewers" />
+                  <p className="text-xs text-muted-foreground mt-1">How many reviewers must approve before submission proceeds</p>
                 </div>
                 <div>
                   <Label>Review Mode</Label>
@@ -4416,9 +4511,32 @@ function SettingsSection() {
                     <SelectContent>
                       <SelectItem value="parallel">Parallel (any reviewer can approve)</SelectItem>
                       <SelectItem value="sequential">Sequential (reviewers approve in order)</SelectItem>
+                      <SelectItem value="committee">Committee (all must approve)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+              <Separator />
+              <div>
+                <Label>Reviewer Pool — Authorized Approver Emails</Label>
+                <p className="text-xs text-muted-foreground mb-2">Comma-separated list of email addresses authorized to review and approve proposals and contracts</p>
+                <Textarea
+                  value={wfForm.reviewerPool || ""}
+                  onChange={e => updWf("reviewerPool", e.target.value)}
+                  placeholder="reviewer@company.com, manager@company.com, ..."
+                  rows={3}
+                  className="text-sm font-mono"
+                  data-testid="textarea-reviewer-pool"
+                />
+                {wfForm.reviewerPool && (
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {String(wfForm.reviewerPool).split(",").map(email => email.trim()).filter(Boolean).map(email => (
+                      <span key={email} className="inline-flex items-center gap-1 text-xs bg-primary/10 text-primary rounded-full px-2 py-0.5">
+                        <Users className="h-2.5 w-2.5" /> {email}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               <Separator />
               <div className="flex items-center justify-between">
@@ -4448,6 +4566,7 @@ function SettingsSection() {
                 { key: "contractSigOverdueDays", label: "Signature Overdue Reminder", hint: "Days after sending before overdue warning" },
                 { key: "contractRenewalWarningDays", label: "Renewal Warning", hint: "Days before contract end to warn of upcoming renewal" },
                 { key: "contractExpiryWarningDays", label: "Expiry Warning", hint: "Days before expiry to send expiry warning" },
+                { key: "contractRenegotiationWarningDays", label: "Renegotiation Warning", hint: "Days before renegotiation deadline to send alert" },
               ].map(({ key, label, hint }) => (
                 <div key={key} className="flex items-center justify-between gap-4">
                   <div className="flex-1">
@@ -4492,11 +4611,28 @@ function SettingsSection() {
       {/* ── NOTIFICATIONS TAB ── */}
       {settingsTab === "notifications" && (
         <div className="space-y-3">
+          {(!emailConfigured || !smsConfigured) && (
+            <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg text-xs">
+              <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium text-amber-800 dark:text-amber-300">Some notification channels are unavailable</p>
+                <p className="text-amber-700 dark:text-amber-400 mt-0.5">
+                  {!emailConfigured && <span>Email (SMTP) is not configured — toggles disabled. </span>}
+                  {!smsConfigured && <span>SMS (Twilio) is not configured — toggles disabled. </span>}
+                  Contact your platform administrator to enable these channels.
+                </p>
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 px-3 py-1 border-b text-xs font-semibold text-muted-foreground uppercase">
             <span>Event</span>
             <span className="w-14 text-center">In-App</span>
-            <span className="w-14 text-center">Email</span>
-            <span className="w-14 text-center">SMS</span>
+            <span className="w-14 text-center">
+              Email {!emailConfigured && <span className="text-amber-500">⚠</span>}
+            </span>
+            <span className="w-14 text-center">
+              SMS {!smsConfigured && <span className="text-amber-500">⚠</span>}
+            </span>
           </div>
           {NOTIFICATION_EVENTS.map(ev => {
             const rule = notifRules[ev.key] || { inApp: true, email: false, sms: false };
@@ -4506,16 +4642,23 @@ function SettingsSection() {
                   <p className="text-sm font-medium">{ev.label}</p>
                   <p className="text-xs text-muted-foreground">{ev.desc}</p>
                 </div>
-                {(["inApp","email","sms"] as const).map(ch => (
-                  <div key={ch} className="w-14 flex justify-center">
-                    <button onClick={() => toggleNotif(ev.key, ch)}
-                      className={cn("h-5 w-9 rounded-full transition-colors", rule[ch] ? "bg-primary" : "bg-muted-foreground/30")}
-                      data-testid={`toggle-notif-${ev.key}-${ch}`}>
-                      <span className={cn("block h-4 w-4 rounded-full bg-white shadow mx-auto transition-transform",
-                        rule[ch] ? "translate-x-2" : "-translate-x-2")} />
-                    </button>
-                  </div>
-                ))}
+                {(["inApp","email","sms"] as const).map(ch => {
+                  const providerAvailable = ch === "email" ? emailConfigured : ch === "sms" ? smsConfigured : true;
+                  const isOn = rule[ch] && providerAvailable;
+                  return (
+                    <div key={ch} className="w-14 flex justify-center" title={!providerAvailable ? `${ch === "email" ? "SMTP" : "SMS"} not configured` : undefined}>
+                      <button onClick={() => providerAvailable && toggleNotif(ev.key, ch)}
+                        disabled={!providerAvailable}
+                        className={cn("h-5 w-9 rounded-full transition-colors",
+                          !providerAvailable ? "opacity-30 cursor-not-allowed bg-muted-foreground/20" :
+                          isOn ? "bg-primary" : "bg-muted-foreground/30")}
+                        data-testid={`toggle-notif-${ev.key}-${ch}`}>
+                        <span className={cn("block h-4 w-4 rounded-full bg-white shadow mx-auto transition-transform",
+                          isOn ? "translate-x-2" : "-translate-x-2")} />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             );
           })}
@@ -4604,7 +4747,17 @@ function SettingsSection() {
             </div>
             <div>
               <Label>Work Type Tags</Label>
-              <Input value={tplForm.workTypeTags || ""} onChange={e => setTplForm(f => ({ ...f, workTypeTags: e.target.value }))} placeholder="e.g. hourly, fixed-price, retainer" data-testid="input-tpl-work-types" />
+              <p className="text-xs text-muted-foreground mb-1">Separate tags with commas — e.g. hourly, fixed-price, retainer</p>
+              <Input value={tplForm.workTypeTags || ""} onChange={e => setTplForm(f => ({ ...f, workTypeTags: e.target.value }))} placeholder="hourly, fixed-price, retainer" data-testid="input-tpl-work-types" />
+              {tplForm.workTypeTags && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {String(tplForm.workTypeTags).split(",").map(tag => tag.trim()).filter(Boolean).map(tag => (
+                    <span key={tag} className="inline-flex items-center gap-1 text-xs bg-primary/10 text-primary rounded-full px-2.5 py-0.5 font-medium">
+                      <Tag className="h-2.5 w-2.5" /> {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
             <div>
               <Label>Description</Label>

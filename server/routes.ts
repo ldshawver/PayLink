@@ -8350,17 +8350,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
       if (!wId) return res.status(400).json({ message: "Worker not found" });
       const { businessName, tagline, primaryColor, secondaryColor, fontFamily, coverNote, signatureText, websiteUrl, licenseNumber, insuranceInfo, footerText, showLogo, showLicenseNumber, contactName, address, phone, contactEmail } = req.body;
-      // Support both file upload (multipart) and logoPath reference
+      const shouldRemoveLogo = req.body.removeLogo === "true";
+      // New upload takes precedence; if removeLogo=true, set to NULL; otherwise retain existing
       const logoUploadPath = req.file ? `/uploads/${req.file.filename}` : null;
-      // logoUrl: prefer new upload, fallback to submitted url, keep existing if neither
-      const logoUrlValue = logoUploadPath || req.body.logoUrl || null;
+      const logoUrlValue = logoUploadPath || (shouldRemoveLogo ? null : req.body.logoUrl || null);
+      const logoPathValue = logoUploadPath || (shouldRemoveLogo ? null : null);
       const result = await db.execute(sql`
         INSERT INTO contractor_branding (worker_id, business_name, tagline, logo_path, logo_url, primary_color, secondary_color, font_family, cover_note, signature_text, website_url, license_number, insurance_info, footer_text, show_logo, show_license_number, contact_name, address, phone, contact_email)
-        VALUES (${wId}, ${businessName || null}, ${tagline || null}, ${logoUploadPath}, ${logoUrlValue}, ${primaryColor || "#0f766e"}, ${secondaryColor || "#64748b"}, ${fontFamily || "Inter"}, ${coverNote || null}, ${signatureText || null}, ${websiteUrl || null}, ${licenseNumber || null}, ${insuranceInfo || null}, ${footerText || null}, ${showLogo !== "false"}, ${showLicenseNumber !== "false"}, ${contactName || null}, ${address || null}, ${phone || null}, ${contactEmail || null})
+        VALUES (${wId}, ${businessName || null}, ${tagline || null}, ${logoPathValue}, ${logoUrlValue}, ${primaryColor || "#0f766e"}, ${secondaryColor || "#64748b"}, ${fontFamily || "Inter"}, ${coverNote || null}, ${signatureText || null}, ${websiteUrl || null}, ${licenseNumber || null}, ${insuranceInfo || null}, ${footerText || null}, ${showLogo !== "false"}, ${showLicenseNumber !== "false"}, ${contactName || null}, ${address || null}, ${phone || null}, ${contactEmail || null})
         ON CONFLICT (worker_id) DO UPDATE SET
           business_name = EXCLUDED.business_name, tagline = EXCLUDED.tagline,
-          logo_path = COALESCE(EXCLUDED.logo_path, contractor_branding.logo_path),
-          logo_url = COALESCE(EXCLUDED.logo_url, contractor_branding.logo_url),
+          logo_path = CASE WHEN ${shouldRemoveLogo} THEN NULL ELSE COALESCE(EXCLUDED.logo_path, contractor_branding.logo_path) END,
+          logo_url = CASE WHEN ${shouldRemoveLogo} THEN NULL ELSE COALESCE(EXCLUDED.logo_url, contractor_branding.logo_url) END,
           primary_color = EXCLUDED.primary_color, secondary_color = EXCLUDED.secondary_color,
           font_family = EXCLUDED.font_family, cover_note = EXCLUDED.cover_note,
           signature_text = EXCLUDED.signature_text, website_url = EXCLUDED.website_url,
