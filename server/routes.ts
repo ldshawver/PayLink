@@ -21658,6 +21658,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   // ── Feature Registry API (Task #39) ────────────────────────────────────────
 
+  // Boolean coercion helper for PostgreSQL boolean columns (handles true, 'true', 't')
+  const toBool = (v: unknown): boolean => v === true || v === 'true' || v === 't';
+
   // GET /api/feature-registry — list all features (platform roles only)
   app.get("/api/feature-registry", requireAuth, requirePlatformRole(), async (req, res) => {
     try {
@@ -21719,7 +21722,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const rows = result.rows ?? (result as any);
       const flags: Record<string, boolean> = {};
       for (const row of rows) {
-        flags[row.feature_key] = row.enabled === true || row.enabled === 'true';
+        flags[row.feature_key] = toBool(row.enabled);
       }
       res.json({ all: false, flags });
     } catch (e: any) {
@@ -21914,11 +21917,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const row = rows[0];
         let effective: boolean;
         if (row.override_enabled == null) {
-          effective = row.default_on === true || row.default_on === 'true';
+          effective = toBool(row.default_on);
         } else if (row.override_expires_at && new Date(row.override_expires_at) < new Date()) {
-          effective = row.default_on === true || row.default_on === 'true';
+          effective = toBool(row.default_on);
         } else {
-          effective = row.override_enabled === true || row.override_enabled === 'true';
+          effective = toBool(row.override_enabled);
         }
 
         if (!effective) {

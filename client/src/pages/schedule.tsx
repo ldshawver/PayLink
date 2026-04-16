@@ -7,6 +7,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useTimeFormat, formatShiftTime, formatShiftRange } from "@/hooks/use-time-format";
 import type { Schedule, Worker, Company, RecurringSchedule, ShiftOffer, Department } from "@shared/schema";
 import { isManagerOrAbove } from "@/lib/roles";
+import { useFeatureFlag } from "@/lib/featureFlags";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -652,6 +653,7 @@ export default function SchedulePage() {
   const { user } = useAuth();
   const timeFormat = useTimeFormat();
   const isAdminOrManager = isManagerOrAbove(user?.role || "");
+  const marketplaceEnabled = useFeatureFlag("tenant.schedule.marketplace");
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useTabParam("schedules");
   const [viewMode, setViewMode] = useState<ViewMode>("week");
@@ -1219,15 +1221,17 @@ export default function SchedulePage() {
             <TrendingUp className="h-4 w-4 mr-1" />
             Labor Projection
           </TabsTrigger>
-          <TabsTrigger value="marketplace" data-testid="tab-marketplace">
-            <RefreshCw className="h-4 w-4 mr-1" />
-            Shift Marketplace
-            {shiftOffers.filter(o => o.status === "open" || o.status === "claimed").length > 0 && (
-              <Badge className="ml-1 h-4 px-1 text-xs" variant="destructive">
-                {shiftOffers.filter(o => o.status === "open" || o.status === "claimed").length}
-              </Badge>
-            )}
-          </TabsTrigger>
+          {marketplaceEnabled && (
+            <TabsTrigger value="marketplace" data-testid="tab-marketplace">
+              <RefreshCw className="h-4 w-4 mr-1" />
+              Shift Marketplace
+              {shiftOffers.filter(o => o.status === "open" || o.status === "claimed").length > 0 && (
+                <Badge className="ml-1 h-4 px-1 text-xs" variant="destructive">
+                  {shiftOffers.filter(o => o.status === "open" || o.status === "claimed").length}
+                </Badge>
+              )}
+            </TabsTrigger>
+          )}
         </TabsList>
         </div>
 
