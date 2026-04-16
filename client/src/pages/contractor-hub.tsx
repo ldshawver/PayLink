@@ -3643,6 +3643,9 @@ function DocumentsSection() {
   const [companyFilter, setCompanyFilter] = useState("all");
   const [emailSending, setEmailSending] = useState<string | null>(null);
   const [expandedAudit, setExpandedAudit] = useState<string | null>(null);
+  const { data: docSectionUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
+  const canArchive = docSectionUser?.role === "admin" || docSectionUser?.role === "manager" ||
+    (docSectionUser?.role || "").startsWith("tenant_") || (docSectionUser?.role || "").startsWith("platform_");
 
   type DocRow = {
     id: string; type: string; title: string; status: string; date: string;
@@ -3711,7 +3714,11 @@ function DocumentsSection() {
     if (costCenterFilter !== "all" && d.costCenter !== costCenterFilter) return false;
     if (jobFilter !== "all" && d.workType !== jobFilter) return false;
     if (companyFilter !== "all" && d.companyId !== companyFilter) return false;
-    if (search && !d.title.toLowerCase().includes(search.toLowerCase())) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      const matchFields = [d.title, d.contractorName, d.companyName, d.costCenter, d.workType, d.status, d.type].filter(Boolean).map(f => f!.toLowerCase());
+      if (!matchFields.some(f => f.includes(q))) return false;
+    }
     if (dateFrom && new Date(d.date) < new Date(dateFrom)) return false;
     if (dateTo && new Date(d.date) > new Date(dateTo + "T23:59:59")) return false;
     return true;
@@ -3987,7 +3994,7 @@ function DocumentsSection() {
                         : <Mail className={cn("h-3.5 w-3.5", !emailProviderConfigured && "opacity-40")} />}
                     </Button>
                   )}
-                  {!doc.immutable && (doc.type === "proposal" || doc.type === "contract") && (
+                  {canArchive && !doc.immutable && (doc.type === "proposal" || doc.type === "contract") && (
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground" title="Archive"
                       onClick={() => setArchiveConfirm({ id: doc.id, type: doc.type, title: doc.title })}
                       data-testid={`btn-archive-doc-${doc.id}`}>

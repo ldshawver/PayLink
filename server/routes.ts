@@ -8349,6 +8349,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const isPlatform = (user?.role || "").startsWith("platform_");
       // Only platform roles can create global templates
       const globalFlag = isPlatform && isGlobal === true;
+      // Enforce single-default: if creating as default, clear other defaults for this company + type
+      if (isDefault) {
+        const clearCid = user?.companyId || null;
+        const clearType = templateType || "proposal";
+        if (clearCid) {
+          await db.execute(sql`UPDATE contractor_templates SET is_default = FALSE WHERE company_id = ${clearCid} AND template_type = ${clearType} AND is_default = TRUE`);
+        } else if (globalFlag) {
+          await db.execute(sql`UPDATE contractor_templates SET is_default = FALSE WHERE company_id IS NULL AND template_type = ${clearType} AND is_default = TRUE`);
+        }
+      }
       const result = await db.execute(sql`
         INSERT INTO contractor_templates (company_id, template_type, name, description, industry, body_json, default_payment_terms, default_scope_template, default_assumptions, default_exclusions, default_warranty, is_global, is_default, layout_variant, work_type_tags, is_active, created_by_user_id)
         VALUES (${user?.companyId || null}, ${templateType || "proposal"}, ${name}, ${description || null}, ${industry || null}, ${bodyJson || null}, ${defaultPaymentTerms || null}, ${defaultScopeTemplate || null}, ${defaultAssumptions || null}, ${defaultExclusions || null}, ${defaultWarranty || null}, ${globalFlag}, ${isDefault || false}, ${layoutVariant || "standard"}, ${workTypeTags || null}, ${isActive !== false}, ${req.session.userId})
@@ -8371,6 +8381,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Non-platform admins can only edit their own company's templates
       if (!isPlatform && tpl.company_id !== user?.companyId) return res.status(403).json({ message: "Access denied" });
       const { name, description, templateType, industry, bodyJson, defaultPaymentTerms, defaultScopeTemplate, defaultAssumptions, defaultExclusions, defaultWarranty, isActive, isDefault, layoutVariant, workTypeTags } = req.body;
+      // Enforce single-default: if setting isDefault=true, clear other defaults for this company + type
+      if (isDefault === true) {
+        const clearType = templateType || tpl.template_type || "proposal";
+        if (tpl.company_id) {
+          await db.execute(sql`UPDATE contractor_templates SET is_default = FALSE WHERE company_id = ${tpl.company_id} AND template_type = ${clearType} AND id <> ${req.params.id} AND is_default = TRUE`);
+        } else if (tpl.is_global) {
+          await db.execute(sql`UPDATE contractor_templates SET is_default = FALSE WHERE company_id IS NULL AND template_type = ${clearType} AND id <> ${req.params.id} AND is_default = TRUE`);
+        }
+      }
       const result = await db.execute(sql`
         UPDATE contractor_templates SET
           name = COALESCE(${name ?? null}, name),
