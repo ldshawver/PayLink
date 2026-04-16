@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn } from "@/lib/utils";
+import { cn, normalizeTemplate } from "@/lib/utils";
 import {
   FileText, Plus, Send, CheckCircle, XCircle, Clock, DollarSign, AlertTriangle,
   Edit, Trash2, Eye, ChevronRight, Sparkles, Paperclip, History, RotateCcw,
@@ -4654,14 +4654,7 @@ function SettingsSection() {
                           <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setDefaultTplMutation.mutate(tpl.id)} data-testid={`btn-set-default-${tpl.id}`}>Set Default</Button>
                         )}
                         <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => {
-                          setTplForm({
-                            ...tpl,
-                            templateType: tpl.template_type || tpl.templateType,
-                            isActive: tpl.is_active ?? tpl.isActive ?? true,
-                            isDefault: tpl.is_default ?? tpl.isDefault ?? false,
-                            layoutVariant: tpl.layout_variant || tpl.layoutVariant || "standard",
-                            workTypeTags: tpl.work_type_tags || tpl.workTypeTags || "",
-                          });
+                          setTplForm(normalizeTemplate(tpl));
                           setTplDialog({ open: true, tpl });
                         }} data-testid={`btn-edit-tpl-${tpl.id}`}>
                           <Edit className="h-3.5 w-3.5" />

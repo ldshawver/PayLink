@@ -6698,13 +6698,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.getUser(userId);
       const userRole = user?.role || "employee";
       const companyId = user?.companyId;
-      if (!companyId) return res.status(400).json({ message: "No company" });
+      const isPlatformUser = (userRole).startsWith("platform_");
+      // Platform users have no companyId — require a cid query param or return all
+      if (!companyId && !isPlatformUser) return res.status(400).json({ message: "No company" });
 
       let rows: any[];
       const showArchived = req.query.showArchived === "true";
+      const filterCompanyId = isPlatformUser ? (req.query.companyId as string | undefined) : companyId;
       const isAdminRole = ["admin", "manager", "supervisor"].includes(userRole) || userRole.startsWith("tenant_") || userRole.startsWith("platform_");
       if (isAdminRole) {
-        // Admins see all proposals targeted at their company
+        // Admins see proposals targeted at their company (or all companies for platform users)
+        const companyFilter = filterCompanyId ? sql`AND cp.company_id = ${filterCompanyId}` : sql``;
         const result = showArchived
           ? await db.execute(sql`
               SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email,
@@ -6712,7 +6716,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
               LEFT JOIN companies co ON co.id = cp.company_id
-              WHERE cp.company_id = ${companyId}
+              WHERE 1=1 ${companyFilter}
               ORDER BY cp.created_at DESC
             `)
           : await db.execute(sql`
@@ -6721,8 +6725,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
               LEFT JOIN companies co ON co.id = cp.company_id
-              WHERE cp.company_id = ${companyId}
-                AND (cp.is_archived IS NOT TRUE)
+              WHERE (cp.is_archived IS NOT TRUE) ${companyFilter}
               ORDER BY cp.created_at DESC
             `);
         rows = result.rows ?? (result as any);
@@ -8331,9 +8334,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const { name, description, templateType, industry, bodyJson, defaultPaymentTerms, defaultScopeTemplate, defaultAssumptions, defaultExclusions, defaultWarranty, isGlobal, isDefault, layoutVariant, workTypeTags, isActive } = req.body;
       if (!name) return res.status(400).json({ message: "name is required" });
       const user = await storage.getUser(req.session.userId!);
-      const isPlatform = (user?.role || "").startsWith("platform_");
-      // Only platform roles can create global templates
-      const globalFlag = isPlatform && isGlobal === true;
+      const isPlatformAdmin = user?.role === "platform_super_admin" || user?.role === "platform_admin";
+      // Only platform_super_admin / platform_admin can create global templates
+      const globalFlag = isPlatformAdmin && isGlobal === true;
+      // Block other platform roles (sales, support, billing, auditor) from creating global templates
+      if (isGlobal === true && !isPlatformAdmin) {
+        return res.status(403).json({ message: "platform_super_admin or platform_admin role required to create global templates" });
+      }
       // Enforce single-default: if creating as default, clear other defaults for this company + type
       if (isDefault) {
         const clearCid = user?.companyId || null;
@@ -8357,14 +8364,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       // Verify template ownership before mutating
       const user = await storage.getUser(req.session.userId!);
-      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isPlatformAdmin = user?.role === "platform_super_admin" || user?.role === "platform_admin";
       const tplRes = await db.execute(sql`SELECT id, company_id, is_global FROM contractor_templates WHERE id = ${req.params.id}`);
       if (!tplRes.rows[0]) return res.status(404).json({ message: "Template not found" });
       const tpl = tplRes.rows[0] as any;
-      // Non-platform admins cannot mutate global/platform templates (company_id=null or is_global=true)
-      if (!isPlatform && (!tpl.company_id || tpl.is_global)) return res.status(403).json({ message: "Platform role required to modify global templates" });
-      // Non-platform admins can only edit their own company's templates
-      if (!isPlatform && tpl.company_id !== user?.companyId) return res.status(403).json({ message: "Access denied" });
+      // Only platform_super_admin / platform_admin can mutate global/platform templates
+      if (!tpl.company_id || tpl.is_global) {
+        if (!isPlatformAdmin) return res.status(403).json({ message: "platform_super_admin or platform_admin role required to modify global templates" });
+      } else {
+        // For company-owned templates, any platform admin or the owning tenant can edit
+        const isAnyPlatform = (user?.role || "").startsWith("platform_");
+        if (!isAnyPlatform && tpl.company_id !== user?.companyId) return res.status(403).json({ message: "Access denied" });
+      }
       const { name, description, templateType, industry, bodyJson, defaultPaymentTerms, defaultScopeTemplate, defaultAssumptions, defaultExclusions, defaultWarranty, isActive, isDefault, layoutVariant, workTypeTags } = req.body;
       // Enforce single-default: if setting isDefault=true, clear other defaults for this company + type
       if (isDefault === true) {
@@ -8404,13 +8415,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       // Verify template ownership before soft-deleting
       const user = await storage.getUser(req.session.userId!);
-      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isPlatformAdmin = user?.role === "platform_super_admin" || user?.role === "platform_admin";
       const tplRes = await db.execute(sql`SELECT id, company_id, is_global FROM contractor_templates WHERE id = ${req.params.id}`);
       if (!tplRes.rows[0]) return res.status(404).json({ message: "Template not found" });
       const tpl = tplRes.rows[0] as any;
-      // Non-platform admins cannot delete global/platform templates
-      if (!isPlatform && (!tpl.company_id || tpl.is_global)) return res.status(403).json({ message: "Platform role required to delete global templates" });
-      if (!isPlatform && tpl.company_id !== user?.companyId) return res.status(403).json({ message: "Access denied" });
+      // Only platform_super_admin / platform_admin can delete global/platform templates
+      if (!tpl.company_id || tpl.is_global) {
+        if (!isPlatformAdmin) return res.status(403).json({ message: "platform_super_admin or platform_admin role required to delete global templates" });
+      } else {
+        const isAnyPlatform = (user?.role || "").startsWith("platform_");
+        if (!isAnyPlatform && tpl.company_id !== user?.companyId) return res.status(403).json({ message: "Access denied" });
+      }
       await db.execute(sql`UPDATE contractor_templates SET is_active = FALSE, updated_at = NOW() WHERE id = ${req.params.id}`);
       res.json({ success: true });
     } catch (e: any) { res.status(500).json({ message: "Failed to delete template: " + e.message }); }
@@ -8696,21 +8711,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const user = await storage.getUser(req.session.userId!);
       const cid = user?.companyId;
-      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isPlatformAdmin = user?.role === "platform_super_admin" || user?.role === "platform_admin";
+      const isAnyPlatform = (user?.role || "").startsWith("platform_");
       const tplRes = await db.execute(sql`SELECT * FROM contractor_templates WHERE id = ${req.params.id}`);
       if (!tplRes.rows[0]) return res.status(404).json({ message: "Template not found" });
       const tpl = tplRes.rows[0] as any;
-      // Block tenant users from mutating shared global templates (would affect all tenants)
-      if (!isPlatform && (!tpl.company_id || tpl.is_global)) {
-        return res.status(403).json({ message: "Access denied: only platform admins can set a global template as default. Create a company-specific copy first." });
-      }
-      // Tenant boundary check: non-platform users can only set defaults for their own company's templates
-      if (!isPlatform && tpl.company_id && tpl.company_id !== cid) {
-        return res.status(403).json({ message: "Access denied: cannot set default for another company's template" });
+      // Only platform_super_admin / platform_admin can set a global template as default
+      if (!tpl.company_id || tpl.is_global) {
+        if (!isPlatformAdmin) return res.status(403).json({ message: "platform_super_admin or platform_admin role required to set a global template as default" });
+      } else {
+        // For company-owned templates, enforce tenant boundary
+        if (!isAnyPlatform && tpl.company_id && tpl.company_id !== cid) {
+          return res.status(403).json({ message: "Access denied: cannot set default for another company's template" });
+        }
       }
       // Clear existing defaults for same type scoped to this company only
       await db.execute(sql`UPDATE contractor_templates SET is_default = FALSE WHERE template_type = ${tpl.template_type} AND company_id = ${cid}`);
-      if (isPlatform) {
+      if (isPlatformAdmin) {
         // Platform admins may also clear global defaults for this type
         await db.execute(sql`UPDATE contractor_templates SET is_default = FALSE WHERE template_type = ${tpl.template_type} AND is_global = TRUE`);
       }
