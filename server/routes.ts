@@ -8011,6 +8011,45 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to download invoice: " + e.message }); }
   });
 
+  // ── Proposal Download ─────────────────────────────────────────────────────
+  app.get("/api/contractor-proposals/:id/download", requireAuth, async (req, res) => {
+    try {
+      const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      if (!propRes.rows[0]) return res.status(404).json({ message: "Proposal not found" });
+      const prop = propRes.rows[0] as any;
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
+      const isAdmin = (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_") || user?.role === "admin" || user?.role === "manager";
+      if (!isAdmin && prop.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      const lineItemsRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${req.params.id}`);
+      const exportData = { ...prop, lineItems: lineItemsRes.rows, exportedAt: new Date().toISOString() };
+      const filename = `proposal-${(prop.proposal_number || req.params.id).replace(/[^a-z0-9]/gi, "_")}.json`;
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader("Content-Type", "application/json");
+      res.json(exportData);
+    } catch (e: any) { res.status(500).json({ message: "Failed to download proposal: " + e.message }); }
+  });
+
+  // ── Payment Download ──────────────────────────────────────────────────────
+  app.get("/api/contractor-payments/:id/download", requireAuth, async (req, res) => {
+    try {
+      const payRes = await db.execute(sql`SELECT * FROM contractor_payments WHERE id = ${req.params.id}`);
+      if (!payRes.rows[0]) return res.status(404).json({ message: "Payment not found" });
+      const pay = payRes.rows[0] as any;
+      const user = await storage.getUser(req.session.userId!);
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
+      const isAdmin = (user?.role || "").startsWith("tenant_") || (user?.role || "").startsWith("platform_") || user?.role === "admin" || user?.role === "manager";
+      if (!isAdmin && pay.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      const exportData = { ...pay, exportedAt: new Date().toISOString() };
+      const filename = `payment-receipt-${req.params.id.slice(0, 8)}.json`;
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader("Content-Type", "application/json");
+      res.json(exportData);
+    } catch (e: any) { res.status(500).json({ message: "Failed to download payment: " + e.message }); }
+  });
+
   // ── Invoice: Request Override ─────────────────────────────────────────────
   app.post("/api/contractor-invoices/:id/request-override", requireAuth, async (req, res) => {
     try {

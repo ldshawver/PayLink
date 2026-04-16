@@ -3620,6 +3620,7 @@ function DocumentsSection() {
   const { data: contracts = [] } = useQuery<Contract[]>({
     queryKey: ["/api/contractor-contracts"],
     queryFn: async () => { const r = await fetch("/api/contractor-contracts", { credentials: "include" }); return r.ok ? r.json() : []; },
+    select: (d: any) => snakeToCamel(d),
   });
   const { data: invoices = [] } = useQuery<Invoice[]>({
     queryKey: ["/api/contractor-invoices"],
@@ -3628,7 +3629,13 @@ function DocumentsSection() {
   const { data: payments = [] } = useQuery<Payment[]>({
     queryKey: ["/api/contractor-payments"],
     queryFn: async () => { const r = await fetch("/api/contractor-payments", { credentials: "include" }); return r.ok ? r.json() : []; },
+    select: (d: any) => snakeToCamel(d),
   });
+  const { data: smtpCfg } = useQuery<{host?: string} | null>({
+    queryKey: ["/api/admin/smtp-config"],
+    queryFn: async () => { const r = await fetch("/api/admin/smtp-config", { credentials: "include" }); return r.ok ? r.json() : null; },
+  });
+  const emailProviderConfigured = !!(smtpCfg?.host);
 
   const [contractorFilter, setContractorFilter] = useState("all");
   const [costCenterFilter, setCostCenterFilter] = useState("all");
@@ -3717,15 +3724,18 @@ function DocumentsSection() {
     }
   }
 
+  const DOC_DOWNLOAD_ENDPOINTS: Record<string, string> = {
+    contract: "/api/contractor-contracts",
+    invoice: "/api/contractor-invoices",
+    proposal: "/api/contractor-proposals",
+    payment: "/api/contractor-payments",
+  };
+
   async function handleDownload(doc: DocRow) {
     try {
-      const endpoint = doc.type === "contract"
-        ? `/api/contractor-contracts/${doc.id}/download`
-        : doc.type === "invoice"
-        ? `/api/contractor-invoices/${doc.id}/download`
-        : null;
-      if (!endpoint) { toast({ title: "Download not available for this document type" }); return; }
-      const r = await fetch(endpoint, { credentials: "include" });
+      const base = DOC_DOWNLOAD_ENDPOINTS[doc.type];
+      if (!base) { toast({ title: "Download not available for this document type" }); return; }
+      const r = await fetch(`${base}/${doc.id}/download`, { credentials: "include" });
       if (!r.ok) { toast({ title: "Download failed", variant: "destructive" }); return; }
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
@@ -3911,38 +3921,38 @@ function DocumentsSection() {
                       <History className="h-3.5 w-3.5" />
                     </Button>
                   )}
-                  {(doc.type === "contract" || doc.type === "invoice" || doc.type === "proposal") && (
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="View document"
-                      onClick={() => {
-                        const url = doc.type === "payment"
-                          ? `/app/contractor-hub?section=payments`
-                          : `/api/contractor-${doc.type}s/${doc.id}/download`;
-                        window.open(url, "_blank");
-                      }}
-                      data-testid={`btn-view-doc-${doc.id}`}>
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </Button>
-                  )}
-                  {(doc.type === "contract" || doc.type === "invoice") && (
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Download"
-                      onClick={() => handleDownload(doc)} data-testid={`btn-download-doc-${doc.id}`}>
-                      <Download className="h-3.5 w-3.5" />
-                    </Button>
-                  )}
-                  {(doc.type === "contract" || doc.type === "invoice") && (
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Print (open in new tab)"
-                      onClick={() => window.open(`/api/contractor-${doc.type}s/${doc.id}/download`, "_blank")}
-                      data-testid={`btn-print-doc-${doc.id}`}>
-                      <Printer className="h-3.5 w-3.5" />
-                    </Button>
-                  )}
+                  {/* View — opens download URL in new tab for all types */}
+                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="View document"
+                    onClick={() => {
+                      const base = DOC_DOWNLOAD_ENDPOINTS[doc.type];
+                      if (base) window.open(`${base}/${doc.id}/download`, "_blank");
+                    }}
+                    data-testid={`btn-view-doc-${doc.id}`}>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Button>
+                  {/* Download — all document types */}
+                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Download"
+                    onClick={() => handleDownload(doc)} data-testid={`btn-download-doc-${doc.id}`}>
+                    <Download className="h-3.5 w-3.5" />
+                  </Button>
+                  {/* Print — all types (opens download URL so browser can print) */}
+                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Print (open in new tab)"
+                    onClick={() => {
+                      const base = DOC_DOWNLOAD_ENDPOINTS[doc.type];
+                      if (base) window.open(`${base}/${doc.id}/download`, "_blank");
+                    }}
+                    data-testid={`btn-print-doc-${doc.id}`}>
+                    <Printer className="h-3.5 w-3.5" />
+                  </Button>
+                  {/* Email — gated by SMTP provider config; shown for sendable types */}
                   {(doc.type === "invoice" || doc.type === "proposal" || doc.type === "contract") && (
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Send via email"
-                      disabled={emailSending === doc.id}
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0"
+                      title={emailProviderConfigured ? "Send via email" : "Email provider not configured"}
+                      disabled={emailSending === doc.id || !emailProviderConfigured}
                       onClick={() => handleEmailDoc(doc)} data-testid={`btn-email-doc-${doc.id}`}>
                       {emailSending === doc.id
                         ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        : <Mail className="h-3.5 w-3.5" />}
+                        : <Mail className={cn("h-3.5 w-3.5", !emailProviderConfigured && "opacity-40")} />}
                     </Button>
                   )}
                   {!doc.immutable && (doc.type === "proposal" || doc.type === "contract") && (
