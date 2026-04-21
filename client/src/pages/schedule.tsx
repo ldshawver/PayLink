@@ -49,6 +49,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Calendar,
   ChevronLeft,
@@ -665,6 +666,15 @@ export default function SchedulePage() {
   const [showUnscheduled, setShowUnscheduled] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [showLaborCosts, setShowLaborCosts] = useState(false);
+  const [printDialogOpen, setPrintDialogOpen] = useState(false);
+  const [printOpts, setPrintOpts] = useState({
+    showNotes: true,
+    showLaborCosts: false,
+    showDailyTotals: true,
+    showWeeklyTotals: true,
+    showPositions: true,
+    showJobs: true,
+  });
   const [addScheduleOpen, setAddScheduleOpen] = useState(false);
   const [editScheduleOpen, setEditScheduleOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
@@ -1151,7 +1161,14 @@ export default function SchedulePage() {
   };
 
   const handlePrint = () => {
-    window.print();
+    setPrintOpts(prev => ({
+      ...prev,
+      showNotes,
+      showLaborCosts,
+      showDailyTotals,
+      showWeeklyTotals,
+    }));
+    setPrintDialogOpen(true);
   };
 
   const dailyTotals = useMemo(() => {
@@ -3026,6 +3043,212 @@ export default function SchedulePage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* ── Print Options Dialog ──────────────────────────────────── */}
+      <Dialog open={printDialogOpen} onOpenChange={setPrintDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Printer className="h-5 w-5" />
+              Print Schedule
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <p className="text-xs text-muted-foreground">
+              Choose what to include in the printed schedule. The output will be landscape-oriented and optimised for PDF.
+            </p>
+            {(
+              [
+                { key: "showNotes",        label: "Shift Notes" },
+                { key: "showPositions",    label: "Position / Role" },
+                { key: "showJobs",         label: "Job / Site" },
+                { key: "showDailyTotals",  label: "Daily Totals Row" },
+                { key: "showWeeklyTotals", label: "Weekly Hours per Employee" },
+                { key: "showLaborCosts",   label: "Projected Labor Costs" },
+              ] as const
+            ).map(({ key, label }) => (
+              <div key={key} className="flex items-center gap-3">
+                <Checkbox
+                  id={`print-opt-${key}`}
+                  checked={printOpts[key]}
+                  onCheckedChange={(v) => setPrintOpts(prev => ({ ...prev, [key]: !!v }))}
+                  data-testid={`checkbox-print-${key}`}
+                />
+                <label htmlFor={`print-opt-${key}`} className="text-sm cursor-pointer select-none">
+                  {label}
+                </label>
+              </div>
+            ))}
+          </div>
+          <DialogFooter className="gap-2">
+            <DialogClose asChild>
+              <Button variant="outline" size="sm">Cancel</Button>
+            </DialogClose>
+            <Button
+              size="sm"
+              onClick={() => { setPrintDialogOpen(false); setTimeout(() => window.print(), 80); }}
+              data-testid="button-confirm-print"
+            >
+              <Printer className="h-4 w-4 mr-1.5" />
+              Print / Save as PDF
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Hidden Print View (renders into @media print only) ────── */}
+      <div className="schedule-print-view" aria-hidden="true">
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "8px" }}>
+          <div>
+            <div style={{ fontSize: "14pt", fontWeight: 700, color: "#1e3a5f" }}>
+              {selectedCompany !== "all"
+                ? (companies.find(c => c.id === selectedCompany)?.name || "Schedule")
+                : "Schedule — All Companies"}
+            </div>
+            <div style={{ fontSize: "9pt", color: "#6b7280", marginTop: "2px" }}>
+              {viewDates.length > 0
+                ? `${DAY_NAMES[viewDates[0].getDay()]} ${formatShortDate(viewDates[0])} – ${DAY_NAMES[viewDates[viewDates.length - 1].getDay()]} ${formatShortDate(viewDates[viewDates.length - 1])}`
+                : ""}
+            </div>
+          </div>
+          <div style={{ fontSize: "8pt", color: "#9ca3af" }}>
+            Printed {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th className="name-col">Employee</th>
+              {viewDates.map(d => {
+                const ds = formatDate(d);
+                return (
+                  <th key={ds}>
+                    <div>{DAY_NAMES[d.getDay()]}</div>
+                    <div style={{ fontSize: "7.5pt", opacity: 0.85 }}>{formatShortDate(d)}</div>
+                  </th>
+                );
+              })}
+              {printOpts.showWeeklyTotals && <th style={{ minWidth: "64px" }}>Total</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {displayWorkers.map(worker => {
+              let weekHours = 0;
+              let weekShifts = 0;
+              let weekCost = 0;
+              const payRate = Number(worker.payRate || 0);
+
+              const cells = viewDates.map(d => {
+                const ds = formatDate(d);
+                const cellSchedules = schedules.filter(
+                  s => s.date === ds && s.workerId === worker.id && (selectedCompany === "all" || s.companyId === selectedCompany)
+                );
+                cellSchedules.forEach(s => {
+                  const h = parseTimeToHours(s.startTime, s.endTime);
+                  weekHours += h;
+                  weekCost += h * payRate;
+                  weekShifts++;
+                });
+                const approvedOff = timeOffRequests.filter((tor: any) =>
+                  tor.workerId === worker.id && tor.status === "approved" &&
+                  ds >= tor.startDate && ds <= tor.endDate
+                );
+                return (
+                  <td key={ds} style={{ textAlign: "center", verticalAlign: "top", minWidth: "90px" }}>
+                    {approvedOff.length > 0 && (
+                      <div className="timeoff-block">{approvedOff[0].requestType || "TIME OFF"}</div>
+                    )}
+                    {cellSchedules.map(s => {
+                      const h = parseTimeToHours(s.startTime, s.endTime);
+                      const pos = printOpts.showPositions && (s as any).positionId ? positions.find((p: any) => p.id === (s as any).positionId) : null;
+                      const job = printOpts.showJobs && (s as any).jobId ? jobs.find((j: any) => j.id === (s as any).jobId) : null;
+                      const cost = h * payRate;
+                      return (
+                        <div key={s.id} className={`shift-block ${s.status === "draft" ? "draft" : "published"}`}>
+                          <div className="shift-time">{formatShiftRange(s.startTime, s.endTime, timeFormat)}</div>
+                          <div className="shift-hours">{h}h{printOpts.showLaborCosts && payRate > 0 ? <span className="shift-cost"> · ${cost.toFixed(2)}</span> : null}</div>
+                          {pos && <div className="shift-meta">{pos.title}</div>}
+                          {job && <div className="shift-meta">{job.name}</div>}
+                          {printOpts.showNotes && s.note && <div className="shift-note">{s.note}</div>}
+                        </div>
+                      );
+                    })}
+                    {cellSchedules.length === 0 && approvedOff.length === 0 && (
+                      <span style={{ color: "#d1d5db", fontSize: "8pt" }}>—</span>
+                    )}
+                  </td>
+                );
+              });
+
+              return (
+                <tr key={worker.id}>
+                  <td className="name-col">
+                    <div>{worker.lastName}, {worker.firstName}</div>
+                    {worker.jobTitle && <div style={{ fontSize: "7pt", color: "#6b7280", fontWeight: 400 }}>{worker.jobTitle}</div>}
+                  </td>
+                  {cells}
+                  {printOpts.showWeeklyTotals && (
+                    <td className="total-col">
+                      <div style={{ fontSize: "8pt" }}>{weekShifts} shift{weekShifts !== 1 ? "s" : ""}</div>
+                      <div style={{ fontSize: "9pt" }}>{Math.round(weekHours * 10) / 10}h</div>
+                      {printOpts.showLaborCosts && payRate > 0 && (
+                        <div style={{ fontSize: "7.5pt", color: "#059669" }}>${weekCost.toFixed(2)}</div>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+
+            {/* Daily totals row */}
+            {printOpts.showDailyTotals && displayWorkers.length > 0 && (
+              <tr className="totals-row">
+                <td className="name-col" style={{ fontWeight: 700 }}>Daily Totals</td>
+                {viewDates.map(d => {
+                  const ds = formatDate(d);
+                  const t = dailyTotals[ds] || { shifts: 0, hours: 0, cost: 0 };
+                  return (
+                    <td key={ds}>
+                      <div style={{ fontSize: "8pt" }}>{t.shifts} shift{t.shifts !== 1 ? "s" : ""}</div>
+                      <div style={{ fontSize: "9pt", fontWeight: 700 }}>{t.hours}h</div>
+                      {printOpts.showLaborCosts && isAdminOrManager && (
+                        <div style={{ fontSize: "7.5pt", color: "#059669" }}>${t.cost.toFixed(2)}</div>
+                      )}
+                    </td>
+                  );
+                })}
+                {printOpts.showWeeklyTotals && (
+                  <td className="total-col">
+                    <div style={{ fontSize: "8pt" }}>{weeklyTotal.shifts} shifts</div>
+                    <div style={{ fontSize: "9pt" }}>{weeklyTotal.hours}h</div>
+                    {printOpts.showLaborCosts && isAdminOrManager && (
+                      <div style={{ fontSize: "7.5pt", color: "#059669" }}>${weeklyTotal.cost.toFixed(2)}</div>
+                    )}
+                  </td>
+                )}
+              </tr>
+            )}
+          </tbody>
+        </table>
+
+        {/* Legend */}
+        <div style={{ display: "flex", gap: "16px", marginTop: "8px", fontSize: "7pt", color: "#6b7280" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <div style={{ width: "10px", height: "10px", background: "#d1fae5", borderLeft: "3px solid #059669", borderRadius: "2px" }} />
+            Published
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <div style={{ width: "10px", height: "10px", background: "#fef3c7", borderLeft: "3px solid #d97706", borderRadius: "2px" }} />
+            Draft
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <div style={{ width: "10px", height: "10px", background: "#ffedd5", borderLeft: "3px solid #ea580c", borderRadius: "2px" }} />
+            Time Off
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
