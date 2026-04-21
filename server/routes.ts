@@ -528,6 +528,35 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/auth/recover", async (req, res) => {
+    try {
+      const { username, recoveryToken, newPassword } = req.body;
+      if (!username || !recoveryToken || !newPassword) {
+        return res.status(400).json({ message: "Username, recovery token, and new password are required" });
+      }
+      const envToken = process.env.RECOVERY_TOKEN;
+      if (!envToken) {
+        return res.status(503).json({ message: "Recovery is not enabled on this server. Set the RECOVERY_TOKEN environment variable to enable it." });
+      }
+      if (recoveryToken !== envToken) {
+        return res.status(401).json({ message: "Invalid recovery token" });
+      }
+      if (newPassword.length < 6) {
+        return res.status(400).json({ message: "New password must be at least 6 characters" });
+      }
+      const user = await storage.getUserByUsername(username);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      await storage.updateUser(user.id, { password: hashedPassword });
+      res.json({ message: "Password reset successfully. You can now sign in with your new password." });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Recovery failed" });
+    }
+  });
+
   app.post("/api/auth/logout", (req, res) => {
     req.session.destroy((err) => {
       if (err) return res.status(500).json({ message: "Logout failed" });

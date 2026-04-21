@@ -22,6 +22,9 @@ import {
   ArrowRight,
   LogOut,
   Activity,
+  KeyRound,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
 
@@ -143,10 +146,17 @@ function PunchButton({
 
 function AdminLoginForm() {
   const { login } = useAuth();
+  const { toast } = useToast();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showRecovery, setShowRecovery] = useState(false);
+  const [recoveryUsername, setRecoveryUsername] = useState("");
+  const [recoveryToken, setRecoveryToken] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -165,53 +175,173 @@ function AdminLoginForm() {
     }
   }
 
+  async function handleRecovery(e: React.FormEvent) {
+    e.preventDefault();
+    if (!recoveryUsername || !recoveryToken || !newPassword) {
+      toast({ title: "All fields are required", variant: "destructive" });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast({ title: "Passwords do not match", variant: "destructive" });
+      return;
+    }
+    if (newPassword.length < 6) {
+      toast({ title: "Password must be at least 6 characters", variant: "destructive" });
+      return;
+    }
+    setRecoveryLoading(true);
+    try {
+      const res = await apiRequest("POST", "/api/auth/recover", {
+        username: recoveryUsername,
+        recoveryToken,
+        newPassword,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast({ title: "Recovery failed", description: data.message, variant: "destructive" });
+      } else {
+        toast({ title: "Password reset", description: data.message });
+        setShowRecovery(false);
+        setUsername(recoveryUsername);
+        setRecoveryUsername("");
+        setRecoveryToken("");
+        setNewPassword("");
+        setConfirmPassword("");
+      }
+    } catch {
+      toast({ title: "Recovery failed", description: "Could not connect to server", variant: "destructive" });
+    } finally {
+      setRecoveryLoading(false);
+    }
+  }
+
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="space-y-2">
-        <Label htmlFor="username" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-          <User className="h-3.5 w-3.5" /> Username
-        </Label>
-        <Input
-          id="username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="Enter username"
-          autoComplete="username"
-          data-testid="input-username"
-        />
+    <div className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="username" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+            <User className="h-3.5 w-3.5" /> Username
+          </Label>
+          <Input
+            id="username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="Enter username"
+            autoComplete="username"
+            data-testid="input-username"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="password" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+            <Lock className="h-3.5 w-3.5" /> Password
+          </Label>
+          <Input
+            id="password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Enter password"
+            autoComplete="current-password"
+            data-testid="input-password"
+          />
+        </div>
+
+        {error && (
+          <p className="text-sm text-destructive text-center" data-testid="text-login-error">
+            {error}
+          </p>
+        )}
+
+        <Button
+          type="submit"
+          size="lg"
+          className="w-full"
+          disabled={loading || !username || !password}
+          data-testid="button-login"
+        >
+          {loading ? "Signing in..." : "Sign In"}
+        </Button>
+      </form>
+
+      <div className="border-t pt-3">
+        <button
+          type="button"
+          onClick={() => setShowRecovery(!showRecovery)}
+          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mx-auto"
+          data-testid="button-toggle-recovery"
+        >
+          <KeyRound className="h-3.5 w-3.5" />
+          Forgot your password?
+          {showRecovery ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+        </button>
+
+        {showRecovery && (
+          <form onSubmit={handleRecovery} className="mt-3 space-y-3 p-3 rounded-lg bg-muted/50 border">
+            <p className="text-xs text-muted-foreground">
+              To reset a password, your server administrator must set a <code className="bg-muted px-1 rounded text-xs">RECOVERY_TOKEN</code> environment variable. Enter that token below along with the username and new password.
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="rec-username" className="text-xs text-muted-foreground uppercase tracking-wider">Username</Label>
+              <Input
+                id="rec-username"
+                value={recoveryUsername}
+                onChange={(e) => setRecoveryUsername(e.target.value)}
+                placeholder="e.g. admin"
+                autoComplete="off"
+                data-testid="input-recovery-username"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="rec-token" className="text-xs text-muted-foreground uppercase tracking-wider">Recovery Token</Label>
+              <Input
+                id="rec-token"
+                value={recoveryToken}
+                onChange={(e) => setRecoveryToken(e.target.value)}
+                placeholder="Token set by server admin"
+                autoComplete="off"
+                data-testid="input-recovery-token"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="rec-newpw" className="text-xs text-muted-foreground uppercase tracking-wider">New Password</Label>
+              <Input
+                id="rec-newpw"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Min. 6 characters"
+                autoComplete="new-password"
+                data-testid="input-recovery-new-password"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="rec-confirmpw" className="text-xs text-muted-foreground uppercase tracking-wider">Confirm New Password</Label>
+              <Input
+                id="rec-confirmpw"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Re-enter new password"
+                autoComplete="new-password"
+                data-testid="input-recovery-confirm-password"
+              />
+            </div>
+            <Button
+              type="submit"
+              size="sm"
+              variant="secondary"
+              className="w-full"
+              disabled={recoveryLoading || !recoveryUsername || !recoveryToken || !newPassword || !confirmPassword}
+              data-testid="button-recovery-submit"
+            >
+              <KeyRound className="h-3.5 w-3.5 mr-1.5" />
+              {recoveryLoading ? "Resetting..." : "Reset Password"}
+            </Button>
+          </form>
+        )}
       </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="password" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-          <Lock className="h-3.5 w-3.5" /> Password
-        </Label>
-        <Input
-          id="password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="Enter password"
-          autoComplete="current-password"
-          data-testid="input-password"
-        />
-      </div>
-
-      {error && (
-        <p className="text-sm text-destructive text-center" data-testid="text-login-error">
-          {error}
-        </p>
-      )}
-
-      <Button
-        type="submit"
-        size="lg"
-        className="w-full"
-        disabled={loading || !username || !password}
-        data-testid="button-login"
-      >
-        {loading ? "Signing in..." : "Sign In"}
-      </Button>
-    </form>
+    </div>
   );
 }
 
