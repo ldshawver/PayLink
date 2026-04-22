@@ -14056,6 +14056,153 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to delete invoice") }); }
   });
 
+  // GET /api/invoices/:id/full — returns full invoice data with company + customer info for template rendering
+  app.get("/api/invoices/:id/full", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const inv = await storage.getInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.companyId && inv.companyId !== user.companyId) return res.status(403).json({ message: "Access denied" });
+
+      const [lineItems, companyRows] = await Promise.all([
+        storage.getInvoiceLineItems(req.params.id),
+        db.execute(sql`SELECT id, name, legal_name, address, city, state, zip, phone, email, logo_url FROM companies WHERE id = ${inv.companyId}`),
+      ]);
+      const company = (companyRows.rows[0] || {}) as any;
+
+      let customer: any = {};
+      if (inv.customerId) {
+        const custRows = await db.execute(sql`SELECT id, customer_name, business_name, email, phone, billing_address, billing_city, billing_state, billing_zip FROM customers WHERE id = ${inv.customerId}`);
+        customer = (custRows.rows[0] || {}) as any;
+      }
+
+      res.json({
+        ...inv,
+        lineItems,
+        companyName: company.name,
+        companyLegalName: company.legal_name,
+        companyAddress: company.address,
+        companyCity: company.city,
+        companyState: company.state,
+        companyZip: company.zip,
+        companyPhone: company.phone,
+        companyEmail: company.email,
+        companyLogoUrl: company.logo_url,
+        customerName: customer.customer_name,
+        customerBusinessName: customer.business_name,
+        customerEmail: customer.email,
+        customerPhone: customer.phone,
+        customerAddress: customer.billing_address,
+        customerCity: customer.billing_city,
+        customerState: customer.billing_state,
+        customerZip: customer.billing_zip,
+      });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to fetch invoice") }); }
+  });
+
+  // POST /api/invoices/:id/send — mark invoice as sent and optionally email the customer
+  app.post("/api/invoices/:id/send", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const inv = await storage.getInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.companyId && inv.companyId !== user.companyId) return res.status(403).json({ message: "Access denied" });
+
+      const updated = await storage.updateInvoice(req.params.id, {
+        status: "sent",
+        sentAt: new Date(),
+      });
+
+      const { sendEmail = false, customMessage } = req.body;
+      let emailSent = false;
+
+      if (sendEmail) {
+        try {
+          const { getTransporter } = await import("./notifications");
+          const smtp = await getTransporter();
+          if (smtp) {
+            const [companyRows, lineItems] = await Promise.all([
+              db.execute(sql`SELECT name, email, phone FROM companies WHERE id = ${inv.companyId}`),
+              storage.getInvoiceLineItems(req.params.id),
+            ]);
+            const company = (companyRows.rows[0] || {}) as any;
+
+            let customerEmail: string | null = null;
+            let customerName: string | null = null;
+            if (inv.customerId) {
+              const custRows = await db.execute(sql`SELECT customer_name, email FROM customers WHERE id = ${inv.customerId}`);
+              const cust = (custRows.rows[0] || {}) as any;
+              customerEmail = cust.email;
+              customerName = cust.customer_name;
+            }
+
+            if (customerEmail) {
+              const appUrl = process.env.APP_BASE_URL || "https://mypaylink.app";
+              const payLink = `${appUrl}/pay/${inv.id}`;
+              const dueDate = inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "";
+              const amount = parseFloat(inv.totalAmount || "0").toLocaleString("en-US", { style: "currency", currency: "USD" });
+
+              const lineRowsHtml = lineItems.map((li: any) =>
+                `<tr><td style="padding:6px 8px;border-bottom:1px solid #f3f4f6">${li.description}</td>
+                 <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:center">${li.quantity}</td>
+                 <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:right">$${parseFloat(li.unit_price || li.unitPrice || "0").toFixed(2)}</td>
+                 <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:right">$${parseFloat(li.amount || "0").toFixed(2)}</td></tr>`
+              ).join("");
+
+              const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+body{font-family:Arial,sans-serif;max-width:620px;margin:0 auto;color:#333;background:#f5f5f5}
+.card{background:#fff;border-radius:8px;overflow:hidden;margin:20px 0;box-shadow:0 1px 4px rgba(0,0,0,.1)}
+.header{background:linear-gradient(135deg,#0d9488,#0369a1);color:white;padding:24px 28px}
+.body{padding:24px 28px}
+.footer{background:#f9fafb;padding:14px 28px;font-size:12px;color:#6b7280;border-top:1px solid #e5e7eb}
+.btn{display:inline-block;background:linear-gradient(135deg,#0d9488,#0369a1);color:white!important;padding:13px 30px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:16px}
+table{width:100%;border-collapse:collapse;margin:12px 0}
+th{background:#f8fafc;padding:8px;text-align:left;font-size:13px;color:#64748b;border-bottom:2px solid #e2e8f0}
+th:last-child,th:nth-child(3),th:nth-child(2){text-align:right}th:nth-child(2){text-align:center}
+.total-row{font-weight:bold;font-size:16px;color:#0d9488}
+</style></head><body>
+<div class="card">
+<div class="header">
+<div style="font-size:22px;font-weight:bold">${company.name || "Invoice"}</div>
+<div style="margin-top:4px;opacity:.85">Invoice #${inv.invoiceNumber}</div>
+</div>
+<div class="body">
+<p style="margin:0 0 16px">Hello${customerName ? ` ${customerName}` : ""},</p>
+<p style="margin:0 0 16px">${customMessage || `You have a new invoice from ${company.name || "us"}. Please review and pay at your earliest convenience.`}</p>
+${lineItems.length > 0 ? `<table><thead><tr><th>Description</th><th>Qty</th><th>Unit Price</th><th>Amount</th></tr></thead><tbody>${lineRowsHtml}</tbody></table>` : ""}
+<div style="text-align:right;margin-top:8px">
+<span style="font-size:13px;color:#64748b">Total: </span><span class="total-row">${amount}</span>
+</div>
+${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#64748b">Due date: ${dueDate}</p>` : ""}
+<div style="text-align:center;margin:28px 0 16px">
+<a href="${payLink}" class="btn">View &amp; Pay Invoice →</a>
+</div>
+<p style="font-size:12px;color:#94a3b8;text-align:center">Or copy this link: <a href="${payLink}" style="color:#0d9488">${payLink}</a></p>
+</div>
+<div class="footer">Powered by PayLink · If you have questions, contact ${company.email || company.name || "us"}.</div>
+</div>
+</body></html>`;
+
+              await smtp.transporter.sendMail({
+                from: smtp.fromAddress,
+                to: customerEmail,
+                subject: `Invoice #${inv.invoiceNumber} from ${company.name || "PayLink"} — ${amount} due`,
+                html,
+                text: `Invoice #${inv.invoiceNumber} from ${company.name || "PayLink"}\nAmount: ${amount}\n${dueDate ? `Due: ${dueDate}\n` : ""}Pay online: ${payLink}`,
+              });
+              emailSent = true;
+            }
+          }
+        } catch (emailErr) {
+          console.warn("Invoice email send failed:", emailErr);
+        }
+      }
+
+      res.json({ ...updated, emailSent });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to send invoice") }); }
+  });
+
   // ══════════════════════════════════════════════════════════════════════
   // PAYMENTS
   // ══════════════════════════════════════════════════════════════════════
@@ -14200,31 +14347,81 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const { invoiceId } = req.params;
       const invoiceResult = await db.execute(sql`
-        SELECT i.*, c.name as company_name, c.id as company_id,
-          cust.customer_name as customer_name, cust.email as customer_email
+        SELECT i.*,
+          c.name as company_name, c.id as company_id,
+          c.address as company_address, c.city as company_city,
+          c.state as company_state, c.zip as company_zip,
+          c.phone as company_phone, c.email as company_email,
+          c.logo_url as company_logo_url,
+          cust.customer_name as customer_name, cust.email as customer_email,
+          cust.billing_address as customer_address, cust.billing_city as customer_city,
+          cust.billing_state as customer_state, cust.billing_zip as customer_zip,
+          cust.phone as customer_phone
         FROM invoices i
         JOIN companies c ON i.company_id = c.id
         LEFT JOIN customers cust ON i.customer_id = cust.id
         WHERE i.id = ${invoiceId}
       `);
-      const invoice = invoiceResult.rows[0];
+      const invoice = invoiceResult.rows[0] as any;
       if (!invoice) return res.status(404).json({ message: "Invoice not found" });
-      if (invoice.status === "paid") return res.json({ invoice, alreadyPaid: true });
+
+      const lineItemsResult = await db.execute(sql`
+        SELECT * FROM invoice_line_items WHERE invoice_id = ${invoiceId} ORDER BY sort_order ASC
+      `);
+      const lineItems = lineItemsResult.rows.map((li: any) => ({
+        id: li.id,
+        description: li.description,
+        quantity: li.quantity,
+        unitPrice: li.unit_price,
+        amount: li.amount,
+        taxable: li.taxable,
+      }));
+
+      const invoiceData = {
+        id: invoice.id,
+        invoiceNumber: invoice.invoice_number,
+        status: invoice.status,
+        issueDate: invoice.issue_date,
+        dueDate: invoice.due_date,
+        subtotal: invoice.subtotal,
+        taxRate: invoice.tax_rate,
+        taxAmount: invoice.tax_amount,
+        totalAmount: invoice.total_amount,
+        amountPaid: invoice.amount_paid,
+        amountDue: invoice.amount_due,
+        notes: invoice.notes,
+        paymentTerms: invoice.payment_terms,
+        templateStyle: invoice.template_style || "modern_clean",
+        companyName: invoice.company_name,
+        companyAddress: invoice.company_address,
+        companyCity: invoice.company_city,
+        companyState: invoice.company_state,
+        companyZip: invoice.company_zip,
+        companyPhone: invoice.company_phone,
+        companyEmail: invoice.company_email,
+        companyLogoUrl: invoice.company_logo_url,
+        customerName: invoice.customer_name,
+        customerEmail: invoice.customer_email,
+        customerAddress: invoice.customer_address,
+        customerCity: invoice.customer_city,
+        customerState: invoice.customer_state,
+        customerZip: invoice.customer_zip,
+        customerPhone: invoice.customer_phone,
+        lineItems,
+      };
+
+      if (invoice.status === "paid") return res.json({ invoice: invoiceData, alreadyPaid: true });
+
+      // Mark as viewed if not already
+      if (invoice.status === "sent") {
+        db.execute(sql`UPDATE invoices SET status = 'viewed', viewed_at = NOW() WHERE id = ${invoiceId} AND status = 'sent'`).catch(() => {});
+      }
 
       const configs = await storage.getPaymentMethodConfigs(invoice.company_id as string);
       const enabledConfigs = configs.filter(c => c.isEnabled && (c.methodType === 'ach' || c.methodType === 'card'));
 
       res.json({
-        invoice: {
-          id: invoice.id,
-          invoiceNumber: invoice.invoice_number,
-          totalAmount: invoice.total_amount,
-          status: invoice.status,
-          dueDate: invoice.due_date,
-          companyName: invoice.company_name,
-          customerName: invoice.customer_name,
-          customerEmail: invoice.customer_email,
-        },
+        invoice: invoiceData,
         paymentMethods: enabledConfigs.map(c => ({
           methodType: c.methodType,
           displayName: c.displayName,

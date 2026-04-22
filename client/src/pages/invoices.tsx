@@ -21,7 +21,7 @@ import {
   CalendarDays, Clock, CheckCircle, AlertCircle, XCircle, Copy, Link2,
   CreditCard, Building2, Zap, ArrowRight, Settings, Info, Sparkles,
   TrendingDown, Shield, Palette, RefreshCw, Bell, Mail, MessageSquare,
-  Pause, Play, MoreHorizontal,
+  Pause, Play, MoreHorizontal, Printer,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -30,6 +30,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { InvoicePreview } from "@/components/invoice-preview";
 import type { Invoice, Customer, Company } from "@shared/schema";
 
 // ── Invoice Template Styles ─────────────────────────────────────────────────
@@ -1118,6 +1119,177 @@ function RecurringBillingTab({ companyId, customers }: { companyId: string; cust
   );
 }
 
+// ── Invoice Preview Dialog ──────────────────────────────────────────────────
+function InvoicePreviewDialog({ invoiceId, companyId, open, onOpenChange, onSend }: {
+  invoiceId: string;
+  companyId: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSend?: () => void;
+}) {
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(false);
+  const [invoiceFull, setInvoiceFull] = useState<any>(null);
+
+  useEffect(() => {
+    if (!open || !invoiceId) return;
+    setLoading(true);
+    fetch(`/api/invoices/${invoiceId}/full`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => { setInvoiceFull(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [open, invoiceId]);
+
+  const handlePrint = () => {
+    const root = document.getElementById("invoice-preview-root");
+    if (!root) return;
+    const html = root.outerHTML;
+    const win = window.open("", "_blank", "width=900,height=700");
+    if (!win) return;
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invoice</title>
+<style>body{margin:0;padding:20px;background:#f5f5f5;font-family:Arial,sans-serif}
+@page{size:A4;margin:12mm}@media print{body{background:white;padding:0}}</style>
+</head><body>${html}<script>window.onload=()=>{window.print();window.close();}<\/script></body></html>`);
+    win.document.close();
+  };
+
+  const payLink = invoiceFull ? `${window.location.origin}/pay/${invoiceId}` : "";
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col p-0">
+        <DialogHeader className="px-6 pt-5 pb-3 border-b flex-shrink-0">
+          <div className="flex items-center justify-between">
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5 text-teal-600" />
+              {invoiceFull ? `Invoice #${invoiceFull.invoiceNumber}` : "Invoice Preview"}
+            </DialogTitle>
+            <div className="flex items-center gap-2 mr-8">
+              <Button variant="outline" size="sm" onClick={handlePrint} data-testid="button-print-invoice">
+                <Printer className="h-4 w-4 mr-1" /> Print / PDF
+              </Button>
+              {invoiceFull && (
+                <Button variant="outline" size="sm" onClick={() => {
+                  navigator.clipboard.writeText(payLink);
+                  toast({ title: "Payment link copied!" });
+                }} data-testid="button-copy-link-preview">
+                  <Link2 className="h-4 w-4 mr-1" /> Copy Pay Link
+                </Button>
+              )}
+              {onSend && invoiceFull?.status === "draft" && (
+                <Button size="sm" className="bg-teal-600 hover:bg-teal-700 text-white" onClick={() => { onOpenChange(false); onSend(); }} data-testid="button-send-from-preview">
+                  <Send className="h-4 w-4 mr-1" /> Send Invoice
+                </Button>
+              )}
+            </div>
+          </div>
+        </DialogHeader>
+        <div className="flex-1 overflow-y-auto p-6 bg-gray-50">
+          {loading ? (
+            <div className="flex items-center justify-center py-20">
+              <Loader2 className="h-8 w-8 animate-spin text-teal-500" />
+            </div>
+          ) : invoiceFull ? (
+            <InvoicePreview invoice={invoiceFull} />
+          ) : (
+            <p className="text-center text-muted-foreground py-10">Failed to load invoice</p>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Send Invoice Dialog ─────────────────────────────────────────────────────
+function SendInvoiceDialog({ invoice, companyId, open, onOpenChange }: {
+  invoice: Invoice | null;
+  companyId: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { toast } = useToast();
+  const [sendEmail, setSendEmail] = useState(true);
+  const [customMessage, setCustomMessage] = useState("");
+
+  const sendMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("POST", `/api/invoices/${invoice?.id}/send`, data),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/invoices?companyId=${companyId}`] });
+      const emailNote = data?.emailSent ? " Email sent to customer." : sendEmail ? " (Email could not be sent — check SMTP settings.)" : "";
+      toast({ title: `Invoice marked as sent.${emailNote}` });
+      onOpenChange(false);
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  if (!invoice) return null;
+  const payLink = `${window.location.origin}/pay/${invoice.id}`;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Send className="h-5 w-5 text-teal-600" /> Send Invoice #{invoice.invoiceNumber}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800 rounded-lg p-3">
+            <p className="text-sm font-medium text-teal-800 dark:text-teal-200">Payment Link</p>
+            <p className="text-xs text-teal-600 dark:text-teal-400 break-all mt-1">{payLink}</p>
+            <Button variant="outline" size="sm" className="mt-2 h-7 text-xs" onClick={() => {
+              navigator.clipboard.writeText(payLink);
+              toast({ title: "Payment link copied!" });
+            }}>
+              <Link2 className="h-3 w-3 mr-1" /> Copy Link
+            </Button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Email Customer</p>
+              <p className="text-xs text-muted-foreground">Send the invoice + pay link by email</p>
+            </div>
+            <Switch checked={sendEmail} onCheckedChange={setSendEmail} data-testid="switch-send-email-invoice" />
+          </div>
+
+          {sendEmail && (
+            <div>
+              <Label htmlFor="custom-message" className="text-sm">Custom Message (optional)</Label>
+              <Textarea
+                id="custom-message"
+                placeholder="Add a personal note to your customer…"
+                value={customMessage}
+                onChange={e => setCustomMessage(e.target.value)}
+                className="mt-1 h-24 text-sm"
+                data-testid="textarea-custom-message"
+              />
+            </div>
+          )}
+
+          <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2">
+            <Info className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
+            <p className="text-xs text-amber-700 dark:text-amber-300">
+              Sending will mark this invoice as <strong>Sent</strong> and it will be visible to your customer at the payment link above. Email requires SMTP to be configured in Settings.
+            </p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button
+            onClick={() => sendMutation.mutate({ sendEmail, customMessage: customMessage || undefined })}
+            disabled={sendMutation.isPending}
+            className="bg-teal-600 hover:bg-teal-700 text-white"
+            data-testid="button-confirm-send-invoice"
+          >
+            {sendMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</> : <><Send className="h-4 w-4 mr-2" />Send Invoice</>}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Status config ──────────────────────────────────────────────────────────
 const statusConfig: Record<string, { icon: any; color: string }> = {
   draft: { icon: FileText, color: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300" },
@@ -1142,6 +1314,8 @@ export default function InvoicesPage() {
   const [activeTab, setActiveTab] = useState(urlTab);
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
   const [adminCompanyId, setAdminCompanyId] = useState<string>("");
+  const [previewInvoiceId, setPreviewInvoiceId] = useState<string | null>(null);
+  const [sendInvoice, setSendInvoice] = useState<Invoice | null>(null);
 
   // Keep tab in sync with URL when the user navigates via the sidebar
   useEffect(() => {
@@ -1396,6 +1570,28 @@ export default function InvoicesPage() {
                                 <DollarSign className="h-4 w-4 mr-1" /> Pay
                               </Button>
                             )}
+                            {invoice.status === "draft" && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button variant="outline" size="sm"
+                                    className="text-teal-600 border-teal-200 hover:bg-teal-50 dark:border-teal-800 dark:hover:bg-teal-950"
+                                    onClick={() => setSendInvoice(invoice)}
+                                    data-testid={`button-send-invoice-${invoice.id}`}>
+                                    <Send className="h-4 w-4 mr-1" /> Send
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Send Invoice to Customer</TooltipContent>
+                              </Tooltip>
+                            )}
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button variant="ghost" size="sm" onClick={() => setPreviewInvoiceId(invoice.id)}
+                                  data-testid={`button-preview-invoice-${invoice.id}`}>
+                                  <Eye className="h-4 w-4 text-blue-500" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Preview Invoice</TooltipContent>
+                            </Tooltip>
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button variant="ghost" size="sm" onClick={() => {
@@ -1473,6 +1669,26 @@ export default function InvoicesPage() {
           onOpenChange={open => { if (!open) setPaymentInvoice(null); }}
         />
       )}
+
+      {previewInvoiceId && (
+        <InvoicePreviewDialog
+          invoiceId={previewInvoiceId}
+          companyId={companyId || ""}
+          open={!!previewInvoiceId}
+          onOpenChange={open => { if (!open) setPreviewInvoiceId(null); }}
+          onSend={() => {
+            const inv = invoices.find(i => i.id === previewInvoiceId);
+            if (inv) setSendInvoice(inv);
+          }}
+        />
+      )}
+
+      <SendInvoiceDialog
+        invoice={sendInvoice}
+        companyId={companyId || ""}
+        open={!!sendInvoice}
+        onOpenChange={open => { if (!open) setSendInvoice(null); }}
+      />
     </div>
   );
 }

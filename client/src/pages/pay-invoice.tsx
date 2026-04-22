@@ -19,17 +19,49 @@ import {
   CheckCircle2,
   XCircle,
   Info,
+  Printer,
 } from "lucide-react";
+import { InvoicePreview } from "@/components/invoice-preview";
+
+interface InvoiceLineItem {
+  id?: string;
+  description: string;
+  quantity?: string;
+  unitPrice?: string;
+  amount?: string;
+}
 
 interface InvoiceData {
   id: string;
   invoiceNumber: string;
-  totalAmount: string;
   status: string;
-  dueDate: string;
+  issueDate?: string;
+  dueDate?: string;
+  subtotal?: string;
+  taxRate?: string;
+  taxAmount?: string;
+  totalAmount: string;
+  amountPaid?: string;
+  amountDue?: string;
+  notes?: string;
+  paymentTerms?: string;
+  templateStyle?: string;
   companyName: string;
-  customerName: string;
-  customerEmail: string;
+  companyAddress?: string;
+  companyCity?: string;
+  companyState?: string;
+  companyZip?: string;
+  companyPhone?: string;
+  companyEmail?: string;
+  companyLogoUrl?: string;
+  customerName?: string;
+  customerEmail?: string;
+  customerAddress?: string;
+  customerCity?: string;
+  customerState?: string;
+  customerZip?: string;
+  customerPhone?: string;
+  lineItems?: InvoiceLineItem[];
 }
 
 interface PayMethodOption {
@@ -82,9 +114,7 @@ function StripePaymentForm({ clientSecret, invoiceId, paymentMethodType, onSucce
     try {
       const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
-        confirmParams: {
-          return_url: window.location.href,
-        },
+        confirmParams: { return_url: window.location.href },
         redirect: "if_required",
       });
 
@@ -98,10 +128,7 @@ function StripePaymentForm({ clientSecret, invoiceId, paymentMethodType, onSucce
         const confirmRes = await fetch(`/api/pay/${invoiceId}/confirm-payment`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            paymentIntentId: paymentIntent.id,
-            paymentMethodType,
-          }),
+          body: JSON.stringify({ paymentIntentId: paymentIntent.id, paymentMethodType }),
         });
         const confirmData = await confirmRes.json();
         onSuccess(confirmData.status || paymentIntent.status);
@@ -114,11 +141,7 @@ function StripePaymentForm({ clientSecret, invoiceId, paymentMethodType, onSucce
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4" data-testid="stripe-payment-form">
-      <PaymentElement
-        options={{
-          layout: "tabs",
-        }}
-      />
+      <PaymentElement options={{ layout: "tabs" }} />
 
       {paymentMethodType === "ach" && (
         <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 flex items-start gap-2">
@@ -137,15 +160,9 @@ function StripePaymentForm({ clientSecret, invoiceId, paymentMethodType, onSucce
         data-testid="button-confirm-payment"
       >
         {processing ? (
-          <>
-            <Loader2 className="h-4 w-4 animate-spin mr-2" />
-            Processing...
-          </>
+          <><Loader2 className="h-4 w-4 animate-spin mr-2" />Processing...</>
         ) : (
-          <>
-            <Shield className="h-4 w-4 mr-2" />
-            Confirm Payment
-          </>
+          <><Shield className="h-4 w-4 mr-2" />Confirm Payment</>
         )}
       </Button>
 
@@ -159,7 +176,6 @@ function StripePaymentForm({ clientSecret, invoiceId, paymentMethodType, onSucce
 
 function PaymentSuccess({ status, paymentMethodType }: { status: string; paymentMethodType: string }) {
   const isProcessing = status === "processing" || (paymentMethodType === "ach" && status !== "succeeded");
-
   return (
     <div className="text-center py-8" data-testid="payment-success">
       {isProcessing ? (
@@ -168,16 +184,11 @@ function PaymentSuccess({ status, paymentMethodType }: { status: string; payment
             <Clock className="h-8 w-8 text-yellow-600" />
           </div>
           <h2 className="text-xl font-bold mb-2">Payment Processing</h2>
-          <p className="text-muted-foreground mb-4">
-            Your bank payment has been submitted and is being processed.
-          </p>
+          <p className="text-muted-foreground mb-4">Your bank payment has been submitted and is being processed.</p>
           <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
-            <Clock className="h-3 w-3 mr-1" />
-            2-4 business days
+            <Clock className="h-3 w-3 mr-1" />2-4 business days
           </Badge>
-          <p className="text-xs text-muted-foreground mt-4">
-            You'll receive a confirmation once the payment clears. No further action is needed.
-          </p>
+          <p className="text-xs text-muted-foreground mt-4">You'll receive a confirmation once the payment clears.</p>
         </>
       ) : (
         <>
@@ -185,12 +196,31 @@ function PaymentSuccess({ status, paymentMethodType }: { status: string; payment
             <CheckCircle2 className="h-8 w-8 text-green-600" />
           </div>
           <h2 className="text-xl font-bold mb-2">Payment Successful</h2>
-          <p className="text-muted-foreground">
-            Your payment has been processed successfully. Thank you!
-          </p>
+          <p className="text-muted-foreground">Your payment has been processed successfully. Thank you!</p>
         </>
       )}
     </div>
+  );
+}
+
+function PrintButton({ invoice }: { invoice: InvoiceData }) {
+  const handlePrint = () => {
+    const root = document.getElementById("invoice-preview-root");
+    if (!root) return;
+    const html = root.outerHTML;
+    const win = window.open("", "_blank", "width=900,height=700");
+    if (!win) return;
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invoice #${invoice.invoiceNumber}</title>
+<style>body{margin:0;padding:20px;background:#f5f5f5;font-family:Arial,sans-serif}
+@page{size:A4;margin:12mm}@media print{body{background:white;padding:0}}</style>
+</head><body>${html}<script>window.onload=()=>{window.print();window.close();}<\/script></body></html>`);
+    win.document.close();
+  };
+
+  return (
+    <Button variant="outline" size="sm" onClick={handlePrint} className="flex items-center gap-1 text-xs" data-testid="button-print-invoice-public">
+      <Printer className="h-3.5 w-3.5" /> Print / Save PDF
+    </Button>
   );
 }
 
@@ -214,6 +244,8 @@ export default function PayInvoicePage() {
 
   const [paymentStatus, setPaymentStatus] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+
+  const [showPayForm, setShowPayForm] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -258,27 +290,20 @@ export default function PayInvoicePage() {
 
   const handleCreatePaymentIntent = async () => {
     if (!selectedMethod || !customerEmail) return;
-
     setCreatingIntent(true);
     setPaymentError(null);
     try {
       const res = await fetch(`/api/pay/${invoiceId}/create-payment-intent`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          paymentMethodType: selectedMethod,
-          customerEmail,
-          customerName,
-        }),
+        body: JSON.stringify({ paymentMethodType: selectedMethod, customerEmail, customerName }),
       });
-
       if (!res.ok) {
         const errData = await res.json();
         setPaymentError(errData.message || "Failed to initiate payment");
         setCreatingIntent(false);
         return;
       }
-
       const data = await res.json();
       setClientSecret(data.clientSecret);
     } catch (err: any) {
@@ -311,14 +336,24 @@ export default function PayInvoicePage() {
 
   if (alreadyPaid) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900">
-        <Card className="max-w-md w-full mx-4">
-          <CardContent className="pt-6 text-center">
-            <CheckCircle2 className="h-12 w-12 text-green-500 mx-auto mb-4" />
-            <h2 className="text-lg font-bold mb-2">Invoice Already Paid</h2>
-            <p className="text-muted-foreground">This invoice has been paid. Thank you!</p>
-          </CardContent>
-        </Card>
+      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 py-8 px-4">
+        <div className="max-w-2xl mx-auto space-y-4">
+          <Card>
+            <CardContent className="pt-6 text-center">
+              <CheckCircle2 className="h-12 w-12 text-green-500 mx-auto mb-4" />
+              <h2 className="text-lg font-bold mb-2">Invoice Paid</h2>
+              <p className="text-muted-foreground">This invoice has been paid. Thank you!</p>
+            </CardContent>
+          </Card>
+          {invoice && (
+            <div>
+              <div className="flex justify-end mb-2">
+                <PrintButton invoice={invoice} />
+              </div>
+              <InvoicePreview invoice={invoice} />
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -332,44 +367,36 @@ export default function PayInvoicePage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 py-6 sm:py-8 px-3 sm:px-4">
-      <div className="max-w-lg mx-auto">
-        <div className="text-center mb-6">
-          <h1 className="text-xl font-bold" data-testid="text-company-name">{invoice.companyName}</h1>
-          <p className="text-sm text-muted-foreground">Invoice Payment</p>
+      <div className="max-w-2xl mx-auto space-y-4">
+
+        {/* Invoice Document */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Invoice</p>
+            <PrintButton invoice={invoice} />
+          </div>
+          <InvoicePreview invoice={invoice} />
         </div>
 
+        {/* Payment Section */}
         {paymentStatus ? (
           <Card>
             <CardContent className="pt-6">
               <PaymentSuccess status={paymentStatus} paymentMethodType={selectedMethod || "card"} />
             </CardContent>
           </Card>
+        ) : paymentMethods.length === 0 ? (
+          <Card>
+            <CardContent className="py-6 text-center text-muted-foreground text-sm">
+              Online payment is not available for this invoice. Please contact {invoice.companyName} directly.
+            </CardContent>
+          </Card>
         ) : (
-          <>
-            <Card className="mb-4">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="text-base">Invoice #{invoice.invoiceNumber}</CardTitle>
-                    <CardDescription>
-                      {invoice.customerName && <span>Bill to: {invoice.customerName}</span>}
-                    </CardDescription>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-2xl font-bold text-teal-600" data-testid="text-invoice-amount">{fmt(amount)}</p>
-                    {invoice.dueDate && (
-                      <p className="text-xs text-muted-foreground">
-                        Due {new Date(invoice.dueDate).toLocaleDateString()}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </CardHeader>
-            </Card>
-
+          <div>
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-2">Payment</p>
             {!clientSecret ? (
               <Card>
-                <CardHeader>
+                <CardHeader className="pb-3">
                   <CardTitle className="text-base">Choose Payment Method</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -412,12 +439,8 @@ export default function PayInvoicePage() {
                                     <Clock className="h-3 w-3 inline mr-1" />
                                     {method.processingTime || "Instant"}
                                   </span>
-                                  {methodFee > 0 && (
-                                    <span className="text-xs text-orange-600">+{fmt(methodFee)} fee</span>
-                                  )}
-                                  {methodFee === 0 && (
-                                    <span className="text-xs text-green-600">No fee</span>
-                                  )}
+                                  {methodFee > 0 && <span className="text-xs text-orange-600">+{fmt(methodFee)} fee</span>}
+                                  {methodFee === 0 && <span className="text-xs text-green-600">No fee</span>}
                                 </div>
                               </div>
                             </div>
@@ -459,18 +482,9 @@ export default function PayInvoicePage() {
 
                       {fee > 0 && (
                         <div className="bg-muted/50 rounded-lg p-3 space-y-1">
-                          <div className="flex justify-between text-sm">
-                            <span>Invoice Amount</span>
-                            <span>{fmt(amount)}</span>
-                          </div>
-                          <div className="flex justify-between text-sm text-orange-600">
-                            <span>Processing Fee</span>
-                            <span>+{fmt(fee)}</span>
-                          </div>
-                          <div className="flex justify-between font-semibold border-t pt-1">
-                            <span>Total</span>
-                            <span>{fmt(total)}</span>
-                          </div>
+                          <div className="flex justify-between text-sm"><span>Invoice Amount</span><span>{fmt(amount)}</span></div>
+                          <div className="flex justify-between text-sm text-orange-600"><span>Processing Fee</span><span>+{fmt(fee)}</span></div>
+                          <div className="flex justify-between font-semibold border-t pt-1"><span>Total</span><span>{fmt(total)}</span></div>
                         </div>
                       )}
 
@@ -493,18 +507,13 @@ export default function PayInvoicePage() {
                       <Button
                         onClick={handleCreatePaymentIntent}
                         disabled={!customerEmail || creatingIntent}
-                        className="w-full"
+                        className="w-full bg-gradient-to-r from-teal-500 to-blue-500 hover:from-teal-600 hover:to-blue-600 text-white"
                         data-testid="button-proceed-to-pay"
                       >
                         {creatingIntent ? (
-                          <>
-                            <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                            Setting up payment...
-                          </>
+                          <><Loader2 className="h-4 w-4 animate-spin mr-2" />Setting up payment...</>
                         ) : (
-                          <>
-                            Proceed to Pay {fmt(total)}
-                          </>
+                          <>Proceed to Pay {fmt(total)}</>
                         )}
                       </Button>
                     </>
@@ -534,10 +543,7 @@ export default function PayInvoicePage() {
                         clientSecret,
                         appearance: {
                           theme: "stripe",
-                          variables: {
-                            colorPrimary: "#0d9488",
-                            borderRadius: "8px",
-                          },
+                          variables: { colorPrimary: "#0d9488", borderRadius: "8px" },
                         },
                       }}
                     >
@@ -553,7 +559,7 @@ export default function PayInvoicePage() {
                 </CardContent>
               </Card>
             )}
-          </>
+          </div>
         )}
 
         <p className="text-center text-xs text-muted-foreground mt-6">
