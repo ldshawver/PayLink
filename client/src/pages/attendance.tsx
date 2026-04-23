@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link, useSearch } from "wouter";
 import {
@@ -367,6 +367,29 @@ function TimesheetTab() {
     },
   });
 
+  // Auto-convert punches to time entries on load and when the week changes
+  useEffect(() => {
+    if (!user) return;
+    const companiesToConvert: string[] = user.companyId && !user.role.startsWith("platform_")
+      ? [user.companyId]
+      : (companies || []).map((c: any) => c.id);
+    if (companiesToConvert.length === 0) return;
+    (async () => {
+      for (const cid of companiesToConvert) {
+        try {
+          await apiRequest("POST", "/api/time-entries/convert-from-punches", {
+            companyId: cid,
+            startDate: weekStart,
+            endDate: weekEnd,
+          });
+        } catch {
+          // Best-effort: skip companies that fail
+        }
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/time-entries"] });
+    })();
+  }, [weekStart, weekEnd]); // Re-run when user navigates to a different week
+
   const openEdit = (entry: TimeEntry) => {
     setEditEntry(entry);
     setEditForm({
@@ -617,8 +640,10 @@ function TimesheetTab() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Employees</SelectItem>
-              {filteredWorkers.filter(w => w.isActive).map(w => (
-                <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>
+              {filteredWorkers.map(w => (
+                <SelectItem key={w.id} value={w.id}>
+                  {w.firstName} {w.lastName}{!w.isActive ? " (inactive)" : ""}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
