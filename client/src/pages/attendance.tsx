@@ -517,8 +517,8 @@ function TimesheetTab() {
                 <Select value={addForm.workerId} onValueChange={v => setAddForm(f => ({ ...f, workerId: v }))}>
                   <SelectTrigger data-testid="select-add-entry-worker"><SelectValue placeholder="Select employee" /></SelectTrigger>
                   <SelectContent>
-                    {(workers || []).filter(w => w.isActive).map(w => (
-                      <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>
+                    {(workers || []).map(w => (
+                      <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}{!w.isActive ? " (inactive)" : ""}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -1181,8 +1181,8 @@ function PunchesTab() {
                 <Select value={addForm.workerId} onValueChange={v => setAddForm(f => ({ ...f, workerId: v }))}>
                   <SelectTrigger data-testid="select-add-punch-worker"><SelectValue placeholder="Select employee" /></SelectTrigger>
                   <SelectContent>
-                    {(workers || []).filter(w => w.isActive).map(w => (
-                      <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>
+                    {(workers || []).map(w => (
+                      <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}{!w.isActive ? " (inactive)" : ""}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
