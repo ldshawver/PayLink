@@ -14113,35 +14113,72 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         sentAt: new Date(),
       });
 
-      const { sendEmail = false, customMessage } = req.body;
+      const { sendEmail = false, sendSms = false, customMessage, reminderEnabled, reminderFrequencyDays } = req.body;
       let emailSent = false;
+      let smsSent = false;
+
+      // Save reminder settings if provided
+      if (reminderEnabled !== undefined || reminderFrequencyDays !== undefined) {
+        const reminderUpdates: Record<string, any> = {};
+        if (reminderEnabled !== undefined) reminderUpdates.reminderEnabled = reminderEnabled;
+        if (reminderFrequencyDays !== undefined) reminderUpdates.reminderFrequencyDays = reminderFrequencyDays;
+        if (reminderEnabled && reminderFrequencyDays) {
+          const daysOut = parseInt(String(reminderFrequencyDays)) || 7;
+          const nextAt = new Date();
+          nextAt.setDate(nextAt.getDate() + daysOut);
+          reminderUpdates.nextReminderAt = nextAt;
+        }
+        await storage.updateInvoice(req.params.id, reminderUpdates);
+      }
+
+      // Fetch company + customer for email/SMS
+      const [companyRows, lineItems] = await Promise.all([
+        db.execute(sql`SELECT name, email, phone FROM companies WHERE id = ${inv.companyId}`),
+        storage.getInvoiceLineItems(req.params.id),
+      ]);
+      const company = (companyRows.rows[0] || {}) as any;
+
+      let customerEmail: string | null = null;
+      let customerName: string | null = null;
+      let customerPhone: string | null = null;
+      if (inv.customerId) {
+        const custRows = await db.execute(sql`SELECT customer_name, email, phone FROM customers WHERE id = ${inv.customerId}`);
+        const cust = (custRows.rows[0] || {}) as any;
+        customerEmail = cust.email;
+        customerName = cust.customer_name;
+        customerPhone = cust.phone;
+      }
+
+      const appUrl = process.env.APP_BASE_URL || "https://mypaylink.app";
+      const payLink = `${appUrl}/pay/${inv.id}`;
+      const dueDate = inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "";
+      const amount = parseFloat(inv.totalAmount || "0").toLocaleString("en-US", { style: "currency", currency: "USD" });
+
+      // Send SMS
+      if (sendSms) {
+        const phoneTarget = (req.body.smsPhone || customerPhone || "").toString().trim();
+        if (phoneTarget) {
+          try {
+            const { sendGenericNotificationSms } = await import("./notifications");
+            const result = await sendGenericNotificationSms({
+              phone: phoneTarget,
+              title: `Invoice #${inv.invoiceNumber}`,
+              body: `Invoice #${inv.invoiceNumber} from ${company.name || "us"} — ${amount}${dueDate ? ` due ${dueDate}` : ""}.\nPay here: ${payLink}`,
+            });
+            smsSent = result.sent;
+          } catch (smsErr: any) {
+            console.warn("Invoice SMS send failed:", smsErr?.message);
+          }
+        }
+      }
 
       if (sendEmail) {
         try {
           const { getTransporter } = await import("./notifications");
           const smtp = await getTransporter();
           if (smtp) {
-            const [companyRows, lineItems] = await Promise.all([
-              db.execute(sql`SELECT name, email, phone FROM companies WHERE id = ${inv.companyId}`),
-              storage.getInvoiceLineItems(req.params.id),
-            ]);
-            const company = (companyRows.rows[0] || {}) as any;
-
-            let customerEmail: string | null = null;
-            let customerName: string | null = null;
-            if (inv.customerId) {
-              const custRows = await db.execute(sql`SELECT customer_name, email FROM customers WHERE id = ${inv.customerId}`);
-              const cust = (custRows.rows[0] || {}) as any;
-              customerEmail = cust.email;
-              customerName = cust.customer_name;
-            }
 
             if (customerEmail) {
-              const appUrl = process.env.APP_BASE_URL || "https://mypaylink.app";
-              const payLink = `${appUrl}/pay/${inv.id}`;
-              const dueDate = inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "";
-              const amount = parseFloat(inv.totalAmount || "0").toLocaleString("en-US", { style: "currency", currency: "USD" });
-
               const lineRowsHtml = lineItems.map((li: any) =>
                 `<tr><td style="padding:6px 8px;border-bottom:1px solid #f3f4f6">${li.description}</td>
                  <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:center">${li.quantity}</td>
@@ -14199,8 +14236,113 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#64748b">Due date: ${du
         }
       }
 
-      res.json({ ...updated, emailSent });
+      res.json({ ...updated, emailSent, smsSent });
     } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to send invoice") }); }
+  });
+
+  // POST /api/invoices/:id/send-reminder — send a reminder to the customer
+  app.post("/api/invoices/:id/send-reminder", requireAuth, requireRole("admin", "manager"), blockDemoWrites, async (req, res) => {
+    try {
+      const inv = await storage.getInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (user?.companyId && inv.companyId !== user.companyId) return res.status(403).json({ message: "Access denied" });
+
+      const { sendEmail = false, sendSms = false, customMessage, smsPhone } = req.body;
+
+      const [companyRows, lineItems] = await Promise.all([
+        db.execute(sql`SELECT name, email, phone FROM companies WHERE id = ${inv.companyId}`),
+        storage.getInvoiceLineItems(req.params.id),
+      ]);
+      const company = (companyRows.rows[0] || {}) as any;
+
+      let customerEmail: string | null = null;
+      let customerName: string | null = null;
+      let customerPhone: string | null = null;
+      if (inv.customerId) {
+        const custRows = await db.execute(sql`SELECT customer_name, email, phone FROM customers WHERE id = ${inv.customerId}`);
+        const cust = (custRows.rows[0] || {}) as any;
+        customerEmail = cust.email;
+        customerName = cust.customer_name;
+        customerPhone = cust.phone;
+      }
+
+      const appUrl = process.env.APP_BASE_URL || "https://mypaylink.app";
+      const payLink = `${appUrl}/pay/${inv.id}`;
+      const dueDate = inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "";
+      const amount = parseFloat(inv.totalAmount || "0").toLocaleString("en-US", { style: "currency", currency: "USD" });
+
+      let emailSent = false;
+      let smsSent = false;
+
+      if (sendSms) {
+        const phoneTarget = (smsPhone || customerPhone || "").toString().trim();
+        if (phoneTarget) {
+          try {
+            const { sendGenericNotificationSms } = await import("./notifications");
+            const result = await sendGenericNotificationSms({
+              phone: phoneTarget,
+              title: `Payment Reminder — Invoice #${inv.invoiceNumber}`,
+              body: `Reminder: Invoice #${inv.invoiceNumber} from ${company.name || "us"} — ${amount}${dueDate ? ` due ${dueDate}` : ""} is still outstanding.\nPay here: ${payLink}`,
+            });
+            smsSent = result.sent;
+          } catch (err: any) { console.warn("Invoice reminder SMS failed:", err?.message); }
+        }
+      }
+
+      if (sendEmail && customerEmail) {
+        try {
+          const { getTransporter } = await import("./notifications");
+          const smtp = await getTransporter();
+          if (smtp) {
+            const lineRowsHtml = lineItems.map((li: any) =>
+              `<tr><td style="padding:6px 8px;border-bottom:1px solid #f3f4f6">${li.description}</td>
+               <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:center">${li.quantity}</td>
+               <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:right">$${parseFloat(li.unit_price || li.unitPrice || "0").toFixed(2)}</td>
+               <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:right">$${parseFloat(li.amount || "0").toFixed(2)}</td></tr>`
+            ).join("");
+            const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>body{font-family:Arial,sans-serif;max-width:620px;margin:0 auto;color:#333;background:#f5f5f5}
+.card{background:#fff;border-radius:8px;overflow:hidden;margin:20px 0;box-shadow:0 1px 4px rgba(0,0,0,.1)}
+.header{background:linear-gradient(135deg,#b45309,#dc2626);color:white;padding:24px 28px}
+.body{padding:24px 28px}.footer{background:#f9fafb;padding:14px 28px;font-size:12px;color:#6b7280;border-top:1px solid #e5e7eb}
+.btn{display:inline-block;background:linear-gradient(135deg,#0d9488,#0369a1);color:white!important;padding:13px 30px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:16px}
+table{width:100%;border-collapse:collapse;margin:12px 0}th{background:#f8fafc;padding:8px;text-align:left;font-size:13px;color:#64748b;border-bottom:2px solid #e2e8f0}
+.total-row{font-weight:bold;font-size:16px;color:#dc2626}</style></head><body>
+<div class="card"><div class="header">
+<div style="font-size:13px;font-weight:600;letter-spacing:0.05em;opacity:.85">PAYMENT REMINDER</div>
+<div style="font-size:22px;font-weight:bold;margin-top:4px">${company.name || "Invoice"}</div>
+<div style="opacity:.85">Invoice #${inv.invoiceNumber}</div>
+</div><div class="body">
+<p style="margin:0 0 16px">Hello${customerName ? ` ${customerName}` : ""},</p>
+<p style="margin:0 0 16px">${customMessage || `This is a friendly reminder that invoice #${inv.invoiceNumber} from ${company.name || "us"} for ${amount} is still outstanding${dueDate ? ` and was due on ${dueDate}` : ""}. Please pay at your earliest convenience.`}</p>
+${lineItems.length > 0 ? `<table><thead><tr><th>Description</th><th>Qty</th><th>Unit Price</th><th>Amount</th></tr></thead><tbody>${lineRowsHtml}</tbody></table>` : ""}
+<div style="text-align:right;margin-top:8px"><span style="font-size:13px;color:#64748b">Amount Due: </span><span class="total-row">${amount}</span></div>
+${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600">Due date: ${dueDate}</p>` : ""}
+<div style="text-align:center;margin:28px 0 16px"><a href="${payLink}" class="btn">Pay Now →</a></div>
+<p style="font-size:12px;color:#94a3b8;text-align:center">Or: <a href="${payLink}" style="color:#0d9488">${payLink}</a></p>
+</div><div class="footer">Powered by PayLink · If you have questions, contact ${company.email || company.name || "us"}.</div>
+</div></body></html>`;
+            await smtp.transporter.sendMail({
+              from: smtp.fromAddress,
+              to: customerEmail,
+              subject: `Payment Reminder: Invoice #${inv.invoiceNumber} — ${amount}`,
+              html,
+              text: `Payment Reminder — Invoice #${inv.invoiceNumber}\nAmount: ${amount}${dueDate ? `\nDue: ${dueDate}` : ""}\nPay: ${payLink}`,
+            });
+            emailSent = true;
+          }
+        } catch (err: any) { console.warn("Invoice reminder email failed:", err?.message); }
+      }
+
+      // Update lastReminderSentAt and schedule next one
+      const freqDays = parseInt(String(inv.reminderFrequencyDays || 7));
+      const nextAt = new Date();
+      nextAt.setDate(nextAt.getDate() + freqDays);
+      await storage.updateInvoice(req.params.id, { lastReminderSentAt: new Date(), nextReminderAt: nextAt });
+
+      res.json({ emailSent, smsSent });
+    } catch (e) { res.status(500).json({ message: safeErrorMessage(e, "Failed to send reminder") }); }
   });
 
   // ══════════════════════════════════════════════════════════════════════

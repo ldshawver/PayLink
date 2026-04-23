@@ -1425,6 +1425,10 @@ app.use((req, res, next) => {
     await run("payroll_items.company_check_unique", sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_payroll_items_company_check ON payroll_items(company_id, check_number) WHERE check_number IS NOT NULL AND company_id IS NOT NULL`);
 
     await run("invoices.template_style", sql`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS template_style TEXT DEFAULT 'modern_clean'`);
+    await run("invoices.reminder_enabled", sql`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS reminder_enabled BOOLEAN DEFAULT FALSE`);
+    await run("invoices.reminder_frequency_days", sql`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS reminder_frequency_days INTEGER DEFAULT 7`);
+    await run("invoices.last_reminder_sent_at", sql`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS last_reminder_sent_at TIMESTAMP`);
+    await run("invoices.next_reminder_at", sql`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS next_reminder_at TIMESTAMP`);
 
     // Staff Messaging tables
     await run("staff_messages table", sql`CREATE TABLE IF NOT EXISTS staff_messages (

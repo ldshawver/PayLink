@@ -21,7 +21,7 @@ import {
   CalendarDays, Clock, CheckCircle, AlertCircle, XCircle, Copy, Link2,
   CreditCard, Building2, Zap, ArrowRight, Settings, Info, Sparkles,
   TrendingDown, Shield, Palette, RefreshCw, Bell, Mail, MessageSquare,
-  Pause, Play, MoreHorizontal, Printer,
+  Pause, Play, MoreHorizontal, Printer, Smartphone, MapPin, BellRing,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -627,20 +627,42 @@ function InvoiceForm({ invoice, customers, companyId, companies = [], onSave, on
         </div>
       </div>
 
-      {/* Company selector — shown when admin has no assigned company */}
+      {/* Company (Accounts Receivable) selector — shown for multi-company admins */}
       {companies.length > 0 && (
         <div>
-          <Label>Company *</Label>
+          <Label className="flex items-center gap-1.5 mb-2">
+            <Building2 className="h-4 w-4" /> Invoice From (Accounts Receivable) *
+          </Label>
           <Select value={form.selectedCompanyId} onValueChange={v => setForm({ ...form, selectedCompanyId: v })}>
             <SelectTrigger data-testid="select-invoice-company">
-              <SelectValue placeholder="Select company" />
+              <SelectValue placeholder="Select company to invoice from" />
             </SelectTrigger>
             <SelectContent>
               {companies.map(c => (
-                <SelectItem key={c.id} value={c.id} data-testid={`option-company-${c.id}`}>{c.name}</SelectItem>
+                <SelectItem key={c.id} value={c.id} data-testid={`option-company-${c.id}`}>
+                  <div className="flex items-center gap-2">
+                    {(c as any).logoUrl ? (
+                      <img src={(c as any).logoUrl} alt={c.name} className="h-5 w-5 object-contain rounded" />
+                    ) : (
+                      <div className="h-5 w-5 rounded bg-teal-100 flex items-center justify-center text-teal-700 text-[9px] font-bold shrink-0">
+                        {c.name?.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <span>{c.name}</span>
+                  </div>
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
+          {form.selectedCompanyId && (() => {
+            const sel = companies.find(c => c.id === form.selectedCompanyId);
+            return sel && (sel as any).logoUrl ? (
+              <div className="mt-2 flex items-center gap-2 p-2 bg-muted/40 rounded-md border border-dashed">
+                <img src={(sel as any).logoUrl} alt={sel.name} className="h-8 object-contain" />
+                <span className="text-xs text-muted-foreground">{sel.name}</span>
+              </div>
+            ) : null;
+          })()}
         </div>
       )}
 
@@ -1201,22 +1223,56 @@ function InvoicePreviewDialog({ invoiceId, companyId, open, onOpenChange, onSend
 }
 
 // ── Send Invoice Dialog ─────────────────────────────────────────────────────
-function SendInvoiceDialog({ invoice, companyId, open, onOpenChange }: {
+function SendInvoiceDialog({ invoice, companyId, open, onOpenChange, customer }: {
   invoice: Invoice | null;
   companyId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  customer?: Customer | null;
 }) {
   const { toast } = useToast();
-  const [sendEmail, setSendEmail] = useState(true);
+  const [tab, setTab] = useState("email");
   const [customMessage, setCustomMessage] = useState("");
+  const [smsPhone, setSmsPhone] = useState("");
+  const [reminderEnabled, setReminderEnabled] = useState(!!(invoice as any)?.reminderEnabled);
+  const [reminderFrequencyDays, setReminderFrequencyDays] = useState(String((invoice as any)?.reminderFrequencyDays || 7));
+
+  useEffect(() => {
+    if (open && customer) setSmsPhone((customer as any).phone || "");
+    if (open && invoice) {
+      setReminderEnabled(!!(invoice as any).reminderEnabled);
+      setReminderFrequencyDays(String((invoice as any).reminderFrequencyDays || 7));
+    }
+  }, [open, customer, invoice]);
+
+  const isReminder = invoice?.status !== "draft";
 
   const sendMutation = useMutation({
-    mutationFn: (data: any) => apiRequest("POST", `/api/invoices/${invoice?.id}/send`, data),
+    mutationFn: (data: any) => {
+      const endpoint = isReminder ? `/api/invoices/${invoice?.id}/send-reminder` : `/api/invoices/${invoice?.id}/send`;
+      return apiRequest("POST", endpoint, data);
+    },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: [`/api/invoices?companyId=${companyId}`] });
-      const emailNote = data?.emailSent ? " Email sent to customer." : sendEmail ? " (Email could not be sent — check SMTP settings.)" : "";
-      toast({ title: `Invoice marked as sent.${emailNote}` });
+      const notes: string[] = [];
+      if (data?.emailSent) notes.push("Email sent.");
+      if (data?.smsSent) notes.push("Text sent.");
+      if (!data?.emailSent && tab === "email") notes.push("Email could not be sent — check SMTP settings.");
+      if (!data?.smsSent && tab === "text") notes.push("SMS could not be sent — check Twilio settings.");
+      toast({ title: isReminder ? "Reminder sent." : "Invoice marked as sent.", description: notes.join(" ") });
+      onOpenChange(false);
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const saveRemindersMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("PATCH", `/api/invoices/${invoice?.id}`, {
+      reminderEnabled: data.reminderEnabled,
+      reminderFrequencyDays: data.reminderFrequencyDays,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/invoices?companyId=${companyId}`] });
+      toast({ title: "Reminder settings saved." });
       onOpenChange(false);
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -1224,67 +1280,211 @@ function SendInvoiceDialog({ invoice, companyId, open, onOpenChange }: {
 
   if (!invoice) return null;
   const payLink = `${window.location.origin}/pay/${invoice.id}`;
+  const custAddr = [
+    (customer as any)?.billingAddress,
+    [(customer as any)?.billingCity, (customer as any)?.billingState].filter(Boolean).join(", "),
+    (customer as any)?.billingZip,
+  ].filter(Boolean).join("\n");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Send className="h-5 w-5 text-teal-600" /> Send Invoice #{invoice.invoiceNumber}
+            <Send className="h-5 w-5 text-teal-600" />
+            {isReminder ? `Send Reminder — Invoice #${invoice.invoiceNumber}` : `Send Invoice #${invoice.invoiceNumber}`}
           </DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800 rounded-lg p-3">
-            <p className="text-sm font-medium text-teal-800 dark:text-teal-200">Payment Link</p>
-            <p className="text-xs text-teal-600 dark:text-teal-400 break-all mt-1">{payLink}</p>
-            <Button variant="outline" size="sm" className="mt-2 h-7 text-xs" onClick={() => {
-              navigator.clipboard.writeText(payLink);
-              toast({ title: "Payment link copied!" });
-            }}>
-              <Link2 className="h-3 w-3 mr-1" /> Copy Link
-            </Button>
-          </div>
 
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">Email Customer</p>
-              <p className="text-xs text-muted-foreground">Send the invoice + pay link by email</p>
-            </div>
-            <Switch checked={sendEmail} onCheckedChange={setSendEmail} data-testid="switch-send-email-invoice" />
+        {/* Pay link always visible */}
+        <div className="bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800 rounded-lg p-3 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-teal-800 dark:text-teal-200 mb-0.5">Payment Link</p>
+            <p className="text-xs text-teal-600 dark:text-teal-400 truncate">{payLink}</p>
           </div>
+          <Button variant="outline" size="sm" className="shrink-0 h-7 text-xs" onClick={() => {
+            navigator.clipboard.writeText(payLink);
+            toast({ title: "Payment link copied!" });
+          }} data-testid="button-copy-pay-link-dialog">
+            <Link2 className="h-3 w-3 mr-1" /> Copy
+          </Button>
+        </div>
 
-          {sendEmail && (
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList className="grid w-full grid-cols-4">
+            <TabsTrigger value="email" data-testid="tab-send-email"><Mail className="h-3.5 w-3.5 mr-1" />Email</TabsTrigger>
+            <TabsTrigger value="text" data-testid="tab-send-text"><Smartphone className="h-3.5 w-3.5 mr-1" />Text</TabsTrigger>
+            <TabsTrigger value="mail" data-testid="tab-send-mail"><MapPin className="h-3.5 w-3.5 mr-1" />Mail</TabsTrigger>
+            <TabsTrigger value="reminders" data-testid="tab-send-reminders"><BellRing className="h-3.5 w-3.5 mr-1" />Reminders</TabsTrigger>
+          </TabsList>
+
+          {/* Email Tab */}
+          <TabsContent value="email" className="space-y-3 pt-2">
+            {customer?.email ? (
+              <div className="flex items-center gap-2 p-2 bg-muted/40 rounded-md text-sm">
+                <Mail className="h-4 w-4 text-muted-foreground" />
+                <span className="text-muted-foreground">To:</span>
+                <span className="font-medium">{customer.email}</span>
+              </div>
+            ) : (
+              <div className="p-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-md text-xs text-amber-700 dark:text-amber-300">
+                No email address on file for this customer.
+              </div>
+            )}
             <div>
-              <Label htmlFor="custom-message" className="text-sm">Custom Message (optional)</Label>
+              <Label className="text-sm">Custom Message (optional)</Label>
               <Textarea
-                id="custom-message"
-                placeholder="Add a personal note to your customer…"
+                placeholder="Add a personal note…"
                 value={customMessage}
                 onChange={e => setCustomMessage(e.target.value)}
-                className="mt-1 h-24 text-sm"
+                className="mt-1 h-20 text-sm"
                 data-testid="textarea-custom-message"
               />
             </div>
-          )}
+            <p className="text-xs text-muted-foreground">Requires SMTP configured in Settings → Notifications.</p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button
+                onClick={() => sendMutation.mutate({ sendEmail: true, customMessage: customMessage || undefined })}
+                disabled={sendMutation.isPending || !customer?.email}
+                className="bg-teal-600 hover:bg-teal-700 text-white"
+                data-testid="button-send-email-invoice"
+              >
+                {sendMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Mail className="h-4 w-4 mr-2" />}
+                {isReminder ? "Send Reminder Email" : "Send & Mark as Sent"}
+              </Button>
+            </DialogFooter>
+          </TabsContent>
 
-          <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2">
-            <Info className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
-            <p className="text-xs text-amber-700 dark:text-amber-300">
-              Sending will mark this invoice as <strong>Sent</strong> and it will be visible to your customer at the payment link above. Email requires SMTP to be configured in Settings.
-            </p>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button
-            onClick={() => sendMutation.mutate({ sendEmail, customMessage: customMessage || undefined })}
-            disabled={sendMutation.isPending}
-            className="bg-teal-600 hover:bg-teal-700 text-white"
-            data-testid="button-confirm-send-invoice"
-          >
-            {sendMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</> : <><Send className="h-4 w-4 mr-2" />Send Invoice</>}
-          </Button>
-        </DialogFooter>
+          {/* Text / SMS Tab */}
+          <TabsContent value="text" className="space-y-3 pt-2">
+            <div>
+              <Label className="text-sm">Customer Phone Number</Label>
+              <Input
+                placeholder="+1 (555) 000-0000"
+                value={smsPhone}
+                onChange={e => setSmsPhone(e.target.value)}
+                className="mt-1"
+                data-testid="input-sms-phone"
+              />
+            </div>
+            <div className="p-3 bg-muted/40 rounded-md text-xs text-muted-foreground space-y-1">
+              <p className="font-semibold text-foreground">Text message will contain:</p>
+              <p>Invoice #{invoice.invoiceNumber} — ${parseFloat(invoice.totalAmount || "0").toFixed(2)}{invoice.dueDate ? ` due ${new Date(invoice.dueDate).toLocaleDateString()}` : ""}</p>
+              <p className="break-all text-teal-600">{payLink}</p>
+            </div>
+            <p className="text-xs text-muted-foreground">Requires Twilio configured in Settings → SMS.</p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button
+                onClick={() => sendMutation.mutate({ sendSms: true, smsPhone: smsPhone || undefined })}
+                disabled={sendMutation.isPending || !smsPhone.trim()}
+                className="bg-teal-600 hover:bg-teal-700 text-white"
+                data-testid="button-send-sms-invoice"
+              >
+                {sendMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Smartphone className="h-4 w-4 mr-2" />}
+                {isReminder ? "Send Reminder Text" : "Send Text & Mark as Sent"}
+              </Button>
+            </DialogFooter>
+          </TabsContent>
+
+          {/* Mail Tab */}
+          <TabsContent value="mail" className="space-y-3 pt-2">
+            <div className="p-4 border rounded-lg space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Mailing Address on File</p>
+              {custAddr ? (
+                <div className="font-medium text-sm whitespace-pre-line leading-relaxed">
+                  {customer?.customerName || customer?.businessName || "Customer"}{"\n"}{custAddr}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No mailing address on file for this customer.</p>
+              )}
+            </div>
+            <div className="bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3 flex items-start gap-2">
+              <Info className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
+              <p className="text-xs text-blue-700 dark:text-blue-300">
+                Print the invoice using the <strong>Preview</strong> button and mail it to the address above. You can mark the invoice as sent once mailed.
+              </p>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button
+                onClick={() => sendMutation.mutate({ sendEmail: false, sendSms: false })}
+                disabled={sendMutation.isPending}
+                className="bg-teal-600 hover:bg-teal-700 text-white"
+                data-testid="button-mark-mailed"
+              >
+                {sendMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <MapPin className="h-4 w-4 mr-2" />}
+                {isReminder ? "Mark Reminder Sent" : "Mark as Sent (Mailed)"}
+              </Button>
+            </DialogFooter>
+          </TabsContent>
+
+          {/* Reminders Tab */}
+          <TabsContent value="reminders" className="space-y-4 pt-2">
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <div>
+                <p className="text-sm font-medium">Enable Automatic Reminders</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Automatically remind customer at set intervals</p>
+              </div>
+              <Switch
+                checked={reminderEnabled}
+                onCheckedChange={setReminderEnabled}
+                data-testid="switch-reminder-enabled"
+              />
+            </div>
+
+            {reminderEnabled && (
+              <div>
+                <Label className="text-sm">Remind every</Label>
+                <div className="flex items-center gap-2 mt-1">
+                  <Select value={reminderFrequencyDays} onValueChange={setReminderFrequencyDays}>
+                    <SelectTrigger className="w-32" data-testid="select-reminder-frequency">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">1 day</SelectItem>
+                      <SelectItem value="3">3 days</SelectItem>
+                      <SelectItem value="7">7 days</SelectItem>
+                      <SelectItem value="14">14 days</SelectItem>
+                      <SelectItem value="30">30 days</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <span className="text-sm text-muted-foreground">after invoice is sent</span>
+                </div>
+              </div>
+            )}
+
+            {(invoice as any)?.lastReminderSentAt && (
+              <div className="p-3 bg-muted/40 rounded-md text-xs text-muted-foreground">
+                Last reminder sent: {new Date((invoice as any).lastReminderSentAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                {(invoice as any)?.nextReminderAt && (
+                  <><br />Next reminder: {new Date((invoice as any).nextReminderAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}</>
+                )}
+              </div>
+            )}
+
+            <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2">
+              <Info className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+              <p className="text-xs text-amber-700 dark:text-amber-300">
+                Use the <strong>Email</strong> or <strong>Text</strong> tabs to send reminders manually at any time. Automatic reminders require SMTP or Twilio to be configured.
+              </p>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button
+                onClick={() => saveRemindersMutation.mutate({ reminderEnabled, reminderFrequencyDays: parseInt(reminderFrequencyDays) || 7 })}
+                disabled={saveRemindersMutation.isPending}
+                className="bg-teal-600 hover:bg-teal-700 text-white"
+                data-testid="button-save-reminders"
+              >
+                {saveRemindersMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <BellRing className="h-4 w-4 mr-2" />}
+                Save Reminder Settings
+              </Button>
+            </DialogFooter>
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );
@@ -1544,6 +1744,11 @@ export default function InvoicesPage() {
                                 <StatusIcon className="h-3 w-3 mr-1" />
                                 {invoice.status}
                               </Badge>
+                              {(invoice as any).reminderEnabled && (
+                                <Badge variant="outline" className="text-amber-600 border-amber-300 bg-amber-50 dark:bg-amber-950/20 text-[10px]">
+                                  <BellRing className="h-2.5 w-2.5 mr-1" /> reminders on
+                                </Badge>
+                              )}
                             </div>
                             <div className="text-sm text-muted-foreground flex items-center gap-3 mt-1 flex-wrap">
                               {customer && <span>{customer.customerName}</span>}
@@ -1570,17 +1775,18 @@ export default function InvoicesPage() {
                                 <DollarSign className="h-4 w-4 mr-1" /> Pay
                               </Button>
                             )}
-                            {invoice.status === "draft" && (
+                            {!["paid", "cancelled"].includes(invoice.status) && (
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <Button variant="outline" size="sm"
                                     className="text-teal-600 border-teal-200 hover:bg-teal-50 dark:border-teal-800 dark:hover:bg-teal-950"
                                     onClick={() => setSendInvoice(invoice)}
                                     data-testid={`button-send-invoice-${invoice.id}`}>
-                                    <Send className="h-4 w-4 mr-1" /> Send
+                                    <Send className="h-4 w-4 mr-1" />
+                                    {invoice.status === "draft" ? "Send" : "Remind"}
                                   </Button>
                                 </TooltipTrigger>
-                                <TooltipContent>Send Invoice to Customer</TooltipContent>
+                                <TooltipContent>{invoice.status === "draft" ? "Send Invoice to Customer" : "Send Reminder to Customer"}</TooltipContent>
                               </Tooltip>
                             )}
                             <Tooltip>
@@ -1688,6 +1894,7 @@ export default function InvoicesPage() {
         companyId={companyId || ""}
         open={!!sendInvoice}
         onOpenChange={open => { if (!open) setSendInvoice(null); }}
+        customer={sendInvoice ? customerMap[sendInvoice.customerId || ""] : null}
       />
     </div>
   );
