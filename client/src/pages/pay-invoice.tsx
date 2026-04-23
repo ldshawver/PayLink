@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useParams } from "wouter";
+import { useLocation } from "wouter";
 import { loadStripe, type Stripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -225,8 +225,8 @@ function PrintButton({ invoice }: { invoice: InvoiceData }) {
 }
 
 export default function PayInvoicePage() {
-  const params = useParams<{ invoiceId: string }>();
-  const invoiceId = params.invoiceId;
+  const [location] = useLocation();
+  const invoiceId = location.split("/pay/")[1]?.split("/")[0] || "";
 
   const [loading, setLoading] = useState(true);
   const [invoice, setInvoice] = useState<InvoiceData | null>(null);
