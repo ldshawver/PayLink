@@ -56,6 +56,7 @@ function CustomerForm({ customer, onSave, onCancel }: {
           <SelectContent>
             <SelectItem value="customer" data-testid="option-type-customer">Customer</SelectItem>
             <SelectItem value="vendor" data-testid="option-type-vendor">Vendor</SelectItem>
+            <SelectItem value="contractor" data-testid="option-type-contractor">Contractor</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -389,7 +390,9 @@ export default function CustomersPage() {
   const [, navigate] = useLocation();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [typeFilter, setTypeFilter] = useState("all");
+  // Sync typeFilter with ?tab= URL param (customers / vendors / contractors)
+  const tabParam = new URLSearchParams(searchParams).get("tab") || "all";
+  const [typeFilter, setTypeFilter] = useState(tabParam !== "all" ? tabParam.replace(/s$/, "") : "all");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Customer | undefined>();
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
@@ -464,12 +467,14 @@ export default function CustomersPage() {
   const typeColors: Record<string, string> = {
     customer: "bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-400",
     vendor: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
+    contractor: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
   };
 
   const stats = {
     total: customers.length,
     customerCount: customers.filter(c => (c.customerType || "customer") === "customer").length,
     vendorCount: customers.filter(c => c.customerType === "vendor").length,
+    contractorCount: customers.filter(c => c.customerType === "contractor").length,
     active: customers.filter(c => c.status === "active").length,
   };
 
@@ -507,11 +512,11 @@ export default function CustomersPage() {
     <div className="p-4 sm:p-6 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold" data-testid="text-page-title">Customers & Vendors</h1>
-          <p className="text-muted-foreground">Manage your customers and vendors</p>
+          <h1 className="text-2xl font-bold" data-testid="text-page-title">Directory</h1>
+          <p className="text-muted-foreground">Customers, vendors, and contractors</p>
         </div>
         <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }} data-testid="button-add-customer" className="w-full sm:w-auto">
-          <Plus className="h-4 w-4 mr-2" /> Add Customer / Vendor
+          <Plus className="h-4 w-4 mr-2" /> Add to Directory
         </Button>
       </div>
 
@@ -576,6 +581,7 @@ export default function CustomersPage() {
             <SelectItem value="all" data-testid="option-all-types">All Types</SelectItem>
             <SelectItem value="customer" data-testid="option-filter-customer">Customers</SelectItem>
             <SelectItem value="vendor" data-testid="option-filter-vendor">Vendors</SelectItem>
+            <SelectItem value="contractor" data-testid="option-filter-contractor">Contractors</SelectItem>
           </SelectContent>
         </Select>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -616,6 +622,8 @@ export default function CustomersPage() {
                     <div className={`h-10 w-10 rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0 ${
                       (customer.customerType || "customer") === "vendor"
                         ? "bg-gradient-to-br from-orange-500 to-amber-500"
+                        : (customer.customerType || "customer") === "contractor"
+                        ? "bg-gradient-to-br from-purple-500 to-indigo-500"
                         : "bg-gradient-to-br from-teal-500 to-blue-500"
                     }`}>
                       {customer.customerName.charAt(0).toUpperCase()}
@@ -624,7 +632,7 @@ export default function CustomersPage() {
                       <div className="flex items-center gap-2">
                         <span className="font-semibold truncate" data-testid={`text-customer-name-${customer.id}`}>{customer.customerName}</span>
                         <Badge className={typeColors[customer.customerType || "customer"]} data-testid={`badge-type-${customer.id}`}>
-                          {(customer.customerType || "customer") === "vendor" ? "Vendor" : "Customer"}
+                          {(customer.customerType || "customer") === "vendor" ? "Vendor" : (customer.customerType || "customer") === "contractor" ? "Contractor" : "Customer"}
                         </Badge>
                         <Badge className={statusColors[customer.status || "active"]} data-testid={`badge-status-${customer.id}`}>
                           {customer.status}

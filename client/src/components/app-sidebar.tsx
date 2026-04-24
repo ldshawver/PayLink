@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { useLocation, useSearch, Link } from "wouter";
 import {
   LayoutDashboard,
@@ -63,12 +64,12 @@ import {
   ServerCog,
   ChevronRight,
   Home,
-  Stethoscope,
   UserCog,
   KeyRound,
   Printer,
   Package,
   Mail,
+  LogOut,
 } from "lucide-react";
 import {
   Sidebar,
@@ -93,7 +94,6 @@ import {
 } from "@/components/ui/collapsible";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
-import { LogOut } from "lucide-react";
 import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
 import { canAccessPlatformConsole, isManagerOrAbove, isTenantAdminRole, expandRoleForLegacyGuards } from "@/lib/roles";
 import { useFeatureFlags } from "@/lib/featureFlags";
@@ -118,10 +118,11 @@ type NavSection = {
 type NavGroup = {
   groupLabel: string;
   roles?: string[];
+  collapsible?: boolean;
   sections: NavSection[];
 };
 
-// ─── Tenant App navigation — organized by functional area ───────────────────
+// ─── Tenant App navigation ────────────────────────────────────────────────────
 
 const TENANT_NAV: NavGroup[] = [
   {
@@ -171,7 +172,7 @@ const TENANT_NAV: NavGroup[] = [
         ],
       },
       {
-        label: "Expenses",
+        label: "My Expenses",
         icon: Receipt,
         url: "/app/expenses",
         items: [
@@ -201,7 +202,7 @@ const TENANT_NAV: NavGroup[] = [
     roles: ["admin", "manager"],
     sections: [
       {
-        label: "Employee",
+        label: "Employees",
         icon: Users,
         url: "/app/employee",
         roles: ["admin", "manager"],
@@ -218,12 +219,6 @@ const TENANT_NAV: NavGroup[] = [
           { title: "User Accounts", url: "/app/employee?tab=user-accounts", icon: Shield, roles: ["admin"] },
         ],
       },
-    ],
-  },
-  {
-    groupLabel: "HR",
-    roles: ["admin", "manager"],
-    sections: [
       {
         label: "HR",
         icon: BadgeCheck,
@@ -273,6 +268,7 @@ const TENANT_NAV: NavGroup[] = [
   {
     groupLabel: "Finance",
     roles: ["admin", "manager"],
+    collapsible: true,
     sections: [
       {
         label: "Invoicing",
@@ -286,13 +282,16 @@ const TENANT_NAV: NavGroup[] = [
         ],
       },
       {
-        label: "Proposals",
-        icon: FilePlus2,
-        url: "/app/biz-docs",
+        label: "Contractor Hub",
+        icon: Briefcase,
+        url: "/app/contractor-hub",
         roles: ["admin", "manager"],
+        featureKey: "tenant.finance.contractor-hub",
         items: [
+          { title: "Contractor Hub", url: "/app/contractor-hub", icon: Briefcase },
           { title: "Proposals", url: "/app/biz-docs?tab=proposals", icon: FilePlus2 },
           { title: "Business Documents", url: "/app/biz-docs", icon: FileText },
+          { title: "Trade Compensation", url: "/app/trade-compensation", icon: ArrowLeftRight, featureKey: "tenant.finance.trade-compensation" },
         ],
       },
       {
@@ -303,42 +302,18 @@ const TENANT_NAV: NavGroup[] = [
         items: [
           { title: "All Expenses", url: "/app/expenses", icon: Receipt },
           { title: "Expense Reports", url: "/app/reports?tab=expense", icon: FileBarChart },
+          { title: "Inventory", url: "/app/inventory", icon: Package },
         ],
       },
       {
-        label: "Contractor Hub",
-        icon: Briefcase,
-        url: "/app/contractor-hub",
-        roles: ["admin"],
-        featureKey: "tenant.finance.contractor-hub",
-        items: [],
-      },
-      {
-        label: "Trade Compensation",
-        icon: ArrowLeftRight,
-        url: "/app/trade-compensation",
-        roles: ["admin", "manager"],
-        featureKey: "tenant.finance.trade-compensation",
-        items: [
-          { title: "Transactions", url: "/app/trade-compensation", icon: ArrowLeftRight },
-        ],
-      },
-      {
-        label: "Inventory",
-        icon: Package,
-        url: "/app/inventory",
-        roles: ["admin", "manager", "employee"],
-        items: [
-          { title: "Stock List", url: "/app/inventory", icon: Package },
-        ],
-      },
-      {
-        label: "Customers & Vendors",
+        label: "Directory",
         icon: HandCoins,
         url: "/app/customers",
         roles: ["admin", "manager"],
         items: [
-          { title: "Directory", url: "/app/customers", icon: Users },
+          { title: "Customers", url: "/app/customers?tab=customers", icon: Users },
+          { title: "Vendors", url: "/app/customers?tab=vendors", icon: Building2 },
+          { title: "Contractors", url: "/app/customers?tab=contractors", icon: Briefcase },
         ],
       },
     ],
@@ -371,7 +346,7 @@ const TENANT_NAV: NavGroup[] = [
         ],
       },
       {
-        label: "Documents & Compliance",
+        label: "Documents",
         icon: FolderClosed,
         url: "/app/company-documents",
         roles: ["admin", "manager"],
@@ -384,12 +359,6 @@ const TENANT_NAV: NavGroup[] = [
           { title: "Audit Log", url: "/app/company-documents?tab=audit", icon: ShieldCheck },
         ],
       },
-    ],
-  },
-  {
-    groupLabel: "Policies & Rules",
-    roles: ["admin"],
-    sections: [
       {
         label: "Policy",
         icon: Shield,
@@ -421,6 +390,7 @@ const TENANT_NAV: NavGroup[] = [
   {
     groupLabel: "Reports",
     roles: ["admin", "manager"],
+    collapsible: true,
     sections: [
       {
         label: "Reports",
@@ -440,8 +410,9 @@ const TENANT_NAV: NavGroup[] = [
     ],
   },
   {
-    groupLabel: "System Admin",
+    groupLabel: "Settings",
     roles: ["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"],
+    collapsible: true,
     sections: [
       {
         label: "Settings",
@@ -525,19 +496,24 @@ export function AppSidebar() {
   const isPlatformUser = canAccessPlatformConsole(userRole, user?.companyId);
   const isManager = isManagerOrAbove(userRole);
 
+  // Track which collapsible group headers are open (default all open)
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+
+  const toggleGroup = (label: string) => {
+    setOpenGroups(prev => ({ ...prev, [label]: !(prev[label] ?? true) }));
+  };
+
+  const isGroupOpen = (label: string) => openGroups[label] ?? true;
+
   const hasAccess = (roles?: string[]) => {
     if (!roles || roles.length === 0) return true;
-    // Expand the user's actual role to its legacy aliases so that new role names
-    // (tenant_admin, tenant_manager, etc.) match against legacy role guards ("admin", "manager")
     const effectiveRoles = expandRoleForLegacyGuards(userRole);
     return roles.some(r => effectiveRoles.includes(r));
   };
 
   const hasFeature = (featureKey?: string) => {
     if (!featureKey) return true;
-    // Platform users always see everything
     if (userRole.startsWith("platform_")) return true;
-    // Default true (forward-compatible) when flags not loaded yet
     if (!featureFlags || !(featureKey in featureFlags)) return true;
     return featureFlags[featureKey] === true;
   };
@@ -624,6 +600,29 @@ export function AppSidebar() {
           if (group.roles && !hasAccess(group.roles)) return null;
           const visibleSections = group.sections.filter(s => hasAccess(s.roles));
           if (visibleSections.length === 0) return null;
+
+          if (group.collapsible) {
+            const open = isGroupOpen(group.groupLabel);
+            return (
+              <SidebarGroup key={group.groupLabel}>
+                <button
+                  onClick={() => toggleGroup(group.groupLabel)}
+                  className="flex items-center w-full px-2 py-1 text-[11px] uppercase tracking-widest text-sidebar-foreground/40 font-semibold hover:text-sidebar-foreground/70 transition-colors group"
+                  data-testid={`group-toggle-${group.groupLabel.toLowerCase().replace(/\s+/g, "-")}`}
+                >
+                  <span>{group.groupLabel}</span>
+                  <ChevronDown className={`ml-auto h-3.5 w-3.5 transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+                </button>
+                {open && (
+                  <SidebarGroupContent>
+                    <SidebarMenu>
+                      {visibleSections.map(section => renderSection(section))}
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                )}
+              </SidebarGroup>
+            );
+          }
 
           return (
             <SidebarGroup key={group.groupLabel}>
