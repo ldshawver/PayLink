@@ -421,6 +421,7 @@ function ProcessPayrollTab() {
             </div>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       {!showAll && !dateSearch && companyFilter === "all" && workerFilter === "all" && payrollRuns.length > Object.keys(latestByCompany).length && (
