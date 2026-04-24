@@ -9,8 +9,8 @@ import os from "os";
 import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
 import { db } from "./db";
-import { sql, eq } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema } from "@shared/schema";
+import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
@@ -3681,6 +3681,46 @@ export async function registerRoutes(
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to convert punches to timesheet entries" });
+    }
+  });
+
+  // Deduplicate time entries — keeps the entry with the highest totalHours for each worker+date
+  app.post("/api/time-entries/deduplicate", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const { companyId, startDate, endDate } = req.body;
+      // Scope: tenant users locked to their company; platform users may pass any companyId
+      const effectiveCompanyId = (!isPlatformUser(user?.role) && user?.companyId) ? user.companyId : companyId;
+      if (!effectiveCompanyId) return res.status(400).json({ message: "companyId required" });
+
+      const whereClause: any[] = [eq(timeEntries.companyId, effectiveCompanyId)];
+      if (startDate) whereClause.push(gte(timeEntries.date, String(startDate)));
+      if (endDate) whereClause.push(lte(timeEntries.date, String(endDate)));
+
+      const allEntries = await db.select().from(timeEntries).where(and(...whereClause));
+
+      // Group by workerId+date
+      const groups: Record<string, typeof allEntries> = {};
+      for (const e of allEntries) {
+        const key = `${e.workerId}::${e.date}`;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(e);
+      }
+
+      let removed = 0;
+      for (const group of Object.values(groups)) {
+        if (group.length <= 1) continue;
+        // Keep the entry with the highest totalHours; on tie, keep the one created first (lowest id)
+        group.sort((a, b) => Number(b.totalHours || 0) - Number(a.totalHours || 0));
+        const toDelete = group.slice(1).map(e => e.id);
+        await db.delete(timeEntries).where(inArray(timeEntries.id, toDelete));
+        removed += toDelete.length;
+      }
+
+      res.json({ removed, message: `Removed ${removed} duplicate time entr${removed === 1 ? "y" : "ies"}` });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to deduplicate time entries" });
     }
   });
 

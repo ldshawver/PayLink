@@ -1135,8 +1135,9 @@ export class DatabaseStorage implements IStorage {
 
     for (const [key, punches] of Object.entries(punchGroups)) {
       const [workerId, date] = key.split("::");
-      // Skip if time entry already exists (from punches source or otherwise has clockIn from punches)
-      const alreadyExists = existingEntries.find(e => e.workerId === workerId && e.date === date && e.source === "punches");
+      // Skip if any time entry already exists for this worker+date (regardless of source)
+      // This prevents duplicates whether the existing entry came from punches, manual entry, or payroll auto-convert
+      const alreadyExists = existingEntries.find(e => e.workerId === workerId && e.date === date);
       if (alreadyExists) { skipped++; continue; }
 
       const clockInPunch = punches.find(p => p.punchType === "clock_in");

@@ -367,6 +367,27 @@ function TimesheetTab() {
     },
   });
 
+  const dedupMutation = useMutation({
+    mutationFn: async () => {
+      return apiRequest("POST", "/api/time-entries/deduplicate", {
+        startDate: weekStart,
+        endDate: weekEnd,
+      });
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/time-entries"] });
+      toast({
+        title: data.removed > 0 ? "Duplicates removed" : "No duplicates found",
+        description: data.removed > 0
+          ? `Removed ${data.removed} duplicate entr${data.removed === 1 ? "y" : "ies"} for this week. Hours should now be correct.`
+          : "All entries for this week are unique.",
+      });
+    },
+    onError: () => {
+      toast({ title: "Deduplication failed", variant: "destructive" });
+    },
+  });
+
   // Auto-convert punches to time entries on load and when the week changes
   useEffect(() => {
     if (!user) return;
@@ -499,6 +520,19 @@ function TimesheetTab() {
             {canEdit && (
               <Button size="sm" variant="outline" onClick={() => setConvertOpen(true)} data-testid="button-convert-punches">
                 <RefreshCw className="h-4 w-4 mr-2" />Convert Punches
+              </Button>
+            )}
+            {canEdit && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => dedupMutation.mutate()}
+                disabled={dedupMutation.isPending}
+                data-testid="button-fix-duplicates"
+                title="Remove duplicate time entries for this week (keeps the entry with the most hours)"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                {dedupMutation.isPending ? "Fixing..." : "Fix Duplicates"}
               </Button>
             )}
             <Dialog open={addOpen} onOpenChange={setAddOpen}>
