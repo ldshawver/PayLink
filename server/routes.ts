@@ -2503,7 +2503,9 @@ export async function registerRoutes(
         if (run.lockedAt || run.isLocked) { skipped.push({ id: run.id, reason: "already locked" }); continue; }
         if (run.status === "draft") { skipped.push({ id: run.id, reason: "still a draft — process it first" }); continue; }
         if (!run.approvedAt) { skipped.push({ id: run.id, reason: "not yet approved" }); continue; }
-        if (run.useDirectDeposit !== false) {
+        // Only gate on ACH if direct deposit is explicitly enabled (true).
+        // Null/undefined means not configured — treat as check/manual payment.
+        if (run.useDirectDeposit === true) {
           const achSt = run.achStatus;
           if (achSt !== "submitted" && achSt !== "settled") {
             skipped.push({ id: run.id, reason: "ACH not yet submitted" }); continue;
