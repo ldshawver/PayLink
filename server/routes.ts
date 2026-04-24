@@ -2496,10 +2496,12 @@ export async function registerRoutes(
     try {
       const requestUser = await storage.getUser(req.session.userId!);
       const { companyId } = req.body;
-      const effectiveCompanyId = (!isPlatformUser(requestUser?.role) && requestUser?.companyId)
+      const isPlatform = isPlatformUser(requestUser?.role);
+      const effectiveCompanyId = (!isPlatform && requestUser?.companyId)
         ? requestUser.companyId
-        : companyId;
-      if (!effectiveCompanyId) return res.status(400).json({ message: "companyId required" });
+        : companyId || undefined;
+      // Tenant users must always have a companyId; platform users may omit it to lock all companies
+      if (!isPlatform && !effectiveCompanyId) return res.status(400).json({ message: "companyId required" });
 
       const allRuns = await storage.getPayrollRuns(effectiveCompanyId);
       const locked: string[] = [];
