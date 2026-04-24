@@ -1016,6 +1016,22 @@ function PayrollRunCard({
       <Dialog open={!!editItem} onOpenChange={(o) => !o && setEditItem(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle>Edit Payroll Item — {editItem ? getWorkerName(editItem.workerId) : ""}</DialogTitle></DialogHeader>
+
+          {(editItem as any)?.isManualOverride ? (
+            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
+              <span className="mt-0.5">⚠</span>
+              <div>
+                <span className="font-medium">Manual override active.</span> This paycheck is locked to your custom values and will not be recalculated if the run is re-processed.
+                {(editItem as any)?.manualOverrideNote && <div className="text-xs mt-0.5 opacity-80">{(editItem as any).manualOverrideNote}</div>}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 px-3 py-2 text-sm text-blue-700 dark:text-blue-300">
+              <span className="mt-0.5">ℹ</span>
+              <span>Saving changes will mark this paycheck as a <strong>manual override</strong>. It will be preserved if this run is re-processed.</span>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {[
               { label: "Pay Rate", key: "payRate" },
@@ -1041,6 +1057,15 @@ function PayrollRunCard({
                 />
               </div>
             ))}
+          </div>
+          <div className="grid gap-1 mt-1">
+            <Label className="text-xs">Override Note (optional)</Label>
+            <Input
+              placeholder="e.g. Commission paid in cash — regular hours only"
+              value={editForm.manualOverrideNote}
+              onChange={e => setEditForm(f => ({ ...f, manualOverrideNote: e.target.value }))}
+              data-testid="input-edit-item-override-note"
+            />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2 border-t pt-3">
             <div className="grid gap-1">
@@ -1072,15 +1097,31 @@ function PayrollRunCard({
               </div>
             )}
           </div>
-          <div className="flex justify-end gap-2 mt-2">
-            <Button variant="outline" onClick={() => setEditItem(null)}>Cancel</Button>
-            <Button
-              disabled={editItemMutation.isPending}
-              onClick={() => editItem && editItemMutation.mutate({ id: editItem.id, data: editForm })}
-              data-testid="button-save-payroll-item"
-            >
-              {editItemMutation.isPending ? "Saving..." : "Save Changes"}
-            </Button>
+          <div className="flex justify-between gap-2 mt-2">
+            <div>
+              {(editItem as any)?.isManualOverride && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-amber-700 border-amber-300 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-700"
+                  disabled={resetOverrideMutation.isPending}
+                  onClick={() => editItem && resetOverrideMutation.mutate(editItem.id)}
+                  data-testid="button-reset-override"
+                >
+                  {resetOverrideMutation.isPending ? "Resetting..." : "Reset to Calculated"}
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setEditItem(null)}>Cancel</Button>
+              <Button
+                disabled={editItemMutation.isPending}
+                onClick={() => editItem && editItemMutation.mutate({ id: editItem.id, data: editForm })}
+                data-testid="button-save-payroll-item"
+              >
+                {editItemMutation.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
@@ -1597,7 +1638,16 @@ function PayrollRunCard({
                         return (
                           <Fragment key={item.id}>
                             <TableRow data-testid={`row-payroll-item-${item.id}`}>
-                              <TableCell>{getWorkerName(item.workerId)}</TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-1.5">
+                                  {getWorkerName(item.workerId)}
+                                  {(item as any).isManualOverride && (
+                                    <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" title={(item as any).manualOverrideNote || "Manually edited"}>
+                                      Manual
+                                    </span>
+                                  )}
+                                </div>
+                              </TableCell>
                               <TableCell>{item.payType || "hourly"}</TableCell>
                               <TableCell>${Number(item.payRate || 0).toFixed(2)}</TableCell>
                               <TableCell>{Number(item.regularHours || 0).toFixed(1)}</TableCell>

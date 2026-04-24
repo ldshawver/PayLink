@@ -9608,11 +9608,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const [existingItem] = await db.select().from(piTable).where(eq(piTable.id, req.params.id as string));
       if (existingItem) {
         const parentRun = await storage.getPayrollRun(existingItem.payrollRunId);
-        if (parentRun && (parentRun.lockedAt || parentRun.isLocked || parentRun.status === "processed" || parentRun.status === "paid")) {
-          return res.status(409).json({ message: "Cannot modify payroll items on a locked or finalized payroll run" });
+        // Only block edits on truly locked or paid runs — processed runs are still editable
+        if (parentRun && (parentRun.lockedAt || parentRun.isLocked || parentRun.status === "paid")) {
+          return res.status(409).json({ message: "Cannot modify payroll items on a locked or paid payroll run" });
         }
       }
-      const item = await storage.updatePayrollItem(req.params.id as string, req.body);
+      // If explicitly clearing the override flag (Reset to Calculated), honour it.
+      // Otherwise auto-flag as manual override so re-processing preserves the edits.
+      const clearingOverride = req.body.isManualOverride === false;
+      const today = new Date().toISOString().slice(0, 10);
+      const updateData = {
+        ...req.body,
+        isManualOverride: clearingOverride ? false : true,
+        manualOverrideNote: clearingOverride
+          ? null
+          : (req.body.manualOverrideNote || ("Manually edited on " + today)),
+      };
+      const item = await storage.updatePayrollItem(req.params.id as string, updateData);
       if (!item) return res.status(404).json({ message: "Payroll item not found" });
       res.json(item);
     } catch (error) {
