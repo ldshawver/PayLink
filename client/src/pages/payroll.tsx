@@ -124,6 +124,22 @@ function ProcessPayrollTab() {
     },
   });
 
+  const fixSchedulesMutation = useMutation({
+    mutationFn: async () => {
+      if (!formData.companyId) throw new Error("Select a company first");
+      const res = await apiRequest("POST", `/api/pay-period-schedules/deactivate-extras?companyId=${encodeURIComponent(formData.companyId)}`, {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-period-schedules/resolve-period"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/pay-period-schedules"] });
+      toast({ title: "Schedules fixed", description: data.message });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
   const bulkLockMutation = useMutation({
     mutationFn: async () => {
       const body: Record<string, string> = {};
@@ -384,9 +400,24 @@ function ProcessPayrollTab() {
               </div>
 
               {formData.companyId && formData.payDate && !resolvedPeriod && resolveError && (
-                <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300 flex items-start gap-2">
-                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-                  <span>{(resolveError as any)?.message || "Could not resolve pay period for this date."}</span>
+                <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                    <span>{(resolveError as any)?.message || "Could not resolve pay period for this date."}</span>
+                  </div>
+                  {(resolveError as any)?.multipleActive && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-amber-400 text-amber-800 hover:bg-amber-100 dark:text-amber-300"
+                      disabled={fixSchedulesMutation.isPending}
+                      onClick={() => fixSchedulesMutation.mutate()}
+                      data-testid="button-fix-schedules"
+                    >
+                      <RefreshCw className="mr-2 h-3 w-3" />
+                      {fixSchedulesMutation.isPending ? "Fixing..." : "Auto-fix: Keep Only Most Recent Schedule"}
+                    </Button>
+                  )}
                 </div>
               )}
 
@@ -894,7 +925,7 @@ function PayrollRunCard({
     { label: "Generate Summary", done: run.status === "processed" || run.status === "paid", active: run.status === "draft" },
     { label: "Approve", done: isApproved, active: run.status === "processed" && !isApproved },
     { label: achStatus === "submitted" || achStatus === "settled" ? "ACH Submitted" : "Submit ACH / Print Checks", done: achStatus === "submitted" || achStatus === "settled", active: isApproved && !achStatus && !isLocked },
-    { label: "Locked", done: isLocked, active: isApproved && (achStatus === "submitted" || achStatus === "settled" || run.useDirectDeposit === false) && !isLocked },
+    { label: "Locked", done: isLocked, active: isApproved && (achStatus === "submitted" || achStatus === "settled" || run.useDirectDeposit !== true) && !isLocked },
   ];
 
   return (
@@ -1149,7 +1180,7 @@ function PayrollRunCard({
               )}
 
               {/* ── ACH Status section ────────────────────────────────────── */}
-              {(run.status === "processed" || run.status === "paid") && run.useDirectDeposit !== false && (
+              {(run.status === "processed" || run.status === "paid") && run.useDirectDeposit === true && (
                 <div className="rounded-lg border bg-muted/20 p-3 space-y-2" data-testid={`ach-section-${run.id}`}>
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">ACH / Direct Deposit Status</p>
                   <div className="flex flex-wrap items-center gap-3">
@@ -1177,7 +1208,7 @@ function PayrollRunCard({
                   <div className="flex items-center gap-2">
                     <Switch
                       id={`dd-toggle-${run.id}`}
-                      checked={run.useDirectDeposit !== false}
+                      checked={run.useDirectDeposit === true}
                       onCheckedChange={(val) => ddToggleMutation.mutate(val)}
                       disabled={ddToggleMutation.isPending || isLocked}
                       data-testid={`switch-direct-deposit-${run.id}`}
@@ -1186,7 +1217,7 @@ function PayrollRunCard({
                       Direct Deposit (ACH) this payroll
                     </Label>
                   </div>
-                  {run.useDirectDeposit !== false && (
+                  {run.useDirectDeposit === true && (
                     <div className="flex items-center gap-2">
                       <Label className="text-sm text-muted-foreground whitespace-nowrap">Pay Date:</Label>
                       <Input
@@ -1359,7 +1390,7 @@ function PayrollRunCard({
                     </>
                   )}
                   {(run.status === "processed" || run.status === "paid") && isApproved && (
-                    run.useDirectDeposit === false || achStatus === "submitted" || achStatus === "settled"
+                    run.useDirectDeposit !== true || achStatus === "submitted" || achStatus === "settled"
                       ? (
                         <Button
                           size="sm"
@@ -1375,7 +1406,7 @@ function PayrollRunCard({
                       ) : (
                         <div className="flex items-center gap-2 text-xs text-muted-foreground px-2 py-1 rounded border border-dashed" data-testid={`lock-pending-notice-${run.id}`}>
                           <LockOpen className="h-3 w-3" />
-                          <span>Submit ACH or confirm checks printed to enable locking</span>
+                          <span>ACH direct deposit is on — submit ACH batch to enable locking</span>
                         </div>
                       )
                   )}

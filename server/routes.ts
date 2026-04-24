@@ -4455,7 +4455,13 @@ export async function registerRoutes(
 
       const schedulePeriodsPerYear = periodsPerYearFromSchedule(activeSchedule.type);
 
-      const entries = await storage.getTimeEntriesByDateRange(companyId, periodStart, periodEnd);
+      let entries = await storage.getTimeEntriesByDateRange(companyId, periodStart, periodEnd);
+      // Strip volunteer-position shifts before any pay calculation
+      const allPositionsForCreate = await storage.getPositions(companyId);
+      const volunteerPosIds = new Set(allPositionsForCreate.filter((p: any) => p.isVolunteer).map((p: any) => p.id));
+      if (volunteerPosIds.size > 0) {
+        entries = entries.filter(e => !(e.positionId && volunteerPosIds.has(String(e.positionId))));
+      }
       const allWorkers = await storage.getWorkers(companyId);
       const activeWorkers = allWorkers.filter(w => w.isActive);
       const companyDeductions = await storage.getTaxesDeductions(companyId);
@@ -4517,14 +4523,15 @@ export async function registerRoutes(
 
       for (const worker of activeWorkers) {
         const workerEntries = entries.filter(e => e.workerId === worker.id);
-        const regHrs = workerEntries.reduce((s, e) => {
+        let regHrs = 0, otHrs = 0, dtHrs = 0;
+        for (const e of workerEntries) {
           const tot = parseFloat(e.totalHours || "0");
-          const ot = parseFloat(e.overtimeHours || "0");
-          const dt = parseFloat((e as any).doubleTimeHours || "0");
-          return s + (tot - ot - dt);
-        }, 0);
-        const otHrs = workerEntries.reduce((s, e) => s + parseFloat(e.overtimeHours || "0"), 0);
-        const dtHrs = workerEntries.reduce((s, e) => s + parseFloat((e as any).doubleTimeHours || "0"), 0);
+          const cappedOt = Math.min(parseFloat(e.overtimeHours || "0"), tot);
+          const cappedDt = Math.min(parseFloat((e as any).doubleTimeHours || "0"), Math.max(0, tot - cappedOt));
+          otHrs += cappedOt;
+          dtHrs += cappedDt;
+          regHrs += Math.max(0, tot - cappedOt - cappedDt);
+        }
         const totalHrs = regHrs + otHrs + dtHrs;
         const defaultRate = parseFloat(worker.payRate || "0");
 
@@ -4539,9 +4546,11 @@ export async function registerRoutes(
         } else {
           for (const e of workerEntries) {
             const entryTotal = parseFloat(e.totalHours || "0");
-            const entryOt = parseFloat(e.overtimeHours || "0");
-            const entryDt = parseFloat((e as any).doubleTimeHours || "0");
-            const entryReg = entryTotal - entryOt - entryDt;
+            const entryOtRaw = parseFloat(e.overtimeHours || "0");
+            const entryDtRaw = parseFloat((e as any).doubleTimeHours || "0");
+            const entryOt = Math.min(entryOtRaw, entryTotal);
+            const entryDt = Math.min(entryDtRaw, Math.max(0, entryTotal - entryOt));
+            const entryReg = Math.max(0, entryTotal - entryOt - entryDt);
             const wgId = (e as any).wageGroupId;
             const wg = wgId ? wageGroupMap[wgId] : null;
             const rate = wg ? wg.hourlyRate : defaultRate;
@@ -10237,6 +10246,34 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to resolve pay period" });
+    }
+  });
+
+  // ── Deactivate all but the most-recently-updated active schedule ─────────
+  app.post("/api/pay-period-schedules/deactivate-extras", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string || req.body.companyId;
+      if (!companyId) return res.status(400).json({ message: "companyId is required" });
+      const schedules = await storage.getPayPeriodSchedules(companyId);
+      const active = schedules.filter(s => s.isActive);
+      if (active.length <= 1) {
+        return res.json({ message: "Already OK", deactivated: 0 });
+      }
+      // Keep the one with the latest updatedAt (fallback to createdAt / id)
+      const sorted = [...active].sort((a, b) => {
+        const ta = (a as any).updatedAt || (a as any).createdAt || a.id;
+        const tb = (b as any).updatedAt || (b as any).createdAt || b.id;
+        return String(tb).localeCompare(String(ta));
+      });
+      const keep = sorted[0];
+      const toDeactivate = sorted.slice(1);
+      for (const s of toDeactivate) {
+        await storage.updatePayPeriodSchedule(s.id, { isActive: false });
+      }
+      res.json({ message: `Kept schedule "${keep.name}", deactivated ${toDeactivate.length} extra(s)`, deactivated: toDeactivate.length, kept: keep });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to deactivate extra schedules" });
     }
   });
 
