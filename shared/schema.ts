@@ -183,6 +183,7 @@ export const timeEntries = pgTable("time_entries", {
   isUnscheduled: boolean("is_unscheduled").default(false),
   source: text("source").default("manual"),
   tipsAmount: numeric("tips_amount").default("0"),
+  payCategory: text("pay_category").default("regular"), // regular | commission_hours | volunteer | special_event
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -256,6 +257,11 @@ export const payrollItems = pgTable("payroll_items", {
   paymentPlatform: text("payment_platform"),
   payMethodId: varchar("pay_method_id"),
   commissionPay: numeric("commission_pay").default("0"),
+  commissionHours: numeric("commission_hours").default("0"),
+  commissionHourlyPay: numeric("commission_hourly_pay").default("0"),
+  volunteerHours: numeric("volunteer_hours").default("0"),
+  specialEventHours: numeric("special_event_hours").default("0"),
+  specialEventPay: numeric("special_event_pay").default("0"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -342,6 +348,7 @@ export const jobs = pgTable("jobs", {
   startDate: date("start_date"),
   endDate: date("end_date"),
   status: jobStatusEnum("status").default("active"),
+  isSpecialEvent: boolean("is_special_event").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

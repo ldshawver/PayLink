@@ -1771,6 +1771,42 @@ function PayStubViewModal({ item, worker, company, run, taxesDeductions, onClose
                     <TableCell className="text-right text-sm">—</TableCell>
                   </TableRow>
                 )}
+                {Number((item as any).commissionHours || 0) > 0 && (
+                  <TableRow>
+                    <TableCell className="text-sm text-purple-700 dark:text-purple-400 font-medium">Commission Hours</TableCell>
+                    <TableCell className="text-right text-sm">{Number((item as any).commissionHours || 0).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">${Number(item.payRate || 0).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">${Number((item as any).commissionHourlyPay || 0).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">—</TableCell>
+                  </TableRow>
+                )}
+                {Number((item as any).specialEventHours || 0) > 0 && (
+                  <TableRow>
+                    <TableCell className="text-sm text-amber-700 dark:text-amber-400 font-medium">Special Event</TableCell>
+                    <TableCell className="text-right text-sm">{Number((item as any).specialEventHours || 0).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">${Number(item.payRate || 0).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">${Number((item as any).specialEventPay || 0).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">—</TableCell>
+                  </TableRow>
+                )}
+                {Number((item as any).volunteerHours || 0) > 0 && (
+                  <TableRow>
+                    <TableCell className="text-sm text-teal-700 dark:text-teal-400 font-medium">Volunteer Hours</TableCell>
+                    <TableCell className="text-right text-sm">{Number((item as any).volunteerHours || 0).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">—</TableCell>
+                    <TableCell className="text-right text-sm text-muted-foreground">$0.00</TableCell>
+                    <TableCell className="text-right text-sm">—</TableCell>
+                  </TableRow>
+                )}
+                {Number(item.commissionPay || 0) > 0 && (
+                  <TableRow>
+                    <TableCell className="text-sm text-blue-700 dark:text-blue-400 font-medium">Commission Earnings</TableCell>
+                    <TableCell className="text-right text-sm">—</TableCell>
+                    <TableCell className="text-right text-sm">—</TableCell>
+                    <TableCell className="text-right text-sm">${Number(item.commissionPay || 0).toFixed(2)}</TableCell>
+                    <TableCell className="text-right text-sm">—</TableCell>
+                  </TableRow>
+                )}
                 <TableRow className="font-semibold bg-muted/20">
                   <TableCell className="text-sm" colSpan={3}>Gross Pay</TableCell>
                   <TableCell className="text-right text-sm">${grossPay.toFixed(2)}</TableCell>

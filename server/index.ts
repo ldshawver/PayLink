@@ -313,6 +313,13 @@ app.use((req, res, next) => {
     await run("time_entries.is_unscheduled", sql`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS is_unscheduled BOOLEAN DEFAULT FALSE`);
     await run("time_entries.source", sql`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'`);
     await run("time_entries.tips_amount", sql`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS tips_amount NUMERIC DEFAULT 0`);
+    await run("time_entries.pay_category", sql`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS pay_category TEXT DEFAULT 'regular'`);
+    await run("payroll_items.commission_hours", sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS commission_hours NUMERIC DEFAULT 0`);
+    await run("payroll_items.commission_hourly_pay", sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS commission_hourly_pay NUMERIC DEFAULT 0`);
+    await run("payroll_items.volunteer_hours", sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS volunteer_hours NUMERIC DEFAULT 0`);
+    await run("payroll_items.special_event_hours", sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS special_event_hours NUMERIC DEFAULT 0`);
+    await run("payroll_items.special_event_pay", sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS special_event_pay NUMERIC DEFAULT 0`);
+    await run("jobs.is_special_event", sql`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS is_special_event BOOLEAN DEFAULT FALSE`);
     // shift_offers table + additions
     await run("shift_offers table", sql`CREATE TABLE IF NOT EXISTS shift_offers (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

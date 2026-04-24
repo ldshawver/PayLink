@@ -2187,6 +2187,9 @@ export async function registerRoutes(
         const otMultiplier = parseFloat(company.overtimeMultiplier || "1.5");
         const dtMultiplier = 2.0;
         let regPay = 0, otPay = 0, dtPay = 0, grossPay = 0;
+        let commissionHrsTotal = 0, commissionHrlyPay = 0;
+        let volunteerHrsTotal = 0;
+        let specialEventHrsTotal = 0, specialEventPayTotal = 0;
 
         if (worker.payType === "salary") {
           const hourlyEquiv = defaultRate / 2080;
@@ -2200,17 +2203,29 @@ export async function registerRoutes(
             const entryOt = parseFloat(e.overtimeHours || "0");
             const entryDt = parseFloat(e.doubleTimeHours || "0");
             const entryReg = entryTotal - entryOt - entryDt;
+            const payCategory = (e as any).payCategory || "regular";
 
             const wgId = e.wageGroupId;
             const wg = wgId ? wageGroupMap[wgId] : null;
             const rate = wg ? wg.hourlyRate : defaultRate;
             const otRate = wg && wg.overtimeRate > 0 ? wg.overtimeRate : rate * otMultiplier;
 
-            regPay += entryReg * rate;
-            otPay += entryOt * otRate;
-            dtPay += entryDt * rate * dtMultiplier;
+            if (payCategory === "volunteer") {
+              volunteerHrsTotal += entryTotal;
+            } else if (payCategory === "commission_hours") {
+              commissionHrsTotal += entryTotal;
+              commissionHrlyPay += entryTotal * rate;
+            } else if (payCategory === "special_event") {
+              specialEventHrsTotal += entryTotal;
+              specialEventPayTotal += entryTotal * rate;
+            } else {
+              // regular (default)
+              regPay += entryReg * rate;
+              otPay += entryOt * otRate;
+              dtPay += entryDt * rate * dtMultiplier;
+            }
           }
-          grossPay = regPay + otPay + dtPay;
+          grossPay = regPay + otPay + dtPay + commissionHrlyPay + specialEventPayTotal;
         }
 
         // Apply pay stub amendments for this worker in this pay period
@@ -2315,6 +2330,11 @@ export async function registerRoutes(
           ytdDeductions: (ytd.deductions + totalDeductions).toFixed(2),
           ytdNet: (ytd.net + netPay).toFixed(2),
           commissionPay: commissionPay > 0 ? commissionPay.toFixed(2) : undefined,
+          commissionHours: commissionHrsTotal > 0 ? commissionHrsTotal.toFixed(2) : "0",
+          commissionHourlyPay: commissionHrlyPay > 0 ? commissionHrlyPay.toFixed(2) : "0",
+          volunteerHours: volunteerHrsTotal > 0 ? volunteerHrsTotal.toFixed(2) : "0",
+          specialEventHours: specialEventHrsTotal > 0 ? specialEventHrsTotal.toFixed(2) : "0",
+          specialEventPay: specialEventPayTotal > 0 ? specialEventPayTotal.toFixed(2) : "0",
         });
       }
 

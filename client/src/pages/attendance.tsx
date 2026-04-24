@@ -249,6 +249,7 @@ function TimesheetTab() {
     overtimeHours: "0",
     doubleTimeHours: "0",
     status: "pending",
+    payCategory: "regular",
   });
   const [addForm, setAddForm] = useState({
     workerId: "",
@@ -445,6 +446,7 @@ function TimesheetTab() {
       overtimeHours: String(entry.overtimeHours || 0),
       doubleTimeHours: String(entry.doubleTimeHours || 0),
       status: entry.status || "pending",
+      payCategory: (entry as any).payCategory || "regular",
     });
   };
 
@@ -1086,16 +1088,30 @@ function TimesheetTab() {
                   <Input type="number" step="0.01" value={editForm.doubleTimeHours} onChange={e => setEditForm(f => ({ ...f, doubleTimeHours: e.target.value }))} data-testid="input-edit-dt" />
                 </div>
               </div>
-              <div className="grid gap-1.5">
-                <Label>Status</Label>
-                <Select value={editForm.status} onValueChange={v => setEditForm(f => ({ ...f, status: v }))}>
-                  <SelectTrigger data-testid="select-edit-status"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="pending">Pending</SelectItem>
-                    <SelectItem value="approved">Approved</SelectItem>
-                    <SelectItem value="rejected">Rejected</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid gap-1.5">
+                  <Label>Status</Label>
+                  <Select value={editForm.status} onValueChange={v => setEditForm(f => ({ ...f, status: v }))}>
+                    <SelectTrigger data-testid="select-edit-status"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="approved">Approved</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label>Pay Category</Label>
+                  <Select value={editForm.payCategory} onValueChange={v => setEditForm(f => ({ ...f, payCategory: v }))}>
+                    <SelectTrigger data-testid="select-edit-pay-category"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="regular">Regular</SelectItem>
+                      <SelectItem value="commission_hours">Commission Hours</SelectItem>
+                      <SelectItem value="volunteer">Volunteer</SelectItem>
+                      <SelectItem value="special_event">Special Event</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <Button
                 onClick={() => updateEntry.mutate({
@@ -1108,6 +1124,7 @@ function TimesheetTab() {
                     overtimeHours: editForm.overtimeHours,
                     doubleTimeHours: editForm.doubleTimeHours,
                     status: editForm.status,
+                    payCategory: editForm.payCategory,
                   },
                 })}
                 disabled={updateEntry.isPending}

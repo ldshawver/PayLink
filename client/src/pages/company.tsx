@@ -2385,7 +2385,7 @@ function JobsTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<Job | null>(null);
-  const emptyForm = { companyId: "__universal__", costCenterId: "", departmentId: "", name: "", description: "", payType: "hourly", defaultWage: "", startDate: "", endDate: "", status: "active" };
+  const emptyForm = { companyId: "__universal__", costCenterId: "", departmentId: "", name: "", description: "", payType: "hourly", defaultWage: "", startDate: "", endDate: "", status: "active", isSpecialEvent: false };
   const [form, setForm] = useState(emptyForm);
 
   const { data: jobsList, isLoading } = useQuery<Job[]>({ queryKey: ["/api/jobs"] });
@@ -2452,6 +2452,7 @@ function JobsTab() {
       startDate: item.startDate || "",
       endDate: item.endDate || "",
       status: item.status || "active",
+      isSpecialEvent: (item as any).isSpecialEvent ?? false,
     });
     setEditOpen(true);
   };
@@ -2557,6 +2558,19 @@ function JobsTab() {
             ))}
           </SelectContent>
         </Select>
+      </div>
+      <div className="flex items-center gap-2 pt-1">
+        <input
+          type="checkbox"
+          id={`job-special-event${suffix}`}
+          checked={!!form.isSpecialEvent}
+          onChange={(e) => setForm({ ...form, isSpecialEvent: e.target.checked })}
+          data-testid={`checkbox-job-special-event${suffix}`}
+          className="h-4 w-4 rounded border-gray-300 text-primary"
+        />
+        <Label htmlFor={`job-special-event${suffix}`} className="cursor-pointer font-normal">
+          Special Event — time entries for this job will appear as a separate pay category on pay stubs
+        </Label>
       </div>
     </div>
   );
