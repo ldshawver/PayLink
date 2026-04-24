@@ -213,6 +213,10 @@ import {
   smtpConfig, smsConfig,
   type SmtpConfig, type InsertSmtpConfig,
   type SmsConfig, type InsertSmsConfig,
+  earningTypes, commissions, payStubLineItems,
+  type EarningType, type InsertEarningType,
+  type Commission, type InsertCommission,
+  type PayStubLineItem, type InsertPayStubLineItem,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -1003,6 +1007,23 @@ export interface IStorage {
   getSmsConfig(): Promise<SmsConfig | undefined>;
   upsertSmsConfig(data: Partial<InsertSmsConfig>): Promise<SmsConfig>;
   updateSmsConfigTestResult(result: string): Promise<void>;
+
+  // Earning Types
+  getEarningTypes(companyId: string): Promise<EarningType[]>;
+  createEarningType(data: InsertEarningType): Promise<EarningType>;
+  deleteEarningType(id: string): Promise<void>;
+
+  // Commissions
+  getCommissions(companyId: string, filters?: { workerId?: string; status?: string; startDate?: string; endDate?: string }): Promise<Commission[]>;
+  getCommission(id: string): Promise<Commission | undefined>;
+  createCommission(data: InsertCommission): Promise<Commission>;
+  updateCommission(id: string, data: Partial<Commission>): Promise<Commission | undefined>;
+  deleteCommission(id: string): Promise<void>;
+
+  // Pay Stub Line Items
+  getPayStubLineItems(payrollItemId: string): Promise<PayStubLineItem[]>;
+  createPayStubLineItem(data: InsertPayStubLineItem): Promise<PayStubLineItem>;
+  deletePayStubLineItemsByPayrollItem(payrollItemId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -4446,6 +4467,55 @@ export class DatabaseStorage implements IStorage {
     if (existing) {
       await db.update(smsConfig).set({ lastTestedAt: new Date(), lastTestResult: result }).where(eq(smsConfig.id, existing.id));
     }
+  }
+
+  // ── Earning Types ─────────────────────────────────────────────────────────
+  async getEarningTypes(companyId: string): Promise<EarningType[]> {
+    return db.select().from(earningTypes).where(eq(earningTypes.companyId, companyId)).orderBy(earningTypes.code);
+  }
+  async createEarningType(data: InsertEarningType): Promise<EarningType> {
+    const [r] = await db.insert(earningTypes).values(data).returning();
+    return r;
+  }
+  async deleteEarningType(id: string): Promise<void> {
+    await db.delete(earningTypes).where(eq(earningTypes.id, id));
+  }
+
+  // ── Commissions ───────────────────────────────────────────────────────────
+  async getCommissions(companyId: string, filters?: { workerId?: string; status?: string; startDate?: string; endDate?: string }): Promise<Commission[]> {
+    let query = db.select().from(commissions).where(eq(commissions.companyId, companyId)).$dynamic();
+    if (filters?.workerId) query = query.where(and(eq(commissions.companyId, companyId), eq(commissions.workerId, filters.workerId)));
+    if (filters?.status) query = query.where(and(eq(commissions.companyId, companyId), eq(commissions.status, filters.status)));
+    if (filters?.startDate) query = query.where(and(eq(commissions.companyId, companyId), gte(commissions.earnedDate, filters.startDate)));
+    if (filters?.endDate) query = query.where(and(eq(commissions.companyId, companyId), lte(commissions.earnedDate, filters.endDate)));
+    return query.orderBy(desc(commissions.earnedDate));
+  }
+  async getCommission(id: string): Promise<Commission | undefined> {
+    const [r] = await db.select().from(commissions).where(eq(commissions.id, id));
+    return r;
+  }
+  async createCommission(data: InsertCommission): Promise<Commission> {
+    const [r] = await db.insert(commissions).values(data).returning();
+    return r;
+  }
+  async updateCommission(id: string, data: Partial<Commission>): Promise<Commission | undefined> {
+    const [r] = await db.update(commissions).set(data as any).where(eq(commissions.id, id)).returning();
+    return r;
+  }
+  async deleteCommission(id: string): Promise<void> {
+    await db.delete(commissions).where(eq(commissions.id, id));
+  }
+
+  // ── Pay Stub Line Items ───────────────────────────────────────────────────
+  async getPayStubLineItems(payrollItemId: string): Promise<PayStubLineItem[]> {
+    return db.select().from(payStubLineItems).where(eq(payStubLineItems.payrollItemId, payrollItemId));
+  }
+  async createPayStubLineItem(data: InsertPayStubLineItem): Promise<PayStubLineItem> {
+    const [r] = await db.insert(payStubLineItems).values(data).returning();
+    return r;
+  }
+  async deletePayStubLineItemsByPayrollItem(payrollItemId: string): Promise<void> {
+    await db.delete(payStubLineItems).where(eq(payStubLineItems.payrollItemId, payrollItemId));
   }
 }
 

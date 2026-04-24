@@ -1980,7 +1980,10 @@ export async function registerRoutes(
         }
 
         // 2. Worker compensation: every active worker must have payRate > 0
+        //    Exception: commission-only workers get paid via commissions, not payRate
         const workersWithoutPay = activeWorkers.filter(w => {
+          const compType = (w as any).compensationType || "hourly";
+          if (compType === "commission") return false; // commission workers don't need a payRate
           const rate = parseFloat(String(w.payRate || "0"));
           return rate <= 0;
         });
@@ -1993,9 +1996,12 @@ export async function registerRoutes(
         }
 
         // 3. Hourly workers: must have at least some time entries in the period
-        const hourlyWorkers = activeWorkers.filter(w =>
-          w.payType === "hourly" || !w.payType
-        );
+        //    Commission workers are exempt from this check
+        const hourlyWorkers = activeWorkers.filter(w => {
+          const compType = (w as any).compensationType || "hourly";
+          if (compType === "commission") return false;
+          return w.payType === "hourly" || !w.payType;
+        });
         const hourlyWorkerIds = new Set(hourlyWorkers.map(w => w.id));
         const workerIdsWithEntries = new Set(entries.map(e => e.workerId));
         const hourlyWithNoEntries = hourlyWorkers.filter(w =>
@@ -2076,6 +2082,22 @@ export async function registerRoutes(
       const schedulePeriodsPerYear = activeSchedule
         ? periodsPerYearFromSchedule(activeSchedule.type)
         : periodsPerYearFromSchedule(company.payFrequency || "biweekly");
+
+      // Load approved commissions for this period (keyed by workerId)
+      const { commissions: commissionsTable } = await import("../shared/schema.js");
+      const periodCommissions = await db.select().from(commissionsTable).where(
+        and(
+          eq(commissionsTable.companyId, run.companyId),
+          eq(commissionsTable.status, "approved"),
+          gte(commissionsTable.earnedDate, run.periodStart),
+          lte(commissionsTable.earnedDate, run.periodEnd)
+        )
+      );
+      const commissionsByWorker: Record<string, typeof periodCommissions> = {};
+      for (const c of periodCommissions) {
+        if (!commissionsByWorker[c.workerId]) commissionsByWorker[c.workerId] = [];
+        commissionsByWorker[c.workerId].push(c);
+      }
 
       // Load amendments and pay stub accounts for this pay period
       const allAmendments = await storage.getPayStubAmendments(run.companyId);
@@ -2177,6 +2199,14 @@ export async function registerRoutes(
         console.log(`[PAYROLL] Worker ${worker.firstName}: earnings_adj=${amendmentEarnings} deductions_adj=${amendmentDeductions} grossBefore=${grossPay}`);
         grossPay += amendmentEarnings;
 
+        // ── Commission earnings ──
+        const workerCommissions = commissionsByWorker[worker.id] || [];
+        const commissionPay = workerCommissions.reduce((sum, c) => sum + parseFloat(c.amount || "0"), 0);
+        if (commissionPay > 0) {
+          grossPay += commissionPay;
+          console.log(`[PAYROLL] Worker ${worker.firstName}: adding commission pay $${commissionPay.toFixed(2)}`);
+        }
+
         const rate = defaultRate;
 
         const isContractor = worker.workerType === "contractor";
@@ -2242,11 +2272,25 @@ export async function registerRoutes(
           ytdGross: (ytd.gross + grossPay).toFixed(2),
           ytdDeductions: (ytd.deductions + totalDeductions).toFixed(2),
           ytdNet: (ytd.net + netPay).toFixed(2),
+          commissionPay: commissionPay > 0 ? commissionPay.toFixed(2) : undefined,
         });
       }
 
       for (const item of items) {
         await storage.createPayrollItem(item);
+      }
+
+      // ── Mark paid commissions ────────────────────────────────────────────
+      const paidRunId = run.id;
+      const commissionIdsToMark: string[] = [];
+      for (const wComms of Object.values(commissionsByWorker)) {
+        for (const c of wComms) commissionIdsToMark.push(c.id);
+      }
+      if (commissionIdsToMark.length > 0) {
+        await db.update(commissionsTable)
+          .set({ status: "paid", payrollRunId: paidRunId, paidAt: new Date() } as any)
+          .where(inArray(commissionsTable.id, commissionIdsToMark));
+        console.log(`[PAYROLL] Marked ${commissionIdsToMark.length} commission(s) as paid for run ${paidRunId}`);
       }
 
       // ── Mark non-recurring amendments as applied to prevent double-apply ──
@@ -4519,6 +4563,22 @@ export async function registerRoutes(
         }
       }
 
+      // ── Load approved commissions for this period ────────────────────────
+      const { commissions: createCommissionsTable } = await import("../shared/schema.js");
+      const createPeriodCommissions = await db.select().from(createCommissionsTable).where(
+        and(
+          eq(createCommissionsTable.companyId, companyId),
+          eq(createCommissionsTable.status, "approved"),
+          gte(createCommissionsTable.earnedDate, periodStart),
+          lte(createCommissionsTable.earnedDate, periodEnd)
+        )
+      );
+      const createCommByWorker: Record<string, typeof createPeriodCommissions> = {};
+      for (const c of createPeriodCommissions) {
+        if (!createCommByWorker[c.workerId]) createCommByWorker[c.workerId] = [];
+        createCommByWorker[c.workerId].push(c);
+      }
+
       const items: any[] = [];
       let totalGross = 0, totalNet = 0, totalHoursSum = 0, totalOT = 0;
       let checkNum = company.nextCheckNumber || 1;
@@ -4564,7 +4624,17 @@ export async function registerRoutes(
           grossPay = regPay + otPay + dtPay;
         }
 
-        if (totalHrs === 0 && worker.payType !== "salary") continue;
+        // ── Commission earnings (CREATE) ──
+        const createWorkerComms = createCommByWorker[worker.id] || [];
+        const createCommPay = createWorkerComms.reduce((sum, c) => sum + parseFloat(c.amount || "0"), 0);
+        if (createCommPay > 0) grossPay += createCommPay;
+
+        const compTypeCreate = (worker as any).compensationType || "hourly";
+        const isCommissionOnlyCreate = compTypeCreate === "commission";
+        // Skip workers with no hours unless they have salary pay type or are commission-only
+        if (totalHrs === 0 && worker.payType !== "salary" && !isCommissionOnlyCreate) continue;
+        // Commission-only workers with no commissions this period also skip
+        if (isCommissionOnlyCreate && createCommPay === 0 && totalHrs === 0) continue;
 
         const isContractor = worker.workerType === "contractor";
         const workerGroup2 = (worker as any).workerGroup || (isContractor ? "hourly_contractor" : "hourly_employee");
@@ -4587,7 +4657,6 @@ export async function registerRoutes(
         for (const ded of workerDeds) {
           if (ded.calculationType === "percentage") {
             if (ded.maxAmount) {
-              // Wage-base cap (e.g. Social Security $168,600): compare against YTD accumulated gross
               const wageCap = parseFloat(ded.maxAmount);
               const remainingCap = Math.max(0, wageCap - ytd.gross);
               const base = Math.min(grossPay, remainingCap);
@@ -4626,6 +4695,7 @@ export async function registerRoutes(
           ytdGross: (ytd.gross + grossPay).toFixed(2),
           ytdDeductions: (ytd.deductions + totalDeductions).toFixed(2),
           ytdNet: (ytd.net + netPay).toFixed(2),
+          commissionPay: createCommPay > 0 ? createCommPay.toFixed(2) : undefined,
         });
       }
 
@@ -4652,6 +4722,17 @@ export async function registerRoutes(
 
       for (const item of items) {
         await storage.createPayrollItem({ payrollRunId: payrollRun.id, ...item });
+      }
+
+      // Mark approved commissions in this period as paid
+      const createCommIdsToMark: string[] = [];
+      for (const wComms of Object.values(createCommByWorker)) {
+        for (const c of wComms) createCommIdsToMark.push(c.id);
+      }
+      if (createCommIdsToMark.length > 0) {
+        await db.update(createCommissionsTable)
+          .set({ status: "paid", payrollRunId: payrollRun.id, paidAt: new Date() } as any)
+          .where(inArray(createCommissionsTable.id, createCommIdsToMark));
       }
 
       await storage.updateCompany(companyId, { nextCheckNumber: checkNum });
@@ -10214,6 +10295,75 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       console.error(error);
       res.status(500).json({ message: "Failed to update pay stub transaction" });
     }
+  });
+
+  // ── Earning Types ─────────────────────────────────────────────────────────
+  app.get("/api/earning-types", requireAuth, async (req, res) => {
+    try {
+      const companyId = req.query.companyId as string;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const types = await storage.getEarningTypes(companyId);
+      res.json(types);
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to fetch earning types" }); }
+  });
+
+  app.post("/api/earning-types", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const type = await storage.createEarningType(req.body);
+      res.status(201).json(type);
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to create earning type" }); }
+  });
+
+  // ── Commissions ────────────────────────────────────────────────────────────
+  app.get("/api/commissions", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const companyId = (!isPlatformUser(user?.role) && user?.companyId)
+        ? user.companyId
+        : req.query.companyId as string;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      const filters = {
+        workerId: req.query.workerId as string | undefined,
+        status: req.query.status as string | undefined,
+        startDate: req.query.startDate as string | undefined,
+        endDate: req.query.endDate as string | undefined,
+      };
+      const list = await storage.getCommissions(companyId, filters);
+      res.json(list);
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to fetch commissions" }); }
+  });
+
+  app.post("/api/commissions", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const companyId = (!isPlatformUser(user?.role) && user?.companyId)
+        ? user.companyId
+        : req.body.companyId;
+      if (!companyId) return res.status(400).json({ message: "companyId required" });
+      if (!req.body.workerId) return res.status(400).json({ message: "workerId required" });
+      if (!req.body.amount) return res.status(400).json({ message: "amount required" });
+      if (!req.body.earnedDate) return res.status(400).json({ message: "earnedDate required" });
+      const commission = await storage.createCommission({ ...req.body, companyId, status: req.body.status || "pending" });
+      res.status(201).json(commission);
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to create commission" }); }
+  });
+
+  app.patch("/api/commissions/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const commission = await storage.updateCommission(req.params.id, req.body);
+      if (!commission) return res.status(404).json({ message: "Commission not found" });
+      res.json(commission);
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to update commission" }); }
+  });
+
+  app.delete("/api/commissions/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const existing = await storage.getCommission(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Commission not found" });
+      if (existing.status === "paid") return res.status(409).json({ message: "Cannot delete a commission that has already been paid" });
+      await storage.deleteCommission(req.params.id);
+      res.json({ message: "Deleted" });
+    } catch (e) { console.error(e); res.status(500).json({ message: "Failed to delete commission" }); }
   });
 
   // ── Resolve pay period from active schedule + payDate ─────────────────────

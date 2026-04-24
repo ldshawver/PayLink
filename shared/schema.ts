@@ -142,6 +142,7 @@ export const workers = pgTable("workers", {
   emergencyContactPhone: text("emergency_contact_phone"),
   contractorType: text("contractor_type").default("hourly"),
   workerGroup: text("worker_group").default("hourly_employee"),
+  compensationType: text("compensation_type").default("hourly"), // hourly | salary | commission | hybrid
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -253,6 +254,7 @@ export const payrollItems = pgTable("payroll_items", {
   paymentMethod: text("payment_method"),
   paymentPlatform: text("payment_platform"),
   payMethodId: varchar("pay_method_id"),
+  commissionPay: numeric("commission_pay").default("0"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -4221,3 +4223,47 @@ export const featureActivationLog = pgTable("feature_activation_log", {
 export const insertFeatureActivationLogSchema = createInsertSchema(featureActivationLog).omit({ id: true, createdAt: true });
 export type FeatureActivationLog = typeof featureActivationLog.$inferSelect;
 export type InsertFeatureActivationLog = z.infer<typeof insertFeatureActivationLogSchema>;
+
+// ── Earning Types ─────────────────────────────────────────────────────────────
+export const earningTypes = pgTable("earning_types", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  code: text("code").notNull(),   // commission | hourly | salary | bonus
+  label: text("label").notNull(),
+  isTaxable: boolean("is_taxable").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertEarningTypeSchema = createInsertSchema(earningTypes).omit({ id: true, createdAt: true });
+export type EarningType = typeof earningTypes.$inferSelect;
+export type InsertEarningType = z.infer<typeof insertEarningTypeSchema>;
+
+// ── Commissions ───────────────────────────────────────────────────────────────
+export const commissions = pgTable("commissions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull(),
+  workerId: varchar("worker_id").notNull(),
+  amount: numeric("amount").notNull(),
+  description: text("description"),
+  sourceType: text("source_type").default("manual"), // manual | order | deal
+  sourceId: varchar("source_id"),
+  earnedDate: date("earned_date").notNull(),
+  status: text("status").default("pending"),  // pending | approved | paid
+  payrollRunId: varchar("payroll_run_id"),     // set when marked paid
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertCommissionSchema = createInsertSchema(commissions).omit({ id: true, createdAt: true });
+export type Commission = typeof commissions.$inferSelect;
+export type InsertCommission = z.infer<typeof insertCommissionSchema>;
+
+// ── Pay Stub Line Items ───────────────────────────────────────────────────────
+export const payStubLineItems = pgTable("pay_stub_line_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  payrollItemId: varchar("payroll_item_id").notNull(),
+  earningTypeId: varchar("earning_type_id"),
+  description: text("description"),
+  amount: numeric("amount").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertPayStubLineItemSchema = createInsertSchema(payStubLineItems).omit({ id: true, createdAt: true });
+export type PayStubLineItem = typeof payStubLineItems.$inferSelect;
+export type InsertPayStubLineItem = z.infer<typeof insertPayStubLineItemSchema>;

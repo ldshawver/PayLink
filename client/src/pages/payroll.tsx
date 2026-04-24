@@ -6130,6 +6130,239 @@ function PaymentRecordsTab() {
   );
 }
 
+// ── Commission Types ───────────────────────────────────────────────────────
+interface EarningType { id: string; companyId: string; code: string; description?: string; }
+interface Commission {
+  id: string; companyId: string; workerId: string; amount: string;
+  earnedDate: string; status: string; description?: string;
+  payrollRunId?: string; paidAt?: string;
+}
+
+const BLANK_COMMISSION = { companyId: "", workerId: "", amount: "", earnedDate: "", description: "", status: "pending" };
+
+function CommissionsTab() {
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [formData, setFormData] = useState({ ...BLANK_COMMISSION });
+  const [filterCompanyId, setFilterCompanyId] = useState<string>("");
+  const [filterStatus, setFilterStatus] = useState<string>("all");
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
+  const isPlatform = (user?.role === "platform_super_admin" || user?.role === "platform_admin" || user?.role === "platform_support");
+  const effectiveCompanyId = isPlatform ? filterCompanyId : (user?.companyId || "");
+
+  const { data: commissions = [], isLoading } = useQuery<Commission[]>({
+    queryKey: ["/api/commissions", effectiveCompanyId, filterStatus],
+    queryFn: async () => {
+      if (!effectiveCompanyId) return [];
+      const params = new URLSearchParams({ companyId: effectiveCompanyId });
+      if (filterStatus && filterStatus !== "all") params.set("status", filterStatus);
+      const res = await fetch(`/api/commissions?${params}`);
+      if (!res.ok) throw new Error("Failed to load commissions");
+      return res.json();
+    },
+    enabled: !!effectiveCompanyId,
+  });
+
+  const companyWorkers = (effectiveCompanyId ? workers.filter(w => w.companyId === effectiveCompanyId) : workers);
+  const getWorkerName = (id: string) => { const w = workers.find(w => w.id === id); return w ? `${w.firstName} ${w.lastName}` : id; };
+
+  const openAdd = () => { setEditingId(null); setFormData({ ...BLANK_COMMISSION, companyId: effectiveCompanyId }); setDialogOpen(true); };
+  const openEdit = (c: Commission) => {
+    if (c.status === "paid") { toast({ title: "Cannot edit a paid commission" }); return; }
+    setEditingId(c.id);
+    setFormData({ companyId: c.companyId, workerId: c.workerId, amount: c.amount, earnedDate: c.earnedDate, description: c.description || "", status: c.status });
+    setDialogOpen(true);
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: async (data: typeof formData) => {
+      if (editingId) {
+        const res = await apiRequest("PATCH", `/api/commissions/${editingId}`, data);
+        return res.json();
+      } else {
+        const res = await apiRequest("POST", "/api/commissions", data);
+        return res.json();
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/commissions"] });
+      toast({ title: editingId ? "Commission updated" : "Commission created" });
+      setDialogOpen(false);
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("PATCH", `/api/commissions/${id}`, { status: "approved" });
+      return res.json();
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/commissions"] }); toast({ title: "Commission approved" }); },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/commissions/${id}`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/commissions"] }); toast({ title: "Commission deleted" }); },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const statusBadge = (status: string) => {
+    const map: Record<string, string> = { pending: "secondary", approved: "default", paid: "outline" };
+    return <Badge variant={(map[status] || "secondary") as any} className="capitalize">{status}</Badge>;
+  };
+
+  const totalPending = commissions.filter(c => c.status === "pending").reduce((s, c) => s + parseFloat(c.amount || "0"), 0);
+  const totalApproved = commissions.filter(c => c.status === "approved").reduce((s, c) => s + parseFloat(c.amount || "0"), 0);
+
+  if (isLoading) return <div data-testid="loading-commissions"><Skeleton className="h-64 w-full" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3 justify-between">
+        <div className="flex flex-wrap gap-3 items-center">
+          {isPlatform && (
+            <Select value={filterCompanyId} onValueChange={setFilterCompanyId}>
+              <SelectTrigger className="w-48" data-testid="select-commission-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+              <SelectContent>{companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+            </Select>
+          )}
+          <Select value={filterStatus} onValueChange={setFilterStatus}>
+            <SelectTrigger className="w-36" data-testid="select-commission-status"><SelectValue placeholder="Status" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Statuses</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="approved">Approved</SelectItem>
+              <SelectItem value="paid">Paid</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <Button data-testid="button-add-commission" onClick={openAdd} disabled={!effectiveCompanyId}><Plus className="mr-2 h-4 w-4" />Add Commission</Button>
+      </div>
+
+      {effectiveCompanyId && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <Card><CardContent className="pt-4"><div className="text-xs text-muted-foreground">Pending</div><div className="text-xl font-bold text-yellow-600 dark:text-yellow-400" data-testid="text-commission-total-pending">${totalPending.toFixed(2)}</div></CardContent></Card>
+          <Card><CardContent className="pt-4"><div className="text-xs text-muted-foreground">Approved (unpaid)</div><div className="text-xl font-bold text-green-600 dark:text-green-400" data-testid="text-commission-total-approved">${totalApproved.toFixed(2)}</div></CardContent></Card>
+        </div>
+      )}
+
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Worker</TableHead>
+                <TableHead>Amount</TableHead>
+                <TableHead>Earned Date</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead>Paid In Run</TableHead>
+                <TableHead className="w-24"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {commissions.length === 0 ? (
+                <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No commissions found</TableCell></TableRow>
+              ) : commissions.map(c => (
+                <TableRow key={c.id} data-testid={`row-commission-${c.id}`}>
+                  <TableCell className="font-medium">{getWorkerName(c.workerId)}</TableCell>
+                  <TableCell className="font-mono">${parseFloat(c.amount || "0").toFixed(2)}</TableCell>
+                  <TableCell>{c.earnedDate}</TableCell>
+                  <TableCell>{statusBadge(c.status)}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate">{c.description || "—"}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{c.payrollRunId ? `Run ${c.payrollRunId.slice(-8)}` : "—"}</TableCell>
+                  <TableCell>
+                    <div className="flex gap-1">
+                      {c.status === "pending" && (
+                        <Button size="sm" variant="outline" data-testid={`button-approve-commission-${c.id}`} onClick={() => approveMutation.mutate(c.id)} disabled={approveMutation.isPending}>
+                          <BadgeCheck className="h-3 w-3" />
+                        </Button>
+                      )}
+                      {c.status !== "paid" && (
+                        <Button size="sm" variant="ghost" data-testid={`button-edit-commission-${c.id}`} onClick={() => openEdit(c)}>
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                      )}
+                      {c.status !== "paid" && (
+                        <Button size="sm" variant="ghost" className="text-destructive" data-testid={`button-delete-commission-${c.id}`}
+                          onClick={() => { if (confirm("Delete this commission?")) deleteMutation.mutate(c.id); }}
+                          disabled={deleteMutation.isPending}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="max-w-md" data-testid="dialog-commission-form">
+          <DialogHeader><DialogTitle>{editingId ? "Edit Commission" : "Add Commission"}</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            {isPlatform && !editingId && (
+              <div className="space-y-1">
+                <Label>Company</Label>
+                <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v, workerId: "" }))}>
+                  <SelectTrigger data-testid="select-form-commission-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                  <SelectContent>{companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label>Worker</Label>
+              <Select value={formData.workerId} onValueChange={v => setFormData(p => ({ ...p, workerId: v }))}>
+                <SelectTrigger data-testid="select-form-commission-worker"><SelectValue placeholder="Select worker" /></SelectTrigger>
+                <SelectContent>
+                  {(formData.companyId ? workers.filter(w => w.companyId === formData.companyId) : companyWorkers).map(w => (
+                    <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>Amount ($)</Label>
+              <Input type="number" step="0.01" min="0" data-testid="input-commission-amount" value={formData.amount} onChange={e => setFormData(p => ({ ...p, amount: e.target.value }))} placeholder="0.00" />
+            </div>
+            <div className="space-y-1">
+              <Label>Earned Date</Label>
+              <Input type="date" data-testid="input-commission-earned-date" value={formData.earnedDate} onChange={e => setFormData(p => ({ ...p, earnedDate: e.target.value }))} />
+            </div>
+            <div className="space-y-1">
+              <Label>Status</Label>
+              <Select value={formData.status} onValueChange={v => setFormData(p => ({ ...p, status: v }))}>
+                <SelectTrigger data-testid="select-form-commission-status"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="approved">Approved</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>Description (optional)</Label>
+              <Textarea data-testid="input-commission-description" value={formData.description} onChange={e => setFormData(p => ({ ...p, description: e.target.value }))} rows={2} placeholder="Sale details, deal name, etc." />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+              <Button data-testid="button-save-commission" onClick={() => saveMutation.mutate(formData)} disabled={saveMutation.isPending || !formData.workerId || !formData.amount || !formData.earnedDate}>
+                {saveMutation.isPending ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 export default function PayrollPage() {
   const [activeTab, setActiveTab] = useTabParam();
 
@@ -6149,6 +6382,7 @@ export default function PayrollPage() {
     { value: "payment-methods", label: "Payment Methods" },
     { value: "funding-accounts", label: "Funding Accounts" },
     { value: "payment-records", label: "Payment Records" },
+    { value: "commissions", label: "Commissions" },
   ];
 
   return (
@@ -6182,6 +6416,7 @@ export default function PayrollPage() {
         <TabsContent value="payment-methods"><PaymentMethodsTab /></TabsContent>
         <TabsContent value="funding-accounts"><FundingAccountsTab /></TabsContent>
         <TabsContent value="payment-records"><PaymentRecordsTab /></TabsContent>
+        <TabsContent value="commissions"><CommissionsTab /></TabsContent>
       </Tabs>
     </div>
   );

@@ -2786,6 +2786,42 @@ Thank you,
         ('tenant.inventory.manage',        'Operations',              'Inventory',                 'tenant', 'enterprise',   'Basic inventory tracking and assignment per location',                    FALSE, TRUE,  FALSE, 260)
       ON CONFLICT (feature_key) DO NOTHING
     `);
+
+    // ── Commission / Earning Types / Pay Stub Line Items ─────────────────────
+    await run("workers.compensation_type", sql`ALTER TABLE workers ADD COLUMN IF NOT EXISTS compensation_type TEXT DEFAULT 'hourly'`);
+    await run("payroll_items.commission_pay", sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS commission_pay NUMERIC DEFAULT 0`);
+
+    await run("earning_types table", sql`CREATE TABLE IF NOT EXISTS earning_types (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL,
+      code TEXT NOT NULL,
+      label TEXT NOT NULL,
+      is_taxable BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await run("commissions table", sql`CREATE TABLE IF NOT EXISTS commissions (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL,
+      worker_id VARCHAR NOT NULL,
+      amount NUMERIC(12,2) NOT NULL,
+      description TEXT,
+      source_type TEXT DEFAULT 'manual',
+      source_id VARCHAR,
+      earned_date DATE NOT NULL,
+      status TEXT DEFAULT 'pending',
+      payroll_run_id VARCHAR,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await run("pay_stub_line_items table", sql`CREATE TABLE IF NOT EXISTS pay_stub_line_items (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      payroll_item_id VARCHAR NOT NULL,
+      earning_type_id VARCHAR,
+      description TEXT,
+      amount NUMERIC(12,2) NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
   }
 
   // Fix: ensure the platform 'admin' user is never scoped to a company.
