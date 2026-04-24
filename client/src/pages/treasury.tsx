@@ -95,14 +95,34 @@ interface PayrollRun {
   achStatus: string | null;
 }
 
+// Parse a raw fetch error (which may be "400: {\"message\":\"...\"}") into a clean string
+function parseApiError(err: Error): string {
+  const raw = err.message || "";
+  const jsonMatch = raw.match(/^\d+:\s*(\{.*\})\s*$/s);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[1]);
+      if (parsed.message) return parsed.message;
+    } catch {}
+  }
+  return raw;
+}
+
 export default function TreasuryPage() {
   const { toast } = useToast();
   const [syncing, setSyncing] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<string>("");
   const [disburseResult, setDisburseResult] = useState<any>(null);
+  const [setupError, setSetupError] = useState<string | null>(null);
 
-  const statusQuery = useQuery<TreasuryStatus>({ queryKey: ["/api/treasury/status"] });
-  const txQuery = useQuery<TreasuryTransaction[]>({ queryKey: ["/api/treasury/transactions"] });
+  const statusQuery = useQuery<TreasuryStatus>({
+    queryKey: ["/api/treasury/status"],
+    retry: false,
+  });
+  const txQuery = useQuery<TreasuryTransaction[]>({
+    queryKey: ["/api/treasury/transactions"],
+    retry: false,
+  });
   const runsQuery = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"] });
 
   const setupMutation = useMutation({
@@ -110,11 +130,14 @@ export default function TreasuryPage() {
       return apiRequest("POST", "/api/treasury/setup").then(r => r.json());
     },
     onSuccess: (data) => {
+      setSetupError(null);
       queryClient.invalidateQueries({ queryKey: ["/api/treasury/status"] });
       toast({ title: "Treasury set up successfully", description: `Financial Account: ${data.financialAccount?.id}` });
     },
     onError: (err: Error) => {
-      toast({ title: "Setup failed", description: err.message, variant: "destructive" });
+      const msg = parseApiError(err);
+      setSetupError(msg);
+      toast({ title: "Setup failed", description: msg, variant: "destructive" });
     },
   });
 
@@ -198,7 +221,23 @@ export default function TreasuryPage() {
                 Stripe Treasury must be enabled on your platform Stripe account before setup. Contact Stripe support or check your Stripe Dashboard under Treasury.
               </AlertDescription>
             </Alert>
-            <Button onClick={() => setupMutation.mutate()} disabled={setupMutation.isPending} data-testid="button-treasury-setup" size="lg">
+            {statusQuery.isError && (
+              <Alert variant="destructive" className="text-left max-w-md" data-testid="alert-treasury-status-error">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-xs">
+                  {parseApiError(statusQuery.error as Error)}
+                </AlertDescription>
+              </Alert>
+            )}
+            {setupError && (
+              <Alert variant="destructive" className="text-left max-w-md" data-testid="alert-treasury-setup-error">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-sm font-medium">
+                  {setupError}
+                </AlertDescription>
+              </Alert>
+            )}
+            <Button onClick={() => { setSetupError(null); setupMutation.mutate(); }} disabled={setupMutation.isPending} data-testid="button-treasury-setup" size="lg">
               {setupMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
               Set Up Treasury Financial Account
             </Button>

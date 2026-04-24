@@ -474,8 +474,12 @@ export async function registerRoutes(
   // requireFeature() is a hoisted function declaration defined later in this file.
   // Using app.use() ensures ALL methods/routes under each prefix are gated.
 
-  // Stripe Treasury
-  app.use("/api/treasury", requireAuth, (req, res, next) => requireFeature("tenant.finance.treasury")(req, res, next));
+  // Stripe Treasury — the setup endpoint is exempt from the feature gate so companies
+  // can call it to enable treasury for the first time (chicken-and-egg guard).
+  app.use("/api/treasury", requireAuth, (req, res, next) => {
+    if (req.method === "POST" && req.path === "/setup") return next();
+    requireFeature("tenant.finance.treasury")(req, res, next);
+  });
 
   // Contractor Hub — all route families
   const contractorHubGate = (req: Request, res: Response, next: NextFunction) => requireFeature("tenant.finance.contractor-hub")(req, res, next);
@@ -2789,11 +2793,17 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/treasury/setup", requireAuth, requireRole("admin"), async (req, res) => {
+  app.post("/api/treasury/setup", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      if (!user?.companyId) return res.status(400).json({ message: "No company associated with this account" });
-      const company = await storage.getCompany(user.companyId);
+      // Platform admins may pass a companyId in the request body; company admins use their own
+      const companyId = isPlatformUser(user?.role) ? (req.body?.companyId || user?.companyId) : user?.companyId;
+      if (!companyId) {
+        return res.status(400).json({
+          message: "No company associated with this account. Platform admins must pass a companyId in the request body."
+        });
+      }
+      const company = await storage.getCompany(companyId);
       if (!company) return res.status(404).json({ message: "Company not found" });
 
       const { getOrCreateFinancialAccount } = await import("./treasury.js");
@@ -2803,10 +2813,27 @@ export async function registerRoutes(
         await storage.updateCompany(company.id, { stripeFinancialAccountId: fa.id } as any);
       }
 
+      // Ensure the treasury feature is enabled for this company after successful setup
+      await db.execute(sql`
+        INSERT INTO feature_overrides (id, feature_key, company_id, enabled, updated_at)
+        VALUES (gen_random_uuid(), 'tenant.finance.treasury', ${companyId}, TRUE, NOW())
+        ON CONFLICT (feature_key, company_id)
+        DO UPDATE SET enabled = TRUE, updated_at = NOW()
+      `);
+
       res.json({ success: true, financialAccount: fa });
     } catch (error: any) {
       console.error("Treasury setup error:", error);
-      res.status(500).json({ message: error.message || "Failed to set up Stripe Treasury" });
+      // Provide a user-friendly message for common Stripe errors
+      let msg = error.message || "Failed to set up Stripe Treasury";
+      if (error.type === "StripePermissionError" || error.code === "treasury_not_enabled") {
+        msg = "Stripe Treasury is not enabled on your Stripe account. Please enable it in your Stripe Dashboard under Treasury, then try again.";
+      } else if (error.type === "StripeAuthenticationError") {
+        msg = "Stripe authentication failed. Please check that the Stripe integration is properly configured.";
+      } else if (error.raw?.message) {
+        msg = error.raw.message;
+      }
+      res.status(500).json({ message: msg });
     }
   });
 
