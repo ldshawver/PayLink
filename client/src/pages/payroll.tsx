@@ -124,6 +124,35 @@ function ProcessPayrollTab() {
     },
   });
 
+  const bulkLockMutation = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, string> = {};
+      if (companyFilter !== "all") body.companyId = companyFilter;
+      const res = await apiRequest("POST", "/api/payroll-runs/bulk-lock", body);
+      if (!res.ok) throw new Error((await res.json()).message || "Bulk lock failed");
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      if (data.locked > 0) {
+        toast({
+          title: `${data.locked} payroll run${data.locked === 1 ? "" : "s"} locked`,
+          description: data.skipped > 0
+            ? `${data.skipped} run${data.skipped === 1 ? "" : "s"} skipped (draft, unapproved, or ACH pending).`
+            : "All eligible runs are now locked.",
+        });
+      } else {
+        toast({
+          title: "No runs to lock",
+          description: data.skipped > 0
+            ? `${data.skipped} run${data.skipped === 1 ? "" : "s"} could not be locked — they may still be in draft, unapproved, or waiting on ACH.`
+            : "There are no eligible processed runs to lock.",
+        });
+      }
+    },
+    onError: (err: Error) => toast({ title: "Bulk lock failed", description: err.message, variant: "destructive" }),
+  });
+
   const totalRuns = payrollRuns.length;
   const totalPayroll = payrollRuns.reduce((sum, r) => sum + Number(r.totalGross || 0), 0);
 
@@ -303,7 +332,17 @@ function ProcessPayrollTab() {
             {showAll ? "Show Latest Only" : "Show All Payrolls"}
           </Button>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => bulkLockMutation.mutate()}
+            disabled={bulkLockMutation.isPending}
+            data-testid="button-lock-all-payrolls"
+            title="Lock all approved, processed payroll runs that have their ACH submitted"
+          >
+            {bulkLockMutation.isPending ? "Locking..." : "Lock All Eligible"}
+          </Button>
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-run-payroll"><Plus className="mr-2 h-4 w-4" />Run Payroll</Button>
           </DialogTrigger>

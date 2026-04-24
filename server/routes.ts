@@ -2483,6 +2483,43 @@ export async function registerRoutes(
     }
   });
 
+  // ── Bulk Lock Payroll Runs ─────────────────────────────────────────────────
+  // Locks every eligible run for a company: must be processed, approved, not
+  // already locked, and (if useDirectDeposit) have ACH submitted/settled.
+  app.post("/api/payroll-runs/bulk-lock", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    try {
+      const requestUser = await storage.getUser(req.session.userId!);
+      const { companyId } = req.body;
+      const effectiveCompanyId = (!isPlatformUser(requestUser?.role) && requestUser?.companyId)
+        ? requestUser.companyId
+        : companyId;
+      if (!effectiveCompanyId) return res.status(400).json({ message: "companyId required" });
+
+      const allRuns = await storage.getPayrollRuns(effectiveCompanyId);
+      const locked: string[] = [];
+      const skipped: { id: string; reason: string }[] = [];
+
+      for (const run of allRuns) {
+        if (run.lockedAt || run.isLocked) { skipped.push({ id: run.id, reason: "already locked" }); continue; }
+        if (run.status === "draft") { skipped.push({ id: run.id, reason: "still a draft — process it first" }); continue; }
+        if (!run.approvedAt) { skipped.push({ id: run.id, reason: "not yet approved" }); continue; }
+        if (run.useDirectDeposit !== false) {
+          const achSt = run.achStatus;
+          if (achSt !== "submitted" && achSt !== "settled") {
+            skipped.push({ id: run.id, reason: "ACH not yet submitted" }); continue;
+          }
+        }
+        await storage.updatePayrollRun(run.id, { lockedAt: new Date(), lockedBy: req.session.userId || null });
+        locked.push(run.id);
+      }
+
+      res.json({ locked: locked.length, skipped: skipped.length, skippedDetails: skipped });
+    } catch (error) {
+      console.error("Bulk lock payroll error:", error);
+      res.status(500).json({ message: "Bulk lock failed" });
+    }
+  });
+
   // ── NACHA ACH File Generation ─────────────────────────────────────────────
   app.get("/api/payroll-runs/:id/nacha", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
