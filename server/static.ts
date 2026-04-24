@@ -51,8 +51,12 @@ export function serveStatic(app: Express) {
   }
 
   // ── React SPA catch-all (app pages, login, clock-in, etc.) ───────────────
+  // Exclude static asset paths so missing files return 404 instead of index.html.
+  // A 200 index.html response for /fonts/micrenc.ttf would be cached by the
+  // service worker's CacheFirst font strategy and permanently break font loading.
+  const STATIC_ASSET_PREFIXES = ["/api/", "/uploads/", "/fonts/", "/assets/", "/icons/"];
   app.use("/{*path}", (req, res, next) => {
-    if (req.path.startsWith("/api/") || req.path.startsWith("/uploads/") || API_ROUTES.has(req.path)) {
+    if (STATIC_ASSET_PREFIXES.some(p => req.path.startsWith(p)) || API_ROUTES.has(req.path)) {
       return next();
     }
     res.sendFile(path.resolve(distPath, "index.html"));

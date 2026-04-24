@@ -11,6 +11,18 @@ cleanupOutdatedCaches();
 
 precacheAndRoute(self.__WB_MANIFEST);
 
+// Delete legacy cache buckets on every SW activation so stale font entries
+// (e.g. index.html served for /fonts/micrenc.ttf before the static-asset
+// catch-all was fixed) are purged and the fonts load correctly.
+self.addEventListener("activate", (event: ExtendableEvent) => {
+  const LEGACY_CACHES = ["static-assets-cache"];
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => LEGACY_CACHES.includes(k)).map((k) => caches.delete(k)))
+    )
+  );
+});
+
 const navigationRoute = new NavigationRoute(
   new NetworkFirst({
     cacheName: "navigation-cache",
@@ -87,7 +99,7 @@ registerRoute(
       request.destination === "image" ||
       request.destination === "font",
     new CacheFirst({
-      cacheName: "static-assets-cache",
+      cacheName: "static-assets-v2",
       plugins: [
         new ExpirationPlugin({ maxEntries: 100, maxAgeSeconds: 60 * 60 * 24 * 30 }),
         new CacheableResponsePlugin({ statuses: [0, 200] }),
