@@ -1999,7 +1999,12 @@ export async function registerRoutes(
         entries = entries.filter(e => !(e.positionId && volunteerPositionIds.has(String(e.positionId))));
       }
       const allWorkers = await storage.getWorkers(run.companyId);
-      const activeWorkers = allWorkers.filter(w => w.isActive);
+      // Treat null as active (handles workers added before the isActive column existed)
+      const activeWorkers = allWorkers.filter(w => w.isActive !== false);
+      const skippedInactive = allWorkers.filter(w => w.isActive === false);
+      if (skippedInactive.length > 0) {
+        console.log(`[PAYROLL] Skipping ${skippedInactive.length} inactive worker(s): ${skippedInactive.map(w => `${w.firstName} ${w.lastName}`).join(", ")}`);
+      }
 
       const companyDeductions = await storage.getTaxesDeductions(run.companyId);
 
@@ -2171,8 +2176,11 @@ export async function registerRoutes(
       const psAccountMap: Record<string, string> = {};
       for (const acc of allPsAccounts) { psAccountMap[acc.id] = acc.type || "earning"; }
 
+      console.log(`[PAYROLL] Run ${run.id}: ${activeWorkers.length} active worker(s) to process for ${run.periodStart}–${run.periodEnd}: ${activeWorkers.map(w => `${w.firstName} ${w.lastName}`).join(", ")}`);
+
       for (const worker of activeWorkers) {
         const workerEntries = entries.filter(e => e.workerId === worker.id);
+        console.log(`[PAYROLL] Processing worker: ${worker.firstName} ${worker.lastName} (id=${worker.id}, isActive=${worker.isActive}, workerGroup=${(worker as any).workerGroup || "unset"}, entries=${workerEntries.length})`);
         let regHrs = 0, otHrs = 0, dtHrs = 0;
         for (const e of workerEntries) {
           const entryTotal = parseFloat(e.totalHours || "0");
@@ -2272,7 +2280,10 @@ export async function registerRoutes(
         const isVolunteer = workerGroup === "volunteer";
         const isOwnerDist = workerGroup === "owner_distribution";
 
-        if (isVolunteer) continue;
+        if (isVolunteer) {
+          console.log(`[PAYROLL] Skipping volunteer worker: ${worker.firstName} ${worker.lastName} (workerGroup="${workerGroup}")`);
+          continue;
+        }
 
         const workerDeductions = (isContractor || isContractorGroup) ? [] : companyDeductions.filter(d => {
           if (!d.isActive || d.isEmployerPaid) return false;
@@ -4594,7 +4605,8 @@ export async function registerRoutes(
         entries = entries.filter(e => !(e.positionId && volunteerPosIds.has(String(e.positionId))));
       }
       const allWorkers = await storage.getWorkers(companyId);
-      const activeWorkers = allWorkers.filter(w => w.isActive);
+      // Treat null as active (handles workers added before the isActive column existed)
+      const activeWorkers = allWorkers.filter(w => w.isActive !== false);
       const companyDeductions = await storage.getTaxesDeductions(companyId);
 
       const allSecondaryWageGroups = await storage.getSecondaryWageGroups(companyId);
@@ -4726,7 +4738,10 @@ export async function registerRoutes(
         const isContractorGroup2 = workerGroup2 === "hourly_contractor" || workerGroup2 === "invoiced_contractor";
         const isVolunteer2 = workerGroup2 === "volunteer";
 
-        if (isVolunteer2) continue;
+        if (isVolunteer2) {
+          console.log(`[PAYROLL-DRAFT] Skipping volunteer worker: ${worker.firstName} ${worker.lastName} (workerGroup="${workerGroup2}")`);
+          continue;
+        }
 
         const workerDeds = (isContractor || isContractorGroup2) ? [] : companyDeductions.filter(d => {
           if (!d.isActive || d.isEmployerPaid || d.isReferenceOnly) return false;
