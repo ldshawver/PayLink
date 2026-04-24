@@ -1373,10 +1373,28 @@ export async function registerRoutes(
       let matchingSchedule: any = null;
       let scheduledStart: Date | undefined;
       let scheduledEnd: Date | undefined;
+      // effectiveCompanyId is the company this shift belongs to — may differ from
+      // worker.companyId when a worker is cross-scheduled at another company.
+      let effectiveCompanyId: string = worker.companyId || "";
 
       if (worker.companyId) {
         const todaySchedules = await storage.getSchedulesByDateRange(worker.companyId, today, today);
-        const workerSchedule = todaySchedules.find(s => s.workerId === worker.id);
+        let workerSchedule = todaySchedules.find(s => s.workerId === worker.id);
+
+        // If no schedule found in the worker's home company, look across all companies.
+        // This handles cross-company shifts (e.g. an Adiken worker scheduled at Lucifer Cruz).
+        if (!workerSchedule) {
+          const { schedules: schedulesTable } = await import("../shared/schema.js");
+          const crossSchedules = await db.select().from(schedulesTable)
+            .where(and(eq(schedulesTable.workerId, worker.id), eq(schedulesTable.date, today)))
+            .limit(1);
+          if (crossSchedules[0]) {
+            workerSchedule = crossSchedules[0] as any;
+            effectiveCompanyId = crossSchedules[0].companyId;
+            console.log(`[CLOCK-IN] Worker ${worker.firstName} ${worker.lastName} has cross-company schedule at companyId=${effectiveCompanyId} (home=${worker.companyId})`);
+          }
+        }
+
         if (workerSchedule) {
           matchingSchedule = workerSchedule;
           // Convert "HH:MM" schedule times to UTC using the company timezone so
@@ -1478,8 +1496,10 @@ export async function registerRoutes(
         });
       }
 
-      // Within grace period — create punch and time entry directly
-      const punch = await storage.createTimePunch({ workerId: worker.id, companyId: worker.companyId, punchType: "clock_in", punchTime: new Date(), approvalStatus: "approved", stationId: null, scheduleId: matchingSchedule?.id || null });
+      // Within grace period — create punch and time entry directly.
+      // Use effectiveCompanyId so cross-company scheduled workers get their hours
+      // stamped against the company that owns the shift (not their home company).
+      const punch = await storage.createTimePunch({ workerId: worker.id, companyId: effectiveCompanyId, punchType: "clock_in", punchTime: new Date(), approvalStatus: "approved", stationId: null, scheduleId: matchingSchedule?.id || null });
       // Close any stale open entries from previous days
       const allEntries = await storage.getTimeEntries();
       const staleOpenEntries = allEntries.filter(e => e.workerId === worker.id && e.clockIn && !e.clockOut && e.date !== today);
@@ -1492,7 +1512,7 @@ export async function registerRoutes(
       }
       const lateMinutes = scheduledStart ? Math.max(0, Math.round((now.getTime() - scheduledStart.getTime()) / 60000)) : 0;
       await storage.createTimeEntry({
-        workerId: worker.id, companyId: worker.companyId, date: today, clockIn: now, status: "pending", source: "punches",
+        workerId: worker.id, companyId: effectiveCompanyId, date: today, clockIn: now, status: "pending", source: "punches",
         scheduleId: matchingSchedule?.id || undefined,
         scheduledStart: scheduledStart || undefined,
         scheduledEnd: scheduledEnd || undefined,
@@ -2004,6 +2024,20 @@ export async function registerRoutes(
       const skippedInactive = allWorkers.filter(w => w.isActive === false);
       if (skippedInactive.length > 0) {
         console.log(`[PAYROLL] Skipping ${skippedInactive.length} inactive worker(s): ${skippedInactive.map(w => `${w.firstName} ${w.lastName}`).join(", ")}`);
+      }
+
+      // Include cross-company workers: workers from other companies who have time
+      // entries stamped with this company's ID (they worked cross-scheduled shifts).
+      const activeWorkerIds = new Set(activeWorkers.map(w => w.id));
+      const entryWorkerIds = new Set(entries.map(e => e.workerId));
+      const crossCompanyWorkerIds = [...entryWorkerIds].filter(id => !activeWorkerIds.has(id));
+      if (crossCompanyWorkerIds.length > 0) {
+        const crossWorkers = await Promise.all(crossCompanyWorkerIds.map(id => storage.getWorker(id)));
+        const validCrossWorkers = crossWorkers.filter(w => w && w.isActive !== false) as typeof activeWorkers;
+        if (validCrossWorkers.length > 0) {
+          console.log(`[PAYROLL] Including ${validCrossWorkers.length} cross-company worker(s) with entries for this period: ${validCrossWorkers.map(w => `${w.firstName} ${w.lastName} (home=${w.companyId})`).join(", ")}`);
+          activeWorkers.push(...validCrossWorkers);
+        }
       }
 
       const companyDeductions = await storage.getTaxesDeductions(run.companyId);
