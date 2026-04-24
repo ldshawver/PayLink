@@ -388,6 +388,24 @@ function TimesheetTab() {
     },
   });
 
+  const dedupAllMutation = useMutation({
+    mutationFn: async () => {
+      return apiRequest("POST", "/api/time-entries/deduplicate", {});
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/time-entries"] });
+      toast({
+        title: data.removed > 0 ? "All duplicates fixed" : "No duplicates found",
+        description: data.removed > 0
+          ? `Removed ${data.removed} duplicate entr${data.removed === 1 ? "y" : "ies"} across all weeks. All hours are now correct.`
+          : "No duplicate entries found in any week.",
+      });
+    },
+    onError: () => {
+      toast({ title: "Fix All failed", variant: "destructive" });
+    },
+  });
+
   // Auto-convert punches to time entries on load and when the week changes
   useEffect(() => {
     if (!user) return;
@@ -399,6 +417,12 @@ function TimesheetTab() {
       for (const cid of companiesToConvert) {
         try {
           await apiRequest("POST", "/api/time-entries/convert-from-punches", {
+            companyId: cid,
+            startDate: weekStart,
+            endDate: weekEnd,
+          });
+          // Immediately dedup after converting to prevent race-condition duplicates
+          await apiRequest("POST", "/api/time-entries/deduplicate", {
             companyId: cid,
             startDate: weekStart,
             endDate: weekEnd,
@@ -529,10 +553,23 @@ function TimesheetTab() {
                 onClick={() => dedupMutation.mutate()}
                 disabled={dedupMutation.isPending}
                 data-testid="button-fix-duplicates"
-                title="Remove duplicate time entries for this week (keeps the entry with the most hours)"
+                title="Remove duplicate time entries for this week"
               >
                 <Trash2 className="h-4 w-4 mr-2" />
-                {dedupMutation.isPending ? "Fixing..." : "Fix Duplicates"}
+                {dedupMutation.isPending ? "Fixing..." : "Fix This Week"}
+              </Button>
+            )}
+            {canEdit && (
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => dedupAllMutation.mutate()}
+                disabled={dedupAllMutation.isPending}
+                data-testid="button-fix-all-duplicates"
+                title="Remove ALL duplicate time entries across every week for this company"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                {dedupAllMutation.isPending ? "Fixing All..." : "Fix All Weeks"}
               </Button>
             )}
             <Dialog open={addOpen} onOpenChange={setAddOpen}>
