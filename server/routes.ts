@@ -2042,6 +2042,12 @@ export async function registerRoutes(
 
       const companyDeductions = await storage.getTaxesDeductions(run.companyId);
 
+      // Load existing items early so the gate can exempt manual-override workers
+      // and the delete phase can preserve them.
+      const existingItemsPreGate = await storage.getPayrollItems(run.id);
+      const manualOverrideItems = existingItemsPreGate.filter(i => (i as any).isManualOverride === true);
+      const manualOverrideWorkerIds = new Set(manualOverrideItems.map(i => i.workerId));
+
       // ── Payroll Pipeline Integrity Gate ──────────────────────────────────────
       // Hard-block processing if fundamental requirements are not met.
       // Prevents producing incorrect or incomplete paychecks.
@@ -2084,7 +2090,12 @@ export async function registerRoutes(
           return w.payType === "hourly" || !w.payType;
         });
         const hourlyWorkerIds = new Set(hourlyWorkers.map(w => w.id));
-        const workerIdsWithEntries = new Set(entries.map(e => e.workerId));
+        // Workers with a manual override are treated as "having entries" — their pay
+        // was intentionally set by an admin and does not require underlying time entries.
+        const workerIdsWithEntries = new Set([
+          ...entries.map(e => e.workerId),
+          ...manualOverrideWorkerIds,
+        ]);
         const hourlyWithNoEntries = hourlyWorkers.filter(w =>
           hourlyWorkerIds.has(w.id) && !workerIdsWithEntries.has(w.id)
         );
@@ -2106,11 +2117,29 @@ export async function registerRoutes(
       }
       // ── End Integrity Gate ───────────────────────────────────────────────────
 
-      // Delete existing items so reprocessing always recalculates everything from scratch
-      const existingItems = await storage.getPayrollItems(run.id);
-      for (const old of existingItems) {
-        await storage.deletePayrollItem(old.id);
+      // Preserve manual-override items; delete only auto-calculated ones.
+      // Manual overrides are payroll items an admin intentionally edited — their
+      // hours and amounts must survive re-processing so the check matches expectations.
+      for (const old of existingItemsPreGate) {
+        if (!(old as any).isManualOverride) {
+          await storage.deletePayrollItem(old.id);
+        }
       }
+
+      // Pre-seed run totals with the values from preserved manual-override items
+      // so the final run totals include both auto and manually-set pay.
+      let totalGross = 0, totalNet = 0, totalHours = 0, totalOT = 0;
+      let checkNum = company.nextCheckNumber || 1;
+      for (const mi of manualOverrideItems) {
+        totalGross += parseFloat((mi as any).grossPay || "0");
+        totalNet   += parseFloat((mi as any).netPay   || "0");
+        totalHours += parseFloat((mi as any).regularHours  || "0") + parseFloat((mi as any).overtimeHours || "0") + parseFloat((mi as any).doubleTimeHours || "0");
+        totalOT    += parseFloat((mi as any).overtimeHours || "0");
+        // Reserve the check number used by this manual item so auto items don't collide
+        const miCheck = parseInt((mi as any).checkNumber || "0", 10);
+        if (miCheck >= checkNum) checkNum = miCheck + 1;
+      }
+
       const existingYtdByWorker: Record<string, { gross: number; deductions: number; net: number }> = {};
 
       const allRuns = await storage.getPayrollRuns(run.companyId);
@@ -2144,8 +2173,6 @@ export async function registerRoutes(
         existingYtdByWorker[worker.id] = { gross: ytdGross, deductions: ytdDeductions, net: ytdNet };
       }
 
-      let totalGross = 0, totalNet = 0, totalHours = 0, totalOT = 0;
-      let checkNum = company.nextCheckNumber || 1;
       const items: any[] = [];
 
       const allWageGroups = await storage.getSecondaryWageGroups(run.companyId);
@@ -2213,6 +2240,12 @@ export async function registerRoutes(
       console.log(`[PAYROLL] Run ${run.id}: ${activeWorkers.length} active worker(s) to process for ${run.periodStart}–${run.periodEnd}: ${activeWorkers.map(w => `${w.firstName} ${w.lastName}`).join(", ")}`);
 
       for (const worker of activeWorkers) {
+        // Skip workers whose payroll item was manually overridden — their preserved
+        // item is already included in totals and doesn't need recalculation.
+        if (manualOverrideWorkerIds.has(worker.id)) {
+          console.log(`[PAYROLL] Skipping ${worker.firstName} ${worker.lastName} — manual override preserved`);
+          continue;
+        }
         const workerEntries = entries.filter(e => e.workerId === worker.id);
         console.log(`[PAYROLL] Processing worker: ${worker.firstName} ${worker.lastName} (id=${worker.id}, isActive=${worker.isActive}, workerGroup=${(worker as any).workerGroup || "unset"}, entries=${workerEntries.length})`);
         let regHrs = 0, otHrs = 0, dtHrs = 0;
