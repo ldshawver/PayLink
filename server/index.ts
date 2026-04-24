@@ -2710,6 +2710,8 @@ Thank you,
     await run("contractor_invoices.is_archived", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT FALSE`);
     await run("contractor_invoices.archived_at", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
 
+    await run("positions.is_volunteer", sql`ALTER TABLE positions ADD COLUMN IF NOT EXISTS is_volunteer BOOLEAN DEFAULT FALSE`);
+
     // ── Feature Registry (Task #39) ──────────────────────────────────────────
     await run("feature_registry table", sql`CREATE TABLE IF NOT EXISTS feature_registry (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

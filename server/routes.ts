@@ -1947,9 +1947,15 @@ export async function registerRoutes(
         console.warn("[PAYROLL] Auto-convert punches warning (non-fatal):", convertErr);
       }
 
-      const entries = await storage.getTimeEntriesByDateRange(
+      let entries = await storage.getTimeEntriesByDateRange(
         run.companyId, run.periodStart, run.periodEnd
       );
+      // Strip out time entries for volunteer/no-pay positions before any calculations
+      const allPositionsForPayroll = await storage.getPositions(run.companyId);
+      const volunteerPositionIds = new Set(allPositionsForPayroll.filter((p: any) => p.isVolunteer).map((p: any) => p.id));
+      if (volunteerPositionIds.size > 0) {
+        entries = entries.filter(e => !(e.positionId && volunteerPositionIds.has(String(e.positionId))));
+      }
       const allWorkers = await storage.getWorkers(run.companyId);
       const activeWorkers = allWorkers.filter(w => w.isActive);
 
@@ -2106,11 +2112,11 @@ export async function registerRoutes(
         let regHrs = 0, otHrs = 0, dtHrs = 0;
         for (const e of workerEntries) {
           const entryTotal = parseFloat(e.totalHours || "0");
-          const entryOt = parseFloat(e.overtimeHours || "0");
-          const entryDt = parseFloat((e as any).doubleTimeHours || "0");
+          const entryOt = Math.min(parseFloat(e.overtimeHours || "0"), entryTotal);
+          const entryDt = Math.min(parseFloat((e as any).doubleTimeHours || "0"), Math.max(0, entryTotal - entryOt));
           dtHrs += entryDt;
           otHrs += entryOt;
-          regHrs += entryTotal - entryOt - entryDt;
+          regHrs += Math.max(0, entryTotal - entryOt - entryDt);
         }
 
         const defaultRate = parseFloat(worker.payRate || "0");
@@ -3060,16 +3066,21 @@ export async function registerRoutes(
       await db.delete(psTable).where(eq(psTable.payrollRunId, run.id));
       // 6. Delete ach_batches (references payroll_runs)
       await db.delete(abTable).where(eq(abTable.payrollRunId, run.id));
-      // 6b. Clear payroll_run_id on reimbursement items so they return to "pending" pool
+      // 6b. Clear applied_payroll_run_id on pay_stub_amendments (preserve audit, but unlink the run)
+      const { payStubAmendments: psaTable } = await import("../shared/schema.js");
+      await db.update(psaTable)
+        .set({ appliedPayrollRunId: null } as any)
+        .where(eq((psaTable as any).appliedPayrollRunId, run.id));
+      // 6c. Clear payroll_run_id on reimbursement items so they return to "pending" pool
       const { payrollReimbursementItems: priTable, checkPrintAuditLogs: cpalTable, treasuryOutboundPayments: topTable } = await import("../shared/schema.js");
       await db.update(priTable)
         .set({ payrollRunId: null, status: "pending", includedInPayrollAt: null } as any)
         .where(eq(priTable.payrollRunId, run.id));
-      // 6c. Null-out payroll_run_id on check_print_audit_logs (preserve audit history)
+      // 6d. Null-out payroll_run_id on check_print_audit_logs (preserve audit history)
       await db.update(cpalTable)
         .set({ payrollRunId: null } as any)
         .where(eq(cpalTable.payrollRunId, run.id));
-      // 6d. Null-out payroll_run_id on treasury_outbound_payments (preserve disbursement records)
+      // 6e. Null-out payroll_run_id on treasury_outbound_payments (preserve disbursement records)
       await db.update(topTable)
         .set({ payrollRunId: null } as any)
         .where(eq(topTable.payrollRunId, run.id));
@@ -3728,15 +3739,17 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       const { companyId, startDate, endDate } = req.body;
-      // Scope: tenant users locked to their company; platform users may pass any companyId
-      const effectiveCompanyId = (!isPlatformUser(user?.role) && user?.companyId) ? user.companyId : companyId;
-      if (!effectiveCompanyId) return res.status(400).json({ message: "companyId required" });
+      // Scope: tenant users locked to their company; platform users may pass any companyId or none (all companies)
+      const isTenant = !isPlatformUser(user?.role) && !!user?.companyId;
+      const effectiveCompanyId = isTenant ? user!.companyId : (companyId || null);
+      if (isTenant && !effectiveCompanyId) return res.status(400).json({ message: "companyId required" });
 
-      const whereClause: any[] = [eq(timeEntries.companyId, effectiveCompanyId)];
+      const whereClause: any[] = [];
+      if (effectiveCompanyId) whereClause.push(eq(timeEntries.companyId, effectiveCompanyId));
       if (startDate) whereClause.push(gte(timeEntries.date, String(startDate)));
       if (endDate) whereClause.push(lte(timeEntries.date, String(endDate)));
 
-      const allEntries = await db.select().from(timeEntries).where(and(...whereClause));
+      const allEntries = await db.select().from(timeEntries).where(whereClause.length ? and(...whereClause) : undefined);
 
       // Group by workerId+date
       const groups: Record<string, typeof allEntries> = {};
@@ -3748,12 +3761,38 @@ export async function registerRoutes(
 
       let removed = 0;
       for (const group of Object.values(groups)) {
-        if (group.length <= 1) continue;
+        if (group.length <= 1) {
+          // Even for non-duplicates, fix corrupt OT hours (overtimeHours > totalHours)
+          const e = group[0];
+          const total = parseFloat(e.totalHours || "0");
+          const ot = parseFloat(e.overtimeHours || "0");
+          const dt = parseFloat((e as any).doubleTimeHours || "0");
+          if (ot > total || dt > total || (ot + dt) > total) {
+            const fixedOt = Math.min(ot, Math.max(0, total));
+            const fixedDt = Math.min(dt, Math.max(0, total - fixedOt));
+            await db.update(timeEntries)
+              .set({ overtimeHours: fixedOt.toFixed(2), doubleTimeHours: fixedDt.toFixed(2) } as any)
+              .where(eq(timeEntries.id, e.id));
+          }
+          continue;
+        }
         // Keep the entry with the highest totalHours; on tie, keep the one created first (lowest id)
         group.sort((a, b) => Number(b.totalHours || 0) - Number(a.totalHours || 0));
+        const keeper = group[0];
         const toDelete = group.slice(1).map(e => e.id);
         await db.delete(timeEntries).where(inArray(timeEntries.id, toDelete));
         removed += toDelete.length;
+        // Normalize OT hours on the kept entry so regHrs never goes negative in payroll
+        const kTotal = parseFloat(keeper.totalHours || "0");
+        const kOt = parseFloat(keeper.overtimeHours || "0");
+        const kDt = parseFloat((keeper as any).doubleTimeHours || "0");
+        if (kOt > kTotal || kDt > kTotal || (kOt + kDt) > kTotal) {
+          const fixedOt = Math.min(kOt, Math.max(0, kTotal));
+          const fixedDt = Math.min(kDt, Math.max(0, kTotal - fixedOt));
+          await db.update(timeEntries)
+            .set({ overtimeHours: fixedOt.toFixed(2), doubleTimeHours: fixedDt.toFixed(2) } as any)
+            .where(eq(timeEntries.id, keeper.id));
+        }
       }
 
       res.json({ removed, message: `Removed ${removed} duplicate time entr${removed === 1 ? "y" : "ies"}` });

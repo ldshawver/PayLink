@@ -1934,7 +1934,7 @@ function PositionsTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<Position | null>(null);
-  const emptyForm = { companyId: "__universal__", departmentId: "", title: "", description: "", reportsToPositionId: "", salaryRangeMin: "", salaryRangeMax: "" };
+  const emptyForm = { companyId: "__universal__", departmentId: "", title: "", description: "", reportsToPositionId: "", salaryRangeMin: "", salaryRangeMax: "", isVolunteer: false };
   const [form, setForm] = useState(emptyForm);
 
   const { data: positionsList, isLoading } = useQuery<Position[]>({ queryKey: ["/api/positions"] });
@@ -1998,6 +1998,7 @@ function PositionsTab() {
       reportsToPositionId: item.reportsToPositionId || "",
       salaryRangeMin: item.salaryRangeMin || "",
       salaryRangeMax: item.salaryRangeMax || "",
+      isVolunteer: (item as any).isVolunteer ?? false,
     });
     setEditOpen(true);
   };
@@ -2070,6 +2071,19 @@ function PositionsTab() {
           <Input data-testid={`input-position-salary-max${suffix}`} type="number" value={form.salaryRangeMax} onChange={(e) => setForm({ ...form, salaryRangeMax: e.target.value })} />
         </div>
       </div>
+      <div className="flex items-center gap-3 pt-1">
+        <input
+          type="checkbox"
+          id={`is-volunteer${suffix}`}
+          data-testid={`checkbox-position-volunteer${suffix}`}
+          checked={!!form.isVolunteer}
+          onChange={(e) => setForm({ ...form, isVolunteer: e.target.checked })}
+          className="h-4 w-4 rounded border-gray-300"
+        />
+        <Label htmlFor={`is-volunteer${suffix}`} className="cursor-pointer">
+          Volunteer / No Pay — shifts with this position are excluded from payroll
+        </Label>
+      </div>
     </div>
   );
 
@@ -2141,9 +2155,14 @@ function PositionsTab() {
                         : "-"}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={p.isActive ? "default" : "secondary"}>
-                        {p.isActive ? "Active" : "Inactive"}
-                      </Badge>
+                      <div className="flex gap-1 flex-wrap">
+                        <Badge variant={p.isActive ? "default" : "secondary"}>
+                          {p.isActive ? "Active" : "Inactive"}
+                        </Badge>
+                        {(p as any).isVolunteer && (
+                          <Badge variant="outline" className="text-orange-600 border-orange-300">Volunteer</Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="flex gap-1">
                       <Button size="icon" variant="ghost" data-testid={`button-edit-position-${p.id}`} onClick={() => handleEdit(p)}>

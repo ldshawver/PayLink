@@ -313,6 +313,7 @@ export const positions = pgTable("positions", {
   salaryRangeMin: numeric("salary_range_min"),
   salaryRangeMax: numeric("salary_range_max"),
   isActive: boolean("is_active").default(true),
+  isVolunteer: boolean("is_volunteer").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
