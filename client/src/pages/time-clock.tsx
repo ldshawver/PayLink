@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Play, Square, LogIn, X, Hash, Lock, CheckCircle, Coffee, ArrowRight, Sun, RefreshCcw, Clock, AlertTriangle } from "lucide-react";
+import { Play, Square, LogIn, X, Hash, Lock, CheckCircle, Coffee, ArrowRight, Sun, RefreshCcw, Clock, AlertTriangle, DollarSign, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -59,7 +59,7 @@ function LiveClock() {
 }
 
 type ModalMode = "clock-in" | "clock-out" | null;
-type ModalStep = "credentials" | "clock-in-choice" | "break-or-start" | "clock-out-choice" | "success" | "pending-approval" | "denied";
+type ModalStep = "credentials" | "clock-in-choice" | "break-or-start" | "clock-out-choice" | "tips-entry" | "success" | "pending-approval" | "denied";
 type SuccessType = "clock-in" | "break-in" | "break-out" | "shift-end" | "sign-in";
 
 interface ClockModalProps {
@@ -87,7 +87,9 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
   const [pendingMessage, setPendingMessage] = useState("");
   const [denialReason, setDenialReason] = useState("");
+  const [tipsAmount, setTipsAmount] = useState("");
   const empRef = useRef<HTMLInputElement>(null);
+  const tipsRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (mode) {
@@ -142,7 +144,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
     return data;
   }
 
-  async function doAction(endpoint: string, type: SuccessType) {
+  async function doAction(endpoint: string, type: SuccessType, extraBody?: Record<string, unknown>) {
     if (!employeeNumber || !pin) { setError("Please enter your employee number and PIN."); return; }
     setLoading(true);
     setError("");
@@ -151,7 +153,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ employeeNumber, pin }),
+        body: JSON.stringify({ employeeNumber, pin, ...extraBody }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Request failed");
@@ -515,7 +517,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
               </button>
 
               <button
-                onClick={() => doAction("clock-out-session", "shift-end")}
+                onClick={() => { setTipsAmount(""); setError(""); setStep("tips-entry"); setTimeout(() => tipsRef.current?.focus(), 100); }}
                 disabled={loading}
                 className="w-full text-left rounded-xl border border-red-500/40 bg-red-600/20 hover:bg-red-600/35 transition-colors p-4 disabled:opacity-50"
                 data-testid="button-done-for-day"
@@ -523,7 +525,7 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
                 <div className="flex items-center gap-3">
                   <Square className="h-6 w-6 text-red-400 shrink-0" />
                   <div>
-                    <p className="font-semibold text-white text-base">{loading ? "Clocking Out..." : "Done for the Day"}</p>
+                    <p className="font-semibold text-white text-base">Done for the Day</p>
                     <p className="text-xs text-white/55 mt-0.5">End my shift and clock out</p>
                   </div>
                 </div>
@@ -543,6 +545,86 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
               >
                 ← Back
               </Button>
+            </div>
+          </>
+        )}
+
+        {/* ── STEP 2D: TIPS ENTRY ── */}
+        {step === "tips-entry" && (
+          <>
+            <DialogHeader>
+              <DialogTitle className="text-xl font-semibold text-white flex items-center gap-2">
+                <DollarSign className="h-5 w-5 text-emerald-400" />
+                Did you receive any tips?
+              </DialogTitle>
+              <DialogDescription className="text-white/55 text-sm leading-relaxed">
+                Enter the total tips you earned this shift. This is your responsibility to report — your employer will review and include them in your paycheck.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 py-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs uppercase tracking-wider text-white/60 flex items-center gap-1.5">
+                  <DollarSign className="h-3.5 w-3.5 text-emerald-300" /> Tip Amount
+                </Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50 text-sm font-medium pointer-events-none">$</span>
+                  <Input
+                    ref={tipsRef}
+                    value={tipsAmount}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/[^0-9.]/g, "");
+                      setTipsAmount(val);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        const parsed = parseFloat(tipsAmount);
+                        if (tipsAmount && (isNaN(parsed) || parsed < 0)) { setError("Please enter a valid tip amount."); return; }
+                        doAction("clock-out-session", "shift-end", parsed > 0 ? { tipsAmount: parsed.toString() } : undefined);
+                      }
+                    }}
+                    placeholder="0.00"
+                    inputMode="decimal"
+                    disabled={loading}
+                    data-testid="input-tips-amount"
+                    className="bg-white/10 border-white/25 text-white placeholder:text-white/35 focus:border-emerald-400 focus:ring-emerald-400/30 pl-7"
+                  />
+                </div>
+                <p className="text-xs text-white/40">Leave blank or enter 0 if you had no tips.</p>
+              </div>
+
+              {error && (
+                <p className="text-sm text-red-300 text-center font-medium" data-testid="text-tips-error">
+                  {error}
+                </p>
+              )}
+
+              <div className="flex flex-col gap-2 pt-1">
+                <Button
+                  onClick={() => {
+                    const parsed = parseFloat(tipsAmount);
+                    if (tipsAmount && (isNaN(parsed) || parsed < 0)) { setError("Please enter a valid tip amount."); return; }
+                    setError("");
+                    doAction("clock-out-session", "shift-end", parsed > 0 ? { tipsAmount: parsed.toString() } : undefined);
+                  }}
+                  disabled={loading}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white border-0 shadow-lg py-5 font-semibold shadow-emerald-900/30"
+                  data-testid="button-tips-submit"
+                >
+                  <ChevronRight className="h-4 w-4 mr-2" />
+                  {loading ? "Clocking Out..." : (tipsAmount && parseFloat(tipsAmount) > 0 ? `Clock Out & Report $${parseFloat(tipsAmount).toFixed(2)} in Tips` : "Clock Out — No Tips")}
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  onClick={() => { setStep("clock-out-choice"); setError(""); setTipsAmount(""); }}
+                  disabled={loading}
+                  className="w-full text-white/40 hover:text-white hover:bg-white/10 text-sm"
+                  data-testid="button-tips-back"
+                >
+                  ← Back
+                </Button>
+              </div>
             </div>
           </>
         )}

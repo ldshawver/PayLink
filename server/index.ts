@@ -312,6 +312,7 @@ app.use((req, res, next) => {
     await run("time_entries.early_departure_minutes", sql`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS early_departure_minutes INTEGER DEFAULT 0`);
     await run("time_entries.is_unscheduled", sql`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS is_unscheduled BOOLEAN DEFAULT FALSE`);
     await run("time_entries.source", sql`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'`);
+    await run("time_entries.tips_amount", sql`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS tips_amount NUMERIC DEFAULT 0`);
     // shift_offers table + additions
     await run("shift_offers table", sql`CREATE TABLE IF NOT EXISTS shift_offers (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

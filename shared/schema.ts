@@ -182,6 +182,7 @@ export const timeEntries = pgTable("time_entries", {
   earlyDepartureMinutes: integer("early_departure_minutes").default(0),
   isUnscheduled: boolean("is_unscheduled").default(false),
   source: text("source").default("manual"),
+  tipsAmount: numeric("tips_amount").default("0"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

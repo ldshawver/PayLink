@@ -1509,7 +1509,7 @@ export async function registerRoutes(
   // Clock out — auth + clock_out punch (no session needed after clock out)
   app.post("/api/time-clock/clock-out-session", async (req, res) => {
     try {
-      const { employeeNumber, pin } = req.body;
+      const { employeeNumber, pin, tipsAmount } = req.body;
       if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
       const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
       if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
@@ -1537,7 +1537,45 @@ export async function registerRoutes(
         const workedHours = Math.max(0, (totalMs - breakMs) / (1000 * 60 * 60));
         const otHours = Math.max(0, workedHours - 8);
         const dtHours = Math.max(0, workedHours - 12);
-        await storage.updateTimeEntry(openEntry.id, { clockOut, totalHours: workedHours.toFixed(2), overtimeHours: otHours.toFixed(2), doubleTimeHours: dtHours.toFixed(2) });
+        const parsedTips = tipsAmount ? parseFloat(tipsAmount) : 0;
+        await storage.updateTimeEntry(openEntry.id, {
+          clockOut, totalHours: workedHours.toFixed(2),
+          overtimeHours: otHours.toFixed(2), doubleTimeHours: dtHours.toFixed(2),
+          ...(parsedTips > 0 ? { tipsAmount: parsedTips.toFixed(2) } : {}),
+        });
+
+        // Auto-create a pending commission record for self-reported tips
+        if (parsedTips > 0) {
+          try {
+            const coObj = worker.companyId ? await storage.getCompany(worker.companyId) : null;
+            const coTz = coObj?.timezone || "America/New_York";
+            const todayStr = getLocalDateStr(now, coTz);
+            // Ensure a "Tips" earning type exists for this company
+            const existingTypes = await storage.getEarningTypes(worker.companyId);
+            let tipsType = existingTypes.find(t => t.code === "tips");
+            if (!tipsType) {
+              tipsType = await storage.createEarningType({
+                companyId: worker.companyId,
+                code: "tips",
+                label: "Tips",
+                isTaxable: true,
+              });
+            }
+            await storage.createCommission({
+              companyId: worker.companyId,
+              workerId: worker.id,
+              amount: parsedTips.toFixed(2),
+              description: `Self-reported tips from clock-out on ${todayStr}`,
+              sourceType: "tips",
+              sourceId: openEntry.id,
+              earnedDate: todayStr,
+              status: "pending",
+              payrollRunId: null,
+            });
+          } catch (tipErr) {
+            console.warn("Tips commission creation failed (non-blocking):", tipErr);
+          }
+        }
       }
 
       // ── Late clock-out notification (notify managers but don't block) ──
