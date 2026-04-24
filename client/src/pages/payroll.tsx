@@ -6167,7 +6167,12 @@ function CommissionsTab() {
     enabled: !!effectiveCompanyId,
   });
 
-  const companyWorkers = (effectiveCompanyId ? workers.filter(w => w.companyId === effectiveCompanyId) : workers);
+  // For platform admins with a company selected, filter by that company.
+  // For regular admins, the server already scopes /api/workers to their company — do NOT
+  // re-filter client-side, because workers with a null/unexpected companyId would be dropped.
+  const companyWorkers = isPlatform && effectiveCompanyId
+    ? workers.filter(w => w.companyId === effectiveCompanyId)
+    : workers;
   const getWorkerName = (id: string) => { const w = workers.find(w => w.id === id); return w ? `${w.firstName} ${w.lastName}` : id; };
 
   const openAdd = () => { setEditingId(null); setFormData({ ...BLANK_COMMISSION, companyId: effectiveCompanyId }); setDialogOpen(true); };
@@ -6322,7 +6327,7 @@ function CommissionsTab() {
               <Select value={formData.workerId} onValueChange={v => setFormData(p => ({ ...p, workerId: v }))}>
                 <SelectTrigger data-testid="select-form-commission-worker"><SelectValue placeholder="Select worker" /></SelectTrigger>
                 <SelectContent>
-                  {(formData.companyId ? workers.filter(w => w.companyId === formData.companyId) : companyWorkers).map(w => (
+                  {companyWorkers.map(w => (
                     <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>
                   ))}
                 </SelectContent>
