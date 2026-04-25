@@ -1,8 +1,9 @@
 import { build as esbuild } from "esbuild";
+import { build as viteBuild } from "vite";
 import { rm, readFile, copyFile } from "fs/promises";
-import { spawnSync } from "child_process";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
+import viteConfig from "../vite.config";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, "..");
@@ -40,20 +41,16 @@ const allowlist = [
 async function buildAll() {
   await rm("dist", { recursive: true, force: true });
 
-  // Run the Vite client build as a separate child process so it starts
-  // outside tsx's ESM loader hooks. This lets Node.js's native ESM resolver
-  // find bare-specifier packages (like @vitejs/plugin-react) from the
-  // project root rather than from inside Vite's temp directory.
+  // Build the client using the already-imported vite config object.
+  // Passing configFile:false tells Vite not to re-load vite.config.ts from
+  // disk, which avoids the .vite-temp ESM temp-file mechanism that fails to
+  // resolve bare-specifier packages on Linux servers.
+  // This mirrors what server/vite.ts does for the dev server.
   console.log("building client...");
-  const viteBin = resolve(projectRoot, "node_modules", ".bin", "vite");
-  const viteResult = spawnSync(viteBin, ["build"], {
-    stdio: "inherit",
-    cwd: projectRoot,
-    env: { ...process.env },
+  await viteBuild({
+    ...viteConfig,
+    configFile: false,
   });
-  if (viteResult.status !== 0) {
-    process.exit(viteResult.status ?? 1);
-  }
 
   console.log("building server...");
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));
