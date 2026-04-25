@@ -2018,6 +2018,12 @@ export async function registerRoutes(
       if (volunteerPositionIds.size > 0) {
         entries = entries.filter(e => !(e.positionId && volunteerPositionIds.has(String(e.positionId))));
       }
+      // Commission-only positions: hours are tracked but don't generate hourly pay.
+      // Commission pay comes separately from the commissions table.
+      const commissionPositionIds = new Set(allPositionsForPayroll.filter((p: any) => p.payType === "commission").map((p: any) => p.id));
+      if (commissionPositionIds.size > 0) {
+        entries = entries.filter(e => !(e.positionId && commissionPositionIds.has(String(e.positionId))));
+      }
       const allWorkers = await storage.getWorkers(run.companyId);
       // Treat null as active (handles workers added before the isActive column existed)
       const activeWorkers = allWorkers.filter(w => w.isActive !== false);
@@ -5155,6 +5161,7 @@ export async function registerRoutes(
       if (data.salaryRangeMin === "") data.salaryRangeMin = null;
       if (data.salaryRangeMax === "") data.salaryRangeMax = null;
       if (data.description === "") data.description = null;
+      if (data.payType === "") data.payType = null;
       const position = await storage.createPosition(data);
       res.status(201).json(position);
     } catch (error: any) {
@@ -5174,6 +5181,7 @@ export async function registerRoutes(
       if (data.salaryRangeMin === "") data.salaryRangeMin = null;
       if (data.salaryRangeMax === "") data.salaryRangeMax = null;
       if (data.description === "") data.description = null;
+      if (data.payType === "") data.payType = null;
       const position = await storage.updatePosition(req.params.id as string, data);
       if (!position) {
         return res.status(404).json({ message: "Position not found" });

@@ -2721,6 +2721,7 @@ Thank you,
     await run("contractor_invoices.archived_at", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
 
     await run("positions.is_volunteer", sql`ALTER TABLE positions ADD COLUMN IF NOT EXISTS is_volunteer BOOLEAN DEFAULT FALSE`);
+    await run("positions.pay_type", sql`ALTER TABLE positions ADD COLUMN IF NOT EXISTS pay_type TEXT`);
 
     // ── Feature Registry (Task #39) ──────────────────────────────────────────
     await run("feature_registry table", sql`CREATE TABLE IF NOT EXISTS feature_registry (

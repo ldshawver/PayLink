@@ -1934,7 +1934,7 @@ function PositionsTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<Position | null>(null);
-  const emptyForm = { companyId: "__universal__", departmentId: "", title: "", description: "", reportsToPositionId: "", salaryRangeMin: "", salaryRangeMax: "", isVolunteer: false };
+  const emptyForm = { companyId: "__universal__", departmentId: "", title: "", description: "", reportsToPositionId: "", salaryRangeMin: "", salaryRangeMax: "", isVolunteer: false, payType: "" };
   const [form, setForm] = useState(emptyForm);
 
   const { data: positionsList, isLoading } = useQuery<Position[]>({ queryKey: ["/api/positions"] });
@@ -1999,6 +1999,7 @@ function PositionsTab() {
       salaryRangeMin: item.salaryRangeMin || "",
       salaryRangeMax: item.salaryRangeMax || "",
       isVolunteer: (item as any).isVolunteer ?? false,
+      payType: (item as any).payType || "",
     });
     setEditOpen(true);
   };
@@ -2070,6 +2071,18 @@ function PositionsTab() {
           <Label>Salary Max</Label>
           <Input data-testid={`input-position-salary-max${suffix}`} type="number" value={form.salaryRangeMax} onChange={(e) => setForm({ ...form, salaryRangeMax: e.target.value })} />
         </div>
+      </div>
+      <div className="grid gap-2">
+        <Label>Pay Type Override</Label>
+        <Select value={form.payType || "__default__"} onValueChange={(v) => setForm({ ...form, payType: v === "__default__" ? "" : v })}>
+          <SelectTrigger data-testid={`select-position-pay-type${suffix}`}>
+            <SelectValue placeholder="Use worker's default pay type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__default__">Use worker's default pay type</SelectItem>
+            <SelectItem value="commission">Commission Only — shifts don't generate hourly pay</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <div className="flex items-center gap-3 pt-1">
         <input
@@ -2161,6 +2174,9 @@ function PositionsTab() {
                         </Badge>
                         {(p as any).isVolunteer && (
                           <Badge variant="outline" className="text-orange-600 border-orange-300">Volunteer</Badge>
+                        )}
+                        {(p as any).payType === "commission" && (
+                          <Badge variant="outline" className="text-purple-600 border-purple-300">Commission Only</Badge>
                         )}
                       </div>
                     </TableCell>
