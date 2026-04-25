@@ -57,6 +57,7 @@ jobs:
             test -f package-lock.json || { echo "ERROR: package-lock.json missing — cannot use npm ci"; exit 1; }
 
             echo "==> Clean install (rm node_modules + npm ci)"
+            chmod -R u+w node_modules 2>/dev/null || true
             rm -rf node_modules
             npm ci
 
