@@ -69,7 +69,6 @@ jobs:
             test -f "$ENV_FILE" || { echo "ERROR: Missing env file: $ENV_FILE"; exit 1; }
 
             echo "==> Clean install state"
-            chmod -R u+w node_modules 2>/dev/null || true
             rm -rf node_modules
 
             echo "==> Install dependencies"
