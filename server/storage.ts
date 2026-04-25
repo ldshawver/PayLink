@@ -1285,6 +1285,14 @@ export class DatabaseStorage implements IStorage {
   }
   async updateTimeEntry(id: string, data: Partial<TimeEntry>): Promise<TimeEntry | undefined> {
     const [entry] = await db.update(timeEntries).set(data).where(eq(timeEntries.id, id)).returning();
+    // Belt-and-suspenders: if payCategory was supplied, guarantee it is written via raw SQL
+    // in case Drizzle's .set() drops the camelCase→snake_case mapping for this field.
+    if (data.payCategory !== undefined && entry) {
+      await db.execute(
+        sql`UPDATE time_entries SET pay_category = ${data.payCategory} WHERE id = ${id}`
+      );
+      return { ...entry, payCategory: data.payCategory };
+    }
     return entry;
   }
   async deleteTimeEntry(id: string): Promise<void> {
