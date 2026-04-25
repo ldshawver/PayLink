@@ -643,7 +643,7 @@ export async function registerRoutes(
   });
 
   app.use("/api", (req, res, next) => {
-    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end"
+    if (req.path === "/auth/login" || req.path === "/auth/logout" || req.path === "/auth/me" || req.path === "/auth/pin-login" || req.path === "/auth/token-restore" || req.path === "/time-clock/auth" || req.path === "/time-clock/punch" || req.path === "/time-clock/punches" || req.path === "/time-clock/sign-in" || req.path === "/time-clock/clock-in-session" || req.path === "/time-clock/clock-out-session" || req.path === "/time-clock/break-start" || req.path === "/time-clock/break-end" || req.path === "/time-clock/session-info"
       || req.path.startsWith("/pay/") || req.path === "/stripe/publishable-key" || req.path.startsWith("/payments/stripe-status/")
       || req.path === "/webhooks/product-events" || req.path.startsWith("/webhooks/esign/")
       || req.path === "/demo/provision"
@@ -1527,9 +1527,64 @@ export async function registerRoutes(
   });
 
   // Clock out — auth + clock_out punch (no session needed after clock out)
+  // Returns position flags for the worker's active session — used by the clock-out UI
+  // to decide which prompt to show (commission entry, tips entry, or neither).
+  app.post("/api/time-clock/session-info", async (req, res) => {
+    try {
+      const { employeeNumber, pin } = req.body;
+      if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
+      const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
+      if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN." });
+      if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
+
+      // Find the worker's open time entry to get their schedule's positionId
+      const allEntries = await storage.getTimeEntries();
+      const openEntry = allEntries
+        .filter(e => e.workerId === worker.id && e.clockIn && !e.clockOut)
+        .sort((a, b) => new Date(b.clockIn!).getTime() - new Date(a.clockIn!).getTime())[0];
+
+      let positionPayType: string | null = null;
+      let positionIsTipped = false;
+      let positionTitle: string | null = null;
+
+      if (openEntry?.scheduleId) {
+        const { schedules: schedulesTable } = await import("../shared/schema.js");
+        const [schedule] = await db.select().from(schedulesTable).where(eq(schedulesTable.id, openEntry.scheduleId));
+        if (schedule?.positionId) {
+          const allPositions = await storage.getPositions(worker.companyId);
+          const pos = allPositions.find((p: any) => p.id === schedule.positionId);
+          if (pos) {
+            positionPayType = (pos as any).payType || null;
+            positionIsTipped = (pos as any).isTipped === true;
+            positionTitle = (pos as any).title || null;
+          }
+        }
+      } else if (openEntry?.positionId) {
+        const allPositions = await storage.getPositions(worker.companyId);
+        const pos = allPositions.find((p: any) => p.id === openEntry.positionId);
+        if (pos) {
+          positionPayType = (pos as any).payType || null;
+          positionIsTipped = (pos as any).isTipped === true;
+          positionTitle = (pos as any).title || null;
+        }
+      }
+
+      return res.json({
+        worker: { id: worker.id, firstName: worker.firstName, lastName: worker.lastName },
+        positionPayType,
+        positionIsTipped,
+        positionTitle,
+        hasClockedIn: !!openEntry,
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch session info" });
+    }
+  });
+
   app.post("/api/time-clock/clock-out-session", async (req, res) => {
     try {
-      const { employeeNumber, pin, tipsAmount } = req.body;
+      const { employeeNumber, pin, tipsAmount, commissionAmount } = req.body;
       if (!employeeNumber || !pin) return res.status(400).json({ message: "Employee number and PIN are required" });
       const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
       if (!worker) return res.status(401).json({ message: "Invalid employee number or PIN. If you have not set up a PIN, ask your administrator." });
@@ -1564,13 +1619,13 @@ export async function registerRoutes(
           ...(parsedTips > 0 ? { tipsAmount: parsedTips.toFixed(2) } : {}),
         });
 
+        const coObj = worker.companyId ? await storage.getCompany(worker.companyId) : null;
+        const coTz = coObj?.timezone || "America/New_York";
+        const todayStr = getLocalDateStr(now, coTz);
+
         // Auto-create a pending commission record for self-reported tips
         if (parsedTips > 0) {
           try {
-            const coObj = worker.companyId ? await storage.getCompany(worker.companyId) : null;
-            const coTz = coObj?.timezone || "America/New_York";
-            const todayStr = getLocalDateStr(now, coTz);
-            // Ensure a "Tips" earning type exists for this company
             const existingTypes = await storage.getEarningTypes(worker.companyId);
             let tipsType = existingTypes.find(t => t.code === "tips");
             if (!tipsType) {
@@ -1594,6 +1649,36 @@ export async function registerRoutes(
             });
           } catch (tipErr) {
             console.warn("Tips commission creation failed (non-blocking):", tipErr);
+          }
+        }
+
+        // Auto-create a pending commission record for self-reported commission sales
+        const parsedCommission = commissionAmount ? parseFloat(commissionAmount) : 0;
+        if (parsedCommission > 0) {
+          try {
+            const existingTypes = await storage.getEarningTypes(worker.companyId);
+            let commType = existingTypes.find(t => t.code === "sales_commission");
+            if (!commType) {
+              commType = await storage.createEarningType({
+                companyId: worker.companyId,
+                code: "sales_commission",
+                label: "Sales Commission",
+                isTaxable: true,
+              });
+            }
+            await storage.createCommission({
+              companyId: worker.companyId,
+              workerId: worker.id,
+              amount: parsedCommission.toFixed(2),
+              description: `Self-reported commission from clock-out on ${todayStr}`,
+              sourceType: "commission",
+              sourceId: openEntry.id,
+              earnedDate: todayStr,
+              status: "pending",
+              payrollRunId: null,
+            });
+          } catch (commErr) {
+            console.warn("Commission creation failed (non-blocking):", commErr);
           }
         }
       }

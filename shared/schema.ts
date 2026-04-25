@@ -324,6 +324,7 @@ export const positions = pgTable("positions", {
   isActive: boolean("is_active").default(true),
   isVolunteer: boolean("is_volunteer").default(false),
   payType: text("pay_type"),
+  isTipped: boolean("is_tipped").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

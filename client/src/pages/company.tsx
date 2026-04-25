@@ -1934,7 +1934,7 @@ function PositionsTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<Position | null>(null);
-  const emptyForm = { companyId: "__universal__", departmentId: "", title: "", description: "", reportsToPositionId: "", salaryRangeMin: "", salaryRangeMax: "", isVolunteer: false, payType: "" };
+  const emptyForm = { companyId: "__universal__", departmentId: "", title: "", description: "", reportsToPositionId: "", salaryRangeMin: "", salaryRangeMax: "", isVolunteer: false, isTipped: false, payType: "" };
   const [form, setForm] = useState(emptyForm);
 
   const { data: positionsList, isLoading } = useQuery<Position[]>({ queryKey: ["/api/positions"] });
@@ -1999,6 +1999,7 @@ function PositionsTab() {
       salaryRangeMin: item.salaryRangeMin || "",
       salaryRangeMax: item.salaryRangeMax || "",
       isVolunteer: (item as any).isVolunteer ?? false,
+      isTipped: (item as any).isTipped ?? false,
       payType: (item as any).payType || "",
     });
     setEditOpen(true);
@@ -2083,6 +2084,19 @@ function PositionsTab() {
             <SelectItem value="commission">Commission Only — shifts don't generate hourly pay</SelectItem>
           </SelectContent>
         </Select>
+      </div>
+      <div className="flex items-center gap-3 pt-1">
+        <input
+          type="checkbox"
+          id={`is-tipped${suffix}`}
+          data-testid={`checkbox-position-tipped${suffix}`}
+          checked={!!(form as any).isTipped}
+          onChange={(e) => setForm({ ...form, isTipped: e.target.checked } as any)}
+          className="h-4 w-4 rounded border-gray-300"
+        />
+        <Label htmlFor={`is-tipped${suffix}`} className="cursor-pointer">
+          Tipped Position — prompts worker to report tips at clock-out
+        </Label>
       </div>
       <div className="flex items-center gap-3 pt-1">
         <input
@@ -2177,6 +2191,9 @@ function PositionsTab() {
                         )}
                         {(p as any).payType === "commission" && (
                           <Badge variant="outline" className="text-purple-600 border-purple-300">Commission Only</Badge>
+                        )}
+                        {(p as any).isTipped && (
+                          <Badge variant="outline" className="text-emerald-600 border-emerald-300">Tipped</Badge>
                         )}
                       </div>
                     </TableCell>

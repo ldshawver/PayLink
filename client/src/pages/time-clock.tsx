@@ -59,7 +59,7 @@ function LiveClock() {
 }
 
 type ModalMode = "clock-in" | "clock-out" | null;
-type ModalStep = "credentials" | "clock-in-choice" | "break-or-start" | "clock-out-choice" | "tips-entry" | "success" | "pending-approval" | "denied";
+type ModalStep = "credentials" | "clock-in-choice" | "break-or-start" | "clock-out-choice" | "tips-entry" | "commission-entry" | "success" | "pending-approval" | "denied";
 type SuccessType = "clock-in" | "break-in" | "break-out" | "shift-end" | "sign-in";
 
 interface ClockModalProps {
@@ -88,8 +88,13 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
   const [pendingMessage, setPendingMessage] = useState("");
   const [denialReason, setDenialReason] = useState("");
   const [tipsAmount, setTipsAmount] = useState("");
+  const [commissionAmount, setCommissionAmount] = useState("");
+  const [positionPayType, setPositionPayType] = useState<string | null>(null);
+  const [positionIsTipped, setPositionIsTipped] = useState(false);
+  const [positionTitle, setPositionTitle] = useState<string | null>(null);
   const empRef = useRef<HTMLInputElement>(null);
   const tipsRef = useRef<HTMLInputElement>(null);
+  const commissionRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (mode) {
@@ -203,12 +208,31 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
     return () => clearInterval(poll);
   }, [step, pendingRequestId]);
 
-  function handleCredentialsContinue() {
+  async function handleCredentialsContinue() {
     if (!employeeNumber || !pin) { setError("Please enter your employee number and PIN."); return; }
     setError("");
     if (mode === "clock-in") {
       setStep("clock-in-choice");
     } else {
+      // Fetch session info to know which clock-out prompt to show
+      try {
+        const res = await fetch("/api/time-clock/session-info", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ employeeNumber, pin }),
+        });
+        const data = await res.json();
+        if (!res.ok) { setError(data.message || "Could not verify credentials."); return; }
+        setPositionPayType(data.positionPayType || null);
+        setPositionIsTipped(data.positionIsTipped === true);
+        setPositionTitle(data.positionTitle || null);
+      } catch {
+        // Non-blocking — fall through with no position info
+        setPositionPayType(null);
+        setPositionIsTipped(false);
+        setPositionTitle(null);
+      }
       setStep("clock-out-choice");
     }
   }
@@ -517,7 +541,20 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
               </button>
 
               <button
-                onClick={() => { setTipsAmount(""); setError(""); setStep("tips-entry"); setTimeout(() => tipsRef.current?.focus(), 100); }}
+                onClick={() => {
+                  setError("");
+                  if (positionPayType === "commission") {
+                    setCommissionAmount("");
+                    setStep("commission-entry");
+                    setTimeout(() => commissionRef.current?.focus(), 100);
+                  } else if (positionIsTipped) {
+                    setTipsAmount("");
+                    setStep("tips-entry");
+                    setTimeout(() => tipsRef.current?.focus(), 100);
+                  } else {
+                    doAction("clock-out-session", "shift-end");
+                  }
+                }}
                 disabled={loading}
                 className="w-full text-left rounded-xl border border-red-500/40 bg-red-600/20 hover:bg-red-600/35 transition-colors p-4 disabled:opacity-50"
                 data-testid="button-done-for-day"
@@ -526,7 +563,9 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
                   <Square className="h-6 w-6 text-red-400 shrink-0" />
                   <div>
                     <p className="font-semibold text-white text-base">Done for the Day</p>
-                    <p className="text-xs text-white/55 mt-0.5">End my shift and clock out</p>
+                    <p className="text-xs text-white/55 mt-0.5">
+                      {positionPayType === "commission" ? "Report your sales commission" : positionIsTipped ? "Report tips and clock out" : "End my shift and clock out"}
+                    </p>
                   </div>
                 </div>
               </button>
@@ -549,7 +588,81 @@ function ClockModal({ mode, onClose }: ClockModalProps) {
           </>
         )}
 
-        {/* ── STEP 2D: TIPS ENTRY ── */}
+        {/* ── STEP 2D: COMMISSION ENTRY ── */}
+        {step === "commission-entry" && (
+          <>
+            <DialogHeader>
+              <DialogTitle className="text-xl font-semibold text-white flex items-center gap-2">
+                <DollarSign className="h-5 w-5 text-purple-400" />
+                Report Your Commission
+              </DialogTitle>
+              <DialogDescription className="text-white/55 text-sm leading-relaxed">
+                {positionTitle ? `Enter the total commission you earned this shift as ${positionTitle}.` : "Enter the total commission you earned this shift."} Your manager will review and approve it before it's included in your paycheck.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 py-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs uppercase tracking-wider text-white/60 flex items-center gap-1.5">
+                  <DollarSign className="h-3.5 w-3.5 text-purple-300" /> Commission Amount
+                </Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/50 text-sm font-medium pointer-events-none">$</span>
+                  <Input
+                    ref={commissionRef}
+                    value={commissionAmount}
+                    onChange={(e) => setCommissionAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        const parsed = parseFloat(commissionAmount);
+                        if (commissionAmount && (isNaN(parsed) || parsed < 0)) { setError("Please enter a valid amount."); return; }
+                        doAction("clock-out-session", "shift-end", parsed > 0 ? { commissionAmount: parsed.toString() } : undefined);
+                      }
+                    }}
+                    placeholder="0.00"
+                    inputMode="decimal"
+                    disabled={loading}
+                    data-testid="input-commission-amount"
+                    className="bg-white/10 border-white/25 text-white placeholder:text-white/35 focus:border-purple-400 focus:ring-purple-400/30 pl-7"
+                  />
+                </div>
+                <p className="text-xs text-white/40">Enter 0 if you had no sales this shift.</p>
+              </div>
+
+              {error && (
+                <p className="text-sm text-red-300 text-center font-medium" data-testid="text-commission-error">{error}</p>
+              )}
+
+              <div className="flex flex-col gap-2 pt-1">
+                <Button
+                  onClick={() => {
+                    const parsed = parseFloat(commissionAmount);
+                    if (commissionAmount && (isNaN(parsed) || parsed < 0)) { setError("Please enter a valid amount."); return; }
+                    setError("");
+                    doAction("clock-out-session", "shift-end", parsed > 0 ? { commissionAmount: parsed.toString() } : undefined);
+                  }}
+                  disabled={loading}
+                  className="w-full bg-purple-600 hover:bg-purple-700 text-white border-0 shadow-lg py-5 font-semibold shadow-purple-900/30"
+                  data-testid="button-commission-submit"
+                >
+                  <ChevronRight className="h-4 w-4 mr-2" />
+                  {loading ? "Clocking Out..." : (commissionAmount && parseFloat(commissionAmount) > 0 ? `Clock Out & Report $${parseFloat(commissionAmount).toFixed(2)} Commission` : "Clock Out — No Commission")}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => { setStep("clock-out-choice"); setError(""); setCommissionAmount(""); }}
+                  disabled={loading}
+                  className="w-full text-white/40 hover:text-white hover:bg-white/10 text-sm"
+                  data-testid="button-commission-back"
+                >
+                  ← Back
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── STEP 2E: TIPS ENTRY ── */}
         {step === "tips-entry" && (
           <>
             <DialogHeader>
