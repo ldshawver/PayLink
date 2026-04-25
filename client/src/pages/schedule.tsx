@@ -716,6 +716,7 @@ export default function SchedulePage() {
     endTime: "",
     effectiveFrom: "",
     effectiveTo: "",
+    department: "",
     jobId: "",
     positionId: "",
     costCenterId: "",
@@ -730,6 +731,7 @@ export default function SchedulePage() {
     endTime: "",
     effectiveFrom: "",
     effectiveTo: "",
+    department: "",
     jobId: "",
     positionId: "",
     costCenterId: "",
@@ -1131,6 +1133,7 @@ export default function SchedulePage() {
       endTime: rs.endTime,
       effectiveFrom: rs.effectiveFrom || "",
       effectiveTo: rs.effectiveTo || "",
+      department: (rs as any).department || "",
       jobId: (rs as any).jobId || "",
       positionId: (rs as any).positionId || "",
       costCenterId: (rs as any).costCenterId || "",
@@ -2158,6 +2161,48 @@ export default function SchedulePage() {
                       </div>
                     </div>
                     <div>
+                      <Label>Department</Label>
+                      <Select
+                        value={recurringForm.department || "__none__"}
+                        onValueChange={(v) => setRecurringForm((f) => ({ ...f, department: v === "__none__" ? "" : v }))}
+                      >
+                        <SelectTrigger data-testid="select-recurring-department">
+                          <SelectValue placeholder="Select department (optional)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">None</SelectItem>
+                          {departments
+                            .filter(d => !d.companyId || d.companyId === recurringForm.companyId)
+                            .map(d => (
+                              <SelectItem key={d.id} value={d.name}>
+                                {d.name}{!d.companyId ? " (All Companies)" : ""}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>Job</Label>
+                      <Select
+                        value={recurringForm.jobId || "__none__"}
+                        onValueChange={(v) => setRecurringForm((f) => ({ ...f, jobId: v === "__none__" ? "" : v }))}
+                      >
+                        <SelectTrigger data-testid="select-recurring-job">
+                          <SelectValue placeholder="Select job (optional)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">None</SelectItem>
+                          {jobs
+                            .filter((j: any) => !j.companyId || j.companyId === recurringForm.companyId)
+                            .map((j: any) => (
+                              <SelectItem key={j.id} value={j.id}>
+                                {j.name}{!j.companyId ? " (All Companies)" : ""}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
                       <Label>Position</Label>
                       <Select
                         value={recurringForm.positionId || "__none__"}
@@ -2439,6 +2484,48 @@ export default function SchedulePage() {
                       onChange={e => setEditRecurringForm(f => ({ ...f, effectiveTo: e.target.value }))}
                       data-testid="input-edit-recurring-effective-to" />
                   </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Department</label>
+                  <Select
+                    value={editRecurringForm.department || "__none__"}
+                    onValueChange={v => setEditRecurringForm(f => ({ ...f, department: v === "__none__" ? "" : v }))}
+                  >
+                    <SelectTrigger data-testid="select-edit-recurring-department">
+                      <SelectValue placeholder="Select department (optional)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">None</SelectItem>
+                      {departments
+                        .filter(d => !d.companyId || d.companyId === editRecurringForm.companyId)
+                        .map(d => (
+                          <SelectItem key={d.id} value={d.name}>
+                            {d.name}{!d.companyId ? " (All Companies)" : ""}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Job</label>
+                  <Select
+                    value={editRecurringForm.jobId || "__none__"}
+                    onValueChange={v => setEditRecurringForm(f => ({ ...f, jobId: v === "__none__" ? "" : v }))}
+                  >
+                    <SelectTrigger data-testid="select-edit-recurring-job">
+                      <SelectValue placeholder="Select job (optional)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">None</SelectItem>
+                      {jobs
+                        .filter((j: any) => !j.companyId || j.companyId === editRecurringForm.companyId)
+                        .map((j: any) => (
+                          <SelectItem key={j.id} value={j.id}>
+                            {j.name}{!j.companyId ? " (All Companies)" : ""}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-muted-foreground">Position</label>

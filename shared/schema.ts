@@ -515,6 +515,7 @@ export const recurringSchedules = pgTable("recurring_schedules", {
   endTime: text("end_time").notNull(),
   effectiveFrom: date("effective_from"),
   effectiveTo: date("effective_to"),
+  department: text("department"),
   jobId: varchar("job_id").references(() => jobs.id),
   positionId: varchar("position_id"),
   costCenterId: varchar("cost_center_id"),

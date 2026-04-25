@@ -13978,7 +13978,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const created = [];
       for (const emp of employees) {
         if (!emp.firstName || !emp.lastName) continue;
-        const worker = await storage.createWorker({
+        const workerData: any = {
           companyId: user.companyId,
           firstName: emp.firstName,
           lastName: emp.lastName,
@@ -13992,7 +13992,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           hireDate: emp.hireDate || new Date().toISOString().split("T")[0],
           status: "active",
           isActive: true,
-        });
+        };
+        if (emp.pin && emp.pin.trim()) workerData.pin = emp.pin.trim();
+        const worker = await storage.createWorker(workerData);
         created.push(worker);
       }
 

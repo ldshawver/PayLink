@@ -52,6 +52,7 @@ interface Employee {
   payType: string;
   workerType: string;
   jobTitle: string;
+  pin: string;
 }
 
 interface PayrollEmployee {
@@ -365,6 +366,7 @@ function Step2Employees({ employees, onAdd, onRemove, onChange, onNext, onBack, 
                     <SelectContent>
                       <SelectItem value="hourly">Hourly</SelectItem>
                       <SelectItem value="salary">Salary</SelectItem>
+                      <SelectItem value="commission">Commission</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -375,6 +377,17 @@ function Step2Employees({ employees, onAdd, onRemove, onChange, onNext, onBack, 
                     onChange={(e) => onChange(idx, "jobTitle", e.target.value)}
                     placeholder="Manager"
                     data-testid={`input-emp-title-${idx}`}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Time Clock PIN</Label>
+                  <Input
+                    type="password"
+                    value={emp.pin || ""}
+                    onChange={(e) => onChange(idx, "pin", e.target.value)}
+                    placeholder="4-digit PIN"
+                    maxLength={8}
+                    data-testid={`input-emp-pin-${idx}`}
                   />
                 </div>
               </div>
@@ -731,7 +744,7 @@ export default function OnboardingWizard() {
     address: "", city: "", zip: "", phone: "",
   });
   const [employees, setEmployees] = useState<Employee[]>([
-    { firstName: "", lastName: "", email: "", payRate: "", payType: "hourly", workerType: "employee", jobTitle: "" },
+    { firstName: "", lastName: "", email: "", payRate: "", payType: "hourly", workerType: "employee", jobTitle: "", pin: "" },
   ]);
   const [bankData, setBankData] = useState({
     bankName: "", routingNumber: "", accountNumber: "", accountType: "checking",
@@ -885,7 +898,7 @@ export default function OnboardingWizard() {
         {currentStep === 2 && (
           <Step2Employees
             employees={employees}
-            onAdd={() => setEmployees((prev) => [...prev, { firstName: "", lastName: "", email: "", payRate: "", payType: "hourly", workerType: "employee", jobTitle: "" }])}
+            onAdd={() => setEmployees((prev) => [...prev, { firstName: "", lastName: "", email: "", payRate: "", payType: "hourly", workerType: "employee", jobTitle: "", pin: "" }])}
             onRemove={(idx) => setEmployees((prev) => prev.filter((_, i) => i !== idx))}
             onChange={(idx, field, value) => setEmployees((prev) => prev.map((e, i) => (i === idx ? { ...e, [field]: value } : e)))}
             onNext={() => employeeMutation.mutate()}

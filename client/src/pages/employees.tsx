@@ -280,6 +280,7 @@ function WorkerFormFields({ form, companies }: { form: any; companies: Company[]
                 <SelectContent>
                   <SelectItem value="hourly">Hourly</SelectItem>
                   <SelectItem value="salary">Salary</SelectItem>
+                  <SelectItem value="commission">Commission</SelectItem>
                 </SelectContent>
               </Select>
               <FormMessage />
