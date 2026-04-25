@@ -865,6 +865,16 @@ function TimesheetTab() {
                           {e.source === "punches" && (
                             <div className="text-xs text-muted-foreground">From punches</div>
                           )}
+                          {e.payCategory && e.payCategory !== "regular" && (
+                            <div className="mt-0.5">
+                              <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
+                                {e.payCategory === "commission_hours" ? "Commission" :
+                                 e.payCategory === "volunteer" ? "Volunteer" :
+                                 e.payCategory === "special_event" ? "Special Event" :
+                                 e.payCategory}
+                              </span>
+                            </div>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell className="text-sm">{entry.date}</TableCell>

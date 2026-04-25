@@ -4184,41 +4184,57 @@ export async function registerRoutes(
           }
         }
       }
-      const data = { ...req.body };
-      if (data.clockIn) data.clockIn = new Date(data.clockIn);
-      if (data.clockOut) data.clockOut = new Date(data.clockOut);
+      const body = req.body;
+
+      // Build a clean, explicit update object to avoid Drizzle silently dropping
+      // fields when given a large mixed-type spread object.
+      const clockInVal = body.clockIn ? new Date(body.clockIn) : undefined;
+      const clockOutVal = body.clockOut ? new Date(body.clockOut) : undefined;
 
       // Auto-recalculate totalHours (and OT/DT) when clockIn or clockOut change.
-      // Always recompute — never trust a stale totalHours sent from the client
-      // when the clock times have been updated.
-      const newClockIn = data.clockIn instanceof Date ? data.clockIn : existing.clockIn;
-      const newClockOut = data.clockOut instanceof Date ? data.clockOut : existing.clockOut;
-      if ((data.clockIn || data.clockOut) && newClockIn && newClockOut) {
+      let totalHours = body.totalHours !== undefined ? String(body.totalHours) : undefined;
+      let overtimeHours = body.overtimeHours !== undefined ? String(body.overtimeHours) : undefined;
+      let doubleTimeHours = body.doubleTimeHours !== undefined ? String(body.doubleTimeHours) : undefined;
+
+      const newClockIn = clockInVal ?? existing.clockIn;
+      const newClockOut = clockOutVal ?? existing.clockOut;
+      if ((clockInVal || clockOutVal) && newClockIn && newClockOut) {
         const diffMs = new Date(newClockOut).getTime() - new Date(newClockIn).getTime();
         if (diffMs > 0) {
-          const breakMins = data.breakMinutes !== undefined ? Number(data.breakMinutes) : (existing.breakMinutes || 0);
+          const breakMins = body.breakMinutes !== undefined ? Number(body.breakMinutes) : (existing.breakMinutes || 0);
           const workedHrs = Math.max(0, diffMs / (1000 * 60 * 60) - breakMins / 60);
-          // Load company OT threshold for this entry
           const entryCompany = existing.companyId
             ? await storage.getCompany(existing.companyId).catch(() => null)
             : null;
           const dailyOTThreshold = parseFloat(String((entryCompany as any)?.overtimeThreshold ?? 8));
           const doubleTimeThreshold = 12;
-          let overtimeHrs = 0;
-          let doubleTimeHrs = 0;
+          let otHrs = 0;
+          let dtHrs = 0;
           if (workedHrs > doubleTimeThreshold) {
-            doubleTimeHrs = workedHrs - doubleTimeThreshold;
-            overtimeHrs = doubleTimeThreshold - dailyOTThreshold;
+            dtHrs = workedHrs - doubleTimeThreshold;
+            otHrs = doubleTimeThreshold - dailyOTThreshold;
           } else if (workedHrs > dailyOTThreshold) {
-            overtimeHrs = workedHrs - dailyOTThreshold;
+            otHrs = workedHrs - dailyOTThreshold;
           }
-          data.totalHours = workedHrs.toFixed(2);
-          data.overtimeHours = overtimeHrs.toFixed(2);
-          data.doubleTimeHours = doubleTimeHrs.toFixed(2);
+          totalHours = workedHrs.toFixed(2);
+          overtimeHours = otHrs.toFixed(2);
+          doubleTimeHours = dtHrs.toFixed(2);
         }
       }
 
-      const entry = await storage.updateTimeEntry(req.params.id, data);
+      // Build explicit update payload — every field is deliberate so nothing gets dropped
+      const updatePayload: Record<string, any> = {};
+      if (clockInVal !== undefined) updatePayload.clockIn = clockInVal;
+      if (clockOutVal !== undefined) updatePayload.clockOut = clockOutVal;
+      if (body.breakMinutes !== undefined) updatePayload.breakMinutes = Number(body.breakMinutes);
+      if (totalHours !== undefined) updatePayload.totalHours = totalHours;
+      if (overtimeHours !== undefined) updatePayload.overtimeHours = overtimeHours;
+      if (doubleTimeHours !== undefined) updatePayload.doubleTimeHours = doubleTimeHours;
+      if (body.status !== undefined) updatePayload.status = body.status;
+      if (body.payCategory !== undefined) updatePayload.payCategory = body.payCategory;
+      if (body.note !== undefined) updatePayload.note = body.note;
+
+      const entry = await storage.updateTimeEntry(req.params.id, updatePayload);
       if (!entry) {
         return res.status(404).json({ message: "Time entry not found" });
       }
