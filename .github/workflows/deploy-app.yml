@@ -53,11 +53,13 @@ jobs:
             echo "App dir: $APP_DIR"
 
             test -d "$APP_DIR" || { echo "ERROR: Missing repo dir: $APP_DIR"; exit 1; }
+
             cd "$APP_DIR"
 
             echo "==> Git sync"
             git fetch origin main
             git reset --hard origin/main
+            git clean -fd
 
             echo "==> Versions"
             node -v
@@ -69,16 +71,18 @@ jobs:
             test -f "$ENV_FILE" || { echo "ERROR: Missing env file: $ENV_FILE"; exit 1; }
 
             echo "==> Clean install state"
+            chmod -R u+w node_modules 2>/dev/null || true
             rm -rf node_modules
 
             echo "==> Install dependencies"
-            npm ci
+            npm install --include=dev --legacy-peer-deps
 
             echo "==> Build app"
             npm run build
 
             echo "==> Verify build output"
             test -f "$APP_ENTRY" || { echo "ERROR: Missing build artifact: $APP_ENTRY"; exit 1; }
+            test -f "$APP_DIR/dist/public/index.html" || { echo "ERROR: Missing frontend artifact: $APP_DIR/dist/public/index.html"; exit 1; }
 
             echo "==> Verify marketing build output"
             test -d "$MARKETING_PUBLIC" || { echo "ERROR: Missing marketing public dir: $MARKETING_PUBLIC"; exit 1; }
@@ -114,10 +118,24 @@ jobs:
             echo "==> Health checks"
             HEALTH_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$APP_PORT/health || true)"
             READY_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$APP_PORT/ready || true)"
-            echo "Health: $HEALTH_CODE | Ready: $READY_CODE"
+            HOME_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$APP_PORT/ || true)"
 
-            if [ "$HEALTH_CODE" != "200" ] && [ "$READY_CODE" != "200" ]; then
-              echo "ERROR: Private app failed health checks"
+            echo "Health: $HEALTH_CODE | Ready: $READY_CODE | Home: $HOME_CODE"
+
+            if [ "$HEALTH_CODE" != "200" ]; then
+              echo "ERROR: /health failed"
+              pm2 logs "$APP_NAME" --lines 150 --nostream || true
+              exit 1
+            fi
+
+            if [ "$READY_CODE" != "200" ]; then
+              echo "ERROR: /ready failed"
+              pm2 logs "$APP_NAME" --lines 150 --nostream || true
+              exit 1
+            fi
+
+            if [ "$HOME_CODE" != "200" ]; then
+              echo "ERROR: homepage failed"
               pm2 logs "$APP_NAME" --lines 150 --nostream || true
               exit 1
             fi
