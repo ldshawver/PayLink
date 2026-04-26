@@ -174,6 +174,45 @@ console.log("\nTest 5: overtime entry stays in regular wage bucket");
   eq("commissionHours stays 0", r.commissionHours, 0);
 }
 
+// ── Test 6: Production run 868c8745 — exact data, Phil Graves Apr 6-12 2026 ──
+console.log("\nTest 6: Production run 868c8745 (Phil Graves — 3 entries, 2 commission_hours)");
+{
+  const entries = [
+    {
+      workerId:        PHIL_ID,
+      totalHours:      "4.72",
+      overtimeHours:   "0",
+      doubleTimeHours: "0",
+      payCategory:     "regular",
+    },
+    {
+      workerId:        PHIL_ID,
+      totalHours:      "4.97",
+      overtimeHours:   "0",
+      doubleTimeHours: "0",
+      payCategory:     "commission_hours",
+    },
+    {
+      workerId:        PHIL_ID,
+      totalHours:      "5.35",
+      overtimeHours:   "0",
+      doubleTimeHours: "0",
+      payCategory:     "commission_hours",
+    },
+  ];
+
+  const r = calculateHourlyWorkerPay(PHIL, entries);
+
+  eq("regularHours must be 4.72 (NOT 15.04)", r.regularHours, 4.72);
+  eq("commissionHours must be 10.32 (4.97+5.35)", r.commissionHours, 10.32);
+  eq("regularPay must be 94.40 (4.72×$20)", r.regularPay, 94.40);
+  eq("commissionHrlyPay must be 206.40 (10.32×$20)", r.commissionHourlyPay, 206.40);
+  eq("grossPay must be 300.80 but split correctly — NOT 15.04 hrs × $20",
+     r.grossPay, 300.80);
+  eq("overtimeHours is 0", r.overtimeHours, 0);
+  eq("regularHours is NOT 15.04 (the broken value)", r.regularHours !== 15.04 ? 0 : 1, 0);
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n${"─".repeat(50)}`);
 console.log(`Results: ${passed} passed, ${failed} failed`);
