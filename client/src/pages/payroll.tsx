@@ -757,6 +757,49 @@ function PayrollRunCard({
     },
   });
 
+  const rebuildMutation = useMutation({
+    mutationFn: async () => {
+      // Step 1: reset to draft (deletes existing payroll items)
+      const resetRes = await fetch(`/api/payroll-runs/${run.id}/reset-to-draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({}),
+      });
+      if (!resetRes.ok) {
+        const body = await resetRes.json().catch(() => ({}));
+        throw new Error(body.message || "Reset to draft failed");
+      }
+      // Step 2: re-process from current time entries
+      const processRes = await fetch(`/api/payroll-runs/${run.id}/process`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({}),
+      });
+      const processBody = await processRes.json().catch(() => ({}));
+      if (!processRes.ok) {
+        const err = new Error(processBody.message || "Rebuild processing failed") as any;
+        err.gateErrors = processBody.errors || null;
+        throw err;
+      }
+      return processBody;
+    },
+    onSuccess: () => {
+      setProcessGateErrors([]);
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs", run.id, "items"] });
+      toast({ title: "Payroll rebuilt from timecards" });
+    },
+    onError: (err: any) => {
+      if (err.gateErrors && Array.isArray(err.gateErrors)) {
+        setProcessGateErrors(err.gateErrors);
+      } else {
+        toast({ title: "Rebuild Error", description: err.message, variant: "destructive" });
+      }
+    },
+  });
+
   const processMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch(`/api/payroll-runs/${run.id}/process`, {
@@ -987,6 +1030,27 @@ function PayrollRunCard({
           </Button>
         </div>
       </CardHeader>
+
+      {(run as any).needsRecalculation && !isLocked && (run.achStatus !== "submitted" && run.achStatus !== "settled") && (
+        <div className="mx-6 mb-2 flex items-start gap-3 rounded-md border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/30 px-3 py-2.5" data-testid={`banner-stale-${run.id}`}>
+          <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">Timecards changed after payroll was generated</p>
+            <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">Rebuild payroll to apply the latest timecard edits. Commission hours will be correctly separated from regular hours.</p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0 border-amber-400 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 text-xs h-7 px-2"
+            onClick={() => rebuildMutation.mutate()}
+            disabled={rebuildMutation.isPending}
+            data-testid={`button-rebuild-payroll-${run.id}`}
+          >
+            <RefreshCw className={`h-3 w-3 mr-1 ${rebuildMutation.isPending ? "animate-spin" : ""}`} />
+            {rebuildMutation.isPending ? "Rebuilding…" : "Rebuild Payroll from Timecards"}
+          </Button>
+        </div>
+      )}
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>

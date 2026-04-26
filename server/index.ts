@@ -323,6 +323,7 @@ app.use((req, res, next) => {
     await run("payroll_items.special_event_pay", sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS special_event_pay NUMERIC DEFAULT 0`);
     await run("payroll_items.is_manual_override", sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS is_manual_override BOOLEAN DEFAULT FALSE`);
     await run("payroll_items.manual_override_note", sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS manual_override_note TEXT`);
+    await run("payroll_runs.needs_recalculation", sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS needs_recalculation BOOLEAN DEFAULT FALSE`);
     await run("jobs.is_special_event", sql`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS is_special_event BOOLEAN DEFAULT FALSE`);
     // shift_offers table + additions
     await run("shift_offers table", sql`CREATE TABLE IF NOT EXISTS shift_offers (

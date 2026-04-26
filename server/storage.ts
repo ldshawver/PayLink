@@ -1284,16 +1284,70 @@ export class DatabaseStorage implements IStorage {
     return entry;
   }
   async updateTimeEntry(id: string, data: Partial<TimeEntry>): Promise<TimeEntry | undefined> {
-    const [entry] = await db.update(timeEntries).set(data).where(eq(timeEntries.id, id)).returning();
-    // Belt-and-suspenders: if payCategory was supplied, guarantee it is written via raw SQL
-    // in case Drizzle's .set() drops the camelCase→snake_case mapping for this field.
-    if (data.payCategory !== undefined && entry) {
-      await db.execute(
-        sql`UPDATE time_entries SET pay_category = ${data.payCategory} WHERE id = ${id}`
-      );
-      return { ...entry, payCategory: data.payCategory };
+    // Build an explicit raw-SQL UPDATE so every field is guaranteed to reach the DB.
+    // Drizzle's .set() can silently skip camelCase→snake_case mappings for columns
+    // added after initial schema generation (e.g. pay_category, override_pay_rate).
+    const parts: ReturnType<typeof sql>[] = [];
+    if ("clockIn" in data)                parts.push(sql`clock_in = ${data.clockIn}`);
+    if ("clockOut" in data)               parts.push(sql`clock_out = ${data.clockOut}`);
+    if ("breakMinutes" in data)           parts.push(sql`break_minutes = ${data.breakMinutes}`);
+    if ("totalHours" in data)             parts.push(sql`total_hours = ${data.totalHours}`);
+    if ("overtimeHours" in data)          parts.push(sql`overtime_hours = ${data.overtimeHours}`);
+    if ("doubleTimeHours" in data)        parts.push(sql`double_time_hours = ${data.doubleTimeHours}`);
+    if ("status" in data)                 parts.push(sql`status = ${data.status}`);
+    if ("payCategory" in data)            parts.push(sql`pay_category = ${data.payCategory}`);
+    if ("note" in data)                   parts.push(sql`note = ${data.note}`);
+    if ("overridePayRate" in data)        parts.push(sql`override_pay_rate = ${data.overridePayRate}`);
+    if ("wageGroupId" in data)            parts.push(sql`wage_group_id = ${data.wageGroupId}`);
+    if ("tipsAmount" in data)             parts.push(sql`tips_amount = ${data.tipsAmount}`);
+    if ("lateMinutes" in data)            parts.push(sql`late_minutes = ${data.lateMinutes}`);
+    if ("earlyDepartureMinutes" in data)  parts.push(sql`early_departure_minutes = ${data.earlyDepartureMinutes}`);
+    if ("isUnscheduled" in data)          parts.push(sql`is_unscheduled = ${data.isUnscheduled}`);
+    if ("source" in data)                 parts.push(sql`source = ${data.source}`);
+    if ("scheduledStart" in data)         parts.push(sql`scheduled_start = ${data.scheduledStart}`);
+    if ("scheduledEnd" in data)           parts.push(sql`scheduled_end = ${data.scheduledEnd}`);
+    if ("scheduledHours" in data)         parts.push(sql`scheduled_hours = ${data.scheduledHours}`);
+
+    if (parts.length === 0) {
+      const [existing] = await db.select().from(timeEntries).where(eq(timeEntries.id, id));
+      return existing;
     }
-    return entry;
+
+    // Fold parts into a comma-separated SET clause and execute
+    const setSql = parts.reduce((acc, part, i) => i === 0 ? part : sql`${acc}, ${part}`);
+    const result = await db.execute(
+      sql`UPDATE time_entries SET ${setSql} WHERE id = ${id} RETURNING *`
+    );
+    if (!result.rows[0]) return undefined;
+    const r = result.rows[0] as Record<string, any>;
+    // Map snake_case DB columns back to camelCase for the caller
+    return {
+      id: r.id,
+      workerId: r.worker_id,
+      companyId: r.company_id,
+      date: r.date,
+      clockIn: r.clock_in,
+      clockOut: r.clock_out,
+      breakMinutes: r.break_minutes ?? 0,
+      totalHours: r.total_hours ?? "0",
+      overtimeHours: r.overtime_hours ?? "0",
+      doubleTimeHours: r.double_time_hours ?? "0",
+      wageGroupId: r.wage_group_id ?? null,
+      status: r.status ?? "pending",
+      note: r.note ?? null,
+      scheduleId: r.schedule_id ?? null,
+      scheduledStart: r.scheduled_start ?? null,
+      scheduledEnd: r.scheduled_end ?? null,
+      scheduledHours: r.scheduled_hours ?? null,
+      lateMinutes: r.late_minutes ?? 0,
+      earlyDepartureMinutes: r.early_departure_minutes ?? 0,
+      isUnscheduled: r.is_unscheduled ?? false,
+      source: r.source ?? "manual",
+      tipsAmount: r.tips_amount ?? "0",
+      payCategory: r.pay_category ?? "regular",
+      overridePayRate: r.override_pay_rate ?? null,
+      createdAt: r.created_at,
+    } as TimeEntry;
   }
   async deleteTimeEntry(id: string): Promise<void> {
     await db.delete(timeEntries).where(eq(timeEntries.id, id));

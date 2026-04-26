@@ -2585,7 +2585,8 @@ export async function registerRoutes(
         totalOvertimeHours: totalOT.toFixed(2),
         workerCount: activeWorkers.length,
         processedAt: new Date(),
-      });
+        needsRecalculation: false,
+      } as any);
 
       // ── Auto-generate payroll summary ──────────────────────────────────────
       try {
@@ -4322,15 +4323,15 @@ export async function registerRoutes(
   app.patch("/api/time-entries/:id", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
       const actingUser = await storage.getUser(req.session.userId!);
-      // Fetch existing entry to verify ownership
-      const allEntries = await storage.getTimeEntries();
-      const existing = allEntries.find(e => e.id === req.params.id);
+      // Use single-entry lookup — do NOT load all entries just to find one
+      const existing = await storage.getTimeEntry(req.params.id);
       if (!existing) return res.status(404).json({ message: "Time entry not found" });
-      // Company ownership check: tenant users can only modify entries in their own company
+
+      // Company ownership check
       if (!isPlatformUser(actingUser?.role) && actingUser?.companyId && existing.companyId !== actingUser.companyId) {
         return res.status(403).json({ message: "Forbidden: entry belongs to a different company" });
       }
-      // Hierarchy check: pure managers/supervisors can only modify entries for direct reports (or self)
+      // Hierarchy check: managers/supervisors can only modify direct reports (or self)
       if (actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
         if (existing.workerId !== actingUser.workerId) {
           const subResult = await db.execute(
@@ -4341,10 +4342,15 @@ export async function registerRoutes(
           }
         }
       }
-      const body = req.body;
 
-      // Build a clean, explicit update object to avoid Drizzle silently dropping
-      // fields when given a large mixed-type spread object.
+      const body = req.body;
+      console.log(`[TIMECARD] incoming raw body entryId=${req.params.id}:`, JSON.stringify(body));
+
+      // Normalize: accept both camelCase (payCategory) and snake_case (pay_category)
+      // so any caller convention works.
+      const payCategoryRaw = body.payCategory ?? body.pay_category;
+      const overridePayRateRaw = body.overridePayRate ?? body.override_pay_rate;
+
       const clockInVal = body.clockIn ? new Date(body.clockIn) : undefined;
       const clockOutVal = body.clockOut ? new Date(body.clockOut) : undefined;
 
@@ -4379,7 +4385,7 @@ export async function registerRoutes(
         }
       }
 
-      // Build explicit update payload — every field is deliberate so nothing gets dropped
+      // Build explicit update payload — only include keys that were actually sent
       const updatePayload: Record<string, any> = {};
       if (clockInVal !== undefined) updatePayload.clockIn = clockInVal;
       if (clockOutVal !== undefined) updatePayload.clockOut = clockOutVal;
@@ -4388,22 +4394,71 @@ export async function registerRoutes(
       if (overtimeHours !== undefined) updatePayload.overtimeHours = overtimeHours;
       if (doubleTimeHours !== undefined) updatePayload.doubleTimeHours = doubleTimeHours;
       if (body.status !== undefined) updatePayload.status = body.status;
-      if (body.payCategory !== undefined) updatePayload.payCategory = body.payCategory;
+      if (payCategoryRaw !== undefined) updatePayload.payCategory = payCategoryRaw;
       if (body.note !== undefined) updatePayload.note = body.note;
-      if (body.overridePayRate !== undefined) {
-        const rateVal = body.overridePayRate === null || body.overridePayRate === "" ? null : String(parseFloat(body.overridePayRate));
+      if (overridePayRateRaw !== undefined) {
+        const rateVal = overridePayRateRaw === null || overridePayRateRaw === "" ? null : String(parseFloat(overridePayRateRaw));
         updatePayload.overridePayRate = rateVal;
       }
 
-      console.log(`[TIMECARD] update entryId=${req.params.id} companyId=${existing.companyId} payload payCategory=${updatePayload.payCategory ?? "(unchanged)"} overridePayRate=${updatePayload.overridePayRate ?? "(unchanged)"} totalHours=${updatePayload.totalHours ?? "(unchanged)"}`);
+      console.log(`[TIMECARD] mapped update entryId=${req.params.id} companyId=${existing.companyId}:`, JSON.stringify({
+        payCategory: updatePayload.payCategory ?? "(not in payload)",
+        overridePayRate: updatePayload.overridePayRate ?? "(not in payload)",
+        totalHours: updatePayload.totalHours ?? "(not in payload)",
+        status: updatePayload.status ?? "(not in payload)",
+      }));
+
       const entry = await storage.updateTimeEntry(req.params.id, updatePayload);
       if (!entry) {
         return res.status(404).json({ message: "Time entry not found" });
       }
-      console.log(`[TIMECARD] saved entryId=${entry.id} payCategory=${(entry as any).payCategory ?? "regular"} overridePayRate=${(entry as any).overridePayRate ?? "null"}`);
+
+      console.log(`[TIMECARD] saved row from DB entryId=${entry.id} payCategory=${(entry as any).payCategory ?? "regular"} overridePayRate=${(entry as any).overridePayRate ?? "null"} totalHours=${entry.totalHours}`);
       res.json(entry);
+
+      // Fire-and-forget: mark any processed payroll runs that overlap this entry's date as stale.
+      // Done after res.json so the client response is not delayed.
+      try {
+        const entryDate = (entry as any).date as string;
+        const companyId = (entry as any).companyId as string;
+        if (entryDate && companyId) {
+          const overlappingRuns = await storage.getPayrollRuns(companyId);
+          const staleRunIds = overlappingRuns
+            .filter(r =>
+              !r.isLocked &&
+              r.achStatus !== "submitted" &&
+              r.achStatus !== "settled" &&
+              r.status !== "draft" &&
+              entryDate >= r.periodStart &&
+              entryDate <= r.periodEnd
+            )
+            .map(r => r.id);
+          for (const runId of staleRunIds) {
+            await db.execute(sql`UPDATE payroll_runs SET needs_recalculation = TRUE WHERE id = ${runId}`);
+            console.log(`[TIMECARD] marked payroll run ${runId} needs_recalculation=true (entry date ${entryDate} falls in period)`);
+          }
+          // Also mark draft runs that have already been processed at some point (no items yet is fine)
+          const draftRunsInPeriod = overlappingRuns.filter(r =>
+            !r.isLocked &&
+            r.achStatus !== "submitted" &&
+            r.achStatus !== "settled" &&
+            r.status === "draft" &&
+            entryDate >= r.periodStart &&
+            entryDate <= r.periodEnd
+          );
+          for (const r of draftRunsInPeriod) {
+            const existingItems = await storage.getPayrollItems(r.id);
+            if (existingItems.length > 0) {
+              await db.execute(sql`UPDATE payroll_runs SET needs_recalculation = TRUE WHERE id = ${r.id}`);
+              console.log(`[TIMECARD] marked draft run ${r.id} needs_recalculation=true (has ${existingItems.length} existing items)`);
+            }
+          }
+        }
+      } catch (staleErr) {
+        console.warn("[TIMECARD] Failed to mark runs stale (non-fatal):", staleErr);
+      }
     } catch (error) {
-      console.error(error);
+      console.error("[TIMECARD] PATCH error:", error);
       res.status(500).json({ message: "Failed to update time entry" });
     }
   });
@@ -5179,6 +5234,7 @@ export async function registerRoutes(
         workerCount: items.length,
         processedAt: new Date(),
         fundingAccountId: defaultFundingAcct?.id || null,
+        needsRecalculation: false,
       } as any);
 
       for (const item of items) {

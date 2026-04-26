@@ -233,6 +233,7 @@ export const payrollRuns = pgTable("payroll_runs", {
   totalDeductions: numeric("total_deductions").default("0"),
   totalEmployerTaxes: numeric("total_employer_taxes").default("0"),
   totalReimbursements: numeric("total_reimbursements").default("0"),
+  needsRecalculation: boolean("needs_recalculation").default(false),
 });
 
 export const payrollItems = pgTable("payroll_items", {

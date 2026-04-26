@@ -297,9 +297,17 @@ function TimesheetTab() {
 
   const updateEntry = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) => {
-      await apiRequest("PATCH", `/api/time-entries/${id}`, data);
+      console.log("[TIMECARD] outgoing PATCH payload:", JSON.stringify({ id, ...data }));
+      const res = await apiRequest("PATCH", `/api/time-entries/${id}`, data);
+      return res.json() as Promise<Record<string, unknown>>;
     },
-    onSuccess: () => {
+    onSuccess: (updatedEntry, { id }) => {
+      // Write the server-returned row directly into the cache so a re-opened dialog
+      // shows fresh data immediately, without waiting for a background refetch.
+      queryClient.setQueryData(["/api/time-entries"], (old: unknown) => {
+        if (!Array.isArray(old)) return old;
+        return old.map((e: Record<string, unknown>) => e.id === id ? updatedEntry : e);
+      });
       queryClient.invalidateQueries({ queryKey: ["/api/time-entries"] });
       toast({ title: "Time entry updated" });
       setEditEntry(null);
