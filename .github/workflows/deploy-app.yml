@@ -79,7 +79,7 @@ jobs:
             test -f "$ENV_FILE" || { echo "ERROR: Missing env file: $ENV_FILE"; exit 1; }
 
             echo "==> Install dependencies"
-            npm ci || npm install
+            npm ci --legacy-peer-deps || npm install --include=dev --legacy-peer-deps
 
             echo "==> Build app"
             npm run build
