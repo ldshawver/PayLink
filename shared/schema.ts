@@ -184,6 +184,7 @@ export const timeEntries = pgTable("time_entries", {
   source: text("source").default("manual"),
   tipsAmount: numeric("tips_amount").default("0"),
   payCategory: text("pay_category").default("regular"), // regular | commission_hours | volunteer | special_event
+  overridePayRate: numeric("override_pay_rate"),         // if set, overrides worker default pay rate for this entry
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -4254,12 +4255,14 @@ export const commissions = pgTable("commissions", {
   companyId: varchar("company_id").notNull(),
   workerId: varchar("worker_id").notNull(),
   amount: numeric("amount").notNull(),
+  hours: numeric("hours").default("0"),        // commission hours worked (optional)
   description: text("description"),
   sourceType: text("source_type").default("manual"), // manual | order | deal
   sourceId: varchar("source_id"),
   earnedDate: date("earned_date").notNull(),
   status: text("status").default("pending"),  // pending | approved | paid
   payrollRunId: varchar("payroll_run_id"),     // set when marked paid
+  paidAt: timestamp("paid_at"),               // timestamp when marked paid via payroll
   createdAt: timestamp("created_at").defaultNow(),
 });
 export const insertCommissionSchema = createInsertSchema(commissions).omit({ id: true, createdAt: true });

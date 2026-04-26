@@ -2373,7 +2373,9 @@ export async function registerRoutes(
 
             const wgId = e.wageGroupId;
             const wg = wgId ? wageGroupMap[wgId] : null;
-            const rate = wg ? wg.hourlyRate : defaultRate;
+            // overridePayRate on the entry takes highest precedence, then wageGroup, then worker default
+            const entryOverride = (e as any).overridePayRate ? parseFloat((e as any).overridePayRate) : null;
+            const rate = entryOverride ?? (wg ? wg.hourlyRate : defaultRate);
             const otRate = wg && wg.overtimeRate > 0 ? wg.overtimeRate : rate * otMultiplier;
 
             if (payCategory === "volunteer") {
@@ -2425,6 +2427,12 @@ export async function registerRoutes(
         // ── Commission earnings ──
         const workerCommissions = commissionsByWorker[worker.id] || [];
         const commissionPay = workerCommissions.reduce((sum, c) => sum + parseFloat(c.amount || "0"), 0);
+        // Add commission hours recorded on commission records themselves (in addition to time-entry commission_hours)
+        const commissionRecordHrs = workerCommissions.reduce((sum, c) => sum + parseFloat((c as any).hours || "0"), 0);
+        if (commissionRecordHrs > 0) {
+          commissionHrsTotal += commissionRecordHrs;
+          console.log(`[PAYROLL] Worker ${worker.firstName}: adding ${commissionRecordHrs.toFixed(2)} commission hours from commission records`);
+        }
         if (commissionPay > 0) {
           grossPay += commissionPay;
           console.log(`[PAYROLL] Worker ${worker.firstName}: adding commission pay $${commissionPay.toFixed(2)}`);
@@ -2657,9 +2665,10 @@ export async function registerRoutes(
       }
 
       res.json({ run: updatedRun, items: finalItems });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Payroll processing error:", error);
-      res.status(500).json({ message: "Failed to process payroll" });
+      const detail = error?.message || String(error);
+      res.status(500).json({ message: "Failed to process payroll", detail });
     }
   });
 
@@ -3415,6 +3424,44 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Unlock payroll error:", error);
       res.status(500).json({ message: "Failed to unlock payroll run" });
+    }
+  });
+
+  // Reset a payroll run to draft — platform_super_admin only, clears ACH/lock state for test/admin recovery
+  app.post("/api/payroll-runs/:id/reset-to-draft", requireAuth, requireRole("admin", "platform_super_admin"), async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const resetUser = await storage.getUser(req.session.userId!);
+      // Only platform_super_admin can reset ACH-submitted runs; regular admin can only reset draft/processed
+      const isSuperAdmin = resetUser?.role === "platform_super_admin";
+      if (!isSuperAdmin && (run.achStatus === "submitted" || run.achStatus === "settled")) {
+        return res.status(403).json({
+          message: "Only a platform super-admin can reset a run with submitted or settled ACH payments.",
+        });
+      }
+      if (!isPlatformUser(resetUser?.role) && resetUser?.companyId && run.companyId !== resetUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
+      }
+      // Un-mark any commissions that were paid by this run (reset them to approved)
+      const { commissions: commissionsTable } = await import("../shared/schema.js");
+      await db.update(commissionsTable)
+        .set({ status: "approved", payrollRunId: null, paidAt: null } as any)
+        .where(eq(commissionsTable.payrollRunId, run.id));
+      const updated = await storage.updatePayrollRun(run.id, {
+        status: "draft",
+        lockedAt: null,
+        isLocked: false,
+        lockedBy: null,
+        approvedAt: null,
+        approvedBy: null,
+        achStatus: null,
+        achSubmittedAt: null,
+      } as any);
+      res.json({ message: "Payroll run reset to draft", run: updated });
+    } catch (error) {
+      console.error("Reset-to-draft error:", error);
+      res.status(500).json({ message: "Failed to reset payroll run" });
     }
   });
 
@@ -4231,6 +4278,10 @@ export async function registerRoutes(
       if (body.status !== undefined) updatePayload.status = body.status;
       if (body.payCategory !== undefined) updatePayload.payCategory = body.payCategory;
       if (body.note !== undefined) updatePayload.note = body.note;
+      if (body.overridePayRate !== undefined) {
+        const rateVal = body.overridePayRate === null || body.overridePayRate === "" ? null : String(parseFloat(body.overridePayRate));
+        updatePayload.overridePayRate = rateVal;
+      }
 
       const entry = await storage.updateTimeEntry(req.params.id, updatePayload);
       if (!entry) {

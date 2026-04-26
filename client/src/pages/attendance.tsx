@@ -250,6 +250,7 @@ function TimesheetTab() {
     doubleTimeHours: "0",
     status: "pending",
     payCategory: "regular",
+    overridePayRate: "",
   });
   const [addForm, setAddForm] = useState({
     workerId: "",
@@ -447,6 +448,7 @@ function TimesheetTab() {
       doubleTimeHours: String(entry.doubleTimeHours || 0),
       status: entry.status || "pending",
       payCategory: (entry as any).payCategory || "regular",
+      overridePayRate: (entry as any).overridePayRate != null ? String((entry as any).overridePayRate) : "",
     });
   };
 
@@ -1123,6 +1125,18 @@ function TimesheetTab() {
                   </Select>
                 </div>
               </div>
+              <div className="grid gap-1.5">
+                <Label>Pay Rate Override ($/hr)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="Leave blank to use worker default"
+                  value={editForm.overridePayRate}
+                  onChange={e => setEditForm(f => ({ ...f, overridePayRate: e.target.value }))}
+                  data-testid="input-edit-override-pay-rate"
+                />
+              </div>
               <Button
                 onClick={() => updateEntry.mutate({
                   id: editEntry.id,
@@ -1135,6 +1149,7 @@ function TimesheetTab() {
                     doubleTimeHours: editForm.doubleTimeHours,
                     status: editForm.status,
                     payCategory: editForm.payCategory,
+                    overridePayRate: editForm.overridePayRate !== "" ? editForm.overridePayRate : null,
                   },
                 })}
                 disabled={updateEntry.isPending}
