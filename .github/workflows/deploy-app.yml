@@ -42,7 +42,7 @@ jobs:
             APP_NAME="paylink"
             APP_DIR="/home/paylinkssh/paylink-app/PayLink"
             APP_ENTRY="$APP_DIR/dist/index.cjs"
-            APP_PORT="8000"
+            APP_PORT="8001"
             ENV_FILE="/etc/paylink/.env"
 
             SHARED_MARKETING_DIR="/var/tmp/paylink-marketing-build"
