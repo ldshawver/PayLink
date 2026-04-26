@@ -10,6 +10,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -4811,17 +4812,32 @@ function PayStubTransactionsTab() {
   );
 }
 
+const BLANK_PPS_FORM = {
+  companyId: "", name: "", description: "", type: "weekly",
+  anchorDate: "", transactionDayOffset: 4, semiMonthlyDay1: 1,
+  semiMonthlyDay2: 15, isActive: true,
+};
+
 function PayPeriodSchedulesTab() {
   const { toast } = useToast();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [formData, setFormData] = useState({
-    companyId: "", name: "", description: "", type: "biweekly",
-    anchorDate: "", transactionDayOffset: 3, semiMonthlyDay1: 1,
-    semiMonthlyDay2: 15, isActive: true,
-  });
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "platform_super_admin";
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editSchedule, setEditSchedule] = useState<PayPeriodSchedule | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [formData, setFormData] = useState({ ...BLANK_PPS_FORM });
+  const [editForm, setEditForm] = useState({ ...BLANK_PPS_FORM });
 
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: schedules = [], isLoading } = useQuery<PayPeriodSchedule[]>({ queryKey: ["/api/pay-period-schedules"] });
+
+  const companyMap = Object.fromEntries((companies as Company[]).map(c => [c.id, c.name]));
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/pay-period-schedules"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/pay-period-schedules/resolve-period"] });
+  };
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
@@ -4833,114 +4849,176 @@ function PayPeriodSchedulesTab() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/pay-period-schedules"] });
+      invalidate();
       toast({ title: "Pay period schedule created" });
-      setDialogOpen(false);
-      setFormData({ companyId: "", name: "", description: "", type: "biweekly", anchorDate: "", transactionDayOffset: 3, semiMonthlyDay1: 1, semiMonthlyDay2: 15, isActive: true });
+      setCreateOpen(false);
+      setFormData({ ...BLANK_PPS_FORM });
     },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: typeof editForm }) => {
+      const res = await apiRequest("PATCH", `/api/pay-period-schedules/${id}`, {
+        ...data,
+        anchorDate: data.anchorDate || null,
+        description: data.description || null,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "Pay period schedule updated" });
+      setEditSchedule(null);
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/pay-period-schedules/${id}`, {});
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "Schedule deleted" });
+      setDeleteId(null);
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const openEdit = (s: PayPeriodSchedule) => {
+    setEditSchedule(s);
+    setEditForm({
+      companyId: s.companyId,
+      name: s.name,
+      description: s.description || "",
+      type: s.type,
+      anchorDate: s.anchorDate || "",
+      transactionDayOffset: s.transactionDayOffset ?? 4,
+      semiMonthlyDay1: s.semiMonthlyDay1 ?? 1,
+      semiMonthlyDay2: s.semiMonthlyDay2 ?? 15,
+      isActive: s.isActive ?? true,
+    });
+  };
+
+  const ScheduleFormFields = ({ form, setForm, hideCompany }: {
+    form: typeof formData;
+    setForm: (fn: (p: typeof formData) => typeof formData) => void;
+    hideCompany?: boolean;
+  }) => (
+    <div className="space-y-4">
+      {!hideCompany && (
+        <div className="space-y-2">
+          <Label>Company</Label>
+          <Select value={form.companyId} onValueChange={v => setForm(p => ({ ...p, companyId: v }))}>
+            <SelectTrigger data-testid="select-pps-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+            <SelectContent>
+              {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      <div className="space-y-2">
+        <Label>Name</Label>
+        <Input data-testid="input-pps-name" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
+      </div>
+      <div className="space-y-2">
+        <Label>Description</Label>
+        <Textarea data-testid="input-pps-description" value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-2">
+          <Label>Type</Label>
+          <Select value={form.type} onValueChange={v => setForm(p => ({ ...p, type: v }))}>
+            <SelectTrigger data-testid="select-pps-type"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="weekly">Weekly</SelectItem>
+              <SelectItem value="biweekly">Biweekly</SelectItem>
+              <SelectItem value="semi_monthly">Semi-Monthly</SelectItem>
+              <SelectItem value="monthly">Monthly</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Payday Offset (days after period end)</Label>
+          <Input type="number" data-testid="input-pps-offset" value={form.transactionDayOffset} onChange={e => setForm(p => ({ ...p, transactionDayOffset: Number(e.target.value) }))} />
+        </div>
+      </div>
+      <div className="space-y-2">
+        <Label>Anchor Date <span className="text-xs text-muted-foreground">(a known period-start Sunday)</span></Label>
+        <Input type="date" data-testid="input-pps-anchor-date" value={form.anchorDate} onChange={e => setForm(p => ({ ...p, anchorDate: e.target.value }))} />
+      </div>
+      {form.type === "semi_monthly" && (
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-2">
+            <Label>Semi-Monthly Day 1</Label>
+            <Input type="number" data-testid="input-pps-semi-day1" value={form.semiMonthlyDay1} onChange={e => setForm(p => ({ ...p, semiMonthlyDay1: Number(e.target.value) }))} />
+          </div>
+          <div className="space-y-2">
+            <Label>Semi-Monthly Day 2</Label>
+            <Input type="number" data-testid="input-pps-semi-day2" value={form.semiMonthlyDay2} onChange={e => setForm(p => ({ ...p, semiMonthlyDay2: Number(e.target.value) }))} />
+          </div>
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <Checkbox
+          id="isActivePPS"
+          data-testid="checkbox-pps-active"
+          checked={form.isActive}
+          onCheckedChange={(checked) => setForm(p => ({ ...p, isActive: checked === true }))}
+        />
+        <Label htmlFor="isActivePPS">Active (only one schedule may be active per company)</Label>
+      </div>
+    </div>
+  );
 
   if (isLoading) return <div data-testid="loading-pay-period-schedules"><Skeleton className="h-64 w-full" /></div>;
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-pay-period-schedule"><Plus className="mr-2 h-4 w-4" />Add Schedule</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader><DialogTitle>Add Pay Period Schedule</DialogTitle></DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label>Company</Label>
-                <Select value={formData.companyId} onValueChange={v => setFormData(p => ({ ...p, companyId: v }))}>
-                  <SelectTrigger data-testid="select-pps-company"><SelectValue placeholder="Select company" /></SelectTrigger>
-                  <SelectContent>
-                    {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+      {isSuperAdmin && (
+        <div className="flex justify-end">
+          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-pay-period-schedule"><Plus className="mr-2 h-4 w-4" />Add Schedule</Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+              <DialogHeader><DialogTitle>Add Pay Period Schedule</DialogTitle></DialogHeader>
+              <ScheduleFormFields form={formData} setForm={setFormData as any} />
+              <div className="pt-2">
+                <Button
+                  className="w-full"
+                  data-testid="button-submit-pay-period-schedule"
+                  disabled={createMutation.isPending || !formData.companyId || !formData.name}
+                  onClick={() => createMutation.mutate(formData)}
+                >
+                  {createMutation.isPending ? "Creating..." : "Create Schedule"}
+                </Button>
               </div>
-              <div className="space-y-2">
-                <Label>Name</Label>
-                <Input data-testid="input-pps-name" value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Description</Label>
-                <Textarea data-testid="input-pps-description" value={formData.description} onChange={e => setFormData(p => ({ ...p, description: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Type</Label>
-                <Select value={formData.type} onValueChange={v => setFormData(p => ({ ...p, type: v }))}>
-                  <SelectTrigger data-testid="select-pps-type"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="weekly">Weekly</SelectItem>
-                    <SelectItem value="biweekly">Biweekly</SelectItem>
-                    <SelectItem value="semi_monthly">Semi-Monthly</SelectItem>
-                    <SelectItem value="monthly">Monthly</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Anchor Date</Label>
-                <Input type="date" data-testid="input-pps-anchor-date" value={formData.anchorDate} onChange={e => setFormData(p => ({ ...p, anchorDate: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Transaction Day Offset</Label>
-                <Input type="number" data-testid="input-pps-offset" value={formData.transactionDayOffset} onChange={e => setFormData(p => ({ ...p, transactionDayOffset: Number(e.target.value) }))} />
-              </div>
-              {formData.type === "semi_monthly" && (
-                <>
-                  <div className="space-y-2">
-                    <Label>Semi-Monthly Day 1</Label>
-                    <Input type="number" data-testid="input-pps-semi-day1" value={formData.semiMonthlyDay1} onChange={e => setFormData(p => ({ ...p, semiMonthlyDay1: Number(e.target.value) }))} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Semi-Monthly Day 2</Label>
-                    <Input type="number" data-testid="input-pps-semi-day2" value={formData.semiMonthlyDay2} onChange={e => setFormData(p => ({ ...p, semiMonthlyDay2: Number(e.target.value) }))} />
-                  </div>
-                </>
-              )}
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="isActivePPS"
-                  data-testid="checkbox-pps-active"
-                  checked={formData.isActive}
-                  onCheckedChange={(checked) => setFormData(p => ({ ...p, isActive: checked === true }))}
-                />
-                <Label htmlFor="isActivePPS">Active</Label>
-              </div>
-              <Button
-                className="w-full"
-                data-testid="button-submit-pay-period-schedule"
-                disabled={createMutation.isPending}
-                onClick={() => createMutation.mutate(formData)}
-              >
-                {createMutation.isPending ? "Creating..." : "Create Schedule"}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      </div>
+            </DialogContent>
+          </Dialog>
+        </div>
+      )}
+
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>Company</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Anchor Date</TableHead>
-                  <TableHead>Transaction Day Offset</TableHead>
+                  <TableHead>Payday Offset</TableHead>
                   <TableHead>Active</TableHead>
+                  {isSuperAdmin && <TableHead className="w-20">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {schedules.map(s => (
                   <TableRow key={s.id} data-testid={`row-pay-period-schedule-${s.id}`}>
+                    <TableCell className="text-xs text-muted-foreground">{companyMap[s.companyId] || s.companyId.slice(0, 8)}</TableCell>
                     <TableCell className="font-medium">{s.name}</TableCell>
                     <TableCell>
                       <Badge variant={s.type === "biweekly" ? "default" : s.type === "weekly" ? "secondary" : "outline"} data-testid={`badge-pps-type-${s.id}`}>
@@ -4948,22 +5026,91 @@ function PayPeriodSchedulesTab() {
                       </Badge>
                     </TableCell>
                     <TableCell>{s.anchorDate || "—"}</TableCell>
-                    <TableCell>{s.transactionDayOffset ?? 3}</TableCell>
+                    <TableCell>{s.transactionDayOffset ?? 4}</TableCell>
                     <TableCell>
                       <Badge variant={s.isActive ? "default" : "outline"} data-testid={`badge-pps-active-${s.id}`}>
                         {s.isActive ? "Active" : "Inactive"}
                       </Badge>
                     </TableCell>
+                    {isSuperAdmin && (
+                      <TableCell>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            size="icon" variant="ghost" className="h-7 w-7"
+                            data-testid={`button-edit-pps-${s.id}`}
+                            onClick={() => openEdit(s)}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="icon" variant="ghost"
+                            className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                            data-testid={`button-delete-pps-${s.id}`}
+                            onClick={() => setDeleteId(s.id)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
                 {schedules.length === 0 && (
-                  <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground">No pay period schedules configured</TableCell></TableRow>
+                  <TableRow>
+                    <TableCell colSpan={isSuperAdmin ? 7 : 6} className="text-center text-muted-foreground">
+                      No pay period schedules configured
+                    </TableCell>
+                  </TableRow>
                 )}
               </TableBody>
             </Table>
           </div>
         </CardContent>
       </Card>
+
+      {/* Edit dialog */}
+      <Dialog open={!!editSchedule} onOpenChange={open => !open && setEditSchedule(null)}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Pay Period Schedule</DialogTitle>
+            <p className="text-xs text-muted-foreground pt-1">{companyMap[editSchedule?.companyId || ""] || ""}</p>
+          </DialogHeader>
+          <ScheduleFormFields form={editForm} setForm={setEditForm as any} hideCompany />
+          <div className="flex gap-2 pt-2">
+            <Button variant="outline" className="flex-1" onClick={() => setEditSchedule(null)}>Cancel</Button>
+            <Button
+              className="flex-1"
+              data-testid="button-save-pps"
+              disabled={updateMutation.isPending || !editForm.name}
+              onClick={() => editSchedule && updateMutation.mutate({ id: editSchedule.id, data: editForm })}
+            >
+              {updateMutation.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <AlertDialog open={!!deleteId} onOpenChange={open => !open && setDeleteId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Pay Period Schedule?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the schedule. Any payroll runs using this schedule will no longer be able to resolve periods. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-pps"
+              onClick={() => deleteId && deleteMutation.mutate(deleteId)}
+            >
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
