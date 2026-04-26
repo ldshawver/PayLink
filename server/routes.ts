@@ -3342,9 +3342,7 @@ export async function registerRoutes(
       if (run.achStatus === "submitted" || run.achStatus === "settled") {
         return res.status(409).json({ message: "Cannot delete a payroll run with submitted or settled ACH payments. Contact your bank to reverse the transaction." });
       }
-      if (run.lockedAt || run.isLocked) {
-        return res.status(409).json({ message: "Cannot delete a locked payroll run. Unlock it first by clicking 'Reopen for Editing'." });
-      }
+      // Allow deletion of locked check-only runs — no ACH submitted so no real money at risk
       // Cascade-delete all dependent records in the correct FK order
       const { inArray } = await import("drizzle-orm");
       const { payStubTransactions: pstTable, payrollTransactionRuns: ptrTable, payrollPaymentRecords: pprTable, payrollSummaries: psTable, achBatches: abTable, payrollItems: piTable } = await import("../shared/schema.js");
