@@ -506,7 +506,7 @@ function PayrollSummaryPanel({ run, items }: { run: PayrollRun; items: PayrollIt
   const itemGross = items.reduce((s, i) => s + Number(i.grossPay || 0), 0);
   const itemDeductions = items.reduce((s, i) => s + Number(i.deductions || 0), 0);
   const itemNet = items.reduce((s, i) => s + Number(i.netPay || 0), 0);
-  const totalHours = items.reduce((s, i) => s + Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0), 0);
+  const totalHours = items.reduce((s, i) => s + Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0) + Number((i as any).commissionHours || 0), 0);
 
   const totalGross = Number(run.totalGross || 0) || itemGross;
   const totalDeductions = Number(run.totalDeductions || 0) || itemDeductions;
@@ -1293,9 +1293,9 @@ function PayrollRunCard({
                   const w = workerMap[i.workerId];
                   return w?.workerType !== "contractor" && w?.payType === "salary";
                 });
-                const hourlyWithTime = hourlyItems.filter(i => Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0) > 0);
-                const hourlyMissingTime = hourlyItems.filter(i => Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0) === 0);
-                const totalApprovedHours = items.reduce((sum, i) => sum + Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0), 0);
+                const hourlyWithTime = hourlyItems.filter(i => Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0) + Number((i as any).commissionHours || 0) > 0);
+                const hourlyMissingTime = hourlyItems.filter(i => Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0) + Number((i as any).commissionHours || 0) === 0);
+                const totalApprovedHours = items.reduce((sum, i) => sum + Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0) + Number((i as any).commissionHours || 0), 0);
                 const estimatedGross = items.reduce((sum, i) => sum + Number(i.grossPay || 0), 0);
                 return (
                   <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 p-3 space-y-3" data-testid={`preflight-summary-${run.id}`}>

@@ -2507,9 +2507,15 @@ export async function registerRoutes(
 
         const netPay = grossPay - totalDeductions;
 
+        console.log(`[PAYROLL] ${worker.firstName} ${worker.lastName}: regHrs=${regHrs.toFixed(2)} otHrs=${otHrs.toFixed(2)} dtHrs=${dtHrs.toFixed(2)} commHrs=${commissionHrsTotal.toFixed(2)} regPay=${regPay.toFixed(2)} commHrlyPay=${commissionHrlyPay.toFixed(2)} commPay=${commissionPay.toFixed(2)} grossPay=${grossPay.toFixed(2)}`);
+        for (const e of workerEntries) {
+          const eCat = (e as any).payCategory || "regular";
+          console.log(`[PAYROLL]   entry id=${e.id} date=${e.date} payCategory=${eCat} totalHours=${e.totalHours} countedAs=${eCat === "commission_hours" ? "commission" : eCat === "volunteer" ? "volunteer" : eCat === "special_event" ? "special_event" : "regular"}`);
+        }
+
         totalGross += grossPay;
         totalNet += netPay;
-        totalHours += regHrs + otHrs + dtHrs;
+        totalHours += regHrs + otHrs + dtHrs + commissionHrsTotal;
         totalOT += otHrs;
 
         items.push({
@@ -3472,6 +3478,17 @@ export async function registerRoutes(
       await db.update(commissionsTable)
         .set({ status: "approved", payrollRunId: null, paidAt: null } as any)
         .where(eq(commissionsTable.payrollRunId, run.id));
+      // Delete all non-manual-override payroll items so re-processing starts clean.
+      // Manual-override items are preserved because an admin intentionally set those values.
+      const existingItemsForReset = await storage.getPayrollItems(run.id);
+      let deletedCount = 0;
+      for (const item of existingItemsForReset) {
+        if (!(item as any).isManualOverride) {
+          await storage.deletePayrollItem(item.id);
+          deletedCount++;
+        }
+      }
+      console.log(`[RESET-TO-DRAFT] Deleted ${deletedCount} payroll item(s) for run ${run.id}`);
       const updated = await storage.updatePayrollRun(run.id, {
         status: "draft",
         lockedAt: null,
@@ -3481,11 +3498,82 @@ export async function registerRoutes(
         approvedBy: null,
         achStatus: null,
         achSubmittedAt: null,
+        totalHours: "0",
+        totalGross: "0",
+        totalNet: "0",
       } as any);
-      res.json({ message: "Payroll run reset to draft", run: updated });
+      res.json({ message: "Payroll run reset to draft", run: updated, deletedItems: deletedCount });
     } catch (error) {
       console.error("Reset-to-draft error:", error);
       res.status(500).json({ message: "Failed to reset payroll run" });
+    }
+  });
+
+  // Debug endpoint: shows per-entry payCategory breakdown for a payroll run period
+  app.get("/api/payroll-runs/:id/debug-hours", requireAuth, requireRole("admin", "platform_super_admin"), async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const debugUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(debugUser?.role) && debugUser?.companyId && run.companyId !== debugUser.companyId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const allEntries = await storage.getTimeEntriesByDateRange(run.companyId, run.periodStart, run.periodEnd);
+      const allWorkersForDebug = await storage.getWorkers(run.companyId);
+      const workerNameMap: Record<string, string> = {};
+      for (const w of allWorkersForDebug) workerNameMap[w.id] = `${w.firstName} ${w.lastName}`;
+
+      const entryDebug = allEntries.map(e => {
+        const payCategory = (e as any).payCategory || "regular";
+        const totalHrs = parseFloat(e.totalHours || "0");
+        const isCommission = payCategory === "commission_hours";
+        const isVolunteer = payCategory === "volunteer";
+        const isSpecialEvent = payCategory === "special_event";
+        const isRegular = !isCommission && !isVolunteer && !isSpecialEvent;
+        return {
+          id: e.id,
+          workerId: e.workerId,
+          workerName: workerNameMap[e.workerId] || "Unknown",
+          date: e.date,
+          payCategory,
+          totalHours: totalHrs,
+          overtimeHours: parseFloat(e.overtimeHours || "0"),
+          countedAs: isCommission ? "commission" : isVolunteer ? "volunteer" : isSpecialEvent ? "special_event" : "regular",
+          regularHoursContribution: isRegular ? Math.max(0, totalHrs - parseFloat(e.overtimeHours || "0") - parseFloat((e as any).doubleTimeHours || "0")) : 0,
+          commissionHoursContribution: isCommission ? totalHrs : 0,
+        };
+      });
+
+      // Aggregate per worker
+      const byWorker: Record<string, { workerName: string; regularHours: number; overtimeHours: number; commissionHours: number; volunteerHours: number; entries: typeof entryDebug }> = {};
+      for (const entry of entryDebug) {
+        if (!byWorker[entry.workerId]) {
+          byWorker[entry.workerId] = { workerName: entry.workerName, regularHours: 0, overtimeHours: 0, commissionHours: 0, volunteerHours: 0, entries: [] };
+        }
+        byWorker[entry.workerId].regularHours += entry.regularHoursContribution;
+        byWorker[entry.workerId].overtimeHours += parseFloat(entry.overtimeHours.toString() || "0") * (entry.countedAs === "regular" ? 1 : 0);
+        byWorker[entry.workerId].commissionHours += entry.commissionHoursContribution;
+        if (entry.countedAs === "volunteer") byWorker[entry.workerId].volunteerHours += entry.totalHours;
+        byWorker[entry.workerId].entries.push(entry);
+      }
+
+      const totals = {
+        totalEntries: allEntries.length,
+        totalRegularHours: Object.values(byWorker).reduce((s, w) => s + w.regularHours, 0),
+        totalCommissionHours: Object.values(byWorker).reduce((s, w) => s + w.commissionHours, 0),
+        totalOvertimeHours: Object.values(byWorker).reduce((s, w) => s + w.overtimeHours, 0),
+      };
+
+      res.json({
+        runId: run.id,
+        period: `${run.periodStart} – ${run.periodEnd}`,
+        totals,
+        byWorker,
+        allEntries: entryDebug,
+      });
+    } catch (error) {
+      console.error("debug-hours error:", error);
+      res.status(500).json({ message: "Failed to generate debug hours" });
     }
   });
 
