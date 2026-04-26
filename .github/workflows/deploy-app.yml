@@ -56,19 +56,23 @@ jobs:
 
             cd "$APP_DIR"
 
-            echo "==> Clean working directory before git sync"
-            # rm needs write permission on parent directories, not on files themselves.
-            # Use find to chmod dirs first so rm can recurse even into deeply locked trees.
+            echo "==> Stop existing PM2 app before cleanup"
+            pm2 stop "$APP_NAME" 2>/dev/null || true
+
+            echo "==> Force unlock and remove generated dirs before git sync"
+
             if [ -d "$APP_DIR/node_modules" ]; then
-              find "$APP_DIR/node_modules" -type d -exec chmod u+w {} + 2>/dev/null || true
-              rm -rf "$APP_DIR/node_modules"
-              [ -d "$APP_DIR/node_modules" ] && sudo rm -rf "$APP_DIR/node_modules" || true
+              sudo chown -R "$(whoami)":"$(id -gn)" "$APP_DIR/node_modules" 2>/dev/null || true
+              sudo find "$APP_DIR/node_modules" -type d -exec chmod u+rwx {} + 2>/dev/null || true
+              sudo find "$APP_DIR/node_modules" -type f -exec chmod u+rw {} + 2>/dev/null || true
+              sudo rm -rf "$APP_DIR/node_modules"
             fi
 
             if [ -d "$APP_DIR/dist" ]; then
-              find "$APP_DIR/dist" -type d -exec chmod u+w {} + 2>/dev/null || true
-              rm -rf "$APP_DIR/dist"
-              [ -d "$APP_DIR/dist" ] && sudo rm -rf "$APP_DIR/dist" || true
+              sudo chown -R "$(whoami)":"$(id -gn)" "$APP_DIR/dist" 2>/dev/null || true
+              sudo find "$APP_DIR/dist" -type d -exec chmod u+rwx {} + 2>/dev/null || true
+              sudo find "$APP_DIR/dist" -type f -exec chmod u+rw {} + 2>/dev/null || true
+              sudo rm -rf "$APP_DIR/dist"
             fi
 
             echo "==> Git sync"
@@ -97,9 +101,6 @@ jobs:
             echo "==> Verify build output"
             test -f "$APP_ENTRY" || { echo "ERROR: Missing build artifact: $APP_ENTRY"; exit 1; }
             test -f "$APP_DIR/dist/public/index.html" || { echo "ERROR: Missing frontend artifact: $APP_DIR/dist/public/index.html"; exit 1; }
-
-            echo "==> Verify marketing build output"
-            test -d "$MARKETING_PUBLIC" || echo "WARN: Marketing public dir not found (marketing deploy may not have run yet): $MARKETING_PUBLIC"
 
             echo "==> Restart PM2 app"
             pm2 delete "$APP_NAME" 2>/dev/null || true
@@ -156,11 +157,15 @@ jobs:
 
             echo "==> Export shared marketing build"
             mkdir -p "$SHARED_MARKETING_DIR"
-            rm -rf "$SHARED_MARKETING_DIR"/*
-            cp -R "$MARKETING_PUBLIC"/. "$SHARED_MARKETING_DIR"/
-            chmod -R a+rX "$SHARED_MARKETING_DIR"
 
-            echo "==> Shared marketing build contents"
-            ls -lah "$SHARED_MARKETING_DIR"
+            if [ -d "$MARKETING_PUBLIC" ]; then
+              sudo rm -rf "$SHARED_MARKETING_DIR"/*
+              cp -R "$MARKETING_PUBLIC"/. "$SHARED_MARKETING_DIR"/
+              chmod -R a+rX "$SHARED_MARKETING_DIR"
+              echo "==> Shared marketing build contents"
+              ls -lah "$SHARED_MARKETING_DIR"
+            else
+              echo "WARN: Marketing public dir not found; skipping marketing export: $MARKETING_PUBLIC"
+            fi
 
             echo "========== PRIVATE APP DEPLOY SUCCESS =========="
