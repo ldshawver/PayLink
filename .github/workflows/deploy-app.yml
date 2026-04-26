@@ -1,4 +1,4 @@
-                                                                                                                                                                                                                                                                                                                                                                                            name: Deploy Private App
+name: Deploy Private App
 
 on:
   push:
