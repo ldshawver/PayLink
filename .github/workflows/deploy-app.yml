@@ -56,10 +56,16 @@ jobs:
 
             cd "$APP_DIR"
 
-            echo "==> Fix permissions before git sync"
-            sudo chown -R paylinkssh:mypaylink-app "$APP_DIR" || true
-            sudo rm -rf "$APP_DIR/node_modules" || true
-            sudo rm -rf "$APP_DIR/dist" || true
+            echo "==> Clean working directory before git sync"
+            # npm ci creates read-only files; chmod first so rm works without sudo
+            chmod -R u+w "$APP_DIR/node_modules" 2>/dev/null || true
+            rm -rf "$APP_DIR/node_modules"
+            # Fallback: if still present, try sudo (suppressed if unavailable)
+            [ -d "$APP_DIR/node_modules" ] && sudo rm -rf "$APP_DIR/node_modules" || true
+
+            chmod -R u+w "$APP_DIR/dist" 2>/dev/null || true
+            rm -rf "$APP_DIR/dist"
+            [ -d "$APP_DIR/dist" ] && sudo rm -rf "$APP_DIR/dist" || true
 
             echo "==> Git sync"
             git fetch origin main
