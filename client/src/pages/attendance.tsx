@@ -762,8 +762,12 @@ function TimesheetTab() {
                   {workerIdsInWeek.map(workerId => {
                     const worker = workerMap.get(workerId);
                     const dayMap = entryByWorkerDay.get(workerId)!;
-                    const weekTotal = Array.from(dayMap.values())
-                      .flat()
+                    const allWeekEntries = Array.from(dayMap.values()).flat();
+                    const weekRegTotal = allWeekEntries
+                      .filter(e => !(e as any).payCategory || (e as any).payCategory === "regular")
+                      .reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
+                    const weekCommTotal = allWeekEntries
+                      .filter(e => (e as any).payCategory === "commission_hours")
                       .reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
                     return (
                       <tr key={workerId} className="border-t hover:bg-muted/20 transition-colors">
@@ -774,9 +778,16 @@ function TimesheetTab() {
                         {weekDays.map((day, i) => {
                           const dateStr = fmtDate(day);
                           const dayEntries = dayMap.get(dateStr) || [];
+                          const dayRegHours = dayEntries
+                            .filter(e => !(e as any).payCategory || (e as any).payCategory === "regular")
+                            .reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
+                          const dayCommHours = dayEntries
+                            .filter(e => (e as any).payCategory === "commission_hours")
+                            .reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
                           const dayHours = dayEntries.reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
                           const isToday = dateStr === today;
                           const hasOt = dayEntries.some(e => Number(e.overtimeHours || 0) > 0);
+                          const hasComm = dayCommHours > 0;
                           const firstEntry = dayEntries[0];
                           return (
                             <td key={i} className={`py-1.5 px-2 text-center border-r last:border-r-0 ${isToday ? "bg-teal-50/50 dark:bg-teal-950/20" : ""}`}>
@@ -785,10 +796,11 @@ function TimesheetTab() {
                                   className={`w-full rounded px-1.5 py-1 text-xs font-medium ${canEdit ? "transition-opacity hover:opacity-80 cursor-pointer" : "cursor-default"} ${statusColor(firstEntry?.status)}`}
                                   onClick={() => canEdit && firstEntry && openEdit(firstEntry)}
                                   data-testid={`cell-${workerId}-${dateStr}`}
-                                  title={canEdit ? `${dayHours.toFixed(1)}h — click to edit` : `${dayHours.toFixed(1)}h`}
+                                  title={canEdit ? `${dayRegHours.toFixed(1)}h reg${hasComm ? ` + ${dayCommHours.toFixed(1)}h comm` : ""} — click to edit` : `${dayHours.toFixed(1)}h`}
                                 >
-                                  <div>{dayHours.toFixed(1)}h</div>
+                                  <div>{dayRegHours > 0 ? `${dayRegHours.toFixed(1)}h` : (hasComm ? "—" : `${dayHours.toFixed(1)}h`)}</div>
                                   {hasOt && <div className="text-xs opacity-70">+OT</div>}
+                                  {hasComm && <div className="text-xs text-violet-600 dark:text-violet-400">{dayCommHours.toFixed(1)}h comm</div>}
                                 </button>
                               ) : (
                                 <span className="text-muted-foreground/30 text-xs">—</span>
@@ -797,7 +809,9 @@ function TimesheetTab() {
                           );
                         })}
                         <td className="py-2 px-3 text-center bg-muted/30 font-semibold text-sm">
-                          {weekTotal.toFixed(1)}h
+                          {weekRegTotal > 0 && <div>{weekRegTotal.toFixed(1)}h</div>}
+                          {weekCommTotal > 0 && <div className="text-xs font-medium text-violet-600 dark:text-violet-400">{weekCommTotal.toFixed(1)}h comm</div>}
+                          {weekRegTotal === 0 && weekCommTotal === 0 && <div>0h</div>}
                         </td>
                       </tr>
                     );
@@ -808,18 +822,35 @@ function TimesheetTab() {
                     <td className="py-2 px-3 text-xs font-medium text-muted-foreground border-r">Daily Total</td>
                     {weekDays.map((day, i) => {
                       const dateStr = fmtDate(day);
-                      const dayTotal = (entries || [])
-                        .filter(e => e.date === dateStr)
+                      const dayEntries = (entries || []).filter(e => e.date === dateStr);
+                      const dayRegTotal = dayEntries
+                        .filter(e => !(e as any).payCategory || (e as any).payCategory === "regular")
+                        .reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
+                      const dayCommTotal = dayEntries
+                        .filter(e => (e as any).payCategory === "commission_hours")
                         .reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
                       const isToday = dateStr === today;
                       return (
                         <td key={i} className={`py-2 px-2 text-center text-xs font-medium border-r last:border-r-0 ${isToday ? "bg-teal-50/50 dark:bg-teal-950/20" : ""}`}>
-                          {dayTotal > 0 ? `${dayTotal.toFixed(1)}h` : <span className="text-muted-foreground/40">—</span>}
+                          {dayRegTotal > 0 && <div>{dayRegTotal.toFixed(1)}h</div>}
+                          {dayCommTotal > 0 && <div className="text-violet-600 dark:text-violet-400">{dayCommTotal.toFixed(1)}c</div>}
+                          {dayRegTotal === 0 && dayCommTotal === 0 && <span className="text-muted-foreground/40">—</span>}
                         </td>
                       );
                     })}
                     <td className="py-2 px-3 text-center text-xs font-semibold bg-muted/70">
-                      {(entries || []).reduce((sum, e) => sum + Number(e.totalHours || 0), 0).toFixed(1)}h
+                      {(() => {
+                        const allEntries = entries || [];
+                        const totalReg = allEntries.filter(e => !(e as any).payCategory || (e as any).payCategory === "regular").reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
+                        const totalComm = allEntries.filter(e => (e as any).payCategory === "commission_hours").reduce((sum, e) => sum + Number(e.totalHours || 0), 0);
+                        return (
+                          <>
+                            {totalReg > 0 && <div>{totalReg.toFixed(1)}h</div>}
+                            {totalComm > 0 && <div className="text-violet-600 dark:text-violet-400">{totalComm.toFixed(1)}h comm</div>}
+                            {totalReg === 0 && totalComm === 0 && <div>0h</div>}
+                          </>
+                        );
+                      })()}
                     </td>
                   </tr>
                 </tfoot>

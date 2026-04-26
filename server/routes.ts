@@ -2339,8 +2339,12 @@ export async function registerRoutes(
         }
         const workerEntries = entries.filter(e => e.workerId === worker.id);
         console.log(`[PAYROLL] Processing worker: ${worker.firstName} ${worker.lastName} (id=${worker.id}, isActive=${worker.isActive}, workerGroup=${(worker as any).workerGroup || "unset"}, entries=${workerEntries.length})`);
+        // First pass: accumulate reg/OT/DT hours — exclude commission_hours, volunteer, special_event
+        // so those categories never inflate regular or overtime counts.
         let regHrs = 0, otHrs = 0, dtHrs = 0;
         for (const e of workerEntries) {
+          const ePayCat = (e as any).payCategory || "regular";
+          if (ePayCat !== "regular" && ePayCat !== "overtime" && ePayCat !== "double_time") continue;
           const entryTotal = parseFloat(e.totalHours || "0");
           const entryOt = Math.min(parseFloat(e.overtimeHours || "0"), entryTotal);
           const entryDt = Math.min(parseFloat((e as any).doubleTimeHours || "0"), Math.max(0, entryTotal - entryOt));
@@ -2363,6 +2367,26 @@ export async function registerRoutes(
           otPay = otHrs * hourlyEquiv * otMultiplier;
           dtPay = dtHrs * hourlyEquiv * dtMultiplier;
           grossPay = regPay + otPay + dtPay;
+          // Salary workers may still have commission_hours / volunteer / special_event time entries
+          for (const e of workerEntries) {
+            const ePayCat = (e as any).payCategory || "regular";
+            if (ePayCat === "regular" || ePayCat === "overtime" || ePayCat === "double_time") continue;
+            const entryTotal = parseFloat(e.totalHours || "0");
+            const wgId = e.wageGroupId;
+            const wg = wgId ? wageGroupMap[wgId] : null;
+            const entryOverride = (e as any).overridePayRate ? parseFloat((e as any).overridePayRate) : null;
+            const rate = entryOverride ?? (wg ? wg.hourlyRate : hourlyEquiv);
+            if (ePayCat === "volunteer") {
+              volunteerHrsTotal += entryTotal;
+            } else if (ePayCat === "commission_hours") {
+              commissionHrsTotal += entryTotal;
+              commissionHrlyPay += entryTotal * rate;
+            } else if (ePayCat === "special_event") {
+              specialEventHrsTotal += entryTotal;
+              specialEventPayTotal += entryTotal * rate;
+            }
+          }
+          grossPay += commissionHrlyPay + specialEventPayTotal;
         } else {
           for (const e of workerEntries) {
             const entryTotal = parseFloat(e.totalHours || "0");
@@ -4283,10 +4307,12 @@ export async function registerRoutes(
         updatePayload.overridePayRate = rateVal;
       }
 
+      console.log(`[TIMECARD] update entryId=${req.params.id} companyId=${existing.companyId} payload payCategory=${updatePayload.payCategory ?? "(unchanged)"} overridePayRate=${updatePayload.overridePayRate ?? "(unchanged)"} totalHours=${updatePayload.totalHours ?? "(unchanged)"}`);
       const entry = await storage.updateTimeEntry(req.params.id, updatePayload);
       if (!entry) {
         return res.status(404).json({ message: "Time entry not found" });
       }
+      console.log(`[TIMECARD] saved entryId=${entry.id} payCategory=${(entry as any).payCategory ?? "regular"} overridePayRate=${(entry as any).overridePayRate ?? "null"}`);
       res.json(entry);
     } catch (error) {
       console.error(error);
@@ -4907,6 +4933,8 @@ export async function registerRoutes(
         const workerEntries = entries.filter(e => e.workerId === worker.id);
         let regHrs = 0, otHrs = 0, dtHrs = 0;
         for (const e of workerEntries) {
+          const ePayCat2 = (e as any).payCategory || "regular";
+          if (ePayCat2 !== "regular" && ePayCat2 !== "overtime" && ePayCat2 !== "double_time") continue;
           const tot = parseFloat(e.totalHours || "0");
           const cappedOt = Math.min(parseFloat(e.overtimeHours || "0"), tot);
           const cappedDt = Math.min(parseFloat((e as any).doubleTimeHours || "0"), Math.max(0, tot - cappedOt));
@@ -4918,6 +4946,7 @@ export async function registerRoutes(
         const defaultRate = parseFloat(worker.payRate || "0");
 
         let regPay = 0, otPay = 0, dtPay = 0, grossPay = 0;
+        let createCommHrsTotal = 0, createCommHrlyPay = 0;
 
         if (worker.payType === "salary") {
           const hourlyEquiv = defaultRate / 2080;
@@ -4925,9 +4954,22 @@ export async function registerRoutes(
           otPay = otHrs * hourlyEquiv * otMultiplier;
           dtPay = dtHrs * hourlyEquiv * dtMultiplier;
           grossPay = regPay + otPay + dtPay;
+          for (const e of workerEntries) {
+            const ePayCat2 = (e as any).payCategory || "regular";
+            if (ePayCat2 !== "commission_hours") continue;
+            const entryTotal = parseFloat(e.totalHours || "0");
+            const wgId2 = (e as any).wageGroupId;
+            const wg2 = wgId2 ? wageGroupMap[wgId2] : null;
+            const entryOverride2 = (e as any).overridePayRate ? parseFloat((e as any).overridePayRate) : null;
+            const rate2 = entryOverride2 ?? (wg2 ? wg2.hourlyRate : hourlyEquiv);
+            createCommHrsTotal += entryTotal;
+            createCommHrlyPay += entryTotal * rate2;
+          }
+          grossPay += createCommHrlyPay;
         } else {
           for (const e of workerEntries) {
             const entryTotal = parseFloat(e.totalHours || "0");
+            const ePayCat2 = (e as any).payCategory || "regular";
             const entryOtRaw = parseFloat(e.overtimeHours || "0");
             const entryDtRaw = parseFloat((e as any).doubleTimeHours || "0");
             const entryOt = Math.min(entryOtRaw, entryTotal);
@@ -4935,13 +4977,21 @@ export async function registerRoutes(
             const entryReg = Math.max(0, entryTotal - entryOt - entryDt);
             const wgId = (e as any).wageGroupId;
             const wg = wgId ? wageGroupMap[wgId] : null;
-            const rate = wg ? wg.hourlyRate : defaultRate;
+            const entryOverride2 = (e as any).overridePayRate ? parseFloat((e as any).overridePayRate) : null;
+            const rate = entryOverride2 ?? (wg ? wg.hourlyRate : defaultRate);
             const otRate = wg && wg.overtimeRate > 0 ? wg.overtimeRate : rate * otMultiplier;
-            regPay += entryReg * rate;
-            otPay += entryOt * otRate;
-            dtPay += entryDt * rate * dtMultiplier;
+            if (ePayCat2 === "commission_hours") {
+              createCommHrsTotal += entryTotal;
+              createCommHrlyPay += entryTotal * rate;
+            } else if (ePayCat2 === "volunteer" || ePayCat2 === "special_event") {
+              // tracked but not added to gross pay here
+            } else {
+              regPay += entryReg * rate;
+              otPay += entryOt * otRate;
+              dtPay += entryDt * rate * dtMultiplier;
+            }
           }
-          grossPay = regPay + otPay + dtPay;
+          grossPay = regPay + otPay + dtPay + createCommHrlyPay;
         }
 
         // ── Commission earnings (CREATE) ──
