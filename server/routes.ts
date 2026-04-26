@@ -1,6 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { calculateHourlyWorkerPay } from "./payroll-calculator";
 import bcrypt from "bcrypt";
 import multer from "multer";
 import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePhone } from "./notifications";
@@ -2358,29 +2359,34 @@ export async function registerRoutes(
         }
         const workerEntries = entries.filter(e => e.workerId === worker.id);
         console.log(`[PAYROLL] Processing worker: ${worker.firstName} ${worker.lastName} (id=${worker.id}, isActive=${worker.isActive}, workerGroup=${(worker as any).workerGroup || "unset"}, entries=${workerEntries.length})`);
-        // First pass: accumulate reg/OT/DT hours — exclude commission_hours, volunteer, special_event
-        // so those categories never inflate regular or overtime counts.
-        let regHrs = 0, otHrs = 0, dtHrs = 0;
+        // ── Diagnostic: log raw DB pay_category for every entry (before fallback) ──
+        console.log(`[PAYROLL] ${worker.firstName} ${worker.lastName}: ${workerEntries.length} entries in period`);
         for (const e of workerEntries) {
-          const ePayCat = (e as any).payCategory || "regular";
-          if (ePayCat !== "regular" && ePayCat !== "overtime" && ePayCat !== "double_time") continue;
-          const entryTotal = parseFloat(e.totalHours || "0");
-          const entryOt = Math.min(parseFloat(e.overtimeHours || "0"), entryTotal);
-          const entryDt = Math.min(parseFloat((e as any).doubleTimeHours || "0"), Math.max(0, entryTotal - entryOt));
-          dtHrs += entryDt;
-          otHrs += entryOt;
-          regHrs += Math.max(0, entryTotal - entryOt - entryDt);
+          const rawCat = (e as any).payCategory;
+          console.log(`[PAYROLL]   RAW entry id=${e.id} date=${e.date} pay_category_db=${JSON.stringify(rawCat)} totalHours=${e.totalHours} overtimeHours=${e.overtimeHours}`);
         }
 
         const defaultRate = parseFloat(worker.payRate || "0");
         const otMultiplier = parseFloat(company.overtimeMultiplier || "1.5");
         const dtMultiplier = 2.0;
+        let regHrs = 0, otHrs = 0, dtHrs = 0;
         let regPay = 0, otPay = 0, dtPay = 0, grossPay = 0;
         let commissionHrsTotal = 0, commissionHrlyPay = 0;
         let volunteerHrsTotal = 0;
         let specialEventHrsTotal = 0, specialEventPayTotal = 0;
 
         if (worker.payType === "salary") {
+          // ── Salary: first pass for OT/DT hours ──────────────────────────────
+          for (const e of workerEntries) {
+            const ePayCat = (e as any).payCategory || "regular";
+            if (ePayCat !== "regular" && ePayCat !== "overtime" && ePayCat !== "double_time") continue;
+            const entryTotal = parseFloat(e.totalHours || "0");
+            const entryOt = Math.min(parseFloat(e.overtimeHours || "0"), entryTotal);
+            const entryDt = Math.min(parseFloat((e as any).doubleTimeHours || "0"), Math.max(0, entryTotal - entryOt));
+            dtHrs += entryDt;
+            otHrs += entryOt;
+            regHrs += Math.max(0, entryTotal - entryOt - entryDt);
+          }
           const hourlyEquiv = defaultRate / 2080;
           regPay = defaultRate / schedulePeriodsPerYear;
           otPay = otHrs * hourlyEquiv * otMultiplier;
@@ -2407,36 +2413,36 @@ export async function registerRoutes(
           }
           grossPay += commissionHrlyPay + specialEventPayTotal;
         } else {
-          for (const e of workerEntries) {
-            const entryTotal = parseFloat(e.totalHours || "0");
-            const entryOt = parseFloat(e.overtimeHours || "0");
-            const entryDt = parseFloat(e.doubleTimeHours || "0");
-            const entryReg = entryTotal - entryOt - entryDt;
-            const payCategory = (e as any).payCategory || "regular";
-
-            const wgId = e.wageGroupId;
-            const wg = wgId ? wageGroupMap[wgId] : null;
-            // overridePayRate on the entry takes highest precedence, then wageGroup, then worker default
-            const entryOverride = (e as any).overridePayRate ? parseFloat((e as any).overridePayRate) : null;
-            const rate = entryOverride ?? (wg ? wg.hourlyRate : defaultRate);
-            const otRate = wg && wg.overtimeRate > 0 ? wg.overtimeRate : rate * otMultiplier;
-
-            if (payCategory === "volunteer") {
-              volunteerHrsTotal += entryTotal;
-            } else if (payCategory === "commission_hours") {
-              commissionHrsTotal += entryTotal;
-              commissionHrlyPay += entryTotal * rate;
-            } else if (payCategory === "special_event") {
-              specialEventHrsTotal += entryTotal;
-              specialEventPayTotal += entryTotal * rate;
-            } else {
-              // regular (default)
-              regPay += entryReg * rate;
-              otPay += entryOt * otRate;
-              dtPay += entryDt * rate * dtMultiplier;
-            }
+          // ── Hourly: use tested pure calculator (commission_hours never inflates regHrs/regPay) ──
+          const wageGroupsForCalc: Record<string, { hourlyRate: number; overtimeRate: number }> = {};
+          for (const [wgId, wg] of Object.entries(wageGroupMap)) {
+            wageGroupsForCalc[wgId] = { hourlyRate: wg.hourlyRate, overtimeRate: wg.overtimeRate };
           }
-          grossPay = regPay + otPay + dtPay + commissionHrlyPay + specialEventPayTotal;
+          const calcResult = calculateHourlyWorkerPay(
+            { id: worker.id, payType: worker.payType || "hourly", payRate: worker.payRate || "0" },
+            workerEntries.map(e => ({
+              workerId: e.workerId,
+              totalHours: e.totalHours || "0",
+              overtimeHours: e.overtimeHours || "0",
+              doubleTimeHours: (e as any).doubleTimeHours || "0",
+              payCategory: (e as any).payCategory,
+              overridePayRate: (e as any).overridePayRate,
+              wageGroupId: e.wageGroupId,
+            })),
+            { overtimeMultiplier: otMultiplier, wageGroups: wageGroupsForCalc }
+          );
+          regHrs            = calcResult.regularHours;
+          otHrs             = calcResult.overtimeHours;
+          dtHrs             = calcResult.doubleTimeHours;
+          regPay            = calcResult.regularPay;
+          otPay             = calcResult.overtimePay;
+          dtPay             = calcResult.doubleTimePay;
+          commissionHrsTotal = calcResult.commissionHours;
+          commissionHrlyPay  = calcResult.commissionHourlyPay;
+          volunteerHrsTotal  = calcResult.volunteerHours;
+          specialEventHrsTotal = calcResult.specialEventHours;
+          specialEventPayTotal = calcResult.specialEventPay;
+          grossPay           = calcResult.grossPay;
         }
 
         // Apply pay stub amendments for this worker in this pay period
