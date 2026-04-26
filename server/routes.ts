@@ -334,27 +334,46 @@ function deduplicateByPeriod<T extends RunLike>(runs: T[]): T[] {
 // ── Pay-period resolution helper ───────────────────────────────────────────────
 // Given a company's active PayPeriodSchedule and a payDate string (YYYY-MM-DD),
 // computes the covered periodStart and periodEnd dates.
-// transactionDayOffset: days between periodEnd and payDate (default 3).
+// transactionDayOffset: days between periodEnd and payDate (default 4 for weekly
+// Sun–Sat / Wednesday payday). Default of 3 is kept only for non-weekly types.
 type PayPeriodScheduleShape = {
   type: string;
+  anchorDate?: string | null;
   transactionDayOffset?: number | null;
   semiMonthlyDay1?: number | null;
   semiMonthlyDay2?: number | null;
 };
+
+/** Snap a date BACK to the most-recent Saturday (day 6).
+ *  If the date is already Saturday, returns it unchanged. */
+function snapToSaturday(d: Date): Date {
+  const dow = d.getDay(); // 0=Sun … 6=Sat
+  const daysBack = dow === 6 ? 0 : dow + 1;
+  const sat = new Date(d);
+  sat.setDate(d.getDate() - daysBack);
+  return sat;
+}
+
 function resolvePayPeriod(
   schedule: PayPeriodScheduleShape,
   payDate: string
 ): { periodStart: string; periodEnd: string } | null {
   const pay = new Date(payDate + "T12:00:00");
   if (isNaN(pay.getTime())) return null;
-  const offset = schedule.transactionDayOffset ?? 3;
+  // For weekly type the canonical offset is 4 (Wed payday, 4 days after Sat).
+  // For all other types fall back to the stored value or legacy default 3.
+  const defaultOffset = schedule.type === "weekly" ? 4 : 3;
+  const offset = schedule.transactionDayOffset ?? defaultOffset;
   const fmt = (d: Date) => d.toISOString().split("T")[0];
 
   if (schedule.type === "weekly") {
-    const end = new Date(pay);
-    end.setDate(pay.getDate() - offset);
+    // Back-calculate tentative period end then snap to nearest past Saturday.
+    // This makes the resolver robust even when payDate is not exactly on payday.
+    const tentativeEnd = new Date(pay);
+    tentativeEnd.setDate(pay.getDate() - offset);
+    const end = snapToSaturday(tentativeEnd);
     const start = new Date(end);
-    start.setDate(end.getDate() - 6);
+    start.setDate(end.getDate() - 6); // always Sunday
     return { periodStart: fmt(start), periodEnd: fmt(end) };
   }
 
@@ -10960,6 +10979,72 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
+  // ── Resolve-debug: super-admin tool to verify what the active schedule resolves to ──
+  app.get("/api/pay-period-schedules/:companyId/resolve-debug", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.params;
+      const dateParam = (req.query.date as string) || new Date().toISOString().split("T")[0];
+
+      const schedules = await storage.getPayPeriodSchedules(companyId);
+      const active = schedules.filter(s => s.isActive);
+
+      if (active.length === 0) {
+        return res.json({
+          companyId, inputDate: dateParam,
+          error: "No active schedule found for this company",
+          activeScheduleId: null,
+        });
+      }
+      if (active.length > 1) {
+        return res.json({
+          companyId, inputDate: dateParam,
+          error: `${active.length} active schedules found — only one allowed`,
+          activeScheduleIds: active.map(s => s.id),
+        });
+      }
+
+      const s = active[0];
+      const defaultOffset = s.type === "weekly" ? 4 : 3;
+      const offset = s.transactionDayOffset ?? defaultOffset;
+      const resolved = resolvePayPeriod(s, dateParam);
+
+      // Compute expected payday from resolved period end
+      let resolvedPayDate: string | null = null;
+      if (resolved) {
+        const periodEndDate = new Date(resolved.periodEnd + "T12:00:00");
+        periodEndDate.setDate(periodEndDate.getDate() + offset);
+        resolvedPayDate = periodEndDate.toISOString().split("T")[0];
+      }
+
+      res.json({
+        source: "database_active_schedule",
+        companyId,
+        activeScheduleId: s.id,
+        scheduleName: s.name,
+        type: s.type,
+        anchorDate: s.anchorDate,
+        transactionDayOffset: offset,
+        isActive: s.isActive,
+        inputDate: dateParam,
+        resolvedPeriodStart: resolved?.periodStart ?? null,
+        resolvedPeriodEnd: resolved?.periodEnd ?? null,
+        resolvedPayDate,
+        periodEndDayOfWeek: resolved
+          ? ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][new Date(resolved.periodEnd + "T12:00:00").getDay()]
+          : null,
+        periodStartDayOfWeek: resolved
+          ? ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][new Date(resolved.periodStart + "T12:00:00").getDay()]
+          : null,
+        payDateDayOfWeek: resolvedPayDate
+          ? ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][new Date(resolvedPayDate + "T12:00:00").getDay()]
+          : null,
+      });
+    } catch (error) {
+      console.error("[resolve-debug]", error);
+      res.status(500).json({ message: "Failed to run resolve-debug" });
+    }
+  });
+
   app.get("/api/pay-period-schedules", async (req, res) => {
     try {
       const companyId = req.query.companyId as string | undefined;
@@ -10993,19 +11078,53 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const existing = await storage.getPayPeriodSchedule(req.params.id);
       if (!existing) return res.status(404).json({ message: "Not found" });
 
-      // ── Enforce single active schedule per company ─────────────────────────
-      if (req.body.isActive && !existing.isActive) {
+      const b = req.body;
+      console.log(`[PPS PATCH] id=${req.params.id} raw body:`, JSON.stringify(b));
+
+      // Helper: accept either camelCase or snake_case from the request body.
+      const pick = (camel: string, snake: string) =>
+        b[camel] !== undefined ? b[camel] : b[snake];
+
+      // Build explicit update object — only known, safe fields.
+      const updates: Record<string, unknown> = {};
+      if (pick("name", "name") !== undefined)
+        updates.name = String(pick("name", "name"));
+      if (pick("description", "description") !== undefined)
+        updates.description = pick("description", "description") || null;
+      if (pick("type", "type") !== undefined)
+        updates.type = String(pick("type", "type"));
+      if (pick("anchorDate", "anchor_date") !== undefined)
+        updates.anchorDate = pick("anchorDate", "anchor_date") || null;
+      if (pick("transactionDayOffset", "transaction_day_offset") !== undefined)
+        updates.transactionDayOffset = Number(pick("transactionDayOffset", "transaction_day_offset"));
+      if (pick("semiMonthlyDay1", "semi_monthly_day1") !== undefined)
+        updates.semiMonthlyDay1 = Number(pick("semiMonthlyDay1", "semi_monthly_day1"));
+      if (pick("semiMonthlyDay2", "semi_monthly_day2") !== undefined)
+        updates.semiMonthlyDay2 = Number(pick("semiMonthlyDay2", "semi_monthly_day2"));
+      if (pick("annualPayPeriods", "annual_pay_periods") !== undefined)
+        updates.annualPayPeriods = pick("annualPayPeriods", "annual_pay_periods")
+          ? Number(pick("annualPayPeriods", "annual_pay_periods")) : null;
+      const incomingActive = pick("isActive", "is_active");
+      if (incomingActive !== undefined)
+        updates.isActive = incomingActive === true || incomingActive === "true";
+
+      console.log(`[PPS PATCH] mapped updates:`, JSON.stringify(updates));
+
+      // ── Enforce single active schedule per company ──────────────────────────
+      if (updates.isActive === true && !existing.isActive) {
         const all = await storage.getPayPeriodSchedules(existing.companyId);
         for (const s of all.filter(s => s.isActive && s.id !== req.params.id)) {
           await storage.updatePayPeriodSchedule(s.id, { isActive: false });
+          console.log(`[PPS PATCH] deactivated competing schedule ${s.id}`);
         }
       }
 
-      const schedule = await storage.updatePayPeriodSchedule(req.params.id, req.body);
+      const schedule = await storage.updatePayPeriodSchedule(req.params.id, updates as any);
       if (!schedule) return res.status(404).json({ message: "Not found" });
+      console.log(`[PPS PATCH] saved:`, JSON.stringify(schedule));
       res.json(schedule);
     } catch (error) {
-      console.error(error);
+      console.error("[PPS PATCH] error:", error);
       res.status(500).json({ message: "Failed to update pay period schedule" });
     }
   });
