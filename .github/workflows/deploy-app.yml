@@ -116,6 +116,9 @@ jobs:
             echo "==> Restart PM2 app"
             pm2 delete "$APP_NAME" 2>/dev/null || true
             sleep 2
+            # Kill anything still holding the port so the new process can bind cleanly
+            fuser -k "$APP_PORT/tcp" 2>/dev/null || true
+            sleep 1
 
             pm2 start "$APP_ENTRY" \
               --name "$APP_NAME" \
