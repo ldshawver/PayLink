@@ -285,7 +285,7 @@ const TENANT_NAV: NavGroup[] = [
         label: "Contractor Hub",
         icon: Briefcase,
         url: "/app/contractor-hub",
-        roles: ["admin", "manager"],
+        roles: ["admin", "manager", "supervisor", "contractor"],
         featureKey: "tenant.finance.contractor-hub",
         items: [
           { title: "Contractor Hub", url: "/app/contractor-hub", icon: Briefcase },

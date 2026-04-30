@@ -2856,6 +2856,31 @@ Thank you,
     console.log("Auto-migration skipped (admin platform scope fix):", (e as Error).message);
   }
 
+  try {
+    const { db: dbCh } = await import("./db");
+    await dbCh.$client.query(`
+      INSERT INTO role_permissions (role_id, resource, can_view, can_create, can_edit, can_delete, can_export, can_approve)
+      SELECT r.id, 'contractor_hub',
+        CASE r.name
+          WHEN 'System Administrator' THEN true WHEN 'HR Manager' THEN true
+          WHEN 'Payroll Manager' THEN true WHEN 'General Manager' THEN true ELSE false
+        END,
+        CASE r.name WHEN 'System Administrator' THEN true WHEN 'General Manager' THEN true ELSE false END,
+        CASE r.name WHEN 'System Administrator' THEN true WHEN 'General Manager' THEN true ELSE false END,
+        CASE r.name WHEN 'System Administrator' THEN true ELSE false END,
+        CASE r.name WHEN 'System Administrator' THEN true WHEN 'General Manager' THEN true ELSE false END,
+        CASE r.name WHEN 'System Administrator' THEN true WHEN 'General Manager' THEN true
+          WHEN 'HR Manager' THEN true WHEN 'Payroll Manager' THEN true ELSE false END
+      FROM roles r
+      WHERE NOT EXISTS (
+        SELECT 1 FROM role_permissions rp WHERE rp.role_id = r.id AND rp.resource = 'contractor_hub'
+      )
+    `);
+    console.log("Auto-migration OK: role_permissions contractor_hub");
+  } catch (e) {
+    console.log("Auto-migration skipped (role_permissions contractor_hub):", (e as Error).message);
+  }
+
   const { seedDatabase } = await import("./seed");
   try {
     await seedDatabase();

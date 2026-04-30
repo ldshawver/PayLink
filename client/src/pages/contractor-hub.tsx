@@ -4829,7 +4829,7 @@ function SettingsSection() {
   const [notifDirty, setNotifDirty] = useState(false);
 
   const { data: currentUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
-  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "manager" ||
+  const isAdmin = currentUser?.role === "admin" || currentUser?.role === "manager" || currentUser?.role === "supervisor" ||
     (currentUser?.role || "").startsWith("tenant_") || (currentUser?.role || "").startsWith("platform_");
   const isPlatformUser = (currentUser?.role || "").startsWith("platform_");
   const isPlatformAdmin = currentUser?.role === "platform_super_admin" || currentUser?.role === "platform_admin";
@@ -5459,7 +5459,7 @@ export default function ContractorHubPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const { data: user } = useQuery<any>({ queryKey: ["/api/auth/me"] });
-  const isAdmin = user?.role === "admin" || user?.role === "manager" ||
+  const isAdmin = user?.role === "admin" || user?.role === "manager" || user?.role === "supervisor" ||
     user?.role?.startsWith("tenant_") || user?.role?.startsWith("platform_");
 
   const { data: proposals = [], isLoading: proposalsLoading } = useQuery<Proposal[]>({
