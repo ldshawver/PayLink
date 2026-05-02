@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearch } from "wouter";
 import { NativeFileUpload } from "@/components/native-file-upload";
 import {
@@ -1192,6 +1192,7 @@ function LegalBasisEditor({ policyId, currentBasis, currentPurpose, companyId }:
   policyId: string; currentBasis: string; currentPurpose: string; companyId?: string;
 }) {
   const { toast } = useToast();
+  const qc = useQueryClient();
   const [basis, setBasis] = useState(currentBasis);
   const [purpose, setPurpose] = useState(currentPurpose);
   const [saving, setSaving] = useState(false);
@@ -1203,7 +1204,7 @@ function LegalBasisEditor({ policyId, currentBasis, currentPurpose, companyId }:
         legalBasis: basis || null,
         purposeDescription: purpose || null,
       });
-      queryClient.invalidateQueries({ queryKey: ["/api/document-retention-policies", companyId] });
+      qc.invalidateQueries({ queryKey: ["/api/document-retention-policies", companyId] });
       toast({ title: "Legal basis & purpose updated" });
     } catch {
       toast({ title: "Failed to update legal basis", variant: "destructive" });
