@@ -26,7 +26,7 @@
 | Database | PostgreSQL | VPS (same host, local socket) |
 | Static assets | Served by Express from `dist/public/` | VPS |
 | Backups | `pg_dump` via cron, stored in `/var/backups/paylink/` | VPS |
-| CI/CD | GitHub Actions → SSH deploy | `.github/workflows/deploy-app.yml` |
+| CI/CD | GitHub Actions → SSH deploy (`appleboy/ssh-action`, secrets: `APP_VPS_HOST`, `APP_VPS_SSH_KEY`) | `.github/workflows/deploy-app.yml` |
 
 ---
 
@@ -126,9 +126,10 @@ pm2 save --force
 ```
 
 ### Rollback via GitHub Actions
-1. Open GitHub → Actions → `Deploy Private App` workflow
+1. Open GitHub → Actions → `PayLink CI / Deploy` workflow
 2. Click **Run workflow** → select the last successful run's commit SHA
-3. Wait for deploy to complete and health checks to pass
+3. The `security-tests` → `build` → `deploy` pipeline will run; SSH deploys to the VPS and verifies `/health`
+4. Wait for deploy to complete and health checks to pass
 
 ---
 
