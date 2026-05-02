@@ -24632,6 +24632,29 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
+  app.get("/api/auth/mfa/enforce-status", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin", "tenant_admin", "tenant_owner"), async (req: any, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId as string);
+      if (!user?.companyId) return res.status(400).json({ message: "No company context" });
+      const result = await db.execute(sql`
+        SELECT
+          COUNT(*) FILTER (WHERE mfa_enforced_at IS NOT NULL) AS enforced_count,
+          COUNT(*) AS total_count,
+          COUNT(*) FILTER (WHERE mfa_enabled = true) AS mfa_enabled_count
+        FROM users WHERE company_id = ${user.companyId}
+      `);
+      const row = result.rows[0] as any;
+      res.json({
+        enforced: parseInt(row?.enforced_count ?? "0") > 0,
+        enforcedCount: parseInt(row?.enforced_count ?? "0"),
+        totalUsers: parseInt(row?.total_count ?? "0"),
+        mfaEnabledCount: parseInt(row?.mfa_enabled_count ?? "0"),
+      });
+    } catch (e) {
+      res.status(500).json({ message: "Failed to fetch MFA enforce status" });
+    }
+  });
+
   // ── PII Data Export ─────────────────────────────────────────────────────────
 
   app.get("/api/workers/:id/data-export", requireAuth, requireRole("admin"), async (req: any, res) => {
@@ -24968,6 +24991,22 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         note: `[PLATFORM ALERT] Breach incident submitted by tenant ${tenantId ?? "unknown"}: ${nature.substring(0, 100)}`,
         companyId: null,
       });
+
+      // Send in-app notification to all platform_super_admin users who have a company context
+      try {
+        await db.execute(sql`
+          INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read)
+          SELECT company_id, id, 'breach_alert',
+            'Breach Incident Alert',
+            ${`Breach incident reported by tenant ${tenantId ?? "unknown"}: ${nature.substring(0, 100)}`},
+            '/breach-response',
+            false
+          FROM users
+          WHERE role = 'platform_super_admin' AND company_id IS NOT NULL
+        `);
+      } catch (notifErr) {
+        console.error("[Breach notification] Failed to notify platform admins", notifErr);
+      }
 
       res.status(201).json(result.rows[0]);
     } catch (e: any) {

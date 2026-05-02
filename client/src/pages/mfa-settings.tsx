@@ -10,7 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
-import { Shield, ShieldCheck, ShieldOff, Smartphone, RefreshCw, Copy, ExternalLink, AlertTriangle } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
+import { Shield, ShieldCheck, ShieldOff, Smartphone, RefreshCw, Copy, ExternalLink, AlertTriangle, Lock } from "lucide-react";
 
 type MfaStatus = { mfaEnabled: boolean; enrollmentPending: boolean };
 type EnrollData = { otpauthUri: string; secret: string; accountName: string };
@@ -81,11 +82,37 @@ function QRCodeDisplay({ otpauthUri, secret }: { otpauthUri: string; secret: str
   );
 }
 
+type EnforceStatus = { enforced: boolean; enforcedCount: number; totalUsers: number; mfaEnabledCount: number };
+
 export default function MfaSettingsPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [enrollData, setEnrollData] = useState<EnrollData | null>(null);
   const [showDisableForm, setShowDisableForm] = useState(false);
+
+  const isAdmin = user?.role === "admin" || user?.role === "tenant_admin" || user?.role === "tenant_owner";
+
+  const { data: enforceStatus, isLoading: enforceLoading } = useQuery<EnforceStatus>({
+    queryKey: ["/api/auth/mfa/enforce-status"],
+    enabled: isAdmin,
+    queryFn: async () => {
+      const r = await fetch("/api/auth/mfa/enforce-status");
+      if (!r.ok) throw new Error("Failed to fetch enforce status");
+      return r.json();
+    },
+  });
+
+  const enforceMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/auth/mfa/enforce"),
+    onSuccess: () => {
+      toast({ title: "MFA enforcement enabled", description: "All users in your company must enroll in MFA." });
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/mfa/enforce-status"] });
+    },
+    onError: () => {
+      toast({ title: "Failed to enforce MFA", variant: "destructive" });
+    },
+  });
 
   const { data: status, isLoading } = useQuery<MfaStatus>({
     queryKey: ["/api/auth/mfa/status"],
@@ -313,6 +340,63 @@ export default function MfaSettingsPage() {
                   </Button>
                 </form>
               </Form>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {isAdmin && (
+        <Card className="border-blue-200 dark:border-blue-800">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2 text-blue-700 dark:text-blue-300">
+              <Lock className="h-4 w-4" />
+              Company MFA Enforcement
+            </CardTitle>
+            <CardDescription>
+              Require all users in your company to enroll in MFA. Once enforced, users cannot access the app until they set up an authenticator.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {enforceLoading ? (
+              <div className="h-8 bg-muted/30 rounded animate-pulse w-48" />
+            ) : (
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">Status:</span>
+                  <Badge
+                    data-testid="status-mfa-enforced"
+                    className={enforceStatus?.enforced
+                      ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+                      : "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"}
+                  >
+                    {enforceStatus?.enforced ? "Enforced" : "Not enforced"}
+                  </Badge>
+                </div>
+                {enforceStatus && (
+                  <span className="text-sm text-muted-foreground" data-testid="text-mfa-stats">
+                    {enforceStatus.mfaEnabledCount}/{enforceStatus.totalUsers} users enrolled
+                  </span>
+                )}
+              </div>
+            )}
+            {!enforceStatus?.enforced && (
+              <Button
+                onClick={() => enforceMutation.mutate()}
+                disabled={enforceMutation.isPending || enforceLoading}
+                data-testid="button-enforce-mfa"
+              >
+                {enforceMutation.isPending ? (
+                  <><RefreshCw className="h-4 w-4 mr-2 animate-spin" />Enforcing…</>
+                ) : (
+                  <><Lock className="h-4 w-4 mr-2" />Enforce MFA for All Users</>
+                )}
+              </Button>
+            )}
+            {enforceStatus?.enforced && (
+              <p className="text-sm text-green-700 dark:text-green-400 flex items-center gap-1.5">
+                <ShieldCheck className="h-4 w-4" />
+                MFA is enforced. All {enforceStatus.totalUsers} users must enroll before accessing the app.
+              </p>
             )}
           </CardContent>
         </Card>
