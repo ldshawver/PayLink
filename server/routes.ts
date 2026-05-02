@@ -25708,5 +25708,240 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     });
   }
 
+  // ── Compliance Engine (Task #2) ──────────────────────────────────────────────
+
+  // GET /api/compliance/jurisdictions
+  app.get("/api/compliance/jurisdictions", requireAuth, async (_req, res) => {
+    try {
+      const list = await storage.getJurisdictions();
+      res.json(list);
+    } catch (e) {
+      res.status(500).json({ message: "Failed to load jurisdictions" });
+    }
+  });
+
+  // GET /api/compliance/company/:companyId — current profile + recent violations
+  app.get("/api/compliance/company/:companyId", requireAuth, async (req, res) => {
+    try {
+      const { companyId } = req.params;
+      const [profile, events] = await Promise.all([
+        storage.getCompanyComplianceProfile(companyId),
+        storage.getComplianceAuditEvents({ companyId }),
+      ]);
+      const blocks   = events.filter(e => e.severity === "block");
+      const warnings = events.filter(e => e.severity === "warn");
+      const infos    = events.filter(e => e.severity === "info");
+      res.json({ profile: profile ?? null, blocks, warnings, infos, total: events.length });
+    } catch (e) {
+      res.status(500).json({ message: "Failed to load compliance summary" });
+    }
+  });
+
+  // PATCH /api/compliance/company/:companyId/profile
+  app.patch("/api/compliance/company/:companyId/profile", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const { companyId } = req.params;
+      const profile = await storage.upsertCompanyComplianceProfile(companyId, req.body);
+      res.json(profile);
+    } catch (e) {
+      res.status(500).json({ message: "Failed to update company compliance profile" });
+    }
+  });
+
+  // GET /api/compliance/worker/:workerId
+  app.get("/api/compliance/worker/:workerId", requireAuth, async (req, res) => {
+    try {
+      const { workerId } = req.params;
+      const worker = await storage.getWorker(workerId);
+      if (!worker) return res.status(404).json({ message: "Worker not found" });
+      const [profile, events] = await Promise.all([
+        storage.getWorkerComplianceProfile(workerId),
+        storage.getComplianceAuditEvents({ workerId }),
+      ]);
+      res.json({ profile: profile ?? null, events, worker });
+    } catch (e) {
+      res.status(500).json({ message: "Failed to load worker compliance" });
+    }
+  });
+
+  // PATCH /api/compliance/worker/:workerId/profile
+  app.patch("/api/compliance/worker/:workerId/profile", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const { workerId } = req.params;
+      const worker = await storage.getWorker(workerId);
+      if (!worker) return res.status(404).json({ message: "Worker not found" });
+      const profile = await storage.upsertWorkerComplianceProfile(workerId, worker.companyId, req.body);
+      res.json(profile);
+    } catch (e) {
+      res.status(500).json({ message: "Failed to update worker compliance profile" });
+    }
+  });
+
+  // POST /api/payroll-runs/:id/preflight — run compliance engine for the payroll run
+  app.post("/api/payroll-runs/:id/preflight", requireAuth, async (req, res) => {
+    try {
+      const { evaluateCompliance } = await import("./compliance-engine.js");
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+
+      // Load company compliance profile + jurisdiction
+      const companyProfile = await storage.getCompanyComplianceProfile(run.companyId);
+      const jurisdictionCode = companyProfile?.jurisdictionId ? null : "CA"; // default CA if no profile
+      let applicableRules: any[] = [];
+      if (companyProfile?.jurisdictionId) {
+        applicableRules = await storage.getApplicableRules(companyProfile.jurisdictionId, run.periodEnd);
+      } else {
+        const caJurisdiction = await storage.getJurisdictionByCode("CA");
+        if (caJurisdiction) {
+          applicableRules = await storage.getApplicableRules(caJurisdiction.id, run.periodEnd);
+        }
+      }
+
+      const rulesInput = applicableRules.map(r => ({
+        id: r.id,
+        ruleType: r.ruleType,
+        ruleValue: parseFloat(String(r.ruleValue)),
+        ruleUnit: r.ruleUnit ?? null,
+        overrideLevel: r.overrideLevel ?? null,
+      }));
+
+      // Load workers + time entries for the period
+      const items = await storage.getPayrollItems(run.id);
+      const allResults: any[] = [];
+      const allEvents: any[] = [];
+
+      for (const item of items) {
+        const worker = await storage.getWorker(item.workerId);
+        if (!worker) continue;
+
+        const workerProfile = await storage.getWorkerComplianceProfile(worker.id);
+        const entries = await storage.getTimeEntriesByDateRange(run.companyId, run.periodStart, run.periodEnd);
+        const workerEntries = entries
+          .filter(e => e.workerId === worker.id)
+          .map(e => ({
+            date: e.date,
+            totalHours: parseFloat(String(e.totalHours ?? 0)),
+            breakMinutes: e.breakMinutes ?? 0,
+            scheduledHours: e.scheduledHours ? parseFloat(String(e.scheduledHours)) : undefined,
+          }));
+
+        const payRateNum = parseFloat(String(worker.payRate ?? 0));
+
+        const ctx = {
+          worker: {
+            id: worker.id,
+            payRate: payRateNum,
+            payType: worker.payType ?? "hourly",
+            workerType: worker.workerType ?? "employee",
+            status: worker.status ?? "active",
+            terminationDate: worker.terminationDate ?? null,
+            hireDate: worker.hireDate ?? null,
+            exemptStatus: workerProfile?.exemptStatus ?? "nonexempt",
+            abcTestA: workerProfile?.abcTestA ?? null,
+            abcTestB: workerProfile?.abcTestB ?? null,
+            abcTestC: workerProfile?.abcTestC ?? null,
+          },
+          entries: workerEntries,
+          rules: rulesInput,
+          periodStart: run.periodStart,
+          periodEnd: run.periodEnd,
+          grossPay: parseFloat(String(item.grossPay ?? 0)),
+        };
+
+        const results = evaluateCompliance(ctx);
+        for (const r of results) {
+          allResults.push({ ...r, workerId: worker.id, workerName: `${worker.firstName} ${worker.lastName}` });
+          // Persist compliance audit event
+          try {
+            await storage.createComplianceAuditEvent({
+              companyId: run.companyId,
+              payrollRunId: run.id,
+              workerId: worker.id,
+              ruleId: r.ruleId ?? null,
+              ruleType: r.ruleType,
+              entityType: "worker",
+              entityId: worker.id,
+              severity: r.severity,
+              message: r.message,
+              detail: r.detail,
+            });
+          } catch (_) { /* non-fatal */ }
+        }
+      }
+
+      const blocks   = allResults.filter(r => r.severity === "block");
+      const warnings = allResults.filter(r => r.severity === "warn");
+      const infos    = allResults.filter(r => r.severity === "info");
+
+      res.json({
+        canProceed: blocks.length === 0,
+        blocks,
+        warnings,
+        infos,
+        totalChecks: allResults.length,
+        workersEvaluated: items.length,
+      });
+    } catch (e) {
+      console.error("[compliance preflight]", e);
+      res.status(500).json({ message: "Preflight check failed" });
+    }
+  });
+
+  // ── California seed (idempotent, runs on every startup) ───────────────────
+  setImmediate(async () => {
+    try {
+      let caJurisdiction = await storage.getJurisdictionByCode("CA");
+      if (!caJurisdiction) {
+        caJurisdiction = await storage.createJurisdiction({
+          code: "CA",
+          name: "California",
+          country: "US",
+          isActive: true,
+        });
+        console.log("[ComplianceSeed] Created California jurisdiction:", caJurisdiction.id);
+      }
+
+      const existingRules = await storage.getLaborRules(caJurisdiction.id);
+      if (existingRules.length > 0) {
+        console.log(`[ComplianceSeed] CA already has ${existingRules.length} labor rules — skipping seed`);
+        return;
+      }
+
+      const jId = caJurisdiction.id;
+      const eff = "2024-01-01"; // effective date for current CA rules
+
+      const caRules = [
+        { jurisdictionId: jId, ruleType: "daily_ot_threshold_1",   ruleValue: "8",    ruleUnit: "hours",      effectiveDate: eff, description: "CA daily OT starts at 8 hours (1.5×)" },
+        { jurisdictionId: jId, ruleType: "daily_ot_threshold_2",   ruleValue: "12",   ruleUnit: "hours",      effectiveDate: eff, description: "CA double time starts at 12 hours (2×)" },
+        { jurisdictionId: jId, ruleType: "seventh_day_ot_threshold",ruleValue: "8",   ruleUnit: "hours",      effectiveDate: eff, description: "CA 7th-consecutive-day: all hours at 1.5×; >8h at 2×" },
+        { jurisdictionId: jId, ruleType: "weekly_ot_threshold",    ruleValue: "40",   ruleUnit: "hours",      effectiveDate: eff, description: "CA weekly OT threshold (1.5× on hours >40, after daily OT)" },
+        { jurisdictionId: jId, ruleType: "meal_break_trigger_1",   ruleValue: "5",    ruleUnit: "hours",      effectiveDate: eff, description: "First 30-min unpaid meal required after 5 hours" },
+        { jurisdictionId: jId, ruleType: "meal_break_trigger_2",   ruleValue: "10",   ruleUnit: "hours",      effectiveDate: eff, description: "Second 30-min unpaid meal required after 10 hours" },
+        { jurisdictionId: jId, ruleType: "rest_break_period",      ruleValue: "4",    ruleUnit: "hours",      effectiveDate: eff, description: "One 10-min paid rest break per 4 hours worked" },
+        { jurisdictionId: jId, ruleType: "min_wage",               ruleValue: "16.50",ruleUnit: "dollars",    effectiveDate: eff, description: "CA state minimum wage $16.50/hr (2024)" },
+        { jurisdictionId: jId, ruleType: "sick_leave_accrual_rate",ruleValue: "30",   ruleUnit: "hours",      effectiveDate: eff, description: "1 hour sick leave per 30 hours worked (CA 2024)" },
+        { jurisdictionId: jId, ruleType: "sick_leave_max_hours",   ruleValue: "40",   ruleUnit: "hours",      effectiveDate: eff, description: "Max 40 hours (5 days) usable sick leave per year (CA 2024)" },
+        { jurisdictionId: jId, ruleType: "final_paycheck_discharge",ruleValue: "0",   ruleUnit: "days",       effectiveDate: eff, description: "Final paycheck due immediately on discharge/termination" },
+        { jurisdictionId: jId, ruleType: "final_paycheck_resignation",ruleValue: "3", ruleUnit: "days",       effectiveDate: eff, description: "Final paycheck due within 72 hours of resignation" },
+        { jurisdictionId: jId, ruleType: "exempt_salary_multiplier",ruleValue: "2",   ruleUnit: "multiplier", effectiveDate: eff, description: "CA exempt salary basis: 2× state min wage × 2080 hours" },
+        { jurisdictionId: jId, ruleType: "split_shift_premium",    ruleValue: "1",    ruleUnit: "flag",       effectiveDate: eff, description: "Split shift premium: 1 extra hour at min wage" },
+        { jurisdictionId: jId, ruleType: "reporting_time_min_pay", ruleValue: "2",    ruleUnit: "hours",      effectiveDate: eff, description: "Reporting time pay: minimum 2 hours when sent home early" },
+      ];
+
+      for (const rule of caRules) {
+        await storage.createLaborRule(rule as any);
+      }
+
+      // CA tax rules (informational — not used in payroll calculator yet)
+      await storage.createTaxRule({ jurisdictionId: jId, ruleType: "sdi_rate", ruleValue: "0.009", ruleUnit: "rate", effectiveDate: eff, description: "CA SDI employee contribution rate 0.9% (2024)" });
+      await storage.createTaxRule({ jurisdictionId: jId, ruleType: "sui_employer_rate", ruleValue: "0.034", ruleUnit: "rate", effectiveDate: eff, description: "CA SUI new employer rate 3.4%" });
+      await storage.createTaxRule({ jurisdictionId: jId, ruleType: "ett_rate", ruleValue: "0.001", ruleUnit: "rate", effectiveDate: eff, description: "CA Employment Training Tax 0.1%" });
+
+      console.log(`[ComplianceSeed] Seeded ${caRules.length} CA labor rules + 3 tax rules`);
+    } catch (e) {
+      console.warn("[ComplianceSeed] Seed error (non-fatal):", e);
+    }
+  });
+
   return httpServer;
 }

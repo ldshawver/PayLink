@@ -22,19 +22,17 @@ import {
   XCircle,
   Minus,
   Plus,
+  Scale,
+  MapPin,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import type { SystemDocument, RemittanceSource } from "@shared/schema";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   Form,
   FormControl,
@@ -45,8 +43,7 @@ import {
   FormDescription,
 } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Company } from "@shared/schema";
+import type { SystemDocument, RemittanceSource, Company } from "@shared/schema";
 
 const US_TIMEZONES = [
   { value: "America/New_York",    label: "Eastern (ET) — New York, Miami, Atlanta" },
@@ -344,6 +341,143 @@ const complianceInfo = [
     status: "Coming Soon",
   },
 ];
+
+function JurisdictionComplianceSection() {
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const { data: jurisdictions = [] } = useQuery<any[]>({ queryKey: ["/api/compliance/jurisdictions"] });
+  const { toast } = useToast();
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
+
+  const _selectedCompany = companies.find(c => c.id === selectedCompanyId); void _selectedCompany;
+
+  const { data: complianceSummary, isLoading: summaryLoading } = useQuery<any>({
+    queryKey: ["/api/compliance/company", selectedCompanyId],
+    queryFn: async () => {
+      const res = await fetch(`/api/compliance/company/${selectedCompanyId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load");
+      return res.json();
+    },
+    enabled: !!selectedCompanyId,
+  });
+
+  const profileMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("PATCH", `/api/compliance/company/${selectedCompanyId}/profile`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/compliance/company", selectedCompanyId] });
+      toast({ title: "Compliance profile saved" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const profile = complianceSummary?.profile;
+
+  const toggleField = (field: string, current: boolean) => {
+    profileMutation.mutate({ [field]: !current });
+  };
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-4">
+        <Scale className="h-4 w-4 text-primary" />
+        <h2 className="text-sm font-semibold">Jurisdiction & Compliance</h2>
+        <p className="text-xs text-muted-foreground ml-2">California labor law compliance settings per company</p>
+      </div>
+
+      <Card>
+        <CardContent className="p-4 space-y-4">
+          <div className="flex items-center gap-3">
+            <Label className="shrink-0 text-xs">Company</Label>
+            <Select value={selectedCompanyId} onValueChange={setSelectedCompanyId}>
+              <SelectTrigger className="h-8 text-xs" data-testid="select-compliance-company">
+                <SelectValue placeholder="Select company" />
+              </SelectTrigger>
+              <SelectContent>
+                {companies.map(c => (
+                  <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {!selectedCompanyId && (
+            <p className="text-xs text-muted-foreground py-4 text-center">Select a company to view its compliance profile.</p>
+          )}
+
+          {selectedCompanyId && summaryLoading && (
+            <p className="text-xs text-muted-foreground py-4 text-center">Loading compliance data…</p>
+          )}
+
+          {selectedCompanyId && !summaryLoading && (
+            <div className="space-y-4">
+              {/* Jurisdiction badge */}
+              <div className="flex items-center gap-2">
+                <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground">Jurisdiction:</span>
+                <Badge variant="outline" className="text-xs" data-testid="badge-jurisdiction">
+                  {jurisdictions.find(j => j.id === profile?.jurisdictionId)?.name ?? "California (default)"}
+                </Badge>
+              </div>
+
+              {/* Enforcement toggles */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {[
+                  { field: "enforceMealBreaks",    label: "Meal Break Enforcement",    description: "Require 30-min break after 5 h" },
+                  { field: "enforceRestBreaks",    label: "Rest Break Enforcement",    description: "10-min break per 4 h worked" },
+                  { field: "enforceDailyOt",       label: "Daily OT (1.5×/2×)",        description: "CA daily overtime thresholds" },
+                  { field: "enforceWeeklyOt",      label: "Weekly OT (>40 h)",         description: "Federal & CA weekly threshold" },
+                  { field: "enforceSeventhDay",    label: "7th-Day Rule",              description: "All hours OT on 7th consecutive day" },
+                  { field: "enforceMinWage",       label: "Min Wage Check ($16.50)",   description: "Flag workers paid below CA min wage" },
+                  { field: "enforceFinalPaycheck", label: "Final Paycheck Timing",     description: "Discharge=same day, Resign=72 h" },
+                  { field: "preflightRequired",    label: "Preflight Required",        description: "Block approval until compliance passes" },
+                ].map(({ field, label, description }) => {
+                  const snake = field.replace(/[A-Z]/g, m => `_${m.toLowerCase()}`);
+                  const current = profile ? !!(profile[field] ?? profile[snake] ?? true) : true;
+                  return (
+                    <div key={field} className="flex items-center justify-between gap-2 p-2 rounded border border-border">
+                      <div>
+                        <p className="text-xs font-medium">{label}</p>
+                        <p className="text-[11px] text-muted-foreground">{description}</p>
+                      </div>
+                      <Switch
+                        checked={current}
+                        onCheckedChange={() => toggleField(field, current)}
+                        disabled={profileMutation.isPending}
+                        data-testid={`switch-compliance-${field}`}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Recent violations summary */}
+              {complianceSummary && (
+                <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20 p-2" data-testid="summary-compliance-blocks">
+                    <p className="text-lg font-bold text-red-600 dark:text-red-400">{complianceSummary.blocks?.length ?? 0}</p>
+                    <p className="text-[10px] text-red-600/70 dark:text-red-400/70">Blocks</p>
+                  </div>
+                  <div className="rounded border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/20 p-2" data-testid="summary-compliance-warnings">
+                    <p className="text-lg font-bold text-amber-600 dark:text-amber-400">{complianceSummary.warnings?.length ?? 0}</p>
+                    <p className="text-[10px] text-amber-600/70 dark:text-amber-400/70">Warnings</p>
+                  </div>
+                  <div className="rounded border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/20 p-2" data-testid="summary-compliance-infos">
+                    <p className="text-lg font-bold text-blue-600 dark:text-blue-400">{complianceSummary.infos?.length ?? 0}</p>
+                    <p className="text-[10px] text-blue-600/70 dark:text-blue-400/70">Info</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 function SystemDocumentsSection() {
   const { data: docs = [], isLoading } = useQuery<SystemDocument[]>({
@@ -647,6 +781,8 @@ export default function SettingsPage() {
           ))}
         </div>
       </div>
+
+      <JurisdictionComplianceSection />
 
       <SystemDocumentsSection />
 

@@ -4400,3 +4400,143 @@ export const breachIncidents = pgTable("breach_incidents", {
 export const insertBreachIncidentSchema = createInsertSchema(breachIncidents).omit({ id: true, createdAt: true });
 export type BreachIncident = typeof breachIncidents.$inferSelect;
 export type InsertBreachIncident = z.infer<typeof insertBreachIncidentSchema>;
+
+// ── Compliance Engine (Task #2) ───────────────────────────────────────────────
+
+export const jurisdictions = pgTable("jurisdictions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").notNull().unique(),       // e.g. "CA", "NY"
+  name: text("name").notNull(),               // e.g. "California"
+  country: text("country").notNull().default("US"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertJurisdictionSchema = createInsertSchema(jurisdictions).omit({ id: true, createdAt: true });
+export type Jurisdiction = typeof jurisdictions.$inferSelect;
+export type InsertJurisdiction = z.infer<typeof insertJurisdictionSchema>;
+
+export const laborRules = pgTable("labor_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  jurisdictionId: varchar("jurisdiction_id").notNull().references(() => jurisdictions.id),
+  ruleType: text("rule_type").notNull(),
+  // e.g. "daily_ot_threshold_1", "daily_ot_threshold_2", "weekly_ot_threshold",
+  // "meal_break_trigger_1", "meal_break_trigger_2", "rest_break_period",
+  // "split_shift_premium", "reporting_time_min_pay", "min_wage",
+  // "sick_leave_accrual_rate", "sick_leave_max_hours", "final_paycheck_discharge",
+  // "final_paycheck_resignation", "exempt_salary_multiplier", "seventh_day_ot_threshold"
+  ruleValue: numeric("rule_value").notNull(),  // numeric threshold or rate
+  ruleUnit: text("rule_unit"),                 // "hours", "dollars", "days", "multiplier"
+  overrideLevel: text("override_level").default("state"),  // state | company | worker
+  effectiveDate: date("effective_date").notNull(),
+  expirationDate: date("expiration_date"),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertLaborRuleSchema = createInsertSchema(laborRules).omit({ id: true, createdAt: true });
+export type LaborRule = typeof laborRules.$inferSelect;
+export type InsertLaborRule = z.infer<typeof insertLaborRuleSchema>;
+
+export const taxRules = pgTable("tax_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  jurisdictionId: varchar("jurisdiction_id").notNull().references(() => jurisdictions.id),
+  ruleType: text("rule_type").notNull(),
+  // e.g. "sdi_rate", "sui_rate", "ett_rate", "pit_withholding_method"
+  ruleValue: numeric("rule_value").notNull(),
+  ruleUnit: text("rule_unit"),
+  effectiveDate: date("effective_date").notNull(),
+  expirationDate: date("expiration_date"),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertTaxRuleSchema = createInsertSchema(taxRules).omit({ id: true, createdAt: true });
+export type TaxRule = typeof taxRules.$inferSelect;
+export type InsertTaxRule = z.infer<typeof insertTaxRuleSchema>;
+
+export const companyComplianceProfiles = pgTable("company_compliance_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().unique().references(() => companies.id),
+  jurisdictionId: varchar("jurisdiction_id").references(() => jurisdictions.id),
+  /** IWC wage order number (e.g. "1", "4", "5", "7", "9", "14", "16") */
+  wageOrderNumber: text("wage_order_number"),
+  /** Overrides state minimum wage (dollars/hour) */
+  localMinWage: numeric("local_min_wage"),
+  /** Whether CA daily OT rules are enforced for this company */
+  enforceDailyOt: boolean("enforce_daily_ot").default(true),
+  /** Whether meal break rules are enforced */
+  enforceMealBreaks: boolean("enforce_meal_breaks").default(true),
+  /** Whether rest break rules are enforced */
+  enforceRestBreaks: boolean("enforce_rest_breaks").default(true),
+  /** Whether CA weekly OT (>40h) rules are enforced */
+  enforceWeeklyOt: boolean("enforce_weekly_ot").default(true),
+  /** Whether 7th-consecutive-day rules are enforced */
+  enforceSeventhDay: boolean("enforce_seventh_day").default(true),
+  /** Whether minimum wage checks are enforced */
+  enforceMinWage: boolean("enforce_min_wage").default(true),
+  /** Whether final paycheck timing rules are enforced */
+  enforceFinalPaycheck: boolean("enforce_final_paycheck").default(true),
+  /** When true, payroll run approval is blocked until preflight passes */
+  preflightRequired: boolean("preflight_required").default(true),
+  /** Free-form compliance notes for this company */
+  customNotes: text("custom_notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertCompanyComplianceProfileSchema = createInsertSchema(companyComplianceProfiles).omit({ id: true, createdAt: true, updatedAt: true });
+export type CompanyComplianceProfile = typeof companyComplianceProfiles.$inferSelect;
+export type InsertCompanyComplianceProfile = z.infer<typeof insertCompanyComplianceProfileSchema>;
+
+export const workerComplianceProfiles = pgTable("worker_compliance_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workerId: varchar("worker_id").notNull().unique().references(() => workers.id),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  /** Exempt/nonexempt under CA wage orders */
+  exemptStatus: text("exempt_status").default("nonexempt"),
+  /** Override minimum wage for this worker (null = use company/state) */
+  minWageOverride: numeric("min_wage_override"),
+  /** ABC test field A: worker free from control/direction of hiring entity */
+  abcTestA: boolean("abc_test_a"),
+  /** ABC test field B: work performed outside usual course of hiring entity's business */
+  abcTestB: boolean("abc_test_b"),
+  /** ABC test field C: worker customarily engaged in independently established trade/occupation */
+  abcTestC: boolean("abc_test_c"),
+  /** Notes on classification determination */
+  classificationNotes: text("classification_notes"),
+  /** Date of contractor agreement execution */
+  contractorAgreementDate: date("contractor_agreement_date"),
+  /** Most recent I-9 date */
+  lastI9Date: date("last_i9_date"),
+  /** Current sick leave balance (hours) */
+  sickLeaveBalance: numeric("sick_leave_balance"),
+  /** Misc compliance notes */
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertWorkerComplianceProfileSchema = createInsertSchema(workerComplianceProfiles).omit({ id: true, createdAt: true, updatedAt: true });
+export type WorkerComplianceProfile = typeof workerComplianceProfiles.$inferSelect;
+export type InsertWorkerComplianceProfile = z.infer<typeof insertWorkerComplianceProfileSchema>;
+
+export const complianceAuditEvents = pgTable("compliance_audit_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  payrollRunId: varchar("payroll_run_id").references(() => payrollRuns.id),
+  workerId: varchar("worker_id").references(() => workers.id),
+  ruleId: varchar("rule_id").references(() => laborRules.id),
+  ruleType: text("rule_type").notNull(),
+  entityType: text("entity_type").notNull().default("worker"), // worker | company | payroll_run
+  entityId: text("entity_id").notNull(),
+  severity: text("severity").notNull(), // block | warn | info
+  message: text("message").notNull(),
+  detail: jsonb("detail"),
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertComplianceAuditEventSchema = createInsertSchema(complianceAuditEvents).omit({ id: true, createdAt: true });
+export type ComplianceAuditEvent = typeof complianceAuditEvents.$inferSelect;
+export type InsertComplianceAuditEvent = z.infer<typeof insertComplianceAuditEventSchema>;

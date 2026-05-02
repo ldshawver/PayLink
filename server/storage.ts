@@ -217,6 +217,14 @@ import {
   type EarningType, type InsertEarningType,
   type Commission, type InsertCommission,
   type PayStubLineItem, type InsertPayStubLineItem,
+  jurisdictions, laborRules, taxRules,
+  companyComplianceProfiles, workerComplianceProfiles, complianceAuditEvents,
+  type Jurisdiction, type InsertJurisdiction,
+  type LaborRule, type InsertLaborRule,
+  type TaxRule, type InsertTaxRule,
+  type CompanyComplianceProfile, type InsertCompanyComplianceProfile,
+  type WorkerComplianceProfile, type InsertWorkerComplianceProfile,
+  type ComplianceAuditEvent, type InsertComplianceAuditEvent,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -1026,6 +1034,26 @@ export interface IStorage {
   getPayStubLineItems(payrollItemId: string): Promise<PayStubLineItem[]>;
   createPayStubLineItem(data: InsertPayStubLineItem): Promise<PayStubLineItem>;
   deletePayStubLineItemsByPayrollItem(payrollItemId: string): Promise<void>;
+
+  // Compliance Engine
+  getJurisdictions(): Promise<Jurisdiction[]>;
+  getJurisdiction(id: string): Promise<Jurisdiction | undefined>;
+  getJurisdictionByCode(code: string): Promise<Jurisdiction | undefined>;
+  createJurisdiction(data: InsertJurisdiction): Promise<Jurisdiction>;
+  getLaborRules(jurisdictionId?: string): Promise<LaborRule[]>;
+  getLaborRule(id: string): Promise<LaborRule | undefined>;
+  createLaborRule(data: InsertLaborRule): Promise<LaborRule>;
+  updateLaborRule(id: string, data: Partial<LaborRule>): Promise<LaborRule | undefined>;
+  deleteLaborRule(id: string): Promise<void>;
+  getApplicableRules(jurisdictionId: string, effectiveDate: string): Promise<LaborRule[]>;
+  getTaxRules(jurisdictionId?: string): Promise<TaxRule[]>;
+  createTaxRule(data: InsertTaxRule): Promise<TaxRule>;
+  getCompanyComplianceProfile(companyId: string): Promise<CompanyComplianceProfile | undefined>;
+  upsertCompanyComplianceProfile(companyId: string, data: Partial<InsertCompanyComplianceProfile>): Promise<CompanyComplianceProfile>;
+  getWorkerComplianceProfile(workerId: string): Promise<WorkerComplianceProfile | undefined>;
+  upsertWorkerComplianceProfile(workerId: string, companyId: string, data: Partial<InsertWorkerComplianceProfile>): Promise<WorkerComplianceProfile>;
+  getComplianceAuditEvents(filters: { companyId?: string; payrollRunId?: string; workerId?: string }): Promise<ComplianceAuditEvent[]>;
+  createComplianceAuditEvent(data: InsertComplianceAuditEvent): Promise<ComplianceAuditEvent>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -4586,6 +4614,115 @@ export class DatabaseStorage implements IStorage {
   }
   async deletePayStubLineItemsByPayrollItem(payrollItemId: string): Promise<void> {
     await db.delete(payStubLineItems).where(eq(payStubLineItems.payrollItemId, payrollItemId));
+  }
+
+  // ── Compliance Engine ─────────────────────────────────────────────────────
+
+  async getJurisdictions(): Promise<Jurisdiction[]> {
+    return db.select().from(jurisdictions).orderBy(jurisdictions.code);
+  }
+  async getJurisdiction(id: string): Promise<Jurisdiction | undefined> {
+    const [r] = await db.select().from(jurisdictions).where(eq(jurisdictions.id, id));
+    return r;
+  }
+  async getJurisdictionByCode(code: string): Promise<Jurisdiction | undefined> {
+    const [r] = await db.select().from(jurisdictions).where(eq(jurisdictions.code, code));
+    return r;
+  }
+  async createJurisdiction(data: InsertJurisdiction): Promise<Jurisdiction> {
+    const [r] = await db.insert(jurisdictions).values(data).returning();
+    return r;
+  }
+
+  async getLaborRules(jurisdictionId?: string): Promise<LaborRule[]> {
+    if (jurisdictionId) {
+      return db.select().from(laborRules).where(eq(laborRules.jurisdictionId, jurisdictionId));
+    }
+    return db.select().from(laborRules);
+  }
+  async getLaborRule(id: string): Promise<LaborRule | undefined> {
+    const [r] = await db.select().from(laborRules).where(eq(laborRules.id, id));
+    return r;
+  }
+  async createLaborRule(data: InsertLaborRule): Promise<LaborRule> {
+    const [r] = await db.insert(laborRules).values(data).returning();
+    return r;
+  }
+  async updateLaborRule(id: string, data: Partial<LaborRule>): Promise<LaborRule | undefined> {
+    const [r] = await db.update(laborRules).set(data as any).where(eq(laborRules.id, id)).returning();
+    return r;
+  }
+  async deleteLaborRule(id: string): Promise<void> {
+    await db.delete(laborRules).where(eq(laborRules.id, id));
+  }
+  /** Returns active rules for a jurisdiction as of effectiveDate, respecting expiration. */
+  async getApplicableRules(jurisdictionId: string, effectiveDate: string): Promise<LaborRule[]> {
+    const all = await db.select().from(laborRules).where(eq(laborRules.jurisdictionId, jurisdictionId));
+    return all.filter(r => {
+      if (r.effectiveDate > effectiveDate) return false;
+      if (r.expirationDate && r.expirationDate <= effectiveDate) return false;
+      return true;
+    });
+  }
+
+  async getTaxRules(jurisdictionId?: string): Promise<TaxRule[]> {
+    if (jurisdictionId) {
+      return db.select().from(taxRules).where(eq(taxRules.jurisdictionId, jurisdictionId));
+    }
+    return db.select().from(taxRules);
+  }
+  async createTaxRule(data: InsertTaxRule): Promise<TaxRule> {
+    const [r] = await db.insert(taxRules).values(data).returning();
+    return r;
+  }
+
+  async getCompanyComplianceProfile(companyId: string): Promise<CompanyComplianceProfile | undefined> {
+    const [r] = await db.select().from(companyComplianceProfiles).where(eq(companyComplianceProfiles.companyId, companyId));
+    return r;
+  }
+  async upsertCompanyComplianceProfile(companyId: string, data: Partial<InsertCompanyComplianceProfile>): Promise<CompanyComplianceProfile> {
+    const existing = await this.getCompanyComplianceProfile(companyId);
+    if (existing) {
+      const [r] = await db.update(companyComplianceProfiles)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(companyComplianceProfiles.companyId, companyId))
+        .returning();
+      return r;
+    }
+    const [r] = await db.insert(companyComplianceProfiles).values({ companyId, ...data } as InsertCompanyComplianceProfile).returning();
+    return r;
+  }
+
+  async getWorkerComplianceProfile(workerId: string): Promise<WorkerComplianceProfile | undefined> {
+    const [r] = await db.select().from(workerComplianceProfiles).where(eq(workerComplianceProfiles.workerId, workerId));
+    return r;
+  }
+  async upsertWorkerComplianceProfile(workerId: string, companyId: string, data: Partial<InsertWorkerComplianceProfile>): Promise<WorkerComplianceProfile> {
+    const existing = await this.getWorkerComplianceProfile(workerId);
+    if (existing) {
+      const [r] = await db.update(workerComplianceProfiles)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(workerComplianceProfiles.workerId, workerId))
+        .returning();
+      return r;
+    }
+    const [r] = await db.insert(workerComplianceProfiles).values({ workerId, companyId, ...data } as InsertWorkerComplianceProfile).returning();
+    return r;
+  }
+
+  async getComplianceAuditEvents(filters: { companyId?: string; payrollRunId?: string; workerId?: string }): Promise<ComplianceAuditEvent[]> {
+    let query = db.select().from(complianceAuditEvents).$dynamic();
+    if (filters.companyId) query = query.where(eq(complianceAuditEvents.companyId, filters.companyId));
+    if (filters.payrollRunId) query = query.where(and(
+      filters.companyId ? eq(complianceAuditEvents.companyId, filters.companyId) : undefined!,
+      eq(complianceAuditEvents.payrollRunId, filters.payrollRunId)
+    ));
+    if (filters.workerId) query = query.where(eq(complianceAuditEvents.workerId, filters.workerId));
+    return query.orderBy(desc(complianceAuditEvents.createdAt));
+  }
+  async createComplianceAuditEvent(data: InsertComplianceAuditEvent): Promise<ComplianceAuditEvent> {
+    const [r] = await db.insert(complianceAuditEvents).values(data).returning();
+    return r;
   }
 }
 

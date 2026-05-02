@@ -27,7 +27,8 @@ import {
   Users, Plus, MoreHorizontal, Settings, DollarSign, CreditCard,
   Briefcase, UserPlus, Clock, Calendar, Building2,
   Pencil, Trash2, ChevronRight, Hash, Globe, Phone, Mail, MapPin, FileText,
-  Upload, Download, ExternalLink, Shield, Eye, EyeOff
+  Upload, Download, ExternalLink, Shield, Eye, EyeOff, Scale, CheckCircle2,
+  XCircle, AlertCircle, Info
 } from "lucide-react";
 
 function useTabParam(defaultTab: string): [string, (tab: string) => void] {
@@ -2911,6 +2912,190 @@ interface UserAccount {
   createdAt: string | null;
 }
 
+function WorkerComplianceTab() {
+  const { toast } = useToast();
+  const workersQuery = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
+  const workers = workersQuery.data || [];
+  const [selectedWorkerId, setSelectedWorkerId] = useState("");
+
+  const { data: complianceData, isLoading } = useQuery<any>({
+    queryKey: ["/api/compliance/worker", selectedWorkerId],
+    queryFn: async () => {
+      const res = await fetch(`/api/compliance/worker/${selectedWorkerId}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load");
+      return res.json();
+    },
+    enabled: !!selectedWorkerId,
+  });
+
+  const profileMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("PATCH", `/api/compliance/worker/${selectedWorkerId}/profile`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/compliance/worker", selectedWorkerId] });
+      toast({ title: "Compliance profile saved" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const profile = complianceData?.profile;
+  const events: any[] = complianceData?.events ?? [];
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Scale className="h-4 w-4" />
+            Worker Compliance Profile
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label className="text-xs">Select Worker</Label>
+            <Select value={selectedWorkerId} onValueChange={setSelectedWorkerId}>
+              <SelectTrigger data-testid="select-compliance-worker">
+                <SelectValue placeholder="Select worker" />
+              </SelectTrigger>
+              <SelectContent>
+                {workers.map(w => (
+                  <SelectItem key={w.id} value={w.id}>
+                    {w.firstName} {w.lastName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {!selectedWorkerId && (
+            <p className="text-xs text-muted-foreground py-4 text-center">Select a worker to view their compliance profile.</p>
+          )}
+
+          {selectedWorkerId && isLoading && (
+            <p className="text-xs text-muted-foreground py-4 text-center">Loading…</p>
+          )}
+
+          {selectedWorkerId && !isLoading && (
+            <div className="space-y-4">
+              {/* Exempt status */}
+              <div className="space-y-2">
+                <Label className="text-xs">Exempt Status</Label>
+                <Select
+                  value={profile?.exemptStatus ?? "nonexempt"}
+                  onValueChange={v => profileMutation.mutate({ exemptStatus: v })}
+                >
+                  <SelectTrigger className="h-8 text-xs" data-testid="select-exempt-status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="nonexempt">Non-Exempt (hourly OT applies)</SelectItem>
+                    <SelectItem value="exempt_executive">Exempt – Executive</SelectItem>
+                    <SelectItem value="exempt_administrative">Exempt – Administrative</SelectItem>
+                    <SelectItem value="exempt_professional">Exempt – Professional</SelectItem>
+                    <SelectItem value="exempt_computer">Exempt – Computer Professional</SelectItem>
+                    <SelectItem value="exempt_outside_sales">Exempt – Outside Sales</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* ABC contractor test */}
+              {complianceData?.worker?.workerType === "contractor" && (
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold">CA ABC Contractor Test</Label>
+                  <p className="text-[11px] text-muted-foreground">All three prongs must pass for independent contractor classification under CA AB5.</p>
+                  {[
+                    { field: "abcTestA", label: "Prong A", description: "Free from control/direction (in contract and in fact)" },
+                    { field: "abcTestB", label: "Prong B", description: "Work is outside the usual course of the hiring entity's business" },
+                    { field: "abcTestC", label: "Prong C", description: "Customarily engaged in independently established trade/occupation" },
+                  ].map(({ field, label, description }) => {
+                    const val = profile?.[field] ?? null;
+                    return (
+                      <div key={field} className="flex items-center justify-between gap-2 p-2 rounded border border-border">
+                        <div>
+                          <p className="text-xs font-medium">{label}: {description}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {val === true ? (
+                            <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 text-xs" data-testid={`badge-abc-${field}`}>Pass</Badge>
+                          ) : val === false ? (
+                            <Badge variant="destructive" className="text-xs" data-testid={`badge-abc-${field}`}>Fail</Badge>
+                          ) : (
+                            <Badge variant="secondary" className="text-xs" data-testid={`badge-abc-${field}`}>Not Set</Badge>
+                          )}
+                          <Select
+                            value={val === true ? "true" : val === false ? "false" : "null"}
+                            onValueChange={v => profileMutation.mutate({ [field]: v === "true" ? true : v === "false" ? false : null })}
+                          >
+                            <SelectTrigger className="h-7 w-24 text-xs" data-testid={`select-abc-${field}`}><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="null">Not Set</SelectItem>
+                              <SelectItem value="true">Pass</SelectItem>
+                              <SelectItem value="false">Fail</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {profile && (
+                    <div className={`flex items-center gap-2 p-2 rounded ${
+                      profile.abcTestA && profile.abcTestB && profile.abcTestC
+                        ? "bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800"
+                        : profile.abcTestA === false || profile.abcTestB === false || profile.abcTestC === false
+                        ? "bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800"
+                        : "bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800"
+                    }`} data-testid="badge-abc-overall">
+                      {profile.abcTestA && profile.abcTestB && profile.abcTestC ? (
+                        <><CheckCircle2 className="h-4 w-4 text-emerald-500" /><span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">ABC Test: All prongs pass — contractor classification valid</span></>
+                      ) : (profile.abcTestA === false || profile.abcTestB === false || profile.abcTestC === false) ? (
+                        <><XCircle className="h-4 w-4 text-red-500" /><span className="text-xs text-red-700 dark:text-red-400 font-medium">ABC Test: One or more prongs fail — worker may be misclassified</span></>
+                      ) : (
+                        <><AlertCircle className="h-4 w-4 text-amber-500" /><span className="text-xs text-amber-700 dark:text-amber-400 font-medium">ABC Test: Incomplete — all prongs must be evaluated</span></>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Compliance event history */}
+              {events.length > 0 && (
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold">Recent Compliance Events</Label>
+                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                    {events.slice(0, 20).map((e: any, i: number) => (
+                      <div key={e.id ?? i} className={`flex items-start gap-2 p-2 rounded text-xs border ${
+                        e.severity === "block" ? "border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20" :
+                        e.severity === "warn"  ? "border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/20" :
+                        "border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/20"
+                      }`} data-testid={`row-compliance-event-${e.id ?? i}`}>
+                        {e.severity === "block" ? <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0 mt-0.5" /> :
+                         e.severity === "warn"  ? <AlertCircle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" /> :
+                                                  <Info className="h-3.5 w-3.5 text-blue-500 shrink-0 mt-0.5" />}
+                        <div className="min-w-0">
+                          <p className="font-medium">{e.ruleType?.replace(/_/g, " ")}</p>
+                          <p className="text-muted-foreground">{e.message}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {events.length === 0 && (
+                <p className="text-xs text-muted-foreground text-center py-2">No compliance events on record for this worker.</p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function UserAccountsTab() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
@@ -3182,6 +3367,9 @@ export default function EmployeePage() {
           <TabsTrigger value="user-accounts" data-testid="tab-user-accounts">
             <Shield className="mr-2 h-4 w-4" />User Accounts
           </TabsTrigger>
+          <TabsTrigger value="compliance" data-testid="tab-compliance">
+            <Scale className="mr-2 h-4 w-4" />Compliance
+          </TabsTrigger>
         </TabsList>
         </div>
 
@@ -3196,6 +3384,7 @@ export default function EmployeePage() {
         <TabsContent value="new-hire-defaults"><NewHireDefaultsTab /></TabsContent>
         <TabsContent value="wage-groups"><WageGroupsTab /></TabsContent>
         <TabsContent value="user-accounts"><UserAccountsTab /></TabsContent>
+        <TabsContent value="compliance"><WorkerComplianceTab /></TabsContent>
       </Tabs>
     </div>
   );
