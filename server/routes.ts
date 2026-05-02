@@ -910,11 +910,20 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.session.userId!);
       const qCompanyId = req.query.companyId as string | undefined;
+      // ?scheduling=true — managers building a schedule can pick workers from any company.
+      // Cross-company scheduling is explicitly supported (a worker may be scheduled at any company).
+      const forScheduling = req.query.scheduling === "true";
       // Non-manager tenant users (employees, contractors, etc.) can only see themselves
       if (user && user.workerId && !isManagerRole(user.role)) {
         const allWorkers = await storage.getWorkers();
         const selfWorker = allWorkers.filter(w => w.id === user.workerId);
         return res.json(selfWorker);
+      }
+      // When a manager is building a schedule they may need to assign workers from other companies.
+      // Return all active workers in this case so cross-company scheduling works.
+      if (forScheduling && isManagerRole(user?.role)) {
+        const allWorkers = await storage.getWorkers();
+        return res.json(allWorkers);
       }
       // Determine effective company scope:
       // 1. Platform users (platform_* role) are NEVER force-scoped — they may have a companyId
@@ -1448,7 +1457,7 @@ export async function registerRoutes(
           INSERT INTO clock_in_requests
             (worker_id, company_id, request_type, minutes_diff, schedule_id, scheduled_start, scheduled_end)
           VALUES
-            (${worker.id}, ${worker.companyId}, ${requestType}, ${minutesDiff},
+            (${worker.id}, ${effectiveCompanyId}, ${requestType}, ${minutesDiff},
              ${matchingSchedule?.id ?? null},
              ${scheduledStart ? scheduledStart.toISOString() : null},
              ${scheduledEnd ? scheduledEnd.toISOString() : null})
@@ -1457,15 +1466,15 @@ export async function registerRoutes(
         const requestId = (requestRow.rows[0] as any).id;
 
         // Notify managers asynchronously — in-app + email/SMS (when allowed by company policy)
+        // Target managers of the EFFECTIVE company (the one the shift belongs to), not the worker's home company.
         (async () => {
           try {
             const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
             const allUsers = await storage.getUsers();
-            // Scope to managers of the same company (or platform-level admins with no companyId)
             const managers = allUsers.filter(u =>
               isManagerRole(u.role) &&
               u.isActive &&
-              (u.companyId === worker.companyId || (!u.companyId && isAdminRole(u.role)))
+              (u.companyId === effectiveCompanyId || (!u.companyId && isAdminRole(u.role)))
             );
             const workerName = `${worker.firstName} ${worker.lastName}`;
             const appUrl = getAppBaseUrl(req);
@@ -1478,11 +1487,11 @@ export async function registerRoutes(
             const bodyText = `${workerName} is requesting to clock in but is outside their scheduled time.\n\nReason: ${reasonLabel}\n${scheduledStart ? `Scheduled start: ${scheduledStart.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}\n` : ""}Current time: ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}\n\nPlease log in to approve or deny this request:\n${appUrl}/app/attendance?tab=clock-in-approvals`;
             for (const mgr of managers) {
               // 1. In-app notification (always created, visible in notification bell/inbox)
-              if (mgr.companyId === worker.companyId) {
+              if (mgr.companyId === effectiveCompanyId) {
                 await db.execute(sql`
                   INSERT INTO notifications (company_id, user_id, worker_id, type, title, message, action_url, is_read)
                   VALUES (
-                    ${worker.companyId},
+                    ${effectiveCompanyId},
                     ${mgr.id},
                     ${mgr.workerId ?? null},
                     'clock_in_approval',
@@ -3706,7 +3715,7 @@ export async function registerRoutes(
         }
       }
       if (!req.body.workerId) return res.status(400).json({ message: "workerId is required" });
-      const worker = await storage.getWorker(req.body.workerId);
+      let worker = await storage.getWorker(req.body.workerId);
       if (!worker) return res.status(404).json({ message: "Worker not found" });
       if (!worker.companyId) return res.status(400).json({ message: "Worker is not assigned to a company. Please assign the worker to a company before clocking in." });
       if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
@@ -3752,12 +3761,35 @@ export async function registerRoutes(
           (actingUser2.workerId && actingUser2.workerId === worker.id);
         if (isSelfClock) {
           const companyForClk = await storage.getCompany(worker.companyId);
-          const companyTzForClk = (companyForClk as any)?.timezone || "America/New_York";
-          const GRACE_MIN = (companyForClk as any)?.clockInGraceMinutes ?? 10;
+          let companyTzForClk = (companyForClk as any)?.timezone || "America/New_York";
           const nowForClk = new Date();
           const todayForClk = getLocalDateStr(nowForClk, companyTzForClk);
-          const todaySchedules = await storage.getSchedulesByDateRange(worker.companyId, todayForClk, todayForClk);
-          const workerSchedule = todaySchedules.find((s: any) => s.workerId === worker.id);
+
+          // First look in the worker's home company, then search all companies.
+          // This handles cross-company shifts (worker scheduled at a different company).
+          const homeTodaySchedules = await storage.getSchedulesByDateRange(worker.companyId, todayForClk, todayForClk);
+          let workerSchedule: any = homeTodaySchedules.find((s: any) => s.workerId === worker.id);
+          let clkEffectiveCompanyId: string = worker.companyId;
+
+          if (!workerSchedule) {
+            const { schedules: schedulesTable } = await import("../shared/schema.js");
+            const crossSchedules = await db.select().from(schedulesTable)
+              .where(and(eq(schedulesTable.workerId, worker.id), eq(schedulesTable.date, todayForClk)))
+              .limit(1);
+            if (crossSchedules[0]) {
+              workerSchedule = crossSchedules[0];
+              clkEffectiveCompanyId = crossSchedules[0].companyId;
+              // Reload timezone for the effective (cross-company) company
+              const effectiveCompanyForClk = await storage.getCompany(clkEffectiveCompanyId);
+              companyTzForClk = (effectiveCompanyForClk as any)?.timezone || companyTzForClk;
+              console.log(`[TIME-PUNCHES] Worker ${worker.firstName} ${worker.lastName} has cross-company schedule at companyId=${clkEffectiveCompanyId} (home=${worker.companyId})`);
+            }
+          }
+
+          const companyObjForClk = clkEffectiveCompanyId !== worker.companyId
+            ? await storage.getCompany(clkEffectiveCompanyId)
+            : companyForClk;
+          const GRACE_MIN = (companyObjForClk as any)?.clockInGraceMinutes ?? 10;
           let clkRequestType: string | null = null;
           let clkMinutesDiff = 0;
           let clkScheduledStart: Date | undefined;
@@ -3777,19 +3809,19 @@ export async function registerRoutes(
               INSERT INTO clock_in_requests
                 (worker_id, company_id, request_type, minutes_diff, schedule_id, scheduled_start, scheduled_end)
               VALUES
-                (${worker.id}, ${worker.companyId}, ${clkRequestType}, ${clkMinutesDiff},
+                (${worker.id}, ${clkEffectiveCompanyId}, ${clkRequestType}, ${clkMinutesDiff},
                  ${workerSchedule?.id ?? null},
                  ${clkScheduledStart ? clkScheduledStart.toISOString() : null},
                  ${clkScheduledEnd ? clkScheduledEnd.toISOString() : null})
               RETURNING id
             `);
             const clkRequestId = (clkReqRow.rows[0] as any).id;
-            // Notify managers asynchronously
+            // Notify managers of the EFFECTIVE company (not the worker's home company)
             (async () => {
               try {
                 const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
                 const allUsers = await storage.getUsers();
-                const managers = allUsers.filter((u) => isManagerRole(u.role) && u.isActive && u.companyId === worker.companyId);
+                const managers = allUsers.filter((u) => isManagerRole(u.role) && u.isActive && u.companyId === clkEffectiveCompanyId);
                 const workerNameForClk = `${worker.firstName} ${worker.lastName}`;
                 const appUrlForClk = getAppBaseUrl(req);
                 const reasonLabelForClk = clkRequestType === "early_clockin" ? `Early clock-in (${Math.abs(clkMinutesDiff)} min early)` : clkRequestType === "late_clockin" ? `Late clock-in (${clkMinutesDiff} min late)` : "Unscheduled clock-in";
@@ -3798,10 +3830,10 @@ export async function registerRoutes(
                 for (const mgr of managers) {
                   await db.execute(sql`
                     INSERT INTO notifications (company_id, user_id, worker_id, type, title, message, action_url, is_read)
-                    VALUES (${worker.companyId}, ${mgr.id}, ${mgr.workerId ?? null}, 'clock_in_approval', ${subjectForClk}, ${`${workerNameForClk} needs clock-in approval: ${reasonLabelForClk}`}, '/app/attendance?tab=clock-in-approvals', false)
+                    VALUES (${clkEffectiveCompanyId}, ${mgr.id}, ${mgr.workerId ?? null}, 'clock_in_approval', ${subjectForClk}, ${`${workerNameForClk} needs clock-in approval: ${reasonLabelForClk}`}, '/app/attendance?tab=clock-in-approvals', false)
                   `).catch((e: any) => console.warn("Notification failed:", e));
                   // Email/SMS gated on company's notifyMgrOnViolations policy (default true)
-                  if ((companyForClk as any)?.notifyMgrOnViolations !== false) {
+                  if ((companyObjForClk as any)?.notifyMgrOnViolations !== false) {
                     const mgrWorker = mgr.workerId ? await storage.getWorker(mgr.workerId) : null;
                     await Promise.all([
                       sendShiftMarketplaceEmail({ recipientName: mgrWorker ? `${mgrWorker.firstName} ${mgrWorker.lastName}` : mgr.username, email: mgrWorker?.workEmail || mgrWorker?.homeEmail || null, subject: subjectForClk, bodyText: bodyTextForClk }),
@@ -3818,6 +3850,10 @@ export async function registerRoutes(
               minutesDiff: clkMinutesDiff,
               message: clkRequestType === "early_clockin" ? `You are ${Math.abs(clkMinutesDiff)} minutes early. Manager approval required.` : clkRequestType === "late_clockin" ? `You are ${clkMinutesDiff} minutes late. Manager approval required.` : "You are not scheduled today. Manager approval required.",
             });
+          }
+          // Within grace period: punch against the effective company (may differ from home company)
+          if (clkEffectiveCompanyId !== worker.companyId) {
+            worker = { ...worker, companyId: clkEffectiveCompanyId } as any;
           }
         }
       }
@@ -4611,28 +4647,23 @@ export async function registerRoutes(
       let allSchedules = await storage.getSchedules();
 
       if (!isPlatformUser(user?.role)) {
-        // Resolve the effective companyId: prefer user.companyId, fall back to their worker record
-        let effectiveCompanyId = user?.companyId ?? null;
-        if (!effectiveCompanyId && user?.workerId) {
-          const workerRec = await storage.getWorker(user.workerId);
-          effectiveCompanyId = workerRec?.companyId ?? null;
-        }
-
-        if (effectiveCompanyId) {
-          // Tenant user: only see their own company's schedules
-          allSchedules = allSchedules.filter((s: any) => s.companyId === effectiveCompanyId);
-        } else if (user?.workerId) {
-          // No company could be resolved — scope strictly to own shifts only
+        if (user?.workerId && !isManagerRole(user.role)) {
+          // Non-manager employees/contractors: see ALL of their own shifts across every company
+          // they are scheduled at — the workerId is the only meaningful scope here.
           allSchedules = allSchedules.filter((s: any) => s.workerId === user!.workerId);
         } else {
-          // Cannot determine scope — return nothing for safety
-          allSchedules = [];
+          // Managers/admins: scope to their company's schedule (they manage their company's shifts)
+          let effectiveCompanyId = user?.companyId ?? null;
+          if (!effectiveCompanyId && user?.workerId) {
+            const workerRec = await storage.getWorker(user.workerId);
+            effectiveCompanyId = workerRec?.companyId ?? null;
+          }
+          if (effectiveCompanyId) {
+            allSchedules = allSchedules.filter((s: any) => s.companyId === effectiveCompanyId);
+          } else if (!user?.workerId) {
+            allSchedules = [];
+          }
         }
-      }
-
-      // Non-manager tenant users (employees, contractors, etc.) only see their own schedules
-      if (user && user.workerId && !isManagerRole(user.role)) {
-        allSchedules = allSchedules.filter((s: any) => s.workerId === user!.workerId);
       }
 
       // Support optional query filters (for platform users or managers with explicit scope)
@@ -4653,15 +4684,11 @@ export async function registerRoutes(
       if (!workerId || !companyId || !date || !startTime || !endTime) {
         return res.status(400).json({ message: "Employee, company, date, start time, and end time are required" });
       }
-      // Cross-company guard: worker must belong to the target company
+      // Validate worker exists — cross-company scheduling is explicitly allowed
+      // (a worker may be scheduled at any company, not just their home company)
       const schedWorker = await storage.getWorker(workerId);
       if (!schedWorker) {
         return res.status(400).json({ message: "Worker not found" });
-      }
-      if (schedWorker.companyId !== companyId) {
-        return res.status(400).json({
-          message: `${schedWorker.firstName} ${schedWorker.lastName} belongs to a different company and cannot be scheduled here`,
-        });
       }
       try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`); } catch {}
       try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS position_id VARCHAR`); } catch {}
@@ -10380,16 +10407,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/recurring-schedules", async (req, res) => {
     try {
-      const { workerId, companyId } = req.body;
-      // Cross-company guard: worker must belong to the target company
-      if (workerId && companyId) {
+      const { workerId } = req.body;
+      // Validate worker exists — cross-company recurring schedules are explicitly allowed
+      if (workerId) {
         const recurWorker = await storage.getWorker(workerId);
         if (!recurWorker) return res.status(400).json({ message: "Worker not found" });
-        if (recurWorker.companyId !== companyId) {
-          return res.status(400).json({
-            message: `${recurWorker.firstName} ${recurWorker.lastName} belongs to a different company and cannot be added to this recurring schedule`,
-          });
-        }
       }
       const schedule = await storage.createRecurringSchedule(req.body);
       res.status(201).json(schedule);
@@ -10401,19 +10423,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/recurring-schedules/:id", async (req, res) => {
     try {
-      // Cross-company guard: if workerId is being changed, ensure they belong to the same company
+      // Validate worker exists if workerId is being changed — cross-company is allowed
       if (req.body.workerId) {
-        const existing = await storage.getRecurringSchedule(req.params.id);
-        if (existing) {
-          const targetCompanyId = req.body.companyId || existing.companyId;
-          const recurWorker = await storage.getWorker(req.body.workerId);
-          if (!recurWorker) return res.status(400).json({ message: "Worker not found" });
-          if (recurWorker.companyId !== targetCompanyId) {
-            return res.status(400).json({
-              message: `${recurWorker.firstName} ${recurWorker.lastName} belongs to a different company and cannot be assigned to this recurring schedule`,
-            });
-          }
-        }
+        const recurWorker = await storage.getWorker(req.body.workerId);
+        if (!recurWorker) return res.status(400).json({ message: "Worker not found" });
       }
       const schedule = await storage.updateRecurringSchedule(req.params.id, req.body);
       if (!schedule) {

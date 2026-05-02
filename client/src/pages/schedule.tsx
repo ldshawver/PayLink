@@ -816,7 +816,12 @@ export default function SchedulePage() {
   });
 
   const { data: workers = [], isLoading: workersLoading } = useQuery<Worker[]>({
-    queryKey: ["/api/workers"],
+    queryKey: ["/api/workers", "scheduling"],
+    queryFn: async () => {
+      const res = await fetch("/api/workers?scheduling=true");
+      if (!res.ok) throw new Error("Failed to fetch workers");
+      return res.json();
+    },
   });
 
   const { data: companies = [], isLoading: companiesLoading } = useQuery<Company[]>({
