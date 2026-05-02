@@ -25,6 +25,7 @@ import {
   KeyRound,
   ChevronDown,
   ChevronUp,
+  Shield,
 } from "lucide-react";
 import paylinkLogo from "@assets/PayLink_Logo_transparent_1771416877301.png";
 
@@ -145,7 +146,6 @@ function PunchButton({
 }
 
 function AdminLoginForm() {
-  const { login } = useAuth();
   const { toast } = useToast();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -158,6 +158,12 @@ function AdminLoginForm() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [recoveryLoading, setRecoveryLoading] = useState(false);
 
+  // MFA step-up state — set when the server returns 202 mfaRequired
+  const [mfaPending, setMfaPending] = useState<{ userId: string } | null>(null);
+  const [mfaToken, setMfaToken] = useState("");
+  const [mfaError, setMfaError] = useState("");
+  const [mfaLoading, setMfaLoading] = useState(false);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -167,11 +173,55 @@ function AdminLoginForm() {
     }
     setLoading(true);
     try {
-      await login(username, password);
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (res.status === 202 && data.mfaRequired) {
+        // Credentials valid but MFA code required before session is granted
+        setMfaPending({ userId: data.userId });
+      } else if (res.ok) {
+        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      } else {
+        setError(data.message || "Invalid username or password");
+      }
     } catch {
-      setError("Invalid username or password");
+      setError("Could not connect to server");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleMfaSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setMfaError("");
+    if (!mfaToken || mfaToken.length !== 6) {
+      setMfaError("Please enter the 6-digit code from your authenticator app");
+      return;
+    }
+    setMfaLoading(true);
+    try {
+      const res = await fetch("/api/auth/mfa/login-verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: mfaPending!.userId, token: mfaToken }),
+        credentials: "include",
+      });
+      if (res.ok) {
+        setMfaPending(null);
+        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      } else {
+        const data = await res.json();
+        setMfaError(data.message || "Invalid code. Try again.");
+        setMfaToken("");
+      }
+    } catch {
+      setMfaError("Could not connect to server");
+    } finally {
+      setMfaLoading(false);
     }
   }
 
@@ -213,6 +263,61 @@ function AdminLoginForm() {
     } finally {
       setRecoveryLoading(false);
     }
+  }
+
+  // MFA step-up screen — shown after valid credentials when MFA is enabled
+  if (mfaPending) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 text-sm font-medium text-blue-700 dark:text-blue-300">
+          <Shield className="h-4 w-4" />
+          Two-Factor Authentication Required
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Open your authenticator app and enter the 6-digit code for PayLink.
+        </p>
+        <form onSubmit={handleMfaSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="mfa-token" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+              <Shield className="h-3.5 w-3.5" /> Authentication Code
+            </Label>
+            <Input
+              id="mfa-token"
+              value={mfaToken}
+              onChange={(e) => setMfaToken(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              placeholder="123456"
+              maxLength={6}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              autoFocus
+              data-testid="input-mfa-login-token"
+            />
+          </div>
+          {mfaError && (
+            <p className="text-sm text-destructive text-center" data-testid="text-mfa-login-error">
+              {mfaError}
+            </p>
+          )}
+          <Button
+            type="submit"
+            size="lg"
+            className="w-full"
+            disabled={mfaLoading || mfaToken.length !== 6}
+            data-testid="button-mfa-login-verify"
+          >
+            {mfaLoading ? "Verifying…" : "Verify & Sign In"}
+          </Button>
+          <button
+            type="button"
+            onClick={() => { setMfaPending(null); setMfaToken(""); setMfaError(""); }}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors mx-auto block"
+            data-testid="button-mfa-login-back"
+          >
+            ← Back to sign in
+          </button>
+        </form>
+      </div>
+    );
   }
 
   return (

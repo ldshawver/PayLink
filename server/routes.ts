@@ -538,6 +538,14 @@ export async function registerRoutes(
       if (user.isActive === false) {
         return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
       }
+      // MFA step-up: if the user has TOTP MFA enabled, do NOT create a session yet.
+      // Return 202 so the client can present a code input before access is granted.
+      const mfaCheck = await db.execute(sql`SELECT mfa_enabled FROM users WHERE id = ${user.id}`);
+      const mfaEnabled = (mfaCheck.rows[0] as any)?.mfa_enabled;
+      if (mfaEnabled) {
+        return res.status(202).json({ mfaRequired: true, userId: user.id });
+      }
+
       req.session.userId = user.id;
       req.session.username = user.username;
       let workerInfo = null;
@@ -549,6 +557,44 @@ export async function registerRoutes(
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Login failed" });
+    }
+  });
+
+  // MFA login step-up: verify a TOTP code after the initial credential check returned 202.
+  // On success this endpoint sets the session exactly like a normal login.
+  app.post("/api/auth/mfa/login-verify", async (req: any, res) => {
+    try {
+      const { userId, token } = req.body;
+      if (!userId || !token) {
+        return res.status(400).json({ message: "userId and token are required" });
+      }
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(401).json({ message: "Invalid request" });
+
+      const mfaResult = await db.execute(sql`SELECT mfa_enabled, totp_secret FROM users WHERE id = ${userId}`);
+      const mfaRow = mfaResult.rows[0] as any;
+      if (!mfaRow?.mfa_enabled || !mfaRow?.totp_secret) {
+        return res.status(400).json({ message: "MFA not configured for this account" });
+      }
+
+      const { verifyTOTP, decryptTotpSecret } = await import("./totp");
+      const plainSecret = decryptTotpSecret(mfaRow.totp_secret);
+      if (!verifyTOTP(plainSecret, token)) {
+        return res.status(401).json({ message: "Invalid or expired authentication code" });
+      }
+
+      // Code verified — grant session
+      req.session.userId = user.id;
+      req.session.username = user.username;
+      let workerInfo = null;
+      if (user.workerId) {
+        const w = await storage.getWorker(user.workerId);
+        if (w) workerInfo = { id: w.id, firstName: w.firstName, lastName: w.lastName, companyId: w.companyId };
+      }
+      res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
+    } catch (e) {
+      console.error("[MFA login-verify]", e);
+      res.status(500).json({ message: "MFA verification failed" });
     }
   });
 
@@ -24467,7 +24513,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   // ── PII Data Export ─────────────────────────────────────────────────────────
 
-  app.get("/api/workers/:id/data-export", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
+  app.get("/api/workers/:id/data-export", requireAuth, requireRole("admin"), async (req: any, res) => {
     try {
       const userId = req.session.userId as string;
       const { id: workerId } = req.params;
@@ -24621,7 +24667,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   // ── Privacy Audit Log API ───────────────────────────────────────────────────
 
-  app.get("/api/privacy-audit-log", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
+  app.get("/api/privacy-audit-log", requireAuth, requireRole("admin"), async (req: any, res) => {
     try {
       const userId = req.session.userId as string;
       const user = await storage.getUser(userId);
