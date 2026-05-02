@@ -544,11 +544,18 @@ export async function registerRoutes(
       `);
       const mfaRow = mfaCheck.rows[0] as any;
 
-      // If MFA is company-enforced but this user has not yet enrolled, block login
+      // If MFA is company-enforced but this user has not yet enrolled, grant a
+      // limited session so the user can reach the MFA settings page to enroll.
+      // The mfaEnrollmentRequired flag is returned so the UI can redirect them.
       if (mfaRow?.mfa_enforced_at && !mfaRow?.mfa_enabled) {
-        return res.status(403).json({
+        req.session.userId = user.id;
+        req.session.username = user.username;
+        req.session.mfaEnrollmentRequired = true;
+        return res.json({
+          id: user.id, username: user.username, role: user.role,
+          companyId: user.companyId, workerId: user.workerId, worker: null,
           mfaEnrollmentRequired: true,
-          message: "Multi-factor authentication is required for your account. Please contact your administrator to enroll.",
+          message: "MFA enrollment required. You will be redirected to set up two-factor authentication.",
         });
       }
 
@@ -24489,8 +24496,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
-  // Verify MFA step-up (for login flow or sensitive action confirmation)
-  app.post("/api/auth/mfa/verify", async (req: any, res) => {
+  // Verify MFA step-up (for sensitive action confirmation — requires authenticated session)
+  app.post("/api/auth/mfa/verify", requireAuth, async (req: any, res) => {
     try {
       const { userId, token } = req.body;
       if (!userId || !token) return res.status(400).json({ message: "userId and token are required" });

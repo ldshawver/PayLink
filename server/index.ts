@@ -74,6 +74,9 @@ declare module "express-session" {
     /** Short-lived marker set after password verification when MFA is required.
      *  The MFA login-verify endpoint checks this before granting a full session. */
     pendingMfaUserId: string;
+    /** Set when the user's company has MFA enforced but this user hasn't enrolled yet.
+     *  Grants a limited session so the user can reach /app/mfa-settings to enroll. */
+    mfaEnrollmentRequired: boolean;
   }
 }
 

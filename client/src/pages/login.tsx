@@ -183,6 +183,10 @@ function AdminLoginForm() {
       if (res.status === 202 && data.mfaRequired) {
         // Credentials valid but MFA code required before session is granted
         setMfaPending({ userId: data.userId });
+      } else if (res.ok && data.mfaEnrollmentRequired) {
+        // MFA is company-enforced but not yet enrolled — session granted, redirect to enroll
+        await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+        window.location.href = "/app/mfa-settings";
       } else if (res.ok) {
         queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       } else {
