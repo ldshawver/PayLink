@@ -24814,7 +24814,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   // ── Privacy Audit Log API ───────────────────────────────────────────────────
 
-  app.get("/api/privacy-audit-log", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin", "tenant_owner"), async (req: any, res) => {
+  app.get("/api/privacy-audit-log", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req: any, res) => {
     try {
       const userId = req.session.userId as string;
       const user = await storage.getUser(userId);
@@ -24874,7 +24874,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
-  app.get("/api/privacy-audit-log/export-csv", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin", "tenant_owner"), async (req: any, res) => {
+  app.get("/api/privacy-audit-log/export-csv", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"), async (req: any, res) => {
     try {
       const userId = req.session.userId as string;
       const user = await storage.getUser(userId);

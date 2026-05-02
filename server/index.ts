@@ -251,7 +251,9 @@ app.use((_req, res, next) => {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",       // Google Fonts CSS + Tailwind runtime
     "img-src 'self' data: blob: https:",                                   // allow remote images (avatars)
     "font-src 'self' data: https://fonts.gstatic.com",                     // Google Fonts files
-    "connect-src 'self' https: wss:",                                      // wss: Vite HMR; https: Stripe/API calls
+    isProduction
+      ? "connect-src 'self' https://api.stripe.com https://*.stripe.com"   // production: known endpoints only
+      : "connect-src 'self' https: wss:",                                  // dev: broad + Vite HMR
     "frame-ancestors 'none'",
     "form-action 'self'",
     "object-src 'none'",
