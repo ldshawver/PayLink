@@ -109,9 +109,28 @@ function getWeekEnd(dateStr: string): string {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
 }
 
+/** Routes accessible during the MFA enrollment grace period (before a user completes enrollment). */
+const MFA_ENROLLMENT_ALLOWED_PATHS = new Set([
+  "/api/auth/me",
+  "/api/auth/logout",
+  "/api/auth/mfa/status",
+  "/api/auth/mfa/enroll",
+  "/api/auth/mfa/confirm",
+]);
+
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.session?.userId) {
     return res.status(401).json({ message: "Not authenticated" });
+  }
+  // If MFA enrollment is required for this session, only permit MFA setup endpoints.
+  if (req.session.mfaEnrollmentRequired) {
+    const path = req.path.split("?")[0];
+    if (!MFA_ENROLLMENT_ALLOWED_PATHS.has(path)) {
+      return res.status(403).json({
+        mfaEnrollmentRequired: true,
+        message: "You must complete MFA enrollment before accessing this resource.",
+      });
+    }
   }
   next();
 }
@@ -24496,11 +24515,14 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
-  // Verify MFA step-up (for sensitive action confirmation — requires authenticated session)
+  // Verify MFA step-up for the current session user (sensitive action confirmation).
+  // userId is taken from the session — the request body userId is intentionally ignored
+  // to prevent cross-user verification attacks.
   app.post("/api/auth/mfa/verify", requireAuth, async (req: any, res) => {
     try {
-      const { userId, token } = req.body;
-      if (!userId || !token) return res.status(400).json({ message: "userId and token are required" });
+      const userId = req.session.userId as string;
+      const { token } = req.body;
+      if (!token) return res.status(400).json({ message: "token is required" });
 
       const { verifyTOTP, decryptTotpSecret } = await import("./totp");
       const rows = await db.execute(sql`SELECT totp_secret, mfa_enabled FROM users WHERE id = ${userId}`);

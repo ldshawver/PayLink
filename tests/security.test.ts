@@ -518,6 +518,35 @@ async function testMfaEnrollmentFlow(adminCookie: string) {
     confirmRes.status === 400 || confirmRes.status === 401,
     `Got status ${confirmRes.status}: ${JSON.stringify(confirmRes.body)}`
   );
+
+  // 6. MFA verify endpoint requires authentication (cannot be used as TOTP oracle)
+  const unauthVerifyRes = await apiPost("/api/auth/mfa/verify", { token: "000000" });
+  ok(
+    "Unauthenticated MFA verify returns 401",
+    unauthVerifyRes.status === 401,
+    `Got status ${unauthVerifyRes.status}: ${JSON.stringify(unauthVerifyRes.body)}`
+  );
+
+  // 7. MFA verify for authenticated user ignores body userId (session-bound)
+  //    Authenticated request with a spoofed userId in the body should verify
+  //    the session user's MFA, not the spoofed user — the response must not
+  //    expose another user's TOTP state with a success 200.
+  const spoofedVerifyRes = await apiPost(
+    "/api/auth/mfa/verify",
+    { token: "000000", userId: "00000000-0000-0000-0000-000000000000" },
+    adminCookie
+  );
+  ok(
+    "MFA verify ignores spoofed userId — uses session user only",
+    spoofedVerifyRes.status === 200 || spoofedVerifyRes.status === 401,
+    `Got status ${spoofedVerifyRes.status}: ${JSON.stringify(spoofedVerifyRes.body)}`
+  );
+  // The response must NOT 500 (which would indicate it tried the spoofed userId)
+  ok(
+    "MFA verify with spoofed userId does not 500 (session user resolved correctly)",
+    spoofedVerifyRes.status !== 500,
+    `Got unexpected 500: ${JSON.stringify(spoofedVerifyRes.body)}`
+  );
 }
 
 async function testPrivacyAuditLogAccess(adminCookie: string, companyId: string) {
