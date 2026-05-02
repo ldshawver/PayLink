@@ -24680,7 +24680,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   // ── PII Data Export ─────────────────────────────────────────────────────────
 
-  app.get("/api/workers/:id/data-export", requireAuth, requireRole("admin"), async (req: any, res) => {
+  app.get("/api/workers/:id/data-export", requireAuth, requireRole("admin", "tenant_owner", "tenant_admin"), async (req: any, res) => {
     try {
       const userId = req.session.userId as string;
       const { id: workerId } = req.params;
@@ -24754,7 +24754,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   // ── Data Anonymization ──────────────────────────────────────────────────────
 
-  app.post("/api/workers/:id/anonymize", requireAuth, requireRole("admin"), async (req: any, res) => {
+  app.post("/api/workers/:id/anonymize", requireAuth, requireRole("admin", "tenant_owner", "tenant_admin"), async (req: any, res) => {
     try {
       const userId = req.session.userId as string;
       const { id: workerId } = req.params;
