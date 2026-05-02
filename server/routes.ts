@@ -4611,6 +4611,16 @@ export async function registerRoutes(
       if (!workerId || !companyId || !date || !startTime || !endTime) {
         return res.status(400).json({ message: "Employee, company, date, start time, and end time are required" });
       }
+      // Cross-company guard: worker must belong to the target company
+      const schedWorker = await storage.getWorker(workerId);
+      if (!schedWorker) {
+        return res.status(400).json({ message: "Worker not found" });
+      }
+      if (schedWorker.companyId !== companyId) {
+        return res.status(400).json({
+          message: `${schedWorker.firstName} ${schedWorker.lastName} belongs to a different company and cannot be scheduled here`,
+        });
+      }
       try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS job_id VARCHAR`); } catch {}
       try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS position_id VARCHAR`); } catch {}
       try { await db.execute(sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS cost_center_id VARCHAR`); } catch {}
@@ -10328,6 +10338,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.post("/api/recurring-schedules", async (req, res) => {
     try {
+      const { workerId, companyId } = req.body;
+      // Cross-company guard: worker must belong to the target company
+      if (workerId && companyId) {
+        const recurWorker = await storage.getWorker(workerId);
+        if (!recurWorker) return res.status(400).json({ message: "Worker not found" });
+        if (recurWorker.companyId !== companyId) {
+          return res.status(400).json({
+            message: `${recurWorker.firstName} ${recurWorker.lastName} belongs to a different company and cannot be added to this recurring schedule`,
+          });
+        }
+      }
       const schedule = await storage.createRecurringSchedule(req.body);
       res.status(201).json(schedule);
     } catch (error) {
@@ -10338,6 +10359,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   app.patch("/api/recurring-schedules/:id", async (req, res) => {
     try {
+      // Cross-company guard: if workerId is being changed, ensure they belong to the same company
+      if (req.body.workerId) {
+        const existing = await storage.getRecurringSchedule(req.params.id);
+        if (existing) {
+          const targetCompanyId = req.body.companyId || existing.companyId;
+          const recurWorker = await storage.getWorker(req.body.workerId);
+          if (!recurWorker) return res.status(400).json({ message: "Worker not found" });
+          if (recurWorker.companyId !== targetCompanyId) {
+            return res.status(400).json({
+              message: `${recurWorker.firstName} ${recurWorker.lastName} belongs to a different company and cannot be assigned to this recurring schedule`,
+            });
+          }
+        }
+      }
       const schedule = await storage.updateRecurringSchedule(req.params.id, req.body);
       if (!schedule) {
         return res.status(404).json({ message: "Recurring schedule not found" });
@@ -13836,6 +13871,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const lister = await storage.getWorker(listing.listedByWorkerId);
       const schedule = await storage.getSchedule(listing.scheduleId);
       if (!candidate || !lister || !schedule) return res.status(404).json({ message: "Related data not found" });
+
+      // Cross-company guard: worker may only claim shifts within their own company
+      if (candidate.companyId !== schedule.companyId) {
+        return res.status(403).json({
+          message: "You can only claim shifts within your own company",
+        });
+      }
 
       const candidateSchedules = (await storage.getSchedules(candidate.companyId || undefined)).filter(
         s => s.workerId === candidate.id

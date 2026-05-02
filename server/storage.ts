@@ -327,6 +327,7 @@ export interface IStorage {
   deleteReview(id: string): Promise<void>;
 
   getRecurringSchedules(companyId?: string): Promise<RecurringSchedule[]>;
+  getRecurringSchedule(id: string): Promise<RecurringSchedule | undefined>;
   createRecurringSchedule(data: InsertRecurringSchedule): Promise<RecurringSchedule>;
   updateRecurringSchedule(id: string, data: Partial<RecurringSchedule>): Promise<RecurringSchedule | undefined>;
   deleteRecurringSchedule(id: string): Promise<void>;
@@ -1722,6 +1723,10 @@ export class DatabaseStorage implements IStorage {
       }
       throw e;
     }
+  }
+  async getRecurringSchedule(id: string): Promise<RecurringSchedule | undefined> {
+    const rows = await this.getRecurringSchedules();
+    return rows.find(r => r.id === id);
   }
   async createRecurringSchedule(data: InsertRecurringSchedule): Promise<RecurringSchedule> {
     try {
