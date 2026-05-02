@@ -628,6 +628,9 @@ export async function registerRoutes(
 
       const { verifyTOTP, decryptTotpSecret } = await import("./totp");
       const plainSecret = decryptTotpSecret(mfaRow.totp_secret);
+      if (!plainSecret) {
+        return res.status(500).json({ message: "MFA configuration error. Please contact support." });
+      }
       if (!verifyTOTP(plainSecret, token)) {
         return res.status(401).json({ message: "Invalid or expired authentication code" });
       }

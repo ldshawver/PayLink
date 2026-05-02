@@ -93,11 +93,13 @@ export default function MfaSettingsPage() {
 
   const isAdmin = user?.role === "admin" || user?.role === "tenant_admin" || user?.role === "tenant_owner";
 
-  const { data: enforceStatus, isLoading: enforceLoading } = useQuery<EnforceStatus>({
+  const { data: enforceStatus, isLoading: enforceLoading } = useQuery<EnforceStatus | null>({
     queryKey: ["/api/auth/mfa/enforce-status"],
-    enabled: isAdmin,
+    enabled: isAdmin && !enrollData,
+    retry: false,
     queryFn: async () => {
       const r = await fetch("/api/auth/mfa/enforce-status");
+      if (r.status === 403) return null;
       if (!r.ok) throw new Error("Failed to fetch enforce status");
       return r.json();
     },
