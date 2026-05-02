@@ -267,7 +267,7 @@ const TENANT_NAV: NavGroup[] = [
   },
   {
     groupLabel: "Finance",
-    roles: ["admin", "manager"],
+    roles: ["admin", "manager", "supervisor", "contractor"],
     collapsible: true,
     sections: [
       {
@@ -288,7 +288,7 @@ const TENANT_NAV: NavGroup[] = [
         roles: ["admin", "manager", "supervisor", "contractor"],
         featureKey: "tenant.finance.contractor-hub",
         items: [
-          { title: "Contractor Hub", url: "/app/contractor-hub", icon: Briefcase },
+          { title: "Overview", url: "/app/contractor-hub", icon: Briefcase },
           { title: "Proposals", url: "/app/biz-docs?tab=proposals", icon: FilePlus2 },
           { title: "Business Documents", url: "/app/biz-docs", icon: FileText },
           { title: "Trade Compensation", url: "/app/trade-compensation", icon: ArrowLeftRight, featureKey: "tenant.finance.trade-compensation" },
