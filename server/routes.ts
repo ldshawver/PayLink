@@ -2260,7 +2260,20 @@ export async function registerRoutes(
       {
         const schedules = await storage.getPayPeriodSchedules(run.companyId);
         const active = schedules.filter(s => s.isActive);
-        if (active.length === 1 && run.payDate) {
+        if (active.length === 0) {
+          return res.status(422).json({
+            message: "No active Pay Period Schedule found for this company. " +
+              "Activate a schedule in Settings → Pay Period Schedules before processing payroll.",
+          });
+        }
+        if (active.length > 1) {
+          return res.status(422).json({
+            message: `${active.length} active Pay Period Schedules found — only one may be active at a time. ` +
+              "Deactivate the extras in Settings → Pay Period Schedules, then try again.",
+            activeScheduleIds: active.map(s => s.id),
+          });
+        }
+        if (run.payDate) {
           const expectedPeriod = resolvePayPeriod(active[0], run.payDate);
           if (expectedPeriod &&
               (expectedPeriod.periodStart !== run.periodStart ||
@@ -3696,8 +3709,11 @@ export async function registerRoutes(
       if (!isPlatformUser(repairUser?.role) && repairUser?.companyId && run.companyId !== repairUser.companyId) {
         return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
       }
-      if (run.status === "paid") {
-        return res.status(403).json({ message: "Cannot repair a paid payroll run — paid records are immutable." });
+      if (run.status !== "draft" && run.status !== "processed") {
+        return res.status(403).json({
+          message: `Cannot repair a payroll run with status "${run.status}". ` +
+            "Only draft and processed runs may be repaired.",
+        });
       }
       if (!run.payDate) {
         return res.status(422).json({ message: "Payroll run has no payDate — cannot resolve period without a pay date." });
@@ -25624,35 +25640,64 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
-  // ── Dev/debug: verify Adiken Inc (or first active weekly schedule) resolves
-  // Sunday–Saturday / Wednesday payday on startup.  Never runs in production.
+  // ── Dev/debug: verify Adiken Inc schedule resolves Sunday–Saturday / Wednesday
+  // on startup.  Falls back to any active weekly schedule if Adiken is not found.
+  // Never runs in production.
   if (process.env.NODE_ENV !== "production") {
     setImmediate(async () => {
       try {
-        const { payPeriodSchedules: ppsTable } = await import("../shared/schema.js");
-        const { eq: eqPps } = await import("drizzle-orm");
-        const weeklySchedules = await db
+        const { payPeriodSchedules: ppsTable, companies: companiesTable } = await import("../shared/schema.js");
+        const { eq: eqPps, ilike } = await import("drizzle-orm");
+
+        // Prefer Adiken Inc; fall back to any company with an active weekly schedule.
+        const adikenCompanies = await db
           .select()
-          .from(ppsTable)
-          .where(eqPps(ppsTable.type, "weekly"))
-          .limit(5);
-        const activeWeekly = weeklySchedules.filter(s => s.isActive);
-        if (activeWeekly.length === 0) {
+          .from(companiesTable)
+          .where(ilike(companiesTable.name, "%adiken%"))
+          .limit(1);
+
+        let candidateSchedules: typeof ppsTable.$inferSelect[] = [];
+        if (adikenCompanies.length > 0) {
+          const adikenSchedules = await db
+            .select()
+            .from(ppsTable)
+            .where(eqPps(ppsTable.companyId, adikenCompanies[0].id));
+          candidateSchedules = adikenSchedules.filter(s => s.isActive && s.type === "weekly");
+          if (candidateSchedules.length === 0) {
+            console.log(`[PayrollCalendar] Dev check: Adiken Inc (${adikenCompanies[0].id}) has no active weekly schedule`);
+          }
+        }
+
+        if (candidateSchedules.length === 0) {
+          // Fall back to any active weekly schedule in the system
+          const allWeekly = await db
+            .select()
+            .from(ppsTable)
+            .where(eqPps(ppsTable.type, "weekly"))
+            .limit(5);
+          candidateSchedules = allWeekly.filter(s => s.isActive);
+        }
+
+        if (candidateSchedules.length === 0) {
           console.log("[PayrollCalendar] Dev check: no active weekly schedules found — skipping resolution assertion");
           return;
         }
-        const refDate = "2025-05-14"; // known Wednesday
-        for (const sched of activeWeekly) {
+
+        const refDate = "2025-05-14"; // known Wednesday payday
+        for (const sched of candidateSchedules) {
           const resolved = resolvePayPeriod(sched, refDate);
           if (!resolved) {
             console.warn(`[PayrollCalendar] Dev check: resolvePayPeriod returned null for schedule ${sched.id} (${sched.name})`);
             continue;
           }
-          const startDay = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][new Date(resolved.periodStart + "T12:00:00").getDay()];
-          const endDay   = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][new Date(resolved.periodEnd   + "T12:00:00").getDay()];
+          const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+          const startDay = days[new Date(resolved.periodStart + "T12:00:00").getDay()];
+          const endDay   = days[new Date(resolved.periodEnd   + "T12:00:00").getDay()];
           const ok = startDay === "Sun" && endDay === "Sat";
+          const label = adikenCompanies.length > 0 && sched.companyId === adikenCompanies[0].id
+            ? "Adiken Inc" : `company ${sched.companyId}`;
           console.log(
-            `[PayrollCalendar] Dev check schedule "${sched.name}" (${sched.companyId}): ` +
+            `[PayrollCalendar] Dev check "${sched.name}" (${label}): ` +
             `refDate=${refDate} → ${resolved.periodStart} (${startDay}) – ${resolved.periodEnd} (${endDay}) ` +
             (ok ? "✓ Sun–Sat confirmed" : "✗ UNEXPECTED — expected Sun–Sat period")
           );
