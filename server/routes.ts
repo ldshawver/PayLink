@@ -24707,7 +24707,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       const [contacts, payMethods, timeEntries, payrollItemsData, documents, auditLogs] = await Promise.all([
         db.execute(sql`SELECT * FROM employee_contacts WHERE worker_id = ${workerId}`),
-        db.execute(sql`SELECT id, method_type, bank_name, account_type, is_primary, is_active FROM pay_methods WHERE worker_id = ${workerId}`),
+        db.execute(sql`SELECT id, method_type, bank_name, account_type, account_number, routing_number, is_primary, is_active FROM pay_methods WHERE worker_id = ${workerId}`),
         db.execute(sql`SELECT * FROM time_entries WHERE worker_id = ${workerId} ORDER BY date DESC LIMIT 500`),
         db.execute(sql`
           SELECT pi.*, pr.period_start, pr.period_end, pr.pay_date
@@ -24780,30 +24780,31 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       // Overwrite PII with anonymized placeholders
       // Payroll totals and YTD data are preserved for legal/tax record-keeping
+      const anonEmail = `anonymized-${workerId}@deleted.invalid`;
       await db.execute(sql`
         UPDATE workers SET
           first_name = '[ANONYMIZED]',
-          middle_name = NULL,
+          middle_name = '[ANONYMIZED]',
           last_name = '[ANONYMIZED]',
-          email = NULL,
-          work_email = NULL,
-          home_email = NULL,
-          phone = NULL,
-          work_phone = NULL,
-          home_phone = NULL,
-          mobile_phone = NULL,
-          fax = NULL,
-          address = NULL,
-          address_2 = NULL,
-          city = NULL,
-          state = NULL,
-          zip = NULL,
+          email = ${anonEmail},
+          work_email = ${anonEmail},
+          home_email = ${anonEmail},
+          phone = '[ANONYMIZED]',
+          work_phone = '[ANONYMIZED]',
+          home_phone = '[ANONYMIZED]',
+          mobile_phone = '[ANONYMIZED]',
+          fax = '[ANONYMIZED]',
+          address = '[ANONYMIZED]',
+          address_2 = '[ANONYMIZED]',
+          city = '[ANONYMIZED]',
+          state = '[ANONYMIZED]',
+          zip = '[ANONYMIZED]',
           birth_date = NULL,
           ssn = 'XXX-XX-XXXX',
-          pin = NULL,
-          note = NULL,
-          emergency_contact_name = NULL,
-          emergency_contact_phone = NULL,
+          pin = '[ANONYMIZED]',
+          note = '[ANONYMIZED]',
+          emergency_contact_name = '[ANONYMIZED]',
+          emergency_contact_phone = '[ANONYMIZED]',
           status = 'terminated',
           is_active = FALSE
         WHERE id = ${workerId} AND company_id = ${user.companyId}
