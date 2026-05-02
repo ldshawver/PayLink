@@ -24563,9 +24563,21 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       if (!token) return res.status(400).json({ message: "Current MFA token is required to disable MFA" });
 
       const { verifyTOTP, decryptTotpSecret } = await import("./totp");
-      const rows = await db.execute(sql`SELECT totp_secret, mfa_enabled FROM users WHERE id = ${userId}`);
+      const rows = await db.execute(sql`SELECT totp_secret, mfa_enabled, company_id FROM users WHERE id = ${userId}`);
       const row = rows.rows[0] as any;
       if (!row?.mfa_enabled) return res.status(400).json({ message: "MFA is not enabled" });
+
+      // Block disable when company-wide MFA enforcement is active
+      if (row?.company_id) {
+        const enforceCheck = await db.execute(sql`
+          SELECT COUNT(*) AS cnt FROM users
+          WHERE company_id = ${row.company_id} AND mfa_enforced_at IS NOT NULL
+        `);
+        const enforced = parseInt((enforceCheck.rows[0] as any)?.cnt ?? "0") > 0;
+        if (enforced) {
+          return res.status(403).json({ message: "MFA cannot be disabled — it is required by your organization." });
+        }
+      }
 
       const plainSecret = decryptTotpSecret(row.totp_secret);
       if (!plainSecret || !verifyTOTP(plainSecret, token)) {
