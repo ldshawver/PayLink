@@ -1188,6 +1188,60 @@ function InvoiceApprovalTab({ companyId }: { companyId?: string }) {
   );
 }
 
+function LegalBasisEditor({ policyId, currentBasis, currentPurpose, companyId }: {
+  policyId: string; currentBasis: string; currentPurpose: string; companyId?: string;
+}) {
+  const { toast } = useToast();
+  const [basis, setBasis] = useState(currentBasis);
+  const [purpose, setPurpose] = useState(currentPurpose);
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    try {
+      await apiRequest("PATCH", `/api/document-retention-policies/${policyId}/legal-basis`, {
+        legalBasis: basis || null,
+        purposeDescription: purpose || null,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/document-retention-policies", companyId] });
+      toast({ title: "Legal basis & purpose updated" });
+    } catch {
+      toast({ title: "Failed to update legal basis", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-end gap-2 pt-1">
+      <div className="flex-1 min-w-[160px]">
+        <Select value={basis} onValueChange={setBasis}>
+          <SelectTrigger className="h-7 text-xs" data-testid={`select-legal-basis-${policyId}`}><SelectValue placeholder="Set legal basis" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="legal_obligation">Legal Obligation</SelectItem>
+            <SelectItem value="legitimate_interest">Legitimate Interest</SelectItem>
+            <SelectItem value="contract">Contract</SelectItem>
+            <SelectItem value="consent">Consent</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="flex-[2] min-w-[200px]">
+        <Textarea
+          value={purpose}
+          onChange={e => setPurpose(e.target.value)}
+          placeholder="Purpose description (e.g. required for tax compliance)"
+          className="text-xs resize-none"
+          rows={1}
+          data-testid={`input-purpose-${policyId}`}
+        />
+      </div>
+      <Button size="sm" className="h-7 text-xs shrink-0" onClick={save} disabled={saving} data-testid={`button-save-legal-basis-${policyId}`}>
+        {saving ? "Saving…" : "Save"}
+      </Button>
+    </div>
+  );
+}
+
 function RetentionTab({ companyId, userRole }: { companyId?: string; userRole?: string }) {
   const isAdmin = userRole === "admin";
   const { toast } = useToast();
@@ -1265,44 +1319,40 @@ function RetentionTab({ companyId, userRole }: { companyId?: string; userRole?: 
           <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Settings className="h-4 w-4" />Custom Policies</CardTitle></CardHeader>
           <CardContent>
             <div className="space-y-2">
-              {policies.map(p => (
-                <div key={p.id} className="flex items-start justify-between py-2 border-b last:border-0" data-testid={`row-retention-${p.id}`}>
-                  <div>
-                    <p className="font-medium text-sm">{p.name}</p>
-                    <p className="text-xs text-muted-foreground">{p.description || `${p.retentionYears || 0}y ${p.retentionMonths || 0}m - ${p.documentType || "All types"}`}</p>
-                    {(p as any).legalBasis && (
-                      <Badge className="mt-1 text-[10px]" variant="secondary">
-                        {({legal_obligation:"Legal Obligation",legitimate_interest:"Legitimate Interest",contract:"Contract",consent:"Consent"} as Record<string,string>)[(p as any).legalBasis] ?? (p as any).legalBasis}
-                      </Badge>
-                    )}
+              {policies.map(p => {
+                const LEGAL_BASIS_LABELS: Record<string, string> = {
+                  legal_obligation: "Legal Obligation",
+                  legitimate_interest: "Legitimate Interest",
+                  contract: "Contract",
+                  consent: "Consent",
+                };
+                return (
+                <div key={p.id} className="py-2 border-b last:border-0 space-y-1" data-testid={`row-retention-${p.id}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm">{p.name}</p>
+                      <p className="text-xs text-muted-foreground">{p.description || `${p.retentionYears || 0}y ${p.retentionMonths || 0}m - ${p.documentType || "All types"}`}</p>
+                      {p.legalBasis && (
+                        <Badge className="mt-1 text-[10px]" variant="secondary">
+                          {LEGAL_BASIS_LABELS[p.legalBasis] ?? p.legalBasis}
+                        </Badge>
+                      )}
+                      {p.purposeDescription && (
+                        <p className="text-xs text-muted-foreground mt-0.5 italic">{p.purposeDescription}</p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Badge variant="secondary">{p.retentionYears || 0}y {p.retentionMonths || 0}m</Badge>
+                      <Badge variant="outline" className="capitalize">{p.dispositionAction}</Badge>
+                      {isAdmin && <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => deleteMutation.mutate(p.id)}><Trash2 className="h-3.5 w-3.5" /></Button>}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary">{p.retentionYears || 0}y {p.retentionMonths || 0}m</Badge>
-                    <Badge variant="outline" className="capitalize">{p.dispositionAction}</Badge>
-                    {isAdmin && (
-                      <Select
-                        value={(p as any).legalBasis ?? ""}
-                        onValueChange={async (val) => {
-                          try {
-                            await apiRequest("PATCH", `/api/document-retention-policies/${p.id}/legal-basis`, { legalBasis: val || null });
-                            queryClient.invalidateQueries({ queryKey: ["/api/document-retention-policies", companyId] });
-                            toast({ title: "Legal basis updated" });
-                          } catch { toast({ title: "Failed to update legal basis", variant: "destructive" }); }
-                        }}
-                      >
-                        <SelectTrigger className="h-7 text-xs w-36" data-testid={`select-legal-basis-${p.id}`}><SelectValue placeholder="Set legal basis" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="legal_obligation">Legal Obligation</SelectItem>
-                          <SelectItem value="legitimate_interest">Legitimate Interest</SelectItem>
-                          <SelectItem value="contract">Contract</SelectItem>
-                          <SelectItem value="consent">Consent</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    )}
-                    {isAdmin && <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => deleteMutation.mutate(p.id)}><Trash2 className="h-3.5 w-3.5" /></Button>}
-                  </div>
+                  {isAdmin && (
+                    <LegalBasisEditor policyId={p.id} currentBasis={p.legalBasis ?? ""} currentPurpose={p.purposeDescription ?? ""} companyId={companyId} />
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </CardContent>
         </Card>
