@@ -892,11 +892,12 @@ function ProposalDetailPanel({
 
   return (
     <Sheet open onOpenChange={() => onClose()}>
-      <SheetContent side="right" className="w-full max-w-3xl p-0 flex flex-col">
-        <SheetHeader className="px-6 py-4 border-b shrink-0">
-          <div className="flex items-start justify-between gap-4">
+      <SheetContent side="right" className="w-screen sm:w-full sm:max-w-3xl p-0 flex flex-col overflow-hidden">
+        <SheetHeader className="px-5 pt-4 pb-0 border-b shrink-0">
+          {/* Row 1: title + meta */}
+          <div className="flex items-start gap-3 pb-2">
             <div className="flex-1 min-w-0">
-              <SheetTitle className="text-base truncate">{proposal.title || "Proposal Detail"}</SheetTitle>
+              <SheetTitle className="text-base leading-tight">{proposal.title || "Proposal Detail"}</SheetTitle>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
                 <span className="text-xs text-muted-foreground">{proposal.proposalNumber}</span>
                 <ProposalBadge status={proposal.status} />
@@ -904,55 +905,58 @@ function ProposalDetailPanel({
                 {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">v{proposal.version}</span>}
               </div>
             </div>
-            <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+          </div>
+          {/* Row 2: action buttons — horizontally scrollable so nothing gets clipped */}
+          {(canEdit || canSubmit || canAdminAction || canMarkNegotiated || canConvertToContract || (proposal.status === "approved" && isAdmin) || canCreateRevision) && (
+            <div className="flex items-center gap-2 overflow-x-auto pb-3 pt-1 scrollbar-none" style={{ scrollbarWidth: "none" }}>
               {canEdit && (
-                <Button size="sm" variant="outline" onClick={onEdit} data-testid="btn-edit-from-detail">
+                <Button size="sm" variant="outline" className="shrink-0" onClick={onEdit} data-testid="btn-edit-from-detail">
                   <Edit className="h-3.5 w-3.5 mr-1" /> Edit
                 </Button>
               )}
               {canSubmit && (
-                <Button size="sm" onClick={() => actionMutation.mutate({ action: "submit" })} disabled={actionMutation.isPending} data-testid="btn-submit-from-detail">
+                <Button size="sm" className="shrink-0" onClick={() => actionMutation.mutate({ action: "submit" })} disabled={actionMutation.isPending} data-testid="btn-submit-from-detail">
                   <Send className="h-3.5 w-3.5 mr-1" /> Submit
                 </Button>
               )}
               {canAdminAction && (
                 <>
-                  <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => actionMutation.mutate({ action: "accept" })} disabled={actionMutation.isPending} data-testid="btn-approve-proposal">
+                  <Button size="sm" className="shrink-0 bg-green-600 hover:bg-green-700 text-white" onClick={() => actionMutation.mutate({ action: "accept" })} disabled={actionMutation.isPending} data-testid="btn-approve-proposal">
                     <CheckCircle className="h-3.5 w-3.5 mr-1" /> Approve
                   </Button>
-                  <Button size="sm" variant="outline" className="border-orange-300 text-orange-700" onClick={() => setRevisionOpen(true)} data-testid="btn-request-revision">
+                  <Button size="sm" variant="outline" className="shrink-0 border-orange-300 text-orange-700" onClick={() => setRevisionOpen(true)} data-testid="btn-request-revision">
                     <RotateCcw className="h-3.5 w-3.5 mr-1" /> Request Revision
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => setCounterOpen(true)} data-testid="btn-counter-offer">
+                  <Button size="sm" variant="outline" className="shrink-0" onClick={() => setCounterOpen(true)} data-testid="btn-counter-offer">
                     <MessageCircle className="h-3.5 w-3.5 mr-1" /> Counter
                   </Button>
-                  <Button size="sm" variant="destructive" onClick={() => setRejectOpen(true)} data-testid="btn-reject-proposal">
+                  <Button size="sm" variant="destructive" className="shrink-0" onClick={() => setRejectOpen(true)} data-testid="btn-reject-proposal">
                     <XCircle className="h-3.5 w-3.5 mr-1" /> Reject
                   </Button>
                 </>
               )}
               {canMarkNegotiated && (
-                <Button size="sm" variant="outline" className="border-teal-300 text-teal-700" onClick={() => actionMutation.mutate({ action: "mark-negotiated" })} disabled={actionMutation.isPending} data-testid="btn-mark-negotiated">
+                <Button size="sm" variant="outline" className="shrink-0 border-teal-300 text-teal-700" onClick={() => actionMutation.mutate({ action: "mark-negotiated" })} disabled={actionMutation.isPending} data-testid="btn-mark-negotiated">
                   <CheckCheck className="h-3.5 w-3.5 mr-1" /> Mark Negotiated
                 </Button>
               )}
               {canConvertToContract && (
-                <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setConvertToContractOpen(true)} data-testid="btn-convert-to-contract">
+                <Button size="sm" className="shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setConvertToContractOpen(true)} data-testid="btn-convert-to-contract">
                   <FileSignature className="h-3.5 w-3.5 mr-1" /> Convert to Contract
                 </Button>
               )}
               {proposal.status === "approved" && isAdmin && (
-                <Button size="sm" variant="outline" onClick={() => actionMutation.mutate({ action: "convert-to-invoice" })} disabled={actionMutation.isPending} data-testid="btn-convert-invoice">
+                <Button size="sm" variant="outline" className="shrink-0" onClick={() => actionMutation.mutate({ action: "convert-to-invoice" })} disabled={actionMutation.isPending} data-testid="btn-convert-invoice">
                   <FilePlus className="h-3.5 w-3.5 mr-1" /> Create Invoice
                 </Button>
               )}
               {canCreateRevision && (
-                <Button size="sm" variant="outline" onClick={() => revisionMutation.mutate()} disabled={revisionMutation.isPending} data-testid="btn-create-revision-from-detail">
+                <Button size="sm" variant="outline" className="shrink-0" onClick={() => revisionMutation.mutate()} disabled={revisionMutation.isPending} data-testid="btn-create-revision-from-detail">
                   <RotateCcw className="h-3.5 w-3.5 mr-1" /> New Revision
                 </Button>
               )}
             </div>
-          </div>
+          )}
         </SheetHeader>
 
         <Tabs value={tab} onValueChange={setTab} className="flex flex-col flex-1 min-h-0">
