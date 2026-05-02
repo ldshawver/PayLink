@@ -1081,6 +1081,11 @@ export async function registerRoutes(
         req.body.employeeNumber = String(next);
       }
       const worker = await storage.createWorker(req.body);
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "workers", changeType: "worker_created",
+        afterValue: `${worker.firstName} ${worker.lastName} (${worker.employeeNumber})`,
+        note: `Worker created`, companyId: worker.companyId, targetUserId: worker.id,
+      });
       res.status(201).json(worker);
     } catch (error) {
       console.error("Failed to create worker:", error);
@@ -1104,6 +1109,11 @@ export async function registerRoutes(
       if (!worker) {
         return res.status(404).json({ message: "Worker not found" });
       }
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "workers", changeType: "worker_updated",
+        afterValue: `${worker.firstName} ${worker.lastName}`,
+        note: `Worker updated`, companyId: worker.companyId, targetUserId: worker.id,
+      });
       res.json(worker);
     } catch (error) {
       console.error(error);
@@ -1124,6 +1134,11 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Forbidden: worker belongs to a different company" });
       }
       await storage.deleteWorker(req.params.id as string);
+      await writeAuditLog({
+        actorUserId: req.session.userId!, targetResource: "workers", changeType: "worker_deleted",
+        beforeValue: `${worker.firstName} ${worker.lastName} (${worker.employeeNumber})`,
+        note: `Worker deleted`, companyId: worker.companyId, targetUserId: worker.id,
+      });
       res.json({ message: "Worker deleted successfully" });
     } catch (error) {
       console.error("Failed to delete worker:", error);
@@ -19736,7 +19751,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     try {
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
       const offset = parseInt(req.query.offset as string) || 0;
-      const { changeType, companyId, actorUserId, fromDate, toDate } = req.query;
+      const { changeType, companyId, actorUserId, fromDate, toDate, targetResource } = req.query;
 
       const currentUser = await storage.getUser(req.session?.userId);
       const isSuperAdmin = currentUser?.role === "platform_super_admin";
@@ -19752,6 +19767,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         actorUserId: actorUserId as string | undefined,
         fromDate: fromDate as string | undefined,
         toDate: toDate as string | undefined,
+        targetResource: targetResource as string | undefined,
       });
       res.json(result);
     } catch (e) { res.status(500).json({ message: "Failed to fetch audit log" }); }
@@ -19759,7 +19775,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.get("/api/audit-log/export-csv", requireAuth, requireRole("admin", "platform_super_admin"), async (req: any, res) => {
     try {
-      const { changeType, companyId, actorUserId, fromDate, toDate } = req.query;
+      const { changeType, companyId, actorUserId, fromDate, toDate, targetResource } = req.query;
 
       const currentUser = await storage.getUser(req.session?.userId);
       const isSuperAdmin = currentUser?.role === "platform_super_admin";
@@ -19775,6 +19791,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         actorUserId: actorUserId as string | undefined,
         fromDate: fromDate as string | undefined,
         toDate: toDate as string | undefined,
+        targetResource: targetResource as string | undefined,
       });
 
       const headers = ["ID", "Timestamp", "Actor", "Event Type", "Target User", "Target Role", "Target Resource", "Before", "After", "Company", "Note"];

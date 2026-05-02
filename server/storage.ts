@@ -894,6 +894,7 @@ export interface IStorage {
     actorUserId?: string;
     fromDate?: string;
     toDate?: string;
+    targetResource?: string;
   }): Promise<{ rows: AuthorizationAuditLog[]; total: number }>;
   createAuthorizationAuditLog(data: InsertAuthorizationAuditLog): Promise<AuthorizationAuditLog>;
 
@@ -4049,12 +4050,14 @@ export class DatabaseStorage implements IStorage {
     actorUserId?: string;
     fromDate?: string;
     toDate?: string;
+    targetResource?: string;
   }): Promise<{ rows: AuthorizationAuditLog[]; total: number }> {
     const { sql: drizzleSql } = await import("drizzle-orm");
     const conditions: any[] = [];
     if (opts.changeType) conditions.push(eq(authorizationAuditLog.changeType, opts.changeType));
     if (opts.companyId) conditions.push(eq(authorizationAuditLog.companyId, opts.companyId));
     if (opts.actorUserId) conditions.push(eq(authorizationAuditLog.actorUserId, opts.actorUserId));
+    if (opts.targetResource) conditions.push(eq(authorizationAuditLog.targetResource, opts.targetResource));
     if (opts.fromDate) conditions.push(sql`${authorizationAuditLog.createdAt} >= ${opts.fromDate}::timestamptz`);
     if (opts.toDate) conditions.push(sql`${authorizationAuditLog.createdAt} <= ${opts.toDate}::timestamptz`);
 

@@ -49,6 +49,21 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   department_changed: "Department Changed",
   location_changed: "Location Changed",
   reporting_changed: "Reporting Changed",
+  worker_created: "Worker Created",
+  worker_updated: "Worker Updated",
+  worker_deleted: "Worker Deleted",
+  data_export: "PII Export (GDPR)",
+  data_anonymization: "Anonymization (GDPR)",
+  payroll_run_created: "Payroll Run Created",
+  payroll_run_approved: "Payroll Run Approved",
+  payroll_run_locked: "Payroll Run Locked",
+  payroll_run_submitted: "Payroll Run Submitted",
+  pay_method_created: "Pay Method Added",
+  pay_method_updated: "Pay Method Updated",
+  pay_method_deleted: "Pay Method Removed",
+  breach_notification: "Breach Notification",
+  mfa_enabled: "MFA Enabled",
+  mfa_disabled: "MFA Disabled",
 };
 
 const EVENT_TYPE_COLORS: Record<string, string> = {
@@ -194,6 +209,7 @@ export default function AuditLogPage() {
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
   const [changeTypeFilter, setChangeTypeFilter] = useState<string>("");
+  const [resourceFilter, setResourceFilter] = useState<string>("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
 
@@ -202,11 +218,12 @@ export default function AuditLogPage() {
     offset: String(page * PAGE_SIZE),
   });
   if (changeTypeFilter) params.set("changeType", changeTypeFilter);
+  if (resourceFilter) params.set("targetResource", resourceFilter);
   if (fromDate) params.set("fromDate", fromDate);
   if (toDate) params.set("toDate", toDate + "T23:59:59");
 
   const { data, isLoading } = useQuery<{ rows: AuditLog[]; total: number }>({
-    queryKey: ["/api/audit-log", page, changeTypeFilter, fromDate, toDate],
+    queryKey: ["/api/audit-log", page, changeTypeFilter, resourceFilter, fromDate, toDate],
     queryFn: async () => {
       const r = await fetch(`/api/audit-log?${params.toString()}`);
       if (!r.ok) throw new Error("Failed to fetch audit log");
@@ -254,7 +271,7 @@ export default function AuditLogPage() {
           <CardDescription>Filter audit events by type, date range, or search by keyword</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
             <div className="space-y-1">
               <Label htmlFor="search">Search</Label>
               <div className="relative">
@@ -291,6 +308,42 @@ export default function AuditLogPage() {
                   <SelectItem value="department_changed">Department Changed</SelectItem>
                   <SelectItem value="location_changed">Location Changed</SelectItem>
                   <SelectItem value="reporting_changed">Reporting Changed</SelectItem>
+                  <SelectItem value="worker_created">Worker Created</SelectItem>
+                  <SelectItem value="worker_updated">Worker Updated</SelectItem>
+                  <SelectItem value="worker_deleted">Worker Deleted</SelectItem>
+                  <SelectItem value="data_export">PII Export (GDPR)</SelectItem>
+                  <SelectItem value="data_anonymization">Anonymization (GDPR)</SelectItem>
+                  <SelectItem value="payroll_run_created">Payroll Run Created</SelectItem>
+                  <SelectItem value="payroll_run_approved">Payroll Run Approved</SelectItem>
+                  <SelectItem value="payroll_run_locked">Payroll Run Locked</SelectItem>
+                  <SelectItem value="pay_method_created">Pay Method Added</SelectItem>
+                  <SelectItem value="pay_method_updated">Pay Method Updated</SelectItem>
+                  <SelectItem value="pay_method_deleted">Pay Method Removed</SelectItem>
+                  <SelectItem value="breach_notification">Breach Notification</SelectItem>
+                  <SelectItem value="mfa_enabled">MFA Enabled</SelectItem>
+                  <SelectItem value="mfa_disabled">MFA Disabled</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="resource-filter">Resource Type</Label>
+              <Select
+                value={resourceFilter || "all"}
+                onValueChange={v => { setResourceFilter(v === "all" ? "" : v); setPage(0); }}
+              >
+                <SelectTrigger id="resource-filter" data-testid="select-resource-filter">
+                  <SelectValue placeholder="All resources" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All resources</SelectItem>
+                  <SelectItem value="workers">Workers</SelectItem>
+                  <SelectItem value="payroll_runs">Payroll Runs</SelectItem>
+                  <SelectItem value="payroll_items">Payroll Items</SelectItem>
+                  <SelectItem value="pay_methods">Pay Methods</SelectItem>
+                  <SelectItem value="companies">Companies</SelectItem>
+                  <SelectItem value="users">Users</SelectItem>
+                  <SelectItem value="breach_incidents">Breach Incidents</SelectItem>
                 </SelectContent>
               </Select>
             </div>

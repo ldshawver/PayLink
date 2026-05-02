@@ -56,6 +56,23 @@ jobs:
           DATABASE_URL: postgresql://paylink:paylink@localhost:5432/paylink_test
         run: npx tsx tests/security.test.ts
 
+      - name: Scan for hardcoded secrets
+        run: |
+          # Fail if obvious hardcoded credentials are found in source files
+          FOUND=$(grep -rEn \
+            "(password|secret|api_key|apikey|private_key|auth_token)\s*[:=]\s*['\"][^'\"]{12,}['\"]" \
+            --include="*.ts" --include="*.tsx" --include="*.js" \
+            --exclude-dir=node_modules --exclude-dir=dist \
+            server/ client/ shared/ 2>/dev/null | \
+            grep -v "process\.env\|getenv\|EXAMPLE\|placeholder\|bcrypt\|MASKED\|ANONYMIZED\|XXXX\|your-\|<YOUR\|TODO\|test\|spec" \
+            || true)
+          if [ -n "$FOUND" ]; then
+            echo "::error::Possible hardcoded secret(s) detected:"
+            echo "$FOUND"
+            exit 1
+          fi
+          echo "No obvious hardcoded secrets detected."
+
       - name: npm audit (high severity gate)
         run: npm audit --audit-level=high
 
