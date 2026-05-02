@@ -12841,6 +12841,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         workerId: workerId || null,
         isActive: true,
       });
+
+      // Propagate MFA enforcement to new user if company has enforcement enabled
+      if (user.companyId) {
+        try {
+          const enforcedResult = await db.execute(sql`
+            SELECT COUNT(*) AS cnt FROM users
+            WHERE company_id = ${user.companyId} AND mfa_enforced_at IS NOT NULL AND id != ${user.id}
+          `);
+          const alreadyEnforced = parseInt((enforcedResult.rows[0] as any)?.cnt ?? "0") > 0;
+          if (alreadyEnforced) {
+            await db.execute(sql`UPDATE users SET mfa_enforced_at = NOW() WHERE id = ${user.id}`);
+          }
+        } catch (enfErr) {
+          console.error("[MFA enforce propagation]", enfErr);
+        }
+      }
+
       res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, isActive: user.isActive });
     } catch (error) {
       console.error(error);
@@ -25005,7 +25022,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           SELECT company_id, id, 'breach_alert',
             'Breach Incident Alert',
             ${`Breach incident reported by tenant ${tenantId ?? "unknown"}: ${nature.substring(0, 100)}`},
-            '/breach-response',
+            '/platform/breach-response',
             false
           FROM users
           WHERE role = 'platform_super_admin' AND company_id IS NOT NULL
