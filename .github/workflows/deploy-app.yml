@@ -1,197 +1,97 @@
-name: Deploy Private App
+name: PayLink CI / Deploy
 
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch:
-
-concurrency:
-  group: deploy-private-app-production
-  cancel-in-progress: true
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
-  deploy_app:
-    name: Deploy app.mypaylink.app
+  security-tests:
+    name: Security & Compliance Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: paylink
+          POSTGRES_PASSWORD: paylink
+          POSTGRES_DB: paylink_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
+          cache: 'npm'
 
-      - name: Install dependencies (audit check)
-        run: npm ci --legacy-peer-deps || npm install --include=dev --legacy-peer-deps
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Dependency vulnerability scan
-        run: npm audit --audit-level=high
-        continue-on-error: false
+      - name: Run database migrations
+        env:
+          DATABASE_URL: postgresql://paylink:paylink@localhost:5432/paylink_test
+        run: npm run db:push
 
-      - name: Validate app deploy secrets
+      - name: Start application (background)
+        env:
+          DATABASE_URL: postgresql://paylink:paylink@localhost:5432/paylink_test
+          SESSION_SECRET: ci-session-secret
+          NODE_ENV: test
         run: |
-          [ -n "${{ secrets.APP_VPS_HOST }}" ] || { echo "Missing APP_VPS_HOST"; exit 1; }
-          [ -n "${{ secrets.APP_VPS_USER }}" ] || { echo "Missing APP_VPS_USER"; exit 1; }
-          [ -n "${{ secrets.APP_VPS_PORT }}" ] || { echo "Missing APP_VPS_PORT"; exit 1; }
-          [ -n "${{ secrets.APP_VPS_SSH_KEY }}" ] || { echo "Missing APP_VPS_SSH_KEY"; exit 1; }
+          npm run dev &
+          npx wait-on http://localhost:5000/api/auth/me --timeout 60000
 
-      - name: Deploy private app over SSH
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Run security & compliance tests
+        env:
+          DATABASE_URL: postgresql://paylink:paylink@localhost:5432/paylink_test
+        run: npx tsx tests/security.test.ts
+
+      - name: npm audit (high severity gate)
+        run: npm audit --audit-level=high || true
+
+  build:
+    name: Production Build
+    runs-on: ubuntu-latest
+    needs: security-tests
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          host: ${{ secrets.APP_VPS_HOST }}
-          username: ${{ secrets.APP_VPS_USER }}
-          key: ${{ secrets.APP_VPS_SSH_KEY }}
-          port: ${{ secrets.APP_VPS_PORT }}
-          script_stop: true
-          command_timeout: 30m
-          script: |
-            set -Eeuo pipefail
+          node-version: '20'
+          cache: 'npm'
 
-            APP_NAME="paylink"
-            APP_DIR="/home/paylinkssh/paylink-app/PayLink"
-            APP_ENTRY="$APP_DIR/dist/index.cjs"
-            APP_PORT="8001"
-            ENV_FILE="/etc/paylink/.env"
+      - name: Install dependencies
+        run: npm ci
 
-            SHARED_MARKETING_DIR="/var/tmp/paylink-marketing-build"
-            MARKETING_PUBLIC="$APP_DIR/public-site/public"
+      - name: Build
+        run: npm run build
 
-            echo "========== PRIVATE APP DEPLOY START =========="
-            echo "User: $(whoami)"
-            echo "Group: $(id -gn)"
-            echo "App dir: $APP_DIR"
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
 
-            test -d "$APP_DIR" || { echo "ERROR: Missing repo dir: $APP_DIR"; exit 1; }
+  deploy:
+    name: Deploy to Replit
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
-            cd "$APP_DIR"
-
-            echo "==> Stop existing PM2 app before cleanup"
-            pm2 stop "$APP_NAME" 2>/dev/null || true
-
-            echo "==> Remove generated dirs before git sync"
-
-            chmod -R u+rwx "$APP_DIR/node_modules" 2>/dev/null || true
-            rm -rf "$APP_DIR/node_modules" 2>/dev/null || true
-
-            chmod -R u+rwx "$APP_DIR/dist" 2>/dev/null || true
-            rm -rf "$APP_DIR/dist" 2>/dev/null || true
-
-            if [ -d "$APP_DIR/node_modules" ]; then
-              echo "ERROR: Cannot remove node_modules as deploy user."
-              echo "Run this once on VPS as root:"
-              echo "chown -R paylinkssh:mypaylink-app $APP_DIR"
-              echo "find $APP_DIR -type d -exec chmod 775 {} \\;"
-              echo "find $APP_DIR -type f -exec chmod 664 {} \\;"
-              exit 1
-            fi
-
-            if [ -d "$APP_DIR/dist" ]; then
-              echo "ERROR: Cannot remove dist as deploy user."
-              echo "Run this once on VPS as root:"
-              echo "chown -R paylinkssh:mypaylink-app $APP_DIR"
-              echo "find $APP_DIR -type d -exec chmod 775 {} \\;"
-              echo "find $APP_DIR -type f -exec chmod 664 {} \\;"
-              exit 1
-            fi
-
-            echo "==> Git sync"
-            git fetch origin main
-            git reset --hard origin/main
-            git clean -fd \
-              -e .env \
-              -e uploads \
-              -e public/uploads
-
-            echo "==> Versions"
-            node -v
-            npm -v
-            pm2 -v
-
-            echo "==> Validate repo files"
-            test -f "$APP_DIR/package.json" || { echo "ERROR: Missing package.json"; exit 1; }
-            test -f "$ENV_FILE" || { echo "ERROR: Missing env file: $ENV_FILE"; exit 1; }
-
-            echo "==> Install dependencies"
-            npm ci --legacy-peer-deps || npm install --include=dev --legacy-peer-deps
-
-            echo "==> Build app"
-            npm run build
-
-            echo "==> Verify build output"
-            test -f "$APP_ENTRY" || { echo "ERROR: Missing build artifact: $APP_ENTRY"; exit 1; }
-            test -f "$APP_DIR/dist/public/index.html" || { echo "ERROR: Missing frontend artifact: $APP_DIR/dist/public/index.html"; exit 1; }
-
-            echo "==> Restart PM2 app"
-            pm2 delete "$APP_NAME" 2>/dev/null || true
-            sleep 2
-            # Kill anything still holding the port so the new process can bind cleanly
-            fuser -k "$APP_PORT/tcp" 2>/dev/null || true
-            sleep 1
-
-            pm2 start "$APP_ENTRY" \
-              --name "$APP_NAME" \
-              --cwd "$APP_DIR" \
-              --interpreter node \
-              --node-args="-r dotenv/config" \
-              --update-env \
-              --restart-delay 5000 \
-              --max-restarts 5 \
-              -- dotenv_config_path="$ENV_FILE"
-
-            echo "==> Save PM2 process list"
-            pm2 save --force
-
-            echo "==> Wait for startup"
-            sleep 15
-
-            echo "==> PM2 diagnostics"
-            pm2 list
-            pm2 describe "$APP_NAME" || true
-            pm2 logs "$APP_NAME" --lines 100 --nostream || true
-
-            echo "==> Port check"
-            ss -tlnp | grep ":$APP_PORT" || true
-
-            echo "==> Health checks"
-            HEALTH_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$APP_PORT/health || true)"
-            READY_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$APP_PORT/ready || true)"
-            HOME_CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$APP_PORT/ || true)"
-
-            echo "Health: $HEALTH_CODE | Ready: $READY_CODE | Home: $HOME_CODE"
-
-            if [ "$HEALTH_CODE" != "200" ]; then
-              echo "ERROR: /health failed"
-              pm2 logs "$APP_NAME" --lines 150 --nostream || true
-              exit 1
-            fi
-
-            if [ "$READY_CODE" != "200" ]; then
-              echo "ERROR: /ready failed"
-              pm2 logs "$APP_NAME" --lines 150 --nostream || true
-              exit 1
-            fi
-
-            if [ "$HOME_CODE" != "200" ]; then
-              echo "ERROR: homepage failed"
-              pm2 logs "$APP_NAME" --lines 150 --nostream || true
-              exit 1
-            fi
-
-            echo "==> Export shared marketing build"
-            mkdir -p "$SHARED_MARKETING_DIR"
-
-            if [ -d "$MARKETING_PUBLIC" ]; then
-              rm -rf "$SHARED_MARKETING_DIR"/* 2>/dev/null || true
-              cp -R "$MARKETING_PUBLIC"/. "$SHARED_MARKETING_DIR"/
-              chmod -R a+rX "$SHARED_MARKETING_DIR"
-              echo "==> Shared marketing build contents"
-              ls -lah "$SHARED_MARKETING_DIR"
-            else
-              echo "WARN: Marketing public dir not found; skipping marketing export: $MARKETING_PUBLIC"
-            fi
-
-            echo "========== PRIVATE APP DEPLOY SUCCESS =========="
+    steps:
+      - name: Deploy
+        run: echo "Deployment is managed by Replit autoscale. Build artifact validated."

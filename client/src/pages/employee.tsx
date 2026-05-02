@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
+import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -19,7 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -66,10 +67,42 @@ function getStatusBadgeVariant(status: string | null | undefined): "default" | "
 
 function EmployeeTab() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [companyFilter, setCompanyFilter] = useState<string>("all");
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editWorker, setEditWorker] = useState<Worker | null>(null);
+  const [piiActionPending, setPiiActionPending] = useState<string | null>(null);
+
+  const canPii = user?.role === "admin" || user?.role === "tenant_admin" || user?.role === "tenant_owner";
+
+  async function handleExportPii(workerId: string, workerName: string) {
+    setPiiActionPending(workerId);
+    try {
+      const res = await fetch(`/api/workers/${workerId}/data-export`, { credentials: "include" });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `pii-export-${workerName.replace(/\s+/g, "-")}.json`;
+      a.click(); URL.revokeObjectURL(url);
+      toast({ title: "PII exported", description: `${workerName}'s data downloaded.` });
+    } catch {
+      toast({ title: "Export failed", variant: "destructive" });
+    } finally { setPiiActionPending(null); }
+  }
+
+  async function handleAnonymize(workerId: string, workerName: string) {
+    if (!window.confirm(`Permanently anonymize all personal data for ${workerName}? This cannot be undone.`)) return;
+    setPiiActionPending(workerId);
+    try {
+      await apiRequest("POST", `/api/workers/${workerId}/anonymize`);
+      queryClient.invalidateQueries({ queryKey: ["/api/workers"] });
+      toast({ title: "Worker anonymized", description: `${workerName}'s personal data has been removed.` });
+    } catch {
+      toast({ title: "Anonymization failed", variant: "destructive" });
+    } finally { setPiiActionPending(null); }
+  }
 
   const emptyForm = {
     firstName: "", middleName: "", lastName: "", email: "", phone: "",
@@ -747,6 +780,26 @@ function EmployeeTab() {
                           <DropdownMenuItem data-testid={`button-edit-${w.id}`} onClick={() => openEdit(w)}>
                             <Pencil className="mr-2 h-4 w-4" /> Edit
                           </DropdownMenuItem>
+                          {canPii && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                data-testid={`button-export-pii-${w.id}`}
+                                disabled={piiActionPending === w.id}
+                                onClick={() => handleExportPii(w.id, `${w.firstName} ${w.lastName}`)}
+                              >
+                                <Download className="mr-2 h-4 w-4" /> Export PII (GDPR)
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                data-testid={`button-anonymize-${w.id}`}
+                                disabled={piiActionPending === w.id}
+                                className="text-red-600 focus:text-red-600"
+                                onClick={() => handleAnonymize(w.id, `${w.firstName} ${w.lastName}`)}
+                              >
+                                <Shield className="mr-2 h-4 w-4" /> Anonymize Worker
+                              </DropdownMenuItem>
+                            </>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </TableCell>
