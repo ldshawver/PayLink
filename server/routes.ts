@@ -24955,8 +24955,14 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       const rows = await dbRaw.$client.query(query, queryParams);
       const headers = ["id", "actorUserId", "actionType", "dataSubjectId", "tenantId", "detail", "createdAt"];
+      // RFC 4180 CSV escaping: quote any field containing comma, newline, or double-quote; escape inner quotes by doubling
+      const csvEscape = (v: any): string => {
+        const s = v == null ? "" : String(v);
+        if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+        return s;
+      };
       const csvRows = rows.rows.map((r: any) =>
-        [r.id, r.actor_user_id, r.action_type, r.data_subject_id ?? "", r.tenant_id ?? "", (r.detail ?? "").replace(/,/g, ";"), r.created_at].join(",")
+        [r.id, r.actor_user_id, r.action_type, r.data_subject_id, r.tenant_id, r.detail, r.created_at].map(csvEscape).join(",")
       );
       const csv = [headers.join(","), ...csvRows].join("\n");
       res.setHeader("Content-Type", "text/csv");
