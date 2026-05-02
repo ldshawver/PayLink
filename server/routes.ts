@@ -19600,6 +19600,60 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     } catch (e) { res.status(500).json({ message: "Failed to compute effective permissions" }); }
   });
 
+  // ── Debug: current user's full RBAC state ──────────────────────────────────
+  app.get("/api/debug/permissions/me", requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.session?.userId as string;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      const { db } = await import("./db");
+      const { sql: sqlD } = await import("drizzle-orm");
+
+      // All role_permissions rows for the user's built-in role
+      const rolePermsResult = await db.execute(sqlD`
+        SELECT rp.*, r.name AS role_name
+        FROM role_permissions rp
+        JOIN roles r ON r.id = rp.role_id
+        WHERE r.name ILIKE ${user.role?.replace(/_/g, " ") || ""}
+           OR r.name = ${user.role || ""}
+      `);
+
+      // Feature flag for contractor_hub
+      const featureResult = await db.execute(sqlD`
+        SELECT fr.key, fr.default_on, fo.is_enabled
+        FROM feature_registry fr
+        LEFT JOIN feature_overrides fo ON fo.feature_key = fr.key AND fo.company_id = ${user.companyId || ""}
+        WHERE fr.key IN ('tenant.finance.contractor-hub', 'contractor_hub')
+      `);
+
+      // Raw contractor_hub permission row
+      const contractorHubResult = await db.execute(sqlD`
+        SELECT rp.*, r.name AS role_name
+        FROM role_permissions rp
+        JOIN roles r ON r.id = rp.role_id
+        WHERE rp.resource = 'contractor_hub'
+          AND (r.name ILIKE ${user.role?.replace(/_/g, " ") || ""} OR r.name = ${user.role || ""})
+      `);
+
+      res.json({
+        user: {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          companyId: user.companyId,
+        },
+        rolePermissions: rolePermsResult.rows,
+        contractorHubPermission: contractorHubResult.rows[0] ?? null,
+        featureFlags: featureResult.rows,
+        expandedRoles: expandRoleForGuard(user.role || ""),
+      });
+    } catch (e: any) {
+      console.error("[debug/permissions/me]", e);
+      res.status(500).json({ message: e?.message || "Debug endpoint failed" });
+    }
+  });
+
   app.get("/api/permissions/audit-log", requireAuth, requireRole("admin"), async (req: any, res) => {
     try {
       const limit = parseInt(req.query.limit as string) || 100;

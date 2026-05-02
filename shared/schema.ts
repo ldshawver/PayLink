@@ -1060,6 +1060,15 @@ export const rolePermissions = pgTable("role_permissions", {
   canExport: boolean("can_export").default(false),
   canApprove: boolean("can_approve").default(false),
   canConfigure: boolean("can_configure").default(false),
+  canViewOwn: boolean("can_view_own").default(false),
+  canEditOwn: boolean("can_edit_own").default(false),
+  canViewSubordinates: boolean("can_view_subordinates").default(false),
+  canEditSubordinates: boolean("can_edit_subordinates").default(false),
+  canApproveSubordinates: boolean("can_approve_subordinates").default(false),
+  canViewDepartment: boolean("can_view_department").default(false),
+  canEditDepartment: boolean("can_edit_department").default(false),
+  canViewCompany: boolean("can_view_company").default(false),
+  canEditCompany: boolean("can_edit_company").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

@@ -2,7 +2,12 @@ import { db } from "../db";
 import { eq, and } from "drizzle-orm";
 import { users, roles, rolePermissions, userRoles, authorizationAuditLog } from "@shared/schema";
 
-export type Permission = "view" | "create" | "edit" | "delete" | "export" | "approve";
+export type Permission =
+  | "view" | "create" | "edit" | "delete" | "export" | "approve" | "configure"
+  | "view_own" | "edit_own"
+  | "view_subordinates" | "edit_subordinates" | "approve_subordinates"
+  | "view_department" | "edit_department"
+  | "view_company" | "edit_company";
 
 export type AuthorizationResult = {
   granted: boolean;
@@ -190,6 +195,17 @@ export async function getEffectivePermissions(
       if (perm.canDelete) granted.push("delete");
       if (perm.canExport) granted.push("export");
       if (perm.canApprove) granted.push("approve");
+      if (perm.canConfigure) granted.push("configure");
+      // Scope-based permissions
+      if (perm.canViewOwn) granted.push("view_own");
+      if (perm.canEditOwn) granted.push("edit_own");
+      if (perm.canViewSubordinates) granted.push("view_subordinates");
+      if (perm.canEditSubordinates) granted.push("edit_subordinates");
+      if (perm.canApproveSubordinates) granted.push("approve_subordinates");
+      if (perm.canViewDepartment) granted.push("view_department");
+      if (perm.canEditDepartment) granted.push("edit_department");
+      if (perm.canViewCompany) granted.push("view_company");
+      if (perm.canEditCompany) granted.push("edit_company");
       if (granted.length > 0) {
         addPerms(perm.resource, granted, `role: ${roleName}`, ur.scopeType);
       }

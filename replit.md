@@ -50,7 +50,7 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 **Backend:**
 -   **Framework:** Express.js + TypeScript.
 -   **Authentication:** Session-based with `express-session`, `connect-pg-simple`, and `bcrypt`.
--   **Authorization (RBAC):** 3-layer role hierarchy. See `client/src/lib/roles.ts` for the authoritative definition.
+-   **Authorization (RBAC):** 3-layer role hierarchy. See `client/src/lib/roles.ts` for the authoritative definition. Scope-based permission columns added to `role_permissions` table: `can_view_own`, `can_edit_own`, `can_view_subordinates`, `can_edit_subordinates`, `can_approve_subordinates`, `can_view_department`, `can_edit_department`, `can_view_company`, `can_edit_company`. Debug endpoint: `GET /api/debug/permissions/me` (requires auth). Permission Overrides UI shows Actions + Scope column groups. Contractor role has `can_view=true, can_view_own=true` on `contractor_hub` resource. Resource key normalized to `contractor_hub` (underscore only — hyphenated variants deleted).
 
 **Role Hierarchy (critical — never bypass):**
 -   **Layer 1 — Platform Console** (`/platform/*`): Only explicit `platform_*` roles may access. `"admin"` is a TENANT role, never a platform role. Dev login: `admin` / `admin` (role: `platform_super_admin`, no companyId).

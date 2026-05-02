@@ -2660,6 +2660,15 @@ Thank you,
 
     await run("roles.capabilities", sql`ALTER TABLE roles ADD COLUMN IF NOT EXISTS capabilities TEXT`);
     await run("role_permissions.can_configure", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_configure BOOLEAN DEFAULT FALSE`);
+    await run("role_permissions.can_view_own", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_view_own BOOLEAN DEFAULT FALSE`);
+    await run("role_permissions.can_edit_own", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_edit_own BOOLEAN DEFAULT FALSE`);
+    await run("role_permissions.can_view_subordinates", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_view_subordinates BOOLEAN DEFAULT FALSE`);
+    await run("role_permissions.can_edit_subordinates", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_edit_subordinates BOOLEAN DEFAULT FALSE`);
+    await run("role_permissions.can_approve_subordinates", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_approve_subordinates BOOLEAN DEFAULT FALSE`);
+    await run("role_permissions.can_view_department", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_view_department BOOLEAN DEFAULT FALSE`);
+    await run("role_permissions.can_edit_department", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_edit_department BOOLEAN DEFAULT FALSE`);
+    await run("role_permissions.can_view_company", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_view_company BOOLEAN DEFAULT FALSE`);
+    await run("role_permissions.can_edit_company", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_edit_company BOOLEAN DEFAULT FALSE`);
 
     await run("weekly_labor_goals table", sql`CREATE TABLE IF NOT EXISTS weekly_labor_goals (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2879,6 +2888,64 @@ Thank you,
     console.log("Auto-migration OK: role_permissions contractor_hub");
   } catch (e) {
     console.log("Auto-migration skipped (role_permissions contractor_hub):", (e as Error).message);
+  }
+
+  // ── Normalize contractor hub resource names & fix Contractor role permissions ─
+  try {
+    const { db: dbNorm } = await import("./db");
+    const { sql: sqlN } = await import("drizzle-orm");
+    // Remove any duplicate resource entries with hyphen or feature-key variants
+    await dbNorm.execute(sqlN`DELETE FROM role_permissions WHERE resource = 'contractor-hub'`);
+    await dbNorm.execute(sqlN`DELETE FROM role_permissions WHERE resource = 'tenant.finance.contractor-hub'`);
+    // Grant Contractor role can_view/can_create/can_edit + can_view_own on contractor_hub
+    await dbNorm.execute(sqlN`
+      UPDATE role_permissions
+      SET can_view = true, can_create = true, can_edit = true, can_view_own = true
+      FROM roles r
+      WHERE role_permissions.role_id = r.id
+        AND r.name = 'Contractor'
+        AND role_permissions.resource = 'contractor_hub'
+    `);
+    // Supervisor: view/approve subordinates on key resources
+    await dbNorm.execute(sqlN`
+      UPDATE role_permissions
+      SET can_view_subordinates = true, can_approve_subordinates = true
+      FROM roles r
+      WHERE role_permissions.role_id = r.id
+        AND r.name IN ('Supervisor', 'Department Manager')
+        AND role_permissions.resource IN ('schedules', 'timesheets', 'timeclock', 'hr', 'workers')
+    `);
+    // Employee & Contractor: set can_view_own=true wherever can_view=true
+    await dbNorm.execute(sqlN`
+      UPDATE role_permissions
+      SET can_view_own = true
+      FROM roles r
+      WHERE role_permissions.role_id = r.id
+        AND r.name IN ('Employee', 'Contractor')
+        AND role_permissions.can_view = true
+        AND role_permissions.can_view_own = false
+    `);
+    // HR Manager: view/edit company for workers, documents, hr resources
+    await dbNorm.execute(sqlN`
+      UPDATE role_permissions
+      SET can_view_company = true, can_edit_company = true
+      FROM roles r
+      WHERE role_permissions.role_id = r.id
+        AND r.name = 'HR Manager'
+        AND role_permissions.resource IN ('workers', 'hr', 'documents')
+    `);
+    // Payroll Manager: view/edit company for payroll, timesheets
+    await dbNorm.execute(sqlN`
+      UPDATE role_permissions
+      SET can_view_company = true, can_edit_company = true
+      FROM roles r
+      WHERE role_permissions.role_id = r.id
+        AND r.name = 'Payroll Manager'
+        AND role_permissions.resource IN ('payroll', 'timesheets')
+    `);
+    console.log("Auto-migration OK: contractor_hub normalization and scope defaults");
+  } catch (e) {
+    console.log("Auto-migration skipped (contractor_hub normalization):", (e as Error).message);
   }
 
   const { seedDatabase } = await import("./seed");

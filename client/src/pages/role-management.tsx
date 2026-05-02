@@ -388,10 +388,16 @@ type MatrixData = {
   userRoles: any[];
 };
 
-const PERM_KEYS = ["canView", "canCreate", "canEdit", "canDelete", "canExport", "canApprove", "canConfigure"] as const;
+const ACTION_KEYS = ["canView", "canCreate", "canEdit", "canDelete", "canExport", "canApprove", "canConfigure"] as const;
+const SCOPE_KEYS = ["canViewOwn", "canEditOwn", "canViewSubordinates", "canEditSubordinates", "canApproveSubordinates", "canViewDepartment", "canEditDepartment", "canViewCompany", "canEditCompany"] as const;
+const PERM_KEYS = [...ACTION_KEYS, ...SCOPE_KEYS] as const;
 const PERM_LABELS: Record<string, string> = {
   canView: "View", canCreate: "Create", canEdit: "Edit",
   canDelete: "Delete", canExport: "Export", canApprove: "Approve", canConfigure: "Configure",
+  canViewOwn: "View Own", canEditOwn: "Edit Own",
+  canViewSubordinates: "View Sub.", canEditSubordinates: "Edit Sub.", canApproveSubordinates: "Approve Sub.",
+  canViewDepartment: "View Dept", canEditDepartment: "Edit Dept",
+  canViewCompany: "View Co.", canEditCompany: "Edit Co.",
 };
 
 const SCOPE_OPTIONS = [
@@ -483,9 +489,16 @@ function PermissionOverridesTab() {
                     <table className="w-full text-xs">
                       <thead>
                         <tr>
-                          <th className="text-left py-1 pr-3 text-muted-foreground font-normal w-32">Role</th>
-                          {PERM_KEYS.map(k => (
-                            <th key={k} className="text-center py-1 px-2 text-muted-foreground font-normal">{PERM_LABELS[k]}</th>
+                          <th className="text-left py-1 pr-3 text-muted-foreground font-normal w-32" rowSpan={2}>Role</th>
+                          <th colSpan={ACTION_KEYS.length} className="text-center py-0.5 px-1 text-muted-foreground font-semibold border-b border-border/30 bg-muted/30">Actions</th>
+                          <th colSpan={SCOPE_KEYS.length} className="text-center py-0.5 px-1 text-muted-foreground font-semibold border-b border-border/30 bg-muted/20 border-l border-border/40">Scope</th>
+                        </tr>
+                        <tr>
+                          {ACTION_KEYS.map(k => (
+                            <th key={k} className="text-center py-1 px-1.5 text-muted-foreground font-normal whitespace-nowrap">{PERM_LABELS[k]}</th>
+                          ))}
+                          {SCOPE_KEYS.map(k => (
+                            <th key={k} className="text-center py-1 px-1.5 text-muted-foreground font-normal whitespace-nowrap border-l border-border/30 first:border-l">{PERM_LABELS[k]}</th>
                           ))}
                         </tr>
                       </thead>
@@ -496,11 +509,23 @@ function PermissionOverridesTab() {
                           return (
                             <tr key={role.id} className="border-t border-border/50">
                               <td className="py-1.5 pr-3 font-medium">{role.name}</td>
-                              {PERM_KEYS.map(k => (
-                                <td key={k} className="text-center py-1.5 px-2">
+                              {ACTION_KEYS.map(k => (
+                                <td key={k} className="text-center py-1.5 px-1.5">
                                   <input
                                     type="checkbox"
                                     className="cursor-pointer"
+                                    checked={!!(perm as any)[k]}
+                                    onChange={e => updatePerm.mutate({ id: perm.id, field: k, value: e.target.checked })}
+                                    disabled={updatePerm.isPending}
+                                    data-testid={`perm-${perm.id}-${k}`}
+                                  />
+                                </td>
+                              ))}
+                              {SCOPE_KEYS.map((k, i) => (
+                                <td key={k} className={`text-center py-1.5 px-1.5${i === 0 ? " border-l border-border/30" : ""}`}>
+                                  <input
+                                    type="checkbox"
+                                    className="cursor-pointer accent-blue-500"
                                     checked={!!(perm as any)[k]}
                                     onChange={e => updatePerm.mutate({ id: perm.id, field: k, value: e.target.checked })}
                                     disabled={updatePerm.isPending}
