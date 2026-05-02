@@ -21969,7 +21969,13 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // ─── npm Audit (/api/platform/audit/npm-audit) ───────────────────────────
+  let npmAuditCache: { data: any; cachedAt: number } | null = null;
+  const NPM_AUDIT_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
   app.get("/api/platform/audit/npm-audit", requirePlatformAudit, (_req, res) => {
+    if (npmAuditCache && Date.now() - npmAuditCache.cachedAt < NPM_AUDIT_TTL_MS) {
+      return res.json(npmAuditCache.data);
+    }
     try {
       const raw = execSync("npm audit --json --audit-level=none 2>/dev/null", {
         cwd: process.cwd(), timeout: 30000, maxBuffer: 4 * 1024 * 1024,
@@ -21985,7 +21991,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         fixAvailable: v.fixAvailable,
         via: Array.isArray(v.via) ? v.via.filter((x: any) => typeof x === "object").map((x: any) => x.title ?? x.name).slice(0, 3) : [],
       }));
-      res.json({ ok: true, summary, findings, scannedAt: new Date().toISOString() });
+      const result = { ok: true, summary, findings, scannedAt: new Date().toISOString() };
+      npmAuditCache = { data: result, cachedAt: Date.now() };
+      res.json(result);
     } catch (e: any) {
       // npm audit exits non-zero when vulnerabilities are found — parse stdout from error
       try {
@@ -21999,7 +22007,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           fixAvailable: v.fixAvailable,
           via: Array.isArray(v.via) ? v.via.filter((x: any) => typeof x === "object").map((x: any) => x.title ?? x.name).slice(0, 3) : [],
         }));
-        res.json({ ok: summary.critical === 0 && summary.high === 0, summary, findings, scannedAt: new Date().toISOString() });
+        const result = { ok: summary.critical === 0 && summary.high === 0, summary, findings, scannedAt: new Date().toISOString() };
+        npmAuditCache = { data: result, cachedAt: Date.now() };
+        res.json(result);
       } catch {
         res.status(500).json({ message: "npm audit failed to parse output", error: String(e?.message ?? e) });
       }

@@ -99,7 +99,8 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.APP_VPS_HOST }}
-          username: paylinkssh
+          port: ${{ secrets.APP_VPS_PORT || 22 }}
+          username: ${{ secrets.APP_VPS_USER || 'paylinkssh' }}
           key: ${{ secrets.APP_VPS_SSH_KEY }}
           script: |
             set -e
