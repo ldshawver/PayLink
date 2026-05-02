@@ -24505,6 +24505,13 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const user = await storage.getUser(userId);
       if (!user) return res.status(404).json({ message: "User not found" });
 
+      // Prevent silent MFA rotation — if MFA is already enabled the user must disable it first
+      const existing = await db.execute(sql`SELECT mfa_enabled FROM users WHERE id = ${userId}`);
+      const existingRow = existing.rows[0] as any;
+      if (existingRow?.mfa_enabled) {
+        return res.status(409).json({ message: "MFA is already enabled. Disable MFA before re-enrolling." });
+      }
+
       // Generate a new TOTP secret
       const plainSecret = generateBase32Secret();
       const encryptedSecret = encryptTotpSecret(plainSecret);

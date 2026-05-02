@@ -251,6 +251,9 @@ app.use((_req, res, next) => {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",       // Google Fonts CSS + Tailwind runtime
     "img-src 'self' data: blob: https:",                                   // allow remote images (avatars)
     "font-src 'self' data: https://fonts.gstatic.com",                     // Google Fonts files
+    // Validated against all frontend network calls: billing.tsx uses /api/analytics/event (self)
+    // and /api/stripe/publishable-key (self); Stripe.js loads from https://*.stripe.com.
+    // No other third-party APIs are called directly from the browser — all external calls proxy through /api/*.
     isProduction
       ? "connect-src 'self' https://api.stripe.com https://*.stripe.com"   // production: known endpoints only
       : "connect-src 'self' https: wss:",                                  // dev: broad + Vite HMR
