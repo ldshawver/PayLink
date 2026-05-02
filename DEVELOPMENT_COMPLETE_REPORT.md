@@ -138,6 +138,22 @@ No severity-critical engineering blockers remain for the application. **However,
 | 4 | Meal break per-shift violation detection requires timesheet-level data analysis | Low | Task #7 | Next sprint |
 | 5 | VPS rsync permissions broken — marketing site auto-deploy fails silently | Low | DevOps (see `replit.md` rule #9) | VPS access needed |
 
+### 3.3 Required QA Before Payroll Calendar Production-Complete (Task #1)
+
+Task #1 is code-complete (see §4.2). The following operational QA must be executed and signed off before the calendar feature may be called production-complete. Follow-ups **#17, #18, #19** remain open and must stay listed as blockers/warnings until the corresponding items below are closed.
+
+| # | Requirement | Severity | Notes |
+|---|-------------|----------|-------|
+| Q1 | Run bulk repair for all companies | High | `POST /api/companies/:companyId/repair-payroll-periods` for every active company; archive the response payload (total / repaired / alreadyAligned / skipped / errors) |
+| Q2 | Confirm Adiken Inc active schedule | High | Exactly one active schedule, `type=weekly`, anchor weekday = **Sunday**, `transactionDayOffset=4` (Wednesday payday) |
+| Q3 | Confirm payroll runs resolve correctly | High | For Adiken Inc: `periodStart` falls on **Sunday**, `periodEnd` on **Saturday**, `payDate` on **Wednesday** |
+| Q4 | Confirm misaligned draft/processed runs can be repaired | High | Manually mis-set period on a draft run → call `POST /api/payroll-runs/:id/repair-period` → verify `before/after` diff and updated row |
+| Q5 | Confirm paid/locked/submitted runs are skipped | High | Repair endpoint must return **403** for any non-`draft`/`processed` status; bulk repair must list these in `skipped[]` |
+| Q6 | Add automated tests for weekly schedules | **Critical** | Tracked by **follow-up #18** — open warning until merged |
+| Q7 | Add UI warning banner for misaligned runs | High | Tracked by **follow-up #17** — open warning until merged |
+
+> Follow-up **#19** (extend resolver coverage to biweekly / semimonthly / monthly schedules) remains an open blocker for any non-weekly customer go-live.
+
 ### 3.2 Required Before SOC 2 / GDPR Compliance-Ready
 
 | # | Requirement | Severity | Notes |
@@ -194,6 +210,22 @@ No severity-critical engineering blockers remain for the application. **However,
 | Security test suite | **57/57 PASS** | `tests/security.test.ts` — auth, RBAC, tenant isolation, MFA, audit, CSP, GDPR routes |
 
 **Compliance status: NOT YET SOC 2 / GDPR READY.** The above are code-complete signals only. Items 6–15 in §3 below must be documented and tested before any external compliance claim.
+
+### 4.2 Payroll Calendar Enforcement (Task #1)
+
+**Code-complete items — PASS:**
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| Single active Pay Period Schedule enforcement | PASS | `server/routes.ts` ~lines 11261 (POST `/api/pay-period-schedules`) and ~11278 (PATCH): rejects activation when another active schedule already exists for the company |
+| Server-side period resolver | PASS | `server/routes.ts` ~line 390: `resolvePayPeriod(schedule, payDate)` computes `periodStart`/`periodEnd` from anchor weekday, cycle length, and `transactionDayOffset` |
+| Client-supplied `periodStart`/`periodEnd` ignored | PASS | `server/routes.ts` ~line 5153 (POST `/api/payroll-runs`): client dates stripped; server resolves from active schedule; **422** when no active schedule exists |
+| Process pre-flight alignment check | PASS | `server/routes.ts` ~line 2259 (POST `/api/payroll-runs/:id/process`): **422** on 0 active schedules, **422** on 2+ active schedules, **422** on resolved-vs-stored period mismatch (response includes `stored`, `expected`, repair URL) |
+| Single-run repair endpoint | PASS | `server/routes.ts` ~line 3692 (`POST /api/payroll-runs/:id/repair-period`): tenant-scoped; **403** for any non-`draft`/`processed` status; **422** for missing payDate or 0/2+ active schedules; returns `{alreadyAligned:true}` or before/after diff; payload typed `Partial<PayrollRun>` |
+| Bulk repair endpoint | PASS | `server/routes.ts` ~line 3758 (`POST /api/companies/:companyId/repair-payroll-periods`): iterates all `draft`/`processed` runs; returns `{ total, repaired, alreadyAligned, skipped, errors[] }`; tenant-scoped |
+| Dev startup assertion | PASS | `server/routes.ts` ~line 25646: `setImmediate` at end of `registerRoutes`, gated `NODE_ENV !== 'production'`; prefers Adiken Inc (`ilike '%adiken%'`), falls back to any active weekly schedule; logs Sun–Sat / Wednesday-payday confirmation against refDate `2025-05-14` |
+
+**Production status: NOT YET PRODUCTION-COMPLETE.** The above are code-complete signals only. The seven QA items in §3.3 (Q1–Q7) and follow-ups **#17, #18, #19** must be closed before the payroll calendar feature may be called production-complete.
 
 ---
 
