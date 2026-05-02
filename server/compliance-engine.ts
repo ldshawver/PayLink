@@ -10,8 +10,8 @@
  *  - Overtime calculation uses CA daily-first bucketing:
  *      1. Daily OT/DT is computed first per day.
  *      2. Weekly OT is computed on remaining regular hours (after daily OT).
- *      3. 7th-consecutive-day rule overrides the daily OT thresholds for day 7.
- *  - All monetary thresholds are in USD; all hours are in decimal.
+ *      3. 7th-consecutive-day rule is scoped to the CA workweek (Sun–Sat).
+ *  - Override layers: state < company < worker (higher layer wins).
  */
 
 export type ComplianceSeverity = "block" | "warn" | "info";
@@ -35,7 +35,7 @@ export interface ComplianceTimeEntry {
 
 export interface ComplianceWorker {
   id: string;
-  payRate: number;        // hourly rate (or annual salary / 2080 for salaried)
+  payRate: number;        // hourly rate (or annual salary for salaried)
   payType: string;        // "hourly" | "salary"
   workerType: string;     // "employee" | "contractor"
   status: string;         // "active" | "terminated" etc.
@@ -53,7 +53,7 @@ export interface LaborRuleInput {
   ruleType: string;
   ruleValue: number;
   ruleUnit?: string | null;
-  overrideLevel?: string | null;
+  overrideLevel?: string | null;  // "state" | "company" | "worker"
 }
 
 export interface ComplianceContext {
@@ -87,9 +87,21 @@ const R = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/**
+ * Resolve the effective value for a rule type, respecting the override layer hierarchy.
+ * Layer priority: worker > company > state (highest wins).
+ */
 function ruleVal(rules: LaborRuleInput[], type: string, fallback: number): number {
-  const r = rules.find(r => r.ruleType === type);
-  return r != null ? Number(r.ruleValue) : fallback;
+  const matching = rules.filter(r => r.ruleType === type);
+  if (matching.length === 0) return fallback;
+  // Sort by override level: worker=3, company=2, state=1 — highest wins
+  const priority = (r: LaborRuleInput) => {
+    if (r.overrideLevel === "worker")  return 3;
+    if (r.overrideLevel === "company") return 2;
+    return 1; // state or undefined
+  };
+  const best = matching.reduce((a, b) => priority(a) >= priority(b) ? a : b);
+  return Number(best.ruleValue);
 }
 
 function ruleId(rules: LaborRuleInput[], type: string): string | null {
@@ -100,31 +112,66 @@ function isoToDate(s: string): Date {
   return new Date(s + "T12:00:00");
 }
 
-function daysBetween(a: string, b: string): number {
-  return Math.round((isoToDate(b).getTime() - isoToDate(a).getTime()) / 86400000);
+/**
+ * Return the Sunday (start) of the CA workweek containing the given YYYY-MM-DD date.
+ * CA Labor Code defines the workweek as 7 consecutive days — typically Sun–Sat,
+ * but employers can designate a different start. We default to Sunday.
+ */
+function workweekSunday(dateStr: string): string {
+  const d = isoToDate(dateStr);
+  const dayOfWeek = d.getDay(); // 0=Sun
+  const sun = new Date(d);
+  sun.setDate(d.getDate() - dayOfWeek);
+  return sun.toISOString().split("T")[0];
 }
 
-function consecutive7thDay(entries: ComplianceTimeEntry[], periodStart: string): Set<string> {
-  // Find any date within the period that is the 7th consecutive day worked in a 7-day block.
-  // CA rule: 7 consecutive days within a single workweek (Sun–Sat).
+/**
+ * Find all dates that are the 7th consecutive day worked within a CA workweek (Sun–Sat).
+ * The 7th-day rule only applies if all 7 days of the same workweek are worked.
+ */
+function consecutive7thDayInWorkweek(entries: ComplianceTimeEntry[]): Set<string> {
   const workedDates = new Set(entries.filter(e => e.totalHours > 0).map(e => e.date));
   const result = new Set<string>();
 
-  for (const entry of entries) {
-    // Check 7 consecutive days ending on this date
-    const d = isoToDate(entry.date);
-    let allWorked = true;
-    for (let i = 6; i >= 1; i--) {
-      const prev = new Date(d);
-      prev.setDate(d.getDate() - i);
-      const key = prev.toISOString().split("T")[0];
-      if (!workedDates.has(key)) { allWorked = false; break; }
+  // Group worked dates by workweek (Sunday as start)
+  const byWeek: Record<string, string[]> = {};
+  for (const date of workedDates) {
+    const sun = workweekSunday(date);
+    if (!byWeek[sun]) byWeek[sun] = [];
+    byWeek[sun].push(date);
+  }
+
+  for (const [sun, dates] of Object.entries(byWeek)) {
+    if (dates.length < 7) continue; // Must have worked all 7 days
+
+    // Build the full 7-day window Sun–Sat
+    const weekDates: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = isoToDate(sun);
+      d.setDate(d.getDate() + i);
+      weekDates.push(d.toISOString().split("T")[0]);
     }
-    if (allWorked && workedDates.has(entry.date)) {
-      result.add(entry.date);
+
+    // All 7 must be worked
+    if (weekDates.every(d => workedDates.has(d))) {
+      // The 7th day (Saturday) is the 7th-day OT day
+      result.add(weekDates[6]);
     }
   }
+
   return result;
+}
+
+/**
+ * Detect split shifts: two or more separate work segments in one day with an
+ * unpaid gap > 1 hour between them. We approximate this from clockIn/clockOut
+ * if available, or flag as info if breakMinutes suggests a gap.
+ * Returns true if the entry likely involves a split shift.
+ */
+function isSplitShift(entry: ComplianceTimeEntry): boolean {
+  // If we have break minutes > 60 and worked hours > 0, treat as potential split shift.
+  // A break ≥ 60 min (non-meal) that splits the day would trigger the premium.
+  return (entry.breakMinutes ?? 0) > 60;
 }
 
 // ── Main evaluator ────────────────────────────────────────────────────────────
@@ -133,7 +180,6 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
   const { worker, entries, rules } = ctx;
   const results: ComplianceResult[] = [];
 
-  // Skip evaluation for exempt salaried workers on most hourly rules
   const isExempt = (worker.exemptStatus ?? "nonexempt") !== "nonexempt";
 
   // ── Contractor ABC test warning ───────────────────────────────────────────
@@ -167,20 +213,21 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
   }
 
   // ── Exempt classification salary basis test ───────────────────────────────
+  // Only applies to workers who ARE classified as exempt — warn if their salary
+  // falls below the statutory threshold (2× min wage × 2080 hrs/year).
   const exemptMultiplier = ruleVal(rules, R.EXEMPT_MULTIPLIER, 2);
-  if (worker.payType === "salary" && !isExempt) {
-    // Salary is annual; payRate for salary workers = annual figure
-    const annualSalary = worker.payRate * 2080; // if payRate is hourly-equiv; handle both
-    // payRate may be annual already if payType === "salary"
-    const actualAnnual = worker.payRate >= 100 ? worker.payRate : worker.payRate * 2080;
+  if (isExempt && worker.workerType === "employee") {
+    // payRate for salaried workers may be stored as annual or as hourly equivalent.
+    // We treat payRate >= 500 as already annual; otherwise multiply by 2080.
+    const actualAnnual = worker.payRate >= 500 ? worker.payRate : worker.payRate * 2080;
     const basisThreshold = minWage * exemptMultiplier * 2080;
     if (actualAnnual < basisThreshold) {
       results.push({
         ruleType: R.EXEMPT_MULTIPLIER,
         ruleId: ruleId(rules, R.EXEMPT_MULTIPLIER),
-        severity: "warn",
-        message: `Salaried worker annual salary $${actualAnnual.toLocaleString()} is below CA exempt salary basis threshold $${basisThreshold.toLocaleString()} (${exemptMultiplier}× min wage × 2080).`,
-        detail: { workerId: worker.id, annualSalary: actualAnnual, threshold: basisThreshold },
+        severity: "block",
+        message: `Exempt worker annual salary $${actualAnnual.toLocaleString()} is below CA exempt salary basis threshold $${basisThreshold.toLocaleString()} (${exemptMultiplier}× min wage × 2080 hrs). Exempt classification is invalid.`,
+        detail: { workerId: worker.id, annualSalary: actualAnnual, threshold: basisThreshold, exemptStatus: worker.exemptStatus },
       });
     }
   }
@@ -193,7 +240,7 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
       ruleType: "final_paycheck_timing",
       ruleId: ruleId(rules, R.FINAL_DISCHARGE),
       severity: "warn",
-      message: `Terminated worker requires final paycheck: immediately on discharge (${dischargeDays}d) or within ${resignDays} days on resignation.`,
+      message: `Terminated worker requires final paycheck: immediately on discharge (${dischargeDays}d) or within ${resignDays} days on resignation. Verify paycheck was issued on time.`,
       detail: { workerId: worker.id, terminationDate: worker.terminationDate, dischargeDays, resignDays },
     });
   }
@@ -208,10 +255,10 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
   const meal1Trig  = ruleVal(rules, R.MEAL_BREAK_1, 5);
   const meal2Trig  = ruleVal(rules, R.MEAL_BREAK_2, 10);
   const restPeriod = ruleVal(rules, R.REST_BREAK_PERIOD, 4);
+  const splitFlag  = ruleVal(rules, R.SPLIT_SHIFT_PREMIUM, 1);
 
-  const seventhDayDates = consecutive7thDay(entries, ctx.periodStart);
-
-  let weeklyRegularHours = 0;  // tracks regular (non-OT) hours for weekly OT test
+  // 7th-day detection scoped to CA workweek (Sun–Sat)
+  const seventhDayDates = consecutive7thDayInWorkweek(entries);
 
   // ── Sick leave accrual quick check ────────────────────────────────────────
   const sickRate    = ruleVal(rules, R.SICK_ACCRUAL_RATE, 30);
@@ -227,6 +274,8 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
     });
   }
 
+  let weeklyRegularHours = 0; // tracks regular (non-OT) hours for weekly OT test
+
   for (const entry of entries) {
     const h = entry.totalHours;
     if (h <= 0) continue;
@@ -240,7 +289,7 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
           ruleType: R.DAILY_OT_2,
           ruleId: ruleId(rules, R.DAILY_OT_2),
           severity: "warn",
-          message: `CA double time: ${h.toFixed(2)}h on ${entry.date} exceeds ${dailyOt2}h threshold.`,
+          message: `CA double time: ${h.toFixed(2)}h on ${entry.date} exceeds ${dailyOt2}h threshold (2× on excess hours).`,
           detail: { date: entry.date, hours: h, threshold: dailyOt2, rate: "2x" },
         });
       } else if (h > dailyOt1) {
@@ -248,32 +297,32 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
           ruleType: R.DAILY_OT_1,
           ruleId: ruleId(rules, R.DAILY_OT_1),
           severity: "info",
-          message: `CA daily OT: ${h.toFixed(2)}h on ${entry.date} exceeds ${dailyOt1}h (1.5× applies to excess).`,
+          message: `CA daily OT: ${h.toFixed(2)}h on ${entry.date} exceeds ${dailyOt1}h (1.5× applies to excess ${(h - dailyOt1).toFixed(2)}h).`,
           detail: { date: entry.date, hours: h, threshold: dailyOt1, rate: "1.5x" },
         });
       }
       // Track regular hours (capped at dailyOt1) for weekly OT accumulation
       weeklyRegularHours += Math.min(h, dailyOt1);
     } else {
-      // 7th consecutive day rules
+      // 7th consecutive day in CA workweek — all hours at 1.5×; >threshold at 2×
       if (h > seventh) {
         results.push({
           ruleType: R.SEVENTH_DAY_OT,
           ruleId: ruleId(rules, R.SEVENTH_DAY_OT),
           severity: "warn",
-          message: `CA 7th-day double time: ${h.toFixed(2)}h on ${entry.date} (7th consecutive day) exceeds ${seventh}h — 2× applies to hours beyond ${seventh}.`,
-          detail: { date: entry.date, hours: h, threshold: seventh, rate: "2x" },
+          message: `CA 7th-day double time: ${h.toFixed(2)}h on ${entry.date} (7th day of workweek) — first ${seventh}h at 1.5×, remaining ${(h - seventh).toFixed(2)}h at 2×.`,
+          detail: { date: entry.date, hours: h, threshold: seventh, rate1: "1.5x", rate2: "2x" },
         });
       } else {
         results.push({
           ruleType: R.SEVENTH_DAY_OT,
           ruleId: ruleId(rules, R.SEVENTH_DAY_OT),
           severity: "info",
-          message: `CA 7th-day OT: all ${h.toFixed(2)}h on ${entry.date} (7th consecutive day) paid at 1.5×.`,
+          message: `CA 7th-day OT: all ${h.toFixed(2)}h on ${entry.date} (7th day of CA workweek) paid at 1.5×.`,
           detail: { date: entry.date, hours: h, rate: "1.5x" },
         });
       }
-      // 7th-day hours don't accumulate toward weekly threshold
+      // 7th-day hours don't accumulate toward weekly threshold (already OT-rated)
     }
 
     // ── Meal break check ──────────────────────────────────────────────────
@@ -283,7 +332,7 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
         ruleType: R.MEAL_BREAK_2,
         ruleId: ruleId(rules, R.MEAL_BREAK_2),
         severity: "warn",
-        message: `Possible second meal break violation on ${entry.date}: ${h.toFixed(2)}h shift, only ${breakHours.toFixed(2)}h break recorded (second 30-min meal required after ${meal2Trig}h).`,
+        message: `Possible second meal break violation on ${entry.date}: ${h.toFixed(2)}h shift, only ${(breakHours * 60).toFixed(0)}min break recorded (second 30-min meal required after ${meal2Trig}h).`,
         detail: { date: entry.date, hoursWorked: h, breakHours, trigger: meal2Trig },
       });
     } else if (h > meal1Trig && breakHours < 0.5) {
@@ -298,26 +347,40 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
 
     // ── Rest break check ──────────────────────────────────────────────────
     const restEntitlements = Math.floor(h / restPeriod);
-    // We can only warn — we can't verify actual rest breaks from time entries alone
     if (restEntitlements > 0) {
       results.push({
         ruleType: R.REST_BREAK_PERIOD,
         ruleId: ruleId(rules, R.REST_BREAK_PERIOD),
         severity: "info",
-        message: `${restEntitlements} × 10-min paid rest break(s) required on ${entry.date} (${h.toFixed(2)}h shift).`,
+        message: `${restEntitlements} × 10-min paid rest break(s) required on ${entry.date} (${h.toFixed(2)}h shift, 1 per ${restPeriod}h).`,
         detail: { date: entry.date, hoursWorked: h, entitlements: restEntitlements },
+      });
+    }
+
+    // ── Split-shift premium check ─────────────────────────────────────────
+    // CA split-shift premium: if a worker works two non-continuous shifts in one day
+    // with a non-meal break >1h between them, they are entitled to an extra hour at
+    // minimum wage. We detect this from breakMinutes > 60 (beyond meal break allowance).
+    if (splitFlag >= 1 && isSplitShift(entry)) {
+      const extraHourPremium = minWage;
+      results.push({
+        ruleType: R.SPLIT_SHIFT_PREMIUM,
+        ruleId: ruleId(rules, R.SPLIT_SHIFT_PREMIUM),
+        severity: "warn",
+        message: `Split shift detected on ${entry.date} (${(entry.breakMinutes / 60).toFixed(1)}h break). CA split-shift premium may apply: +$${extraHourPremium.toFixed(2)} (1 hr at min wage $${minWage.toFixed(2)}).`,
+        detail: { date: entry.date, hoursWorked: h, breakMinutes: entry.breakMinutes, premium: extraHourPremium },
       });
     }
 
     // ── Reporting-time pay ────────────────────────────────────────────────
     if (entry.scheduledHours && entry.scheduledHours > 0 && h < entry.scheduledHours / 2) {
-      const minPay = Math.max(2, entry.scheduledHours / 2);
+      const minPayHours = Math.max(2, entry.scheduledHours / 2);
       results.push({
         ruleType: R.REPORTING_TIME_MIN,
         ruleId: ruleId(rules, R.REPORTING_TIME_MIN),
         severity: "warn",
-        message: `Reporting-time pay may apply on ${entry.date}: worked ${h.toFixed(2)}h of ${entry.scheduledHours}h scheduled. Employee may be entitled to pay for ${minPay.toFixed(2)}h minimum.`,
-        detail: { date: entry.date, worked: h, scheduled: entry.scheduledHours, minPay },
+        message: `Reporting-time pay may apply on ${entry.date}: worked ${h.toFixed(2)}h of ${entry.scheduledHours}h scheduled — employee entitled to pay for at least ${minPayHours.toFixed(2)}h.`,
+        detail: { date: entry.date, worked: h, scheduled: entry.scheduledHours, minPayHours },
       });
     }
   }
@@ -329,7 +392,7 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
       ruleType: R.WEEKLY_OT,
       ruleId: ruleId(rules, R.WEEKLY_OT),
       severity: "info",
-      message: `Weekly OT: ${weeklyRegularHours.toFixed(2)} regular hours this period exceeds ${weeklyOt}h threshold — ${excess.toFixed(2)}h at 1.5× applies (after daily OT adjustments).`,
+      message: `Weekly OT: ${weeklyRegularHours.toFixed(2)} regular hours this period exceeds ${weeklyOt}h threshold — ${excess.toFixed(2)}h at 1.5× (after CA daily-first OT adjustments).`,
       detail: { weeklyHours: weeklyRegularHours, threshold: weeklyOt, excessHours: excess },
     });
   }

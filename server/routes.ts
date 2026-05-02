@@ -2903,6 +2903,90 @@ export async function registerRoutes(
       }
       if (run.status !== "processed") return res.status(400).json({ message: "Payroll run must be processed before approving" });
       if (run.lockedAt || run.isLocked) return res.status(400).json({ message: "Payroll run is locked and cannot be modified" });
+
+      // ── Server-side compliance preflight gate ────────────────────────────
+      try {
+        const companyProfile = await storage.getCompanyComplianceProfile(run.companyId);
+        const preflightRequired = companyProfile?.preflightRequired ?? true;
+        if (preflightRequired) {
+          const { evaluateCompliance } = await import("./compliance-engine.js");
+
+          let applicableRules: any[] = [];
+          if (companyProfile?.jurisdictionId) {
+            applicableRules = await storage.getApplicableRules(companyProfile.jurisdictionId, run.periodEnd);
+          } else {
+            const caJurisdiction = await storage.getJurisdictionByCode("CA");
+            if (caJurisdiction) {
+              applicableRules = await storage.getApplicableRules(caJurisdiction.id, run.periodEnd);
+            }
+          }
+
+          const rulesInput = applicableRules.map(r => ({
+            id: r.id,
+            ruleType: r.ruleType,
+            ruleValue: parseFloat(String(r.ruleValue)),
+            ruleUnit: r.ruleUnit ?? null,
+            overrideLevel: r.overrideLevel ?? null,
+          }));
+
+          const items = await storage.getPayrollItems(run.id);
+          const allBlocks: any[] = [];
+
+          for (const item of items) {
+            const worker = await storage.getWorker(item.workerId);
+            if (!worker) continue;
+            const workerProfile = await storage.getWorkerComplianceProfile(worker.id);
+            const entries = await storage.getTimeEntriesByDateRange(run.companyId, run.periodStart, run.periodEnd);
+            const workerEntries = entries
+              .filter(e => e.workerId === worker.id)
+              .map(e => ({
+                date: e.date,
+                totalHours: parseFloat(String(e.totalHours ?? 0)),
+                breakMinutes: e.breakMinutes ?? 0,
+                scheduledHours: e.scheduledHours ? parseFloat(String(e.scheduledHours)) : undefined,
+              }));
+
+            const ctx = {
+              worker: {
+                id: worker.id,
+                payRate: parseFloat(String(worker.payRate ?? 0)),
+                payType: worker.payType ?? "hourly",
+                workerType: worker.workerType ?? "employee",
+                status: worker.status ?? "active",
+                terminationDate: worker.terminationDate ?? null,
+                hireDate: worker.hireDate ?? null,
+                exemptStatus: workerProfile?.exemptStatus ?? "nonexempt",
+                abcTestA: workerProfile?.abcTestA ?? null,
+                abcTestB: workerProfile?.abcTestB ?? null,
+                abcTestC: workerProfile?.abcTestC ?? null,
+              },
+              entries: workerEntries,
+              rules: rulesInput,
+              periodStart: run.periodStart,
+              periodEnd: run.periodEnd,
+              grossPay: parseFloat(String(item.grossPay ?? 0)),
+            };
+
+            const workerResults = evaluateCompliance(ctx);
+            const workerBlocks = workerResults.filter(r => r.severity === "block");
+            for (const b of workerBlocks) {
+              allBlocks.push({ ...b, workerId: worker.id, workerName: `${worker.firstName} ${worker.lastName}` });
+            }
+          }
+
+          if (allBlocks.length > 0) {
+            return res.status(422).json({
+              message: `Payroll approval blocked: ${allBlocks.length} compliance violation${allBlocks.length !== 1 ? "s" : ""} must be resolved.`,
+              blocks: allBlocks,
+              canProceed: false,
+            });
+          }
+        }
+      } catch (preflightErr) {
+        console.warn("[compliance] Server-side preflight error (non-fatal, proceeding):", preflightErr);
+      }
+      // ────────────────────────────────────────────────────────────────────
+
       const updated = await storage.updatePayrollRun(run.id, {
         approvedAt: new Date(),
         approvedBy: req.session.userId || null,
