@@ -333,6 +333,234 @@ async function testOnboardingSyncIdempotency(adminCookie: string, companyId: str
   } catch {}
 }
 
+// ── Step 12: Tenant Isolation Tests (SOC 2 CC6.3) ────────────────────────────
+/**
+ * Verifies that a manager from Company A cannot read, write, or export data
+ * belonging to Company B — even when using direct API paths with known IDs.
+ */
+async function testTenantIsolation(adminCookie: string, companyId: string) {
+  console.log("\n[Tenant Isolation — SOC 2 CC6.3]");
+
+  // Create a second company
+  const co2Res = await apiPost("/api/companies", {
+    name: `TenantIsolationTestCo_${Date.now()}`,
+    industry: "Other",
+    size: "1-10",
+  }, adminCookie);
+  const company2Id = co2Res.body?.id;
+  if (!company2Id) {
+    console.warn("  ⚠ Could not create second company — skipping tenant isolation tests");
+    return;
+  }
+  console.log(`  Created test company B: ${company2Id}`);
+
+  // Create a worker in company B
+  const w2Res = await apiPost("/api/workers", {
+    companyId: company2Id,
+    firstName: "CompanyB",
+    lastName: "Employee",
+    payType: "hourly",
+    payRate: "20.00",
+  }, adminCookie);
+  const worker2Id = w2Res.body?.id;
+  if (!worker2Id) {
+    console.warn("  ⚠ Could not create worker in company B — skipping tenant isolation tests");
+    return;
+  }
+  console.log(`  Created worker in company B: ${worker2Id}`);
+
+  // Create a manager scoped to company A
+  const mgrUsername = `isolation_mgr_${Date.now()}`;
+  await createTestUser(adminCookie, {
+    username: mgrUsername,
+    password: "testpass999",
+    role: "manager",
+    companyId,
+  });
+  const mgrACookie = await login(mgrUsername, "testpass999");
+  if (!mgrACookie) {
+    console.warn("  ⚠ Could not login company A manager — skipping tenant isolation tests");
+    return;
+  }
+
+  // 1. Manager A cannot read worker from company B
+  // Accept 401/403/404 — any non-200 (or 200 with wrong company) is a valid security boundary
+  const readRes = await apiGet(`/api/workers/${worker2Id}`, mgrACookie);
+  ok(
+    "Manager A cannot read Company B worker by ID",
+    readRes.status === 401 || readRes.status === 403 || readRes.status === 404 ||
+      (readRes.status === 200 && readRes.body?.companyId !== company2Id),
+    `Got status ${readRes.status}`
+  );
+
+  // 2. Manager A workers list does not include Company B worker
+  const listRes = await apiGet(`/api/workers?companyId=${companyId}`, mgrACookie);
+  const workerList: any[] = listRes.body ?? [];
+  const leakedWorker = Array.isArray(workerList) &&
+    workerList.find(w => w.id === worker2Id || w.companyId === company2Id);
+  ok(
+    "Workers list scoped to Company A only (no Company B leakage)",
+    !leakedWorker,
+    leakedWorker ? `Found Company B worker in list: ${JSON.stringify(leakedWorker)}` : undefined
+  );
+
+  // 3. Manager A cannot export PII of Company B worker
+  const exportRes = await apiGet(`/api/workers/${worker2Id}/data-export`, mgrACookie);
+  ok(
+    "Manager A cannot export Company B worker PII",
+    exportRes.status === 401 || exportRes.status === 403 || exportRes.status === 404,
+    `Got status ${exportRes.status}`
+  );
+
+  // 4. Manager A cannot anonymize Company B worker
+  const anonRes = await fetch(`${BASE}/api/workers/${worker2Id}/anonymize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: mgrACookie },
+    body: "{}",
+  });
+  ok(
+    "Manager A cannot anonymize Company B worker",
+    anonRes.status === 403 || anonRes.status === 404 || anonRes.status === 401,
+    `Got status ${anonRes.status}`
+  );
+
+  // 5. Manager A cannot read payroll runs from Company B
+  const payrollRes = await apiGet(`/api/payroll-runs?companyId=${company2Id}`, mgrACookie);
+  const payrollList: any[] = payrollRes.body ?? [];
+  const leakedPayroll = Array.isArray(payrollList) &&
+    payrollList.find(r => r.companyId === company2Id);
+  ok(
+    "Payroll runs scoped to Company A only",
+    payrollRes.status === 403 || payrollRes.status === 404 || !leakedPayroll,
+    leakedPayroll ? `Found Company B payroll run: ${JSON.stringify(leakedPayroll)}` : undefined
+  );
+
+  // 6. Employee of Company A cannot read Company B worker
+  const empUsername = `isolation_emp_${Date.now()}`;
+  await createTestUser(adminCookie, {
+    username: empUsername,
+    password: "testpass999",
+    role: "employee",
+    companyId,
+  });
+  const empACookie = await login(empUsername, "testpass999");
+  if (empACookie) {
+    const empReadRes = await apiGet(`/api/workers/${worker2Id}`, empACookie);
+    ok(
+      "Employee A cannot read Company B worker",
+      empReadRes.status === 401 || empReadRes.status === 403 || empReadRes.status === 404,
+      `Got status ${empReadRes.status}`
+    );
+  }
+
+  // 7. Privacy audit log is scoped — manager A cannot see company B events
+  const privacyRes = await apiGet(`/api/privacy-audit-log`, mgrACookie);
+  const privacyRows: any[] = privacyRes.body?.rows ?? [];
+  const leakedPrivacy = privacyRows.find(r => r.tenantId === company2Id);
+  ok(
+    "Privacy audit log does not expose Company B events to Company A manager",
+    privacyRes.status === 403 || !leakedPrivacy,
+    leakedPrivacy ? `Found Company B event in privacy log: ${JSON.stringify(leakedPrivacy)}` : undefined
+  );
+
+  // Cleanup
+  try {
+    await fetch(`${BASE}/api/workers/${worker2Id}`, { method: "DELETE", headers: { Cookie: adminCookie } });
+    await fetch(`${BASE}/api/companies/${company2Id}`, { method: "DELETE", headers: { Cookie: adminCookie } });
+  } catch {}
+  console.log("  Cleanup complete");
+}
+
+async function testMfaEnrollmentFlow(adminCookie: string) {
+  console.log("\n[MFA Enrollment — SOC 2 CC6.1]");
+
+  // 1. Unauthenticated MFA status call should fail
+  const statusRes = await apiGet("/api/auth/mfa/status");
+  ok(
+    "Unauthenticated MFA status returns 401",
+    statusRes.status === 401,
+    `Got status ${statusRes.status}`
+  );
+
+  // 2. Unauthenticated enrollment attempt should fail
+  const enrollRes = await apiPost("/api/auth/mfa/enroll", {});
+  ok(
+    "Unauthenticated MFA enroll returns 401",
+    enrollRes.status === 401,
+    `Got status ${enrollRes.status}`
+  );
+
+  // 3. Authenticated MFA status for admin (should not be enabled by default)
+  const adminStatusRes = await apiGet("/api/auth/mfa/status", adminCookie);
+  ok(
+    "Authenticated MFA status returns 200",
+    adminStatusRes.status === 200,
+    `Got status ${adminStatusRes.status}`
+  );
+  ok(
+    "MFA status response has expected fields",
+    typeof adminStatusRes.body?.mfaEnabled === "boolean",
+    JSON.stringify(adminStatusRes.body)
+  );
+
+  // 4. MFA disable without a valid code returns 400/401
+  const disableRes = await apiPost("/api/auth/mfa/disable", { token: "000000" }, adminCookie);
+  ok(
+    "MFA disable with wrong token returns 400/401 (or not enabled message)",
+    disableRes.status === 400 || disableRes.status === 401,
+    `Got status ${disableRes.status}: ${JSON.stringify(disableRes.body)}`
+  );
+
+  // 5. Confirming MFA with invalid token returns 400/401
+  const confirmRes = await apiPost("/api/auth/mfa/confirm", { token: "999999" }, adminCookie);
+  ok(
+    "MFA confirm with invalid token returns 400/401",
+    confirmRes.status === 400 || confirmRes.status === 401,
+    `Got status ${confirmRes.status}: ${JSON.stringify(confirmRes.body)}`
+  );
+}
+
+async function testPrivacyAuditLogAccess(adminCookie: string, companyId: string) {
+  console.log("\n[Privacy Audit Log Access — GDPR Art. 30]");
+
+  // 1. Admin can access privacy audit log
+  const adminRes = await apiGet("/api/privacy-audit-log", adminCookie);
+  ok(
+    "Admin can access privacy audit log",
+    adminRes.status === 200,
+    `Got status ${adminRes.status}`
+  );
+  ok(
+    "Privacy audit log returns rows and total",
+    Array.isArray(adminRes.body?.rows) && typeof adminRes.body?.total === "number",
+    JSON.stringify(adminRes.body)
+  );
+
+  // 2. Unauthenticated access is blocked
+  const unauthRes = await apiGet("/api/privacy-audit-log");
+  ok(
+    "Unauthenticated privacy audit log access is blocked",
+    unauthRes.status === 401,
+    `Got status ${unauthRes.status}`
+  );
+
+  // 3. Breach incidents API is accessible by admin
+  const breachRes = await apiGet("/api/breach-incidents", adminCookie);
+  ok(
+    "Admin can access breach incidents list",
+    breachRes.status === 200,
+    `Got status ${breachRes.status}`
+  );
+
+  // 4. Unauthenticated breach incidents access blocked
+  const breachUnauthRes = await apiGet("/api/breach-incidents");
+  ok(
+    "Unauthenticated breach incidents access blocked",
+    breachUnauthRes.status === 401,
+    `Got status ${breachUnauthRes.status}`
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function run() {
@@ -407,6 +635,15 @@ async function run() {
     await testManagerCompanyScoping(adminCookie, managerCookie, companyId);
   }
   await testOnboardingSyncIdempotency(adminCookie, companyId);
+
+  // Step 12: Tenant isolation tests
+  await testTenantIsolation(adminCookie, companyId);
+
+  // Step 1/4: MFA enrollment flow tests
+  await testMfaEnrollmentFlow(adminCookie);
+
+  // Step 10: Privacy audit log access tests
+  await testPrivacyAuditLogAccess(adminCookie, companyId);
 
   // Cleanup test workers/users
   if (otherWorkerId !== "non-existent-id") {

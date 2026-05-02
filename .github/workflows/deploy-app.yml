@@ -20,6 +20,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies (audit check)
+        run: npm ci --legacy-peer-deps || npm install --include=dev --legacy-peer-deps
+
+      - name: Dependency vulnerability scan
+        run: npm audit --audit-level=high
+        continue-on-error: false
+
       - name: Validate app deploy secrets
         run: |
           [ -n "${{ secrets.APP_VPS_HOST }}" ] || { echo "Missing APP_VPS_HOST"; exit 1; }

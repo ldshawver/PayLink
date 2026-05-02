@@ -327,6 +327,12 @@ export const users = pgTable("users", {
   companyId: varchar("company_id"),
   workerId: varchar("worker_id"),
   isActive: boolean("is_active").default(true),
+  /** AES-256-GCM encrypted TOTP secret (base32). Null = MFA not enrolled. */
+  totpSecret: text("totp_secret"),
+  /** True once the user has enrolled and confirmed their TOTP code. */
+  mfaEnabled: boolean("mfa_enabled").default(false),
+  /** ISO timestamp at which the company admin enforced MFA for all users. */
+  mfaEnforcedAt: timestamp("mfa_enforced_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -2937,6 +2943,8 @@ export type DocumentAcl = typeof documentAcls.$inferSelect;
 export type InsertDocumentAcl = z.infer<typeof insertDocumentAclSchema>;
 
 // ── Document Retention Policies ──────────────────────────────────────────
+export const legalBasisEnum = pgEnum("legal_basis", ["legal_obligation", "legitimate_interest", "contract", "consent"]);
+
 export const documentRetentionPolicies = pgTable("document_retention_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id),
@@ -2948,6 +2956,10 @@ export const documentRetentionPolicies = pgTable("document_retention_policies", 
   retentionRule: text("retention_rule"),
   dispositionAction: text("disposition_action").default("archive"),
   isActive: boolean("is_active").default(true),
+  /** GDPR/SOC 2 — legal basis for retaining this category of document */
+  legalBasis: text("legal_basis"),
+  /** Free-text description of the purpose for retaining this document type */
+  purposeDescription: text("purpose_description"),
   createdBy: varchar("created_by"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -4343,3 +4355,46 @@ export const payStubLineItems = pgTable("pay_stub_line_items", {
 export const insertPayStubLineItemSchema = createInsertSchema(payStubLineItems).omit({ id: true, createdAt: true });
 export type PayStubLineItem = typeof payStubLineItems.$inferSelect;
 export type InsertPayStubLineItem = z.infer<typeof insertPayStubLineItemSchema>;
+
+// ── Privacy Actions Audit Log (GDPR / SOC 2) ─────────────────────────────────
+// Records consent changes, data exports, anonymizations, retention policy changes,
+// MFA enrollment/disable events, and breach notifications.
+export const privacyAuditLog = pgTable("privacy_audit_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /** User who performed the action (or "system") */
+  actorUserId: varchar("actor_user_id").notNull(),
+  /** Action type: data_export | data_anonymization | consent_change |
+   *  retention_policy_change | mfa_enrolled | mfa_disabled |
+   *  breach_notification | data_access */
+  actionType: text("action_type").notNull(),
+  /** The worker/user whose personal data was acted upon */
+  dataSubjectId: varchar("data_subject_id"),
+  /** Company (tenant) context */
+  tenantId: varchar("tenant_id"),
+  /** JSON or free-text detail about the action */
+  detail: text("detail"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertPrivacyAuditLogSchema = createInsertSchema(privacyAuditLog).omit({ id: true, createdAt: true });
+export type PrivacyAuditLog = typeof privacyAuditLog.$inferSelect;
+export type InsertPrivacyAuditLog = z.infer<typeof insertPrivacyAuditLogSchema>;
+
+// ── Breach Incidents ──────────────────────────────────────────────────────────
+export const breachIncidents = pgTable("breach_incidents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  actorUserId: varchar("actor_user_id").notNull(),
+  discoveredAt: timestamp("discovered_at").notNull(),
+  nature: text("nature").notNull(),
+  dataCategories: text("data_categories").notNull(),
+  approximateSubjects: integer("approximate_subjects").default(0),
+  responseActions: text("response_actions").notNull(),
+  dpaNotified: boolean("dpa_notified").default(false),
+  subjectsNotified: boolean("subjects_notified").default(false),
+  containmentComplete: boolean("containment_complete").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertBreachIncidentSchema = createInsertSchema(breachIncidents).omit({ id: true, createdAt: true });
+export type BreachIncident = typeof breachIncidents.$inferSelect;
+export type InsertBreachIncident = z.infer<typeof insertBreachIncidentSchema>;

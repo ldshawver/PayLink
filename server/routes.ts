@@ -24280,5 +24280,513 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // Export the helper so it can be used in route definitions above (if needed in future modules)
   (app as any)._requireFeature = requireFeature;
 
+  // ── Security Compliance Routes (Task #10) ─────────────────────────────────
+
+  // Helper: write to privacy_audit_log
+  async function writePrivacyAuditLog(opts: {
+    actorUserId: string;
+    actionType: string;
+    dataSubjectId?: string | null;
+    tenantId?: string | null;
+    detail?: string | null;
+  }) {
+    try {
+      await db.execute(sql`
+        INSERT INTO privacy_audit_log (actor_user_id, action_type, data_subject_id, tenant_id, detail)
+        VALUES (${opts.actorUserId}, ${opts.actionType}, ${opts.dataSubjectId ?? null},
+                ${opts.tenantId ?? null}, ${opts.detail ?? null})
+      `);
+    } catch (e) {
+      console.error("[privacyAuditLog] Failed to write:", e);
+    }
+  }
+
+  // ── TOTP MFA Routes ─────────────────────────────────────────────────────────
+
+  // Begin TOTP enrollment — generates a new secret and returns the otpauth URI + base32 key
+  app.post("/api/auth/mfa/enroll", requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.session.userId as string;
+      const { generateBase32Secret, buildOtpAuthUri, encryptTotpSecret } = await import("./totp");
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      // Generate a new TOTP secret
+      const plainSecret = generateBase32Secret();
+      const encryptedSecret = encryptTotpSecret(plainSecret);
+
+      // Store encrypted secret (not yet enabled — requires confirmation)
+      await db.execute(sql`
+        UPDATE users SET totp_secret = ${encryptedSecret}, mfa_enabled = FALSE WHERE id = ${userId}
+      `);
+
+      const accountName = user.username;
+      const otpauthUri = buildOtpAuthUri(plainSecret, accountName);
+
+      res.json({ otpauthUri, secret: plainSecret, accountName });
+    } catch (e: any) {
+      console.error("[MFA enroll]", e);
+      res.status(500).json({ message: "Failed to start MFA enrollment" });
+    }
+  });
+
+  // Confirm TOTP enrollment — verify the code then mark MFA as enabled
+  app.post("/api/auth/mfa/confirm", requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.session.userId as string;
+      const { token } = req.body;
+      if (!token) return res.status(400).json({ message: "token is required" });
+
+      const { verifyTOTP, decryptTotpSecret } = await import("./totp");
+      const rows = await db.execute(sql`SELECT totp_secret FROM users WHERE id = ${userId}`);
+      const row = rows.rows[0] as any;
+      if (!row?.totp_secret) return res.status(400).json({ message: "No pending MFA enrollment" });
+
+      const plainSecret = decryptTotpSecret(row.totp_secret);
+      if (!plainSecret) return res.status(500).json({ message: "Failed to decrypt MFA secret" });
+
+      if (!verifyTOTP(plainSecret, token)) {
+        return res.status(401).json({ message: "Invalid or expired code. Try again." });
+      }
+
+      await db.execute(sql`UPDATE users SET mfa_enabled = TRUE WHERE id = ${userId}`);
+
+      const user = await storage.getUser(userId);
+      await writePrivacyAuditLog({
+        actorUserId: userId,
+        actionType: "mfa_enrolled",
+        dataSubjectId: userId,
+        tenantId: user?.companyId ?? null,
+        detail: `User ${user?.username} enrolled TOTP MFA`,
+      });
+      await writeAuditLog({ actorUserId: userId, targetResource: "auth", changeType: "mfa_enrolled", note: "TOTP MFA enabled", companyId: user?.companyId ?? null });
+
+      res.json({ ok: true, message: "MFA enabled successfully" });
+    } catch (e: any) {
+      console.error("[MFA confirm]", e);
+      res.status(500).json({ message: "Failed to confirm MFA enrollment" });
+    }
+  });
+
+  // Disable MFA — requires current TOTP code for confirmation
+  app.post("/api/auth/mfa/disable", requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.session.userId as string;
+      const { token } = req.body;
+      if (!token) return res.status(400).json({ message: "Current MFA token is required to disable MFA" });
+
+      const { verifyTOTP, decryptTotpSecret } = await import("./totp");
+      const rows = await db.execute(sql`SELECT totp_secret, mfa_enabled FROM users WHERE id = ${userId}`);
+      const row = rows.rows[0] as any;
+      if (!row?.mfa_enabled) return res.status(400).json({ message: "MFA is not enabled" });
+
+      const plainSecret = decryptTotpSecret(row.totp_secret);
+      if (!plainSecret || !verifyTOTP(plainSecret, token)) {
+        return res.status(401).json({ message: "Invalid MFA code" });
+      }
+
+      await db.execute(sql`UPDATE users SET mfa_enabled = FALSE, totp_secret = NULL WHERE id = ${userId}`);
+
+      const user = await storage.getUser(userId);
+      await writePrivacyAuditLog({
+        actorUserId: userId,
+        actionType: "mfa_disabled",
+        dataSubjectId: userId,
+        tenantId: user?.companyId ?? null,
+        detail: `User ${user?.username} disabled TOTP MFA`,
+      });
+      await writeAuditLog({ actorUserId: userId, targetResource: "auth", changeType: "mfa_disabled", note: "TOTP MFA disabled", companyId: user?.companyId ?? null });
+
+      res.json({ ok: true, message: "MFA disabled" });
+    } catch (e: any) {
+      console.error("[MFA disable]", e);
+      res.status(500).json({ message: "Failed to disable MFA" });
+    }
+  });
+
+  // Get MFA status for current user
+  app.get("/api/auth/mfa/status", requireAuth, async (req: any, res) => {
+    try {
+      const userId = req.session.userId as string;
+      const rows = await db.execute(sql`SELECT mfa_enabled, totp_secret FROM users WHERE id = ${userId}`);
+      const row = rows.rows[0] as any;
+      res.json({
+        mfaEnabled: !!row?.mfa_enabled,
+        enrollmentPending: !!(row?.totp_secret && !row?.mfa_enabled),
+      });
+    } catch (e) {
+      res.status(500).json({ message: "Failed to fetch MFA status" });
+    }
+  });
+
+  // Verify MFA step-up (for login flow or sensitive action confirmation)
+  app.post("/api/auth/mfa/verify", async (req: any, res) => {
+    try {
+      const { userId, token } = req.body;
+      if (!userId || !token) return res.status(400).json({ message: "userId and token are required" });
+
+      const { verifyTOTP, decryptTotpSecret } = await import("./totp");
+      const rows = await db.execute(sql`SELECT totp_secret, mfa_enabled FROM users WHERE id = ${userId}`);
+      const row = rows.rows[0] as any;
+      if (!row?.mfa_enabled) return res.status(200).json({ ok: true, message: "MFA not enabled — no check required" });
+
+      const plainSecret = decryptTotpSecret(row.totp_secret);
+      if (!plainSecret) return res.status(500).json({ message: "Failed to decrypt MFA secret" });
+
+      if (!verifyTOTP(plainSecret, token)) {
+        return res.status(401).json({ message: "Invalid or expired MFA code" });
+      }
+
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ message: "MFA verification failed" });
+    }
+  });
+
+  // Admin: enforce MFA for all users in a company
+  app.post("/api/auth/mfa/enforce", requireAuth, requireRole("admin"), async (req: any, res) => {
+    try {
+      const userId = req.session.userId as string;
+      const user = await storage.getUser(userId);
+      if (!user?.companyId) return res.status(400).json({ message: "No company context" });
+
+      const now = new Date();
+      await db.execute(sql`
+        UPDATE users SET mfa_enforced_at = ${now} WHERE company_id = ${user.companyId}
+      `);
+      await writeAuditLog({
+        actorUserId: userId, targetResource: "auth", changeType: "mfa_enforced",
+        note: `MFA enforcement enabled for company ${user.companyId}`, companyId: user.companyId,
+      });
+
+      res.json({ ok: true, message: "MFA enforcement enabled for all company users" });
+    } catch (e) {
+      res.status(500).json({ message: "Failed to enforce MFA" });
+    }
+  });
+
+  // ── PII Data Export ─────────────────────────────────────────────────────────
+
+  app.get("/api/workers/:id/data-export", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
+    try {
+      const userId = req.session.userId as string;
+      const { id: workerId } = req.params;
+
+      const user = await storage.getUser(userId);
+      if (!user?.companyId) return res.status(400).json({ message: "No company context" });
+
+      // Fetch all personal data for this worker
+      const workerResult = await db.execute(sql`SELECT * FROM workers WHERE id = ${workerId} AND company_id = ${user.companyId}`);
+      const workerData = workerResult.rows[0] as any;
+      if (!workerData) return res.status(404).json({ message: "Worker not found or not in your company" });
+
+      const [contacts, payMethods, timeEntries, payrollItemsData, documents, auditLogs] = await Promise.all([
+        db.execute(sql`SELECT * FROM employee_contacts WHERE worker_id = ${workerId}`),
+        db.execute(sql`SELECT id, method_type, bank_name, account_type, is_primary, is_active FROM pay_methods WHERE worker_id = ${workerId}`),
+        db.execute(sql`SELECT * FROM time_entries WHERE worker_id = ${workerId} ORDER BY date DESC LIMIT 500`),
+        db.execute(sql`
+          SELECT pi.*, pr.period_start, pr.period_end, pr.pay_date
+          FROM payroll_items pi
+          JOIN payroll_runs pr ON pi.payroll_run_id = pr.id
+          WHERE pi.worker_id = ${workerId}
+          ORDER BY pr.period_start DESC LIMIT 100
+        `),
+        db.execute(sql`SELECT id, file_name, document_type, status, created_at FROM documents WHERE worker_id = ${workerId}`),
+        db.execute(sql`
+          SELECT id, actor_user_id, change_type, target_resource, note, created_at
+          FROM authorization_audit_log
+          WHERE target_user_id = ${workerId} OR note LIKE ${'%' + workerId + '%'}
+          ORDER BY created_at DESC LIMIT 200
+        `),
+      ]);
+
+      // Mask sensitive fields in the export
+      const exportData = {
+        exportedAt: new Date().toISOString(),
+        exportedBy: userId,
+        workerId,
+        profile: {
+          ...workerData,
+          ssn: workerData.ssn ? "XXX-XX-" + (workerData.ssn?.slice(-4) ?? "****") : null,
+          pin: workerData.pin ? "[MASKED]" : null,
+        },
+        contacts: contacts.rows,
+        payMethods: payMethods.rows, // account/routing numbers excluded from select
+        timeEntries: timeEntries.rows,
+        payrollHistory: payrollItemsData.rows,
+        documents: documents.rows,
+        auditLogEntries: auditLogs.rows,
+      };
+
+      await writePrivacyAuditLog({
+        actorUserId: userId,
+        actionType: "data_export",
+        dataSubjectId: workerId,
+        tenantId: user.companyId,
+        detail: `PII data export for worker ${workerId} (${workerData.first_name} ${workerData.last_name}) by user ${userId}`,
+      });
+      await writeAuditLog({
+        actorUserId: userId, targetResource: "workers", changeType: "data_export",
+        note: `PII export for worker ${workerId}`, companyId: user.companyId, targetUserId: workerId,
+      });
+
+      res.setHeader("Content-Disposition", `attachment; filename="worker-${workerId}-export.json"`);
+      res.setHeader("Content-Type", "application/json");
+      res.json(exportData);
+    } catch (e: any) {
+      console.error("[PII export]", e);
+      res.status(500).json({ message: "Failed to export worker data" });
+    }
+  });
+
+  // ── Data Anonymization ──────────────────────────────────────────────────────
+
+  app.post("/api/workers/:id/anonymize", requireAuth, requireRole("admin"), async (req: any, res) => {
+    try {
+      const userId = req.session.userId as string;
+      const { id: workerId } = req.params;
+
+      const user = await storage.getUser(userId);
+      if (!user?.companyId) return res.status(400).json({ message: "No company context" });
+
+      const workerRows = await db.execute(sql`SELECT * FROM workers WHERE id = ${workerId} AND company_id = ${user.companyId}`);
+      const worker = workerRows.rows[0] as any;
+      if (!worker) return res.status(404).json({ message: "Worker not found" });
+
+      // Overwrite PII with anonymized placeholders
+      // Payroll totals and YTD data are preserved for legal/tax record-keeping
+      await db.execute(sql`
+        UPDATE workers SET
+          first_name = '[ANONYMIZED]',
+          middle_name = NULL,
+          last_name = '[ANONYMIZED]',
+          email = NULL,
+          work_email = NULL,
+          home_email = NULL,
+          phone = NULL,
+          work_phone = NULL,
+          home_phone = NULL,
+          mobile_phone = NULL,
+          fax = NULL,
+          address = NULL,
+          address_2 = NULL,
+          city = NULL,
+          state = NULL,
+          zip = NULL,
+          birth_date = NULL,
+          ssn = 'XXX-XX-XXXX',
+          pin = NULL,
+          note = NULL,
+          emergency_contact_name = NULL,
+          emergency_contact_phone = NULL,
+          status = 'terminated',
+          is_active = FALSE
+        WHERE id = ${workerId} AND company_id = ${user.companyId}
+      `);
+
+      // Null-out bank details in pay_methods
+      await db.execute(sql`
+        UPDATE pay_methods SET
+          account_number = '00000000',
+          routing_number = '000000000',
+          bank_name = '[ANONYMIZED]',
+          handle = NULL,
+          is_active = FALSE
+        WHERE worker_id = ${workerId}
+      `);
+
+      // Remove emergency contacts
+      await db.execute(sql`DELETE FROM employee_contacts WHERE worker_id = ${workerId}`);
+
+      await writePrivacyAuditLog({
+        actorUserId: userId,
+        actionType: "data_anonymization",
+        dataSubjectId: workerId,
+        tenantId: user.companyId,
+        detail: `Worker ${workerId} anonymized by user ${userId}. PII overwritten: name, email, phone, address, SSN, bank details. Payroll totals retained.`,
+      });
+      await writeAuditLog({
+        actorUserId: userId, targetResource: "workers", changeType: "data_anonymization",
+        beforeValue: `${worker.first_name} ${worker.last_name}`,
+        afterValue: "[ANONYMIZED]",
+        note: `Worker data anonymized per GDPR/SOC2 request`, companyId: user.companyId, targetUserId: workerId,
+      });
+
+      res.json({ ok: true, message: "Worker data has been anonymized. Payroll totals and YTD figures are retained for legal/tax compliance." });
+    } catch (e: any) {
+      console.error("[Anonymize]", e);
+      res.status(500).json({ message: "Failed to anonymize worker data" });
+    }
+  });
+
+  // ── Privacy Audit Log API ───────────────────────────────────────────────────
+
+  app.get("/api/privacy-audit-log", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
+    try {
+      const { limit = "50", offset = "0", actionType, dataSubjectId, fromDate, toDate } = req.query;
+
+      let whereClause = "WHERE 1=1";
+      const params: any[] = [];
+      let paramIdx = 1;
+
+      if (actionType) {
+        whereClause += ` AND action_type = $${paramIdx++}`;
+        params.push(actionType);
+      }
+      if (dataSubjectId) {
+        whereClause += ` AND data_subject_id = $${paramIdx++}`;
+        params.push(dataSubjectId);
+      }
+      if (fromDate) {
+        whereClause += ` AND created_at >= $${paramIdx++}`;
+        params.push(fromDate);
+      }
+      if (toDate) {
+        whereClause += ` AND created_at <= $${paramIdx++}`;
+        params.push(toDate);
+      }
+
+      const { db: dbRaw } = await import("./db");
+      const countResult = await dbRaw.$client.query(
+        `SELECT COUNT(*) AS total FROM privacy_audit_log ${whereClause}`, params
+      );
+      const total = parseInt(countResult.rows[0]?.total ?? "0");
+
+      const rows = await dbRaw.$client.query(
+        `SELECT id, actor_user_id AS "actorUserId", action_type AS "actionType",
+                data_subject_id AS "dataSubjectId", tenant_id AS "tenantId",
+                detail, created_at AS "createdAt"
+         FROM privacy_audit_log ${whereClause}
+         ORDER BY created_at DESC
+         LIMIT $${paramIdx++} OFFSET $${paramIdx++}`,
+        [...params, parseInt(limit as string), parseInt(offset as string)]
+      );
+
+      res.json({ rows: rows.rows, total });
+    } catch (e: any) {
+      console.error("[Privacy audit log]", e);
+      res.status(500).json({ message: "Failed to fetch privacy audit log" });
+    }
+  });
+
+  app.get("/api/privacy-audit-log/export-csv", requireAuth, requireRole("admin"), async (req: any, res) => {
+    try {
+      const { db: dbRaw } = await import("./db");
+      const rows = await dbRaw.$client.query(`
+        SELECT id, actor_user_id, action_type, data_subject_id, tenant_id, detail, created_at
+        FROM privacy_audit_log ORDER BY created_at DESC LIMIT 10000
+      `);
+      const headers = ["id", "actorUserId", "actionType", "dataSubjectId", "tenantId", "detail", "createdAt"];
+      const csvRows = rows.rows.map((r: any) =>
+        [r.id, r.actor_user_id, r.action_type, r.data_subject_id ?? "", r.tenant_id ?? "", (r.detail ?? "").replace(/,/g, ";"), r.created_at].join(",")
+      );
+      const csv = [headers.join(","), ...csvRows].join("\n");
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", "attachment; filename=\"privacy-audit-log.csv\"");
+      res.send(csv);
+    } catch (e) {
+      res.status(500).json({ message: "Failed to export privacy audit log" });
+    }
+  });
+
+  // ── Breach Incidents API ─────────────────────────────────────────────────────
+
+  app.get("/api/breach-incidents", requireAuth, requireRole("admin"), async (_req, res) => {
+    try {
+      const { db: dbRaw } = await import("./db");
+      const rows = await dbRaw.$client.query(`
+        SELECT id, actor_user_id AS "actorUserId", discovered_at AS "discoveredAt",
+               nature, data_categories AS "dataCategories",
+               approximate_subjects AS "approximateSubjects",
+               response_actions AS "responseActions",
+               dpa_notified AS "dpaNotified",
+               subjects_notified AS "subjectsNotified",
+               containment_complete AS "containmentComplete",
+               created_at AS "createdAt"
+        FROM breach_incidents ORDER BY created_at DESC
+      `);
+      res.json(rows.rows);
+    } catch (e) {
+      res.status(500).json({ message: "Failed to fetch breach incidents" });
+    }
+  });
+
+  app.post("/api/breach-incidents", requireAuth, requireRole("admin"), async (req: any, res) => {
+    try {
+      const userId = req.session.userId as string;
+      const user = await storage.getUser(userId);
+      const {
+        discoveredAt, nature, dataCategories, approximateSubjects = 0,
+        responseActions, dpaNotified = false, subjectsNotified = false, containmentComplete = false,
+      } = req.body;
+
+      if (!discoveredAt || !nature || !dataCategories || !responseActions) {
+        return res.status(400).json({ message: "discoveredAt, nature, dataCategories, and responseActions are required" });
+      }
+
+      const { db: dbRaw } = await import("./db");
+      const result = await dbRaw.$client.query(`
+        INSERT INTO breach_incidents
+          (actor_user_id, discovered_at, nature, data_categories, approximate_subjects,
+           response_actions, dpa_notified, subjects_notified, containment_complete)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING *
+      `, [userId, discoveredAt, nature, dataCategories, approximateSubjects,
+          responseActions, dpaNotified, subjectsNotified, containmentComplete]);
+
+      await writePrivacyAuditLog({
+        actorUserId: userId,
+        actionType: "breach_notification",
+        tenantId: user?.companyId ?? null,
+        detail: JSON.stringify({ nature, dataCategories, approximateSubjects, dpaNotified, subjectsNotified }),
+      });
+      await writeAuditLog({
+        actorUserId: userId, targetResource: "breach_incidents", changeType: "breach_notification",
+        note: `Breach incident recorded: ${nature.substring(0, 100)}`, companyId: user?.companyId ?? null,
+      });
+
+      res.status(201).json(result.rows[0]);
+    } catch (e: any) {
+      console.error("[Breach incident]", e);
+      res.status(500).json({ message: "Failed to record breach incident" });
+    }
+  });
+
+  // ── Retention Policy: legal basis support ──────────────────────────────────
+
+  // PATCH endpoint to update legal basis and purpose description on a retention policy
+  app.patch("/api/document-retention-policies/:id/legal-basis", requireAuth, requireRole("admin"), async (req: any, res) => {
+    try {
+      const userId = req.session.userId as string;
+      const { id } = req.params;
+      const { legalBasis, purposeDescription } = req.body;
+
+      const validBases = ["legal_obligation", "legitimate_interest", "contract", "consent"];
+      if (legalBasis && !validBases.includes(legalBasis)) {
+        return res.status(400).json({ message: "Invalid legalBasis value" });
+      }
+
+      await db.execute(sql`
+        UPDATE document_retention_policies
+        SET legal_basis = ${legalBasis ?? null},
+            purpose_description = ${purposeDescription ?? null},
+            updated_at = NOW()
+        WHERE id = ${id}
+      `);
+
+      const user = await storage.getUser(userId);
+      await writePrivacyAuditLog({
+        actorUserId: userId,
+        actionType: "retention_policy_change",
+        tenantId: user?.companyId ?? null,
+        detail: `Retention policy ${id}: legalBasis=${legalBasis}, purpose updated`,
+      });
+
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ message: "Failed to update legal basis" });
+    }
+  });
+
   return httpServer;
 }

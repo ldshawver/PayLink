@@ -76,6 +76,10 @@ const InventoryPage = lazy(() => import("@/pages/inventory"));
 const KpiGoalsPage = lazy(() => import("@/pages/kpi-goals"));
 const EmailSettingsPage = lazy(() => import("@/pages/email-settings"));
 const SmsSettingsPage = lazy(() => import("@/pages/sms-settings"));
+const GdprInventoryPage = lazy(() => import("@/pages/gdpr-inventory"));
+const PrivacyAuditLogPage = lazy(() => import("@/pages/privacy-audit-log"));
+const BreachResponsePage = lazy(() => import("@/pages/breach-response"));
+const MfaSettingsPage = lazy(() => import("@/pages/mfa-settings"));
 
 // ─── Shared page-loading fallback ────────────────────────────────────────────
 function PageLoader() {
@@ -182,6 +186,7 @@ function AuthenticatedRouter() {
         <Route path="/app/settings/sms">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner"]}><SmsSettingsPage /></StrictRoleGuard>}</Route>
         <Route path="/app/role-management">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"]}><RoleManagementPage /></StrictRoleGuard>}</Route>
         <Route path="/app/kpi-goals">{() => <RoleGuard roles={["admin", "manager"]}><KpiGoalsPage /></RoleGuard>}</Route>
+        <Route path="/app/mfa-settings" component={MfaSettingsPage} />
         <Route component={NotFound} />
       </Switch>
     </Suspense>
@@ -290,6 +295,9 @@ function PlatformRouter() {
           <Route path="/platform/billing" component={BillingPage} />
           <Route path="/platform/feature-registry" component={FeatureRegistryPage} />
           <Route path="/platform/audit" component={PlatformAuditPage} />
+          <Route path="/platform/gdpr-inventory" component={GdprInventoryPage} />
+          <Route path="/platform/privacy-audit-log" component={PrivacyAuditLogPage} />
+          <Route path="/platform/breach-response" component={BreachResponsePage} />
           <Route component={NotFound} />
         </Switch>
       </Suspense>

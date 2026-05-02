@@ -228,16 +228,30 @@ app.use((req, res, next) => {
   });
 });
 
-if (isProduction) {
-  app.use((_req, res, next) => {
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader("X-XSS-Protection", "1; mode=block");
-    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  if (isProduction) {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-    next();
-  });
-}
+  }
+  // Content-Security-Policy — strict policy for all environments
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",                                   // unsafe-inline needed for Vite HMR + shadcn
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",       // Google Fonts CSS
+    "img-src 'self' data: blob: https:",                                   // allow remote images (avatars, QR codes)
+    "font-src 'self' data: https://fonts.gstatic.com",                     // Google Fonts files
+    "connect-src 'self' https: wss:",                                      // wss: Vite HMR; https: Stripe/API calls
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+  ].join("; ");
+  res.setHeader("Content-Security-Policy", csp);
+  next();
+});
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -2874,6 +2888,42 @@ Thank you,
     await run("payroll_items.holiday_pay",       sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS holiday_pay NUMERIC DEFAULT 0`);
     await run("payroll_items.unpaid_hours",      sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS unpaid_hours NUMERIC DEFAULT 0`);
     await run("payroll_items.unpaid_deduction",  sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS unpaid_deduction NUMERIC DEFAULT 0`);
+
+    // ── Task #10: Security Compliance additions ────────────────────────────
+    // TOTP MFA fields on users table
+    await run("users.totp_secret",     sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT`);
+    await run("users.mfa_enabled",     sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN DEFAULT FALSE`);
+    await run("users.mfa_enforced_at", sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enforced_at TIMESTAMP`);
+
+    // Legal basis + purpose description on document retention policies
+    await run("document_retention_policies.legal_basis",         sql`ALTER TABLE document_retention_policies ADD COLUMN IF NOT EXISTS legal_basis TEXT`);
+    await run("document_retention_policies.purpose_description", sql`ALTER TABLE document_retention_policies ADD COLUMN IF NOT EXISTS purpose_description TEXT`);
+
+    // Privacy actions audit log table
+    await run("privacy_audit_log table", sql`CREATE TABLE IF NOT EXISTS privacy_audit_log (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      actor_user_id VARCHAR NOT NULL,
+      action_type TEXT NOT NULL,
+      data_subject_id VARCHAR,
+      tenant_id VARCHAR,
+      detail TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // Breach incidents table
+    await run("breach_incidents table", sql`CREATE TABLE IF NOT EXISTS breach_incidents (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      actor_user_id VARCHAR NOT NULL,
+      discovered_at TIMESTAMP NOT NULL,
+      nature TEXT NOT NULL,
+      data_categories TEXT NOT NULL,
+      approximate_subjects INTEGER DEFAULT 0,
+      response_actions TEXT NOT NULL,
+      dpa_notified BOOLEAN DEFAULT FALSE,
+      subjects_notified BOOLEAN DEFAULT FALSE,
+      containment_complete BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
   }
 
   // Fix: ensure the platform 'admin' user is never scoped to a company.

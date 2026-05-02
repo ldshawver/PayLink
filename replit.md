@@ -39,6 +39,56 @@ Schema Change Rules (CRITICAL - NEVER VIOLATE):
 7. Test all schema changes on Replit dev database BEFORE deploying to VPS.
 8. The VPS database contains REAL production data - treat it as sacred.
 
+## Security & Compliance (SOC 2 + GDPR — Task #10)
+
+### TOTP MFA (Steps 1–4)
+- `server/totp.ts`: RFC 6238 TOTP using Node.js `crypto` only (no external deps). `generateBase32Secret`, `verifyTOTP`, `buildOtpAuthUri`, `encryptTotpSecret`, `decryptTotpSecret`.
+- API routes: `POST /api/auth/mfa/enroll`, `POST /api/auth/mfa/confirm`, `POST /api/auth/mfa/disable`, `GET /api/auth/mfa/status`, `POST /api/auth/mfa/verify`, `POST /api/auth/mfa/enforce`.
+- DB: `users.totp_secret` (AES-256-GCM encrypted), `users.mfa_enabled`, `users.mfa_enforced_at`.
+- UI: `/app/mfa-settings` — self-service TOTP enrollment with QR code + manual key entry.
+
+### Content-Security-Policy (Step 5)
+- Applied to ALL environments (dev + prod) via `server/index.ts` middleware.
+- Directives: `default-src 'self'`, `script-src 'self' 'unsafe-inline'`, `style-src + Google Fonts`, `frame-ancestors 'none'`, `object-src 'none'`.
+- HSTS (`Strict-Transport-Security`) applied in production only.
+
+### PII Data Export (Step 6)
+- `GET /api/workers/:id/data-export` — exports all personal data for a worker as JSON. SSN masked in output.
+- Writes to both `privacy_audit_log` and `authorization_audit_log`.
+
+### Data Anonymization (Step 7)
+- `POST /api/workers/:id/anonymize` — overwrites all PII fields with `[ANONYMIZED]` placeholders. Payroll YTD totals are preserved for tax/legal compliance.
+- Writes to both audit logs.
+
+### GDPR Data Inventory (Step 8)
+- `client/src/pages/gdpr-inventory.tsx` — config-driven table of all data categories, legal basis (per GDPR Art. 6), retention, 3rd parties.
+- Subprocessors tab: Stripe, DocuSign, Acrobat Sign, SendGrid, Twilio, VPS hosting.
+- Route: `/platform/gdpr-inventory`.
+
+### Privacy Actions Audit Log (Steps 9–10)
+- DB: `privacy_audit_log` table — records `data_export`, `data_anonymization`, `consent_change`, `retention_policy_change`, `mfa_enrolled`, `mfa_disabled`, `breach_notification`, `data_access`.
+- API: `GET /api/privacy-audit-log` (with filters), `GET /api/privacy-audit-log/export-csv`.
+- UI: `/platform/privacy-audit-log` — filterable table with CSV export.
+
+### Breach Response Workflow (Step 11)
+- DB: `breach_incidents` table.
+- API: `GET /api/breach-incidents`, `POST /api/breach-incidents`.
+- UI: `/platform/breach-response` — 5-step GDPR Art. 33/34 guide + incident recording form.
+
+### Tenant Isolation Tests (Step 12)
+- `tests/security.test.ts` — `testTenantIsolation()` suite verifies Company A manager cannot read/export/anonymize Company B workers.
+- Also covers MFA enrollment flow tests and privacy audit log access tests.
+
+### Disaster Recovery Runbook (Step 13)
+- `DISASTER_RECOVERY.md` — RTO/RPO targets, backup verification, DB restore procedure, application rollback, escalation contacts, quarterly DR drill checklist.
+
+### Dependency Vulnerability Scan (Step 14)
+- `.github/workflows/deploy-app.yml` — `npm audit --audit-level=high` added as a required step before deployment build.
+
+### Retention Policy: Legal Basis (GDPR Art. 6)
+- `document_retention_policies.legal_basis` and `purpose_description` columns added.
+- `PATCH /api/document-retention-policies/:id/legal-basis` to update.
+
 ## System Architecture
 PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL database, following a microservices-inspired approach.
 
