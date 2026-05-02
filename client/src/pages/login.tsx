@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -285,17 +286,18 @@ function AdminLoginForm() {
             <Label htmlFor="mfa-token" className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
               <Shield className="h-3.5 w-3.5" /> Authentication Code
             </Label>
-            <Input
-              id="mfa-token"
-              value={mfaToken}
-              onChange={(e) => setMfaToken(e.target.value.replace(/\D/g, "").slice(0, 6))}
-              placeholder="123456"
+            <InputOTP
               maxLength={6}
-              inputMode="numeric"
+              value={mfaToken}
+              onChange={(val) => setMfaToken(val)}
               autoComplete="one-time-code"
               autoFocus
               data-testid="input-mfa-login-token"
-            />
+            >
+              <InputOTPGroup>
+                {[0,1,2,3,4,5].map(i => <InputOTPSlot key={i} index={i} />)}
+              </InputOTPGroup>
+            </InputOTP>
           </div>
           {mfaError && (
             <p className="text-sm text-destructive text-center" data-testid="text-mfa-login-error">

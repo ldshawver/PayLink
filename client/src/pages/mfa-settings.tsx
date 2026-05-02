@@ -7,8 +7,8 @@ import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { Shield, ShieldCheck, ShieldOff, Smartphone, RefreshCw, Copy, ExternalLink, AlertTriangle, Lock } from "lucide-react";
@@ -265,14 +265,17 @@ export default function MfaSettingsPage() {
                     <FormItem className="flex-1">
                       <FormLabel>Verification Code</FormLabel>
                       <FormControl>
-                        <Input
-                          {...field}
-                          placeholder="123456"
+                        <InputOTP
                           maxLength={6}
-                          inputMode="numeric"
+                          value={field.value}
+                          onChange={field.onChange}
                           autoComplete="one-time-code"
                           data-testid="input-totp-confirm"
-                        />
+                        >
+                          <InputOTPGroup>
+                            {[0,1,2,3,4,5].map(i => <InputOTPSlot key={i} index={i} />)}
+                          </InputOTPGroup>
+                        </InputOTP>
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -322,14 +325,17 @@ export default function MfaSettingsPage() {
                     <FormItem className="flex-1">
                       <FormLabel>Current MFA Code</FormLabel>
                       <FormControl>
-                        <Input
-                          {...field}
-                          placeholder="123456"
+                        <InputOTP
                           maxLength={6}
-                          inputMode="numeric"
+                          value={field.value}
+                          onChange={field.onChange}
                           autoComplete="one-time-code"
                           data-testid="input-totp-disable"
-                        />
+                        >
+                          <InputOTPGroup>
+                            {[0,1,2,3,4,5].map(i => <InputOTPSlot key={i} index={i} />)}
+                          </InputOTPGroup>
+                        </InputOTP>
                       </FormControl>
                       <FormMessage />
                     </FormItem>

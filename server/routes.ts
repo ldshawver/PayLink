@@ -24917,16 +24917,24 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       let query: string;
       let queryParams: any[];
 
-      if (isGlobalViewer) {
-        query = `SELECT id, actor_user_id, action_type, data_subject_id, tenant_id, detail, created_at
-                 FROM privacy_audit_log ORDER BY created_at DESC LIMIT 10000`;
-        queryParams = [];
-      } else {
+      const { actionType, dataSubjectId, fromDate, toDate } = req.query as Record<string, string>;
+      const conditions: string[] = [];
+      const baseParams: any[] = [];
+
+      if (!isGlobalViewer) {
         if (!user?.companyId) return res.status(403).json({ message: "No company context" });
-        query = `SELECT id, actor_user_id, action_type, data_subject_id, tenant_id, detail, created_at
-                 FROM privacy_audit_log WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 10000`;
-        queryParams = [user.companyId];
+        baseParams.push(user.companyId);
+        conditions.push(`tenant_id = $${baseParams.length}`);
       }
+      if (actionType) { baseParams.push(actionType); conditions.push(`action_type = $${baseParams.length}`); }
+      if (dataSubjectId) { baseParams.push(dataSubjectId); conditions.push(`data_subject_id = $${baseParams.length}`); }
+      if (fromDate) { baseParams.push(fromDate); conditions.push(`created_at >= $${baseParams.length}`); }
+      if (toDate) { baseParams.push(toDate); conditions.push(`created_at <= $${baseParams.length}`); }
+
+      const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+      query = `SELECT id, actor_user_id, action_type, data_subject_id, tenant_id, detail, created_at
+               FROM privacy_audit_log ${where} ORDER BY created_at DESC LIMIT 10000`;
+      queryParams = baseParams;
 
       const rows = await dbRaw.$client.query(query, queryParams);
       const headers = ["id", "actorUserId", "actionType", "dataSubjectId", "tenantId", "detail", "createdAt"];
