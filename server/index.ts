@@ -2848,6 +2848,32 @@ Thank you,
       amount NUMERIC(12,2) NOT NULL,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`);
+
+    // ── Task 2: Payroll Engine — persons table + person_id on workers ──────────
+    await run("persons table", sql`CREATE TABLE IF NOT EXISTS persons (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      first_name TEXT,
+      last_name TEXT,
+      email TEXT,
+      ssn TEXT,
+      global_id TEXT UNIQUE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await run("workers.person_id", sql`ALTER TABLE workers ADD COLUMN IF NOT EXISTS person_id VARCHAR REFERENCES persons(id)`);
+
+    // ── Task 2: All 15 pay categories — new payroll_items columns ─────────────
+    await run("payroll_items.salary_pay",       sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS salary_pay NUMERIC DEFAULT 0`);
+    await run("payroll_items.bonus_pay",         sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS bonus_pay NUMERIC DEFAULT 0`);
+    await run("payroll_items.tips_pay",          sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS tips_pay NUMERIC DEFAULT 0`);
+    await run("payroll_items.reimburse_amount",  sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS reimburse_amount NUMERIC DEFAULT 0`);
+    await run("payroll_items.pto_hours",         sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS pto_hours NUMERIC DEFAULT 0`);
+    await run("payroll_items.pto_pay",           sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS pto_pay NUMERIC DEFAULT 0`);
+    await run("payroll_items.sick_hours",        sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS sick_hours NUMERIC DEFAULT 0`);
+    await run("payroll_items.sick_pay",          sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS sick_pay NUMERIC DEFAULT 0`);
+    await run("payroll_items.holiday_hours",     sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS holiday_hours NUMERIC DEFAULT 0`);
+    await run("payroll_items.holiday_pay",       sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS holiday_pay NUMERIC DEFAULT 0`);
+    await run("payroll_items.unpaid_hours",      sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS unpaid_hours NUMERIC DEFAULT 0`);
+    await run("payroll_items.unpaid_deduction",  sql`ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS unpaid_deduction NUMERIC DEFAULT 0`);
   }
 
   // Fix: ensure the platform 'admin' user is never scoped to a company.

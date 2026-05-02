@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { calculateHourlyWorkerPay } from "./payroll-calculator";
+import { calculateWorkerPay } from "./payroll-calculator";
 import bcrypt from "bcrypt";
 import multer from "multer";
 import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePhone } from "./notifications";
@@ -2383,84 +2383,41 @@ export async function registerRoutes(
 
         const defaultRate = parseFloat(worker.payRate || "0");
         const otMultiplier = parseFloat(company.overtimeMultiplier || "1.5");
-        const dtMultiplier = 2.0;
-        let regHrs = 0, otHrs = 0, dtHrs = 0;
-        let regPay = 0, otPay = 0, dtPay = 0, grossPay = 0;
-        let commissionHrsTotal = 0, commissionHrlyPay = 0;
-        let volunteerHrsTotal = 0;
-        let specialEventHrsTotal = 0, specialEventPayTotal = 0;
 
-        if (worker.payType === "salary") {
-          // ── Salary: first pass for OT/DT hours ──────────────────────────────
-          for (const e of workerEntries) {
-            const ePayCat = (e as any).payCategory || "regular";
-            if (ePayCat !== "regular" && ePayCat !== "overtime" && ePayCat !== "double_time") continue;
-            const entryTotal = parseFloat(e.totalHours || "0");
-            const entryOt = Math.min(parseFloat(e.overtimeHours || "0"), entryTotal);
-            const entryDt = Math.min(parseFloat((e as any).doubleTimeHours || "0"), Math.max(0, entryTotal - entryOt));
-            dtHrs += entryDt;
-            otHrs += entryOt;
-            regHrs += Math.max(0, entryTotal - entryOt - entryDt);
+        // ── Unified calculator: all 15 pay categories, both hourly and salary ──
+        // This is the ONLY place payroll math runs in the process route.
+        // No inline salary/hourly branching — calculateWorkerPay() handles both.
+        const processCalcResult = calculateWorkerPay(
+          { id: worker.id, payType: worker.payType || "hourly", payRate: worker.payRate || "0" },
+          workerEntries.map(e => ({
+            workerId: e.workerId,
+            totalHours: e.totalHours || "0",
+            overtimeHours: e.overtimeHours || "0",
+            doubleTimeHours: (e as any).doubleTimeHours || "0",
+            payCategory: (e as any).payCategory,
+            overridePayRate: (e as any).overridePayRate,
+            wageGroupId: e.wageGroupId,
+            tipsAmount: (e as any).tipsAmount,
+          })),
+          {
+            overtimeMultiplier: otMultiplier,
+            periodsPerYear: schedulePeriodsPerYear,
+            wageGroups: wageGroupMap,
           }
-          const hourlyEquiv = defaultRate / 2080;
-          regPay = defaultRate / schedulePeriodsPerYear;
-          otPay = otHrs * hourlyEquiv * otMultiplier;
-          dtPay = dtHrs * hourlyEquiv * dtMultiplier;
-          grossPay = regPay + otPay + dtPay;
-          // Salary workers may still have commission_hours / volunteer / special_event time entries
-          for (const e of workerEntries) {
-            const ePayCat = (e as any).payCategory || "regular";
-            if (ePayCat === "regular" || ePayCat === "overtime" || ePayCat === "double_time") continue;
-            const entryTotal = parseFloat(e.totalHours || "0");
-            const wgId = e.wageGroupId;
-            const wg = wgId ? wageGroupMap[wgId] : null;
-            const entryOverride = (e as any).overridePayRate ? parseFloat((e as any).overridePayRate) : null;
-            const rate = entryOverride ?? (wg ? wg.hourlyRate : hourlyEquiv);
-            if (ePayCat === "volunteer") {
-              volunteerHrsTotal += entryTotal;
-            } else if (ePayCat === "commission_hours") {
-              commissionHrsTotal += entryTotal;
-              commissionHrlyPay += entryTotal * rate;
-            } else if (ePayCat === "special_event") {
-              specialEventHrsTotal += entryTotal;
-              specialEventPayTotal += entryTotal * rate;
-            }
-          }
-          grossPay += commissionHrlyPay + specialEventPayTotal;
-        } else {
-          // ── Hourly: use tested pure calculator (commission_hours never inflates regHrs/regPay) ──
-          const wageGroupsForCalc: Record<string, { hourlyRate: number; overtimeRate: number }> = {};
-          for (const [wgId, wg] of Object.entries(wageGroupMap)) {
-            wageGroupsForCalc[wgId] = { hourlyRate: wg.hourlyRate, overtimeRate: wg.overtimeRate };
-          }
-          console.log(`[PAYROLL] USING calculateHourlyWorkerPay runId=${run.id} workerId=${worker.id}`);
-          const calcResult = calculateHourlyWorkerPay(
-            { id: worker.id, payType: worker.payType || "hourly", payRate: worker.payRate || "0" },
-            workerEntries.map(e => ({
-              workerId: e.workerId,
-              totalHours: e.totalHours || "0",
-              overtimeHours: e.overtimeHours || "0",
-              doubleTimeHours: (e as any).doubleTimeHours || "0",
-              payCategory: (e as any).payCategory,
-              overridePayRate: (e as any).overridePayRate,
-              wageGroupId: e.wageGroupId,
-            })),
-            { overtimeMultiplier: otMultiplier, wageGroups: wageGroupsForCalc }
-          );
-          regHrs            = calcResult.regularHours;
-          otHrs             = calcResult.overtimeHours;
-          dtHrs             = calcResult.doubleTimeHours;
-          regPay            = calcResult.regularPay;
-          otPay             = calcResult.overtimePay;
-          dtPay             = calcResult.doubleTimePay;
-          commissionHrsTotal = calcResult.commissionHours;
-          commissionHrlyPay  = calcResult.commissionHourlyPay;
-          volunteerHrsTotal  = calcResult.volunteerHours;
-          specialEventHrsTotal = calcResult.specialEventHours;
-          specialEventPayTotal = calcResult.specialEventPay;
-          grossPay           = calcResult.grossPay;
-          console.log(`[PAYROLL] RESULT workerId=${worker.id} regularHours=${regHrs.toFixed(2)} commissionHours=${commissionHrsTotal.toFixed(2)} regularPay=${regPay.toFixed(2)} commHrlyPay=${commissionHrlyPay.toFixed(2)} grossPay=${grossPay.toFixed(2)}`);
-        }
+        );
+        let regHrs             = processCalcResult.regularHours;
+        let otHrs              = processCalcResult.overtimeHours;
+        let dtHrs              = processCalcResult.doubleTimeHours;
+        let regPay             = processCalcResult.regularPay;
+        let otPay              = processCalcResult.overtimePay;
+        let dtPay              = processCalcResult.doubleTimePay;
+        let commissionHrsTotal = processCalcResult.commissionHours;
+        let commissionHrlyPay  = processCalcResult.commissionHourlyPay;
+        let volunteerHrsTotal  = processCalcResult.volunteerHours;
+        let specialEventHrsTotal = processCalcResult.specialEventHours;
+        let specialEventPayTotal = processCalcResult.specialEventPay;
+        let grossPay             = processCalcResult.grossPay;
+        console.log(`[PAYROLL] ${worker.payType === "salary" ? "SALARY" : "HOURLY"} workerId=${worker.id} regHrs=${regHrs.toFixed(2)} otHrs=${otHrs.toFixed(2)} commHrs=${commissionHrsTotal.toFixed(2)} salaryPay=${processCalcResult.salaryPay.toFixed(2)} grossPay=${grossPay.toFixed(2)}`);
 
         // Apply pay stub amendments for this worker in this pay period
         const workerAmendments = periodAmendments.filter(a => a.workerId === worker.id);
@@ -2566,7 +2523,8 @@ export async function registerRoutes(
           regularHours: regHrs.toFixed(2),
           overtimeHours: otHrs.toFixed(2),
           doubleTimeHours: dtHrs.toFixed(2),
-          regularPay: regPay.toFixed(2),
+          // regularPay: salary base kept here for backward compat; salaryPay column is additional detail
+          regularPay: (regPay + processCalcResult.salaryPay).toFixed(2),
           overtimePay: otPay.toFixed(2),
           doubleTimePay: dtPay.toFixed(2),
           grossPay: grossPay.toFixed(2),
@@ -2584,6 +2542,19 @@ export async function registerRoutes(
           volunteerHours: volunteerHrsTotal > 0 ? volunteerHrsTotal.toFixed(2) : "0",
           specialEventHours: specialEventHrsTotal > 0 ? specialEventHrsTotal.toFixed(2) : "0",
           specialEventPay: specialEventPayTotal > 0 ? specialEventPayTotal.toFixed(2) : "0",
+          // ── All 15 categories (Task 2) ────────────────────────────────────
+          salaryPay: processCalcResult.salaryPay > 0 ? processCalcResult.salaryPay.toFixed(2) : "0",
+          bonusPay: processCalcResult.bonusPay > 0 ? processCalcResult.bonusPay.toFixed(2) : "0",
+          tipsPay: processCalcResult.tipsPay > 0 ? processCalcResult.tipsPay.toFixed(2) : "0",
+          reimburseAmount: processCalcResult.reimburseAmount > 0 ? processCalcResult.reimburseAmount.toFixed(2) : "0",
+          ptoHours: processCalcResult.ptoHours > 0 ? processCalcResult.ptoHours.toFixed(2) : "0",
+          ptoPay: processCalcResult.ptoPay > 0 ? processCalcResult.ptoPay.toFixed(2) : "0",
+          sickHours: processCalcResult.sickHours > 0 ? processCalcResult.sickHours.toFixed(2) : "0",
+          sickPay: processCalcResult.sickPay > 0 ? processCalcResult.sickPay.toFixed(2) : "0",
+          holidayHours: processCalcResult.holidayHours > 0 ? processCalcResult.holidayHours.toFixed(2) : "0",
+          holidayPay: processCalcResult.holidayPay > 0 ? processCalcResult.holidayPay.toFixed(2) : "0",
+          unpaidHours: processCalcResult.unpaidHours > 0 ? processCalcResult.unpaidHours.toFixed(2) : "0",
+          unpaidDeduction: processCalcResult.unpaidDeduction > 0 ? processCalcResult.unpaidDeduction.toFixed(2) : "0",
         });
       }
 
@@ -5144,7 +5115,6 @@ export async function registerRoutes(
       }
 
       const otMultiplier = Number(company.overtimeMultiplier || 1.5);
-      const dtMultiplier = 2.0;
 
       // ── Load worker payment methods to set per-worker paymentMethod ────────
       const allWorkerPayMethods = await storage.getPayMethods();
@@ -5189,74 +5159,44 @@ export async function registerRoutes(
         }
 
         const defaultRate = parseFloat(worker.payRate || "0");
-        let regHrs = 0, otHrs = 0, dtHrs = 0;
-        let regPay = 0, otPay = 0, dtPay = 0, grossPay = 0;
-        let createCommHrsTotal = 0, createCommHrlyPay = 0;
 
-        if (worker.payType === "salary") {
-          // ── Salary: first pass for OT/DT hours, then commission add-ons ────
-          for (const e of workerEntries) {
-            const ePayCat2 = (e as any).payCategory || "regular";
-            if (ePayCat2 !== "regular" && ePayCat2 !== "overtime" && ePayCat2 !== "double_time") continue;
-            const tot = parseFloat(e.totalHours || "0");
-            const cappedOt = Math.min(parseFloat(e.overtimeHours || "0"), tot);
-            const cappedDt = Math.min(parseFloat((e as any).doubleTimeHours || "0"), Math.max(0, tot - cappedOt));
-            otHrs += cappedOt;
-            dtHrs += cappedDt;
-            regHrs += Math.max(0, tot - cappedOt - cappedDt);
-          }
-          const hourlyEquiv = defaultRate / 2080;
-          regPay = defaultRate / schedulePeriodsPerYear;
-          otPay = otHrs * hourlyEquiv * otMultiplier;
-          dtPay = dtHrs * hourlyEquiv * dtMultiplier;
-          grossPay = regPay + otPay + dtPay;
-          for (const e of workerEntries) {
-            const ePayCat2 = (e as any).payCategory || "regular";
-            if (ePayCat2 !== "commission_hours") continue;
-            const entryTotal = parseFloat(e.totalHours || "0");
-            const wgId2 = (e as any).wageGroupId;
-            const wg2 = wgId2 ? wageGroupMap[wgId2] : null;
-            const entryOverride2 = (e as any).overridePayRate ? parseFloat((e as any).overridePayRate) : null;
-            const rate2 = entryOverride2 ?? (wg2 ? wg2.hourlyRate : hourlyEquiv);
-            createCommHrsTotal += entryTotal;
-            createCommHrlyPay += entryTotal * rate2;
-          }
-          grossPay += createCommHrlyPay;
-        } else {
-          // ── Hourly: delegate to tested pure calculator so commission_hours
-          //    NEVER inflates regularHours or regularPay ──────────────────────
-          console.log(`[PAYROLL] USING calculateHourlyWorkerPay runId=CREATE workerId=${worker.id}`);
-          const calcResult = calculateHourlyWorkerPay(
-            { id: worker.id, payType: worker.payType || "hourly", payRate: worker.payRate || "0" },
-            workerEntries.map(e => ({
-              workerId: e.workerId,
-              totalHours: e.totalHours || "0",
-              overtimeHours: e.overtimeHours || "0",
-              doubleTimeHours: (e as any).doubleTimeHours || "0",
-              payCategory: (e as any).payCategory,
-              overridePayRate: (e as any).overridePayRate,
-              wageGroupId: e.wageGroupId,
-            })),
-            { overtimeMultiplier: otMultiplier, wageGroups: wageGroupMap }
-          );
-          regHrs             = calcResult.regularHours;
-          otHrs              = calcResult.overtimeHours;
-          dtHrs              = calcResult.doubleTimeHours;
-          regPay             = calcResult.regularPay;
-          otPay              = calcResult.overtimePay;
-          dtPay              = calcResult.doubleTimePay;
-          createCommHrsTotal = calcResult.commissionHours;
-          createCommHrlyPay  = calcResult.commissionHourlyPay;
-          grossPay           = calcResult.grossPay;
-          console.log(`[PAYROLL] RESULT workerId=${worker.id} regularHours=${regHrs.toFixed(2)} commissionHours=${createCommHrsTotal.toFixed(2)} regularPay=${regPay.toFixed(2)} commHrlyPay=${createCommHrlyPay.toFixed(2)} grossPay=${grossPay.toFixed(2)}`);
-        }
-
-        const totalHrs = regHrs + otHrs + dtHrs + createCommHrsTotal;
-
-        // ── Commission earnings (CREATE) ──
+        // ── Commission earnings (CREATE) ──────────────────────────────────────
         const createWorkerComms = createCommByWorker[worker.id] || [];
         const createCommPay = createWorkerComms.reduce((sum, c) => sum + parseFloat(c.amount || "0"), 0);
-        if (createCommPay > 0) grossPay += createCommPay;
+
+        // ── Unified calculator: all 15 pay categories, both hourly and salary ──
+        // This is the ONLY place payroll math runs in the create/draft route.
+        const createCalcResult = calculateWorkerPay(
+          { id: worker.id, payType: worker.payType || "hourly", payRate: worker.payRate || "0" },
+          workerEntries.map(e => ({
+            workerId: e.workerId,
+            totalHours: e.totalHours || "0",
+            overtimeHours: e.overtimeHours || "0",
+            doubleTimeHours: (e as any).doubleTimeHours || "0",
+            payCategory: (e as any).payCategory,
+            overridePayRate: (e as any).overridePayRate,
+            wageGroupId: e.wageGroupId,
+            tipsAmount: (e as any).tipsAmount,
+          })),
+          {
+            overtimeMultiplier: otMultiplier,
+            periodsPerYear: schedulePeriodsPerYear,
+            wageGroups: wageGroupMap,
+            commissionPay: createCommPay,
+          }
+        );
+        let regHrs             = createCalcResult.regularHours;
+        let otHrs              = createCalcResult.overtimeHours;
+        let dtHrs              = createCalcResult.doubleTimeHours;
+        let regPay             = createCalcResult.regularPay;
+        let otPay              = createCalcResult.overtimePay;
+        let dtPay              = createCalcResult.doubleTimePay;
+        let createCommHrsTotal = createCalcResult.commissionHours;
+        let createCommHrlyPay  = createCalcResult.commissionHourlyPay;
+        let grossPay           = createCalcResult.grossPay;
+        console.log(`[PAYROLL] CREATE ${worker.payType === "salary" ? "SALARY" : "HOURLY"} workerId=${worker.id} regHrs=${regHrs.toFixed(2)} commHrs=${createCommHrsTotal.toFixed(2)} salaryPay=${createCalcResult.salaryPay.toFixed(2)} commPay=${createCommPay.toFixed(2)} grossPay=${grossPay.toFixed(2)}`);
+
+        const totalHrs = regHrs + otHrs + dtHrs + createCommHrsTotal;
 
         const compTypeCreate = (worker as any).compensationType || "hourly";
         const isCommissionOnlyCreate = compTypeCreate === "commission";
@@ -5314,7 +5254,8 @@ export async function registerRoutes(
           regularHours: regHrs.toFixed(2),
           overtimeHours: otHrs.toFixed(2),
           doubleTimeHours: dtHrs.toFixed(2),
-          regularPay: regPay.toFixed(2),
+          // regularPay: salary base kept here for backward compat; salaryPay column is additional detail
+          regularPay: (regPay + createCalcResult.salaryPay).toFixed(2),
           overtimePay: otPay.toFixed(2),
           doubleTimePay: dtPay.toFixed(2),
           grossPay: grossPay.toFixed(2),
@@ -5330,6 +5271,19 @@ export async function registerRoutes(
           commissionPay: createCommPay > 0 ? createCommPay.toFixed(2) : undefined,
           commissionHours: createCommHrsTotal > 0 ? createCommHrsTotal.toFixed(2) : "0",
           commissionHourlyPay: createCommHrlyPay > 0 ? createCommHrlyPay.toFixed(2) : "0",
+          // ── All 15 categories (Task 2) ────────────────────────────────────
+          salaryPay: createCalcResult.salaryPay > 0 ? createCalcResult.salaryPay.toFixed(2) : "0",
+          bonusPay: createCalcResult.bonusPay > 0 ? createCalcResult.bonusPay.toFixed(2) : "0",
+          tipsPay: createCalcResult.tipsPay > 0 ? createCalcResult.tipsPay.toFixed(2) : "0",
+          reimburseAmount: createCalcResult.reimburseAmount > 0 ? createCalcResult.reimburseAmount.toFixed(2) : "0",
+          ptoHours: createCalcResult.ptoHours > 0 ? createCalcResult.ptoHours.toFixed(2) : "0",
+          ptoPay: createCalcResult.ptoPay > 0 ? createCalcResult.ptoPay.toFixed(2) : "0",
+          sickHours: createCalcResult.sickHours > 0 ? createCalcResult.sickHours.toFixed(2) : "0",
+          sickPay: createCalcResult.sickPay > 0 ? createCalcResult.sickPay.toFixed(2) : "0",
+          holidayHours: createCalcResult.holidayHours > 0 ? createCalcResult.holidayHours.toFixed(2) : "0",
+          holidayPay: createCalcResult.holidayPay > 0 ? createCalcResult.holidayPay.toFixed(2) : "0",
+          unpaidHours: createCalcResult.unpaidHours > 0 ? createCalcResult.unpaidHours.toFixed(2) : "0",
+          unpaidDeduction: createCalcResult.unpaidDeduction > 0 ? createCalcResult.unpaidDeduction.toFixed(2) : "0",
         });
       }
 

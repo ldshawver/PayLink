@@ -68,6 +68,29 @@ export const companies = pgTable("companies", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/**
+ * persons — global identity record for a human who may work at multiple
+ * legal entities. A single person can have multiple worker records (one per
+ * company/legal-entity). W-2/1099 and tax remittance are always per worker
+ * (i.e. per legal employer), never per person. The person record is used only
+ * for consolidated reporting and cross-company identity lookups.
+ */
+export const persons = pgTable("persons", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  email: text("email"),
+  /** SSN — stored once at person level to avoid duplicates across employers */
+  ssn: text("ssn"),
+  /** Arbitrary external reference (e.g. HRIS global ID) */
+  globalId: text("global_id").unique(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertPersonSchema = createInsertSchema(persons).omit({ id: true, createdAt: true });
+export type Person = typeof persons.$inferSelect;
+export type InsertPerson = z.infer<typeof insertPersonSchema>;
+
 export const legalEntities = pgTable("legal_entities", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id"),
@@ -91,6 +114,10 @@ export const legalEntities = pgTable("legal_entities", {
 export const workers = pgTable("workers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id),
+  /** Links this worker record to a global person identity.
+   *  Null = person record not yet created.
+   *  YTD and tax filings are scoped to (workerId, legalEntityId, year) — never personId. */
+  personId: varchar("person_id").references(() => persons.id),
   firstName: text("first_name").notNull(),
   middleName: text("middle_name"),
   lastName: text("last_name").notNull(),
@@ -264,6 +291,31 @@ export const payrollItems = pgTable("payroll_items", {
   volunteerHours: numeric("volunteer_hours").default("0"),
   specialEventHours: numeric("special_event_hours").default("0"),
   specialEventPay: numeric("special_event_pay").default("0"),
+  // ── Extended pay categories (Task 2 — all 15 categories) ─────────────────
+  /** Base salary amount for this pay period (salary workers only) */
+  salaryPay: numeric("salary_pay").default("0"),
+  /** Bonus pay disbursed this period */
+  bonusPay: numeric("bonus_pay").default("0"),
+  /** Employer-collected tips paid through payroll */
+  tipsPay: numeric("tips_pay").default("0"),
+  /** Non-taxable reimbursements included in this paycheck */
+  reimburseAmount: numeric("reimburse_amount").default("0"),
+  /** PTO hours paid (hourly workers; salary workers: tracked, no additional pay) */
+  ptoHours: numeric("pto_hours").default("0"),
+  /** PTO pay (hourly workers only) */
+  ptoPay: numeric("pto_pay").default("0"),
+  /** Sick leave hours */
+  sickHours: numeric("sick_hours").default("0"),
+  /** Sick pay (hourly workers only) */
+  sickPay: numeric("sick_pay").default("0"),
+  /** Holiday pay hours */
+  holidayHours: numeric("holiday_hours").default("0"),
+  /** Holiday pay (hourly workers only) */
+  holidayPay: numeric("holiday_pay").default("0"),
+  /** Unpaid leave hours tracked this period */
+  unpaidHours: numeric("unpaid_hours").default("0"),
+  /** Salary dock for unpaid leave (salary workers only) */
+  unpaidDeduction: numeric("unpaid_deduction").default("0"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
