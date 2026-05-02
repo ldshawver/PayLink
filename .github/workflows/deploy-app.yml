@@ -57,7 +57,7 @@ jobs:
         run: npx tsx tests/security.test.ts
 
       - name: npm audit (high severity gate)
-        run: npm audit --audit-level=high || true
+        run: npm audit --audit-level=high
 
   build:
     name: Production Build
