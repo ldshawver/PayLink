@@ -21898,6 +21898,720 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
+  // ─── Readiness Audit (/api/platform/audit/readiness) ──────────────────────
+  app.get("/api/platform/audit/readiness", requirePlatformAudit, async (_req, res) => {
+    try {
+      const { db: dbR } = await import("./db");
+      const { sql: sqlR } = await import("drizzle-orm");
+
+      const q = async (query: any) => {
+        try { return (await dbR.execute(query)).rows; }
+        catch { return []; }
+      };
+      const count = async (query: any): Promise<number> => {
+        const rows = await q(query);
+        return parseInt((rows[0] as any)?.count ?? "0", 10);
+      };
+
+      // ── Run all queries in parallel ──────────────────────────────────────
+      const [
+        payrollRunCount, completedRunCount, payrollItemCount,
+        taxSnapshotCount, payItemsWithTax,
+        payPeriodScheduleCount, companiesWithoutSchedule,
+        legalEntityCount, multiCompanyWorkers,
+        payStubLineCount, stubsPerRun,
+        checkLogCount, checkTemplateCount,
+        treasuryPaymentCount, stripeKeySet,
+        savedReportCount,
+        caWorkerCount, caOvertimeCount, mealPolicyCount,
+        distinctStateCount,
+        damDocCount, workerDocCount, docFolderCount,
+        onboardingPacketCount, onboardingTemplateCount, workerOnboardingCount,
+        proposalCount, invoiceCount, contractCount,
+        signedSignerCount, sigReqCount, sigPackageCount,
+        notifTemplateCount, smtpConfigCount, reminderCount,
+        rolePermCount, resourceCount, scopeColExists,
+        auditLogCount, scheduleAuditCount,
+        sessionSecretSet, retentionPolicyCount,
+        demoCompanyCount, provAuditLogCount,
+        custOnboardingCount,
+      ] = await Promise.all([
+        // 1. Payroll engine
+        count(sqlR`SELECT COUNT(*) FROM payroll_runs`),
+        count(sqlR`SELECT COUNT(*) FROM payroll_runs WHERE status IN ('processed','paid','completed')`),
+        count(sqlR`SELECT COUNT(*) FROM payroll_items`),
+        // 2. Tax calculations
+        count(sqlR`SELECT COUNT(*) FROM tax_filing_snapshots`),
+        count(sqlR`SELECT COUNT(*) FROM payroll_items WHERE federal_income_tax > 0 OR state_income_tax > 0 OR fica_employee > 0`),
+        // 3. Pay period schedules
+        count(sqlR`SELECT COUNT(*) FROM pay_period_schedules`),
+        count(sqlR`SELECT COUNT(*) FROM companies c WHERE NOT EXISTS (SELECT 1 FROM pay_period_schedules p WHERE p.company_id = c.id) AND c.is_demo = false AND c.id != ''`),
+        // 4. Multi-company income
+        count(sqlR`SELECT COUNT(*) FROM legal_entities`),
+        count(sqlR`SELECT COUNT(DISTINCT worker_id) FROM time_entries GROUP BY worker_id HAVING COUNT(DISTINCT company_id) > 1`),
+        // 5. Paystubs
+        count(sqlR`SELECT COUNT(*) FROM pay_stub_line_items`),
+        count(sqlR`SELECT COUNT(DISTINCT payroll_run_id) FROM pay_stub_accounts`),
+        // 6. Check printing
+        count(sqlR`SELECT COUNT(*) FROM check_print_audit_logs`),
+        count(sqlR`SELECT COUNT(*) FROM check_templates`),
+        // 7. ACH/Stripe
+        count(sqlR`SELECT COUNT(*) FROM treasury_outbound_payments`),
+        Promise.resolve(!!process.env.STRIPE_SECRET_KEY ? 1 : 0),
+        // 8. Reports/exports
+        count(sqlR`SELECT COUNT(*) FROM saved_reports`),
+        // 9. California compliance
+        count(sqlR`SELECT COUNT(*) FROM workers WHERE state = 'CA' OR state = 'California'`),
+        count(sqlR`SELECT COUNT(*) FROM time_entries WHERE CAST(double_time_hours AS numeric) > 0`),
+        count(sqlR`SELECT COUNT(*) FROM meal_policies`),
+        // 10. Multi-state
+        count(sqlR`SELECT COUNT(DISTINCT state) FROM workers WHERE state IS NOT NULL AND state != ''`),
+        // 11. Document management
+        count(sqlR`SELECT COUNT(*) FROM dam_documents`),
+        count(sqlR`SELECT COUNT(*) FROM worker_documents`),
+        count(sqlR`SELECT COUNT(*) FROM document_folders`),
+        // 12. Onboarding packets
+        count(sqlR`SELECT COUNT(*) FROM onboarding_packets`),
+        count(sqlR`SELECT COUNT(*) FROM onboarding_templates`),
+        count(sqlR`SELECT COUNT(*) FROM worker_onboarding`),
+        // 13. Contractor proposals/invoices/contracts
+        count(sqlR`SELECT COUNT(*) FROM contractor_proposals`),
+        count(sqlR`SELECT COUNT(*) FROM contractor_invoices`),
+        count(sqlR`SELECT COUNT(*) FROM contractor_contracts`),
+        // 14. E-signatures
+        count(sqlR`SELECT COUNT(*) FROM contract_signers WHERE status = 'signed'`),
+        count(sqlR`SELECT COUNT(*) FROM document_signature_requests`),
+        count(sqlR`SELECT COUNT(*) FROM signature_packages`),
+        // 15. Notifications
+        count(sqlR`SELECT COUNT(*) FROM notification_templates`),
+        count(sqlR`SELECT COUNT(*) FROM smtp_config`),
+        count(sqlR`SELECT COUNT(*) FROM contractor_reminders`),
+        // 16. Permissions/RBAC
+        count(sqlR`SELECT COUNT(*) FROM role_permissions`),
+        count(sqlR`SELECT COUNT(DISTINCT resource) FROM role_permissions`),
+        q(sqlR`SELECT column_name FROM information_schema.columns WHERE table_name='role_permissions' AND column_name='can_view_own'`),
+        // 17. Tenant isolation — checked via key table audit log
+        count(sqlR`SELECT COUNT(*) FROM authorization_audit_log`),
+        count(sqlR`SELECT COUNT(*) FROM schedule_audit_logs`),
+        // 18. SOC 2 placeholder (env check)
+        Promise.resolve(!!process.env.SESSION_SECRET ? 1 : 0),
+        count(sqlR`SELECT COUNT(*) FROM document_retention_policies`),
+        // 19. Demo provisioning
+        count(sqlR`SELECT COUNT(*) FROM companies WHERE is_demo = true`),
+        count(sqlR`SELECT COUNT(*) FROM tenant_provisioning_audit_logs`),
+        // 20. Customer onboarding
+        count(sqlR`SELECT COUNT(*) FROM customer_onboarding_projects`),
+      ]);
+
+      // ── Tenant isolation: verify company_id in key tables ─────────────────
+      const keyTables = ["time_entries","payroll_runs","payroll_items","workers","schedules","expenses","invoices"];
+      const isoChecks: { table: string; hasCompanyId: boolean }[] = [];
+      for (const t of keyTables) {
+        const rows = await q(sqlR`SELECT column_name FROM information_schema.columns WHERE table_name=${t} AND column_name='company_id'`);
+        isoChecks.push({ table: t, hasCompanyId: rows.length > 0 });
+      }
+      const isoPass = isoChecks.every(c => c.hasCompanyId);
+
+      // ── SOC 2 checks ──────────────────────────────────────────────────────
+      const soc2Checks = [
+        { id: "session_secret", label: "SESSION_SECRET set", pass: !!process.env.SESSION_SECRET },
+        { id: "db_url", label: "DATABASE_URL set", pass: !!process.env.DATABASE_URL },
+        { id: "https_required", label: "Production HTTPS (APP_BASE_URL https://)", pass: (process.env.APP_BASE_URL || "").startsWith("https://") },
+        { id: "audit_log", label: "Authorization audit log populated", pass: auditLogCount > 0 },
+        { id: "retention_policies", label: "Data retention policies defined", pass: retentionPolicyCount > 0 },
+        { id: "smtp_configured", label: "Email (SMTP) configured", pass: smtpConfigCount > 0 },
+      ];
+      const soc2PassCount = soc2Checks.filter(c => c.pass).length;
+
+      // ── Build structured area results ──────────────────────────────────────
+      type AreaStatus = "pass" | "warning" | "fail";
+      type RiskLevel = "critical" | "high" | "medium" | "low";
+      type Area = {
+        id: string; name: string; status: AreaStatus; riskLevel: RiskLevel;
+        summary: string; evidence: Record<string, any>;
+        missingPieces: string[]; affectedTables: string[]; affectedRoutes: string[]; affectedUi: string[];
+        testCases: string[]; owner: string; blockingIssue: string | null; recommendedFixOrder: number;
+      };
+
+      const areas: Area[] = [
+        {
+          id: "payroll_engine", name: "Payroll Engine", recommendedFixOrder: 1,
+          riskLevel: "critical",
+          status: completedRunCount > 0 ? "pass" : payrollRunCount > 0 ? "warning" : "fail",
+          summary: `${payrollRunCount} total runs, ${completedRunCount} completed, ${payrollItemCount} line items`,
+          evidence: { payrollRunCount, completedRunCount, payrollItemCount },
+          missingPieces: [
+            ...(completedRunCount === 0 ? ["No completed payroll runs — cannot verify end-to-end calculation"] : []),
+            "IRS Pub 15-T percentage method not unit-tested",
+            "Supplemental wage rate (22%) not verified",
+            "Tip credit and tipped employee calculations unaudited",
+          ],
+          affectedTables: ["payroll_runs","payroll_items","pay_stub_line_items","pay_stub_accounts","pay_stub_transactions","pay_stub_amendments"],
+          affectedRoutes: ["POST /api/payroll-runs","PATCH /api/payroll-runs/:id/finalize","GET /api/payroll-runs/:id","GET /api/payroll-runs/:id/summary"],
+          affectedUi: ["Payroll page","Pay period wizard","Payroll detail view","Preview paystub modal"],
+          testCases: [
+            "Single employee hourly payroll — verify gross, federal WH, FICA, net",
+            "Salary employee with exempt status — no OT, correct federal WH",
+            "Multi-deduction employee — 401k, health, garnishment stacking",
+            "Year-to-date FICA cap enforcement ($168,600 for 2024 SS wages)",
+            "Supplemental payment (bonus) at 22% flat rate",
+          ],
+          owner: "Payroll Team",
+          blockingIssue: completedRunCount === 0 ? "No completed payroll run to validate against real output" : null,
+        },
+        {
+          id: "tax_calculations", name: "Tax Calculations", recommendedFixOrder: 2,
+          riskLevel: "critical",
+          status: taxSnapshotCount > 0 && payItemsWithTax > 0 ? "warning" : "fail",
+          summary: `${taxSnapshotCount} tax snapshots, ${payItemsWithTax} items with tax deductions`,
+          evidence: { taxSnapshotCount, payItemsWithTax },
+          missingPieces: [
+            "IRS Pub 15-T Percentage Method Tables not verified per bracket",
+            "CA SDI (1.1% 2024), CA SUI employer rate not validated per EDD",
+            "Federal FUTA (6% on first $7,000) cap enforcement unaudited",
+            "W-4 2020+ format (Steps 1-4) vs legacy not distinguished in calculation",
+            "State income tax withholding tables for non-CA states absent",
+            taxSnapshotCount === 0 ? "No tax_filing_snapshots — quarterly filing data absent" : "",
+          ].filter(Boolean),
+          affectedTables: ["payroll_items","tax_filing_snapshots","taxes_deductions","remittance_agencies","remittance_sources"],
+          affectedRoutes: ["GET /api/payroll-runs/:id/tax-summary","POST /api/tax-filings","GET /api/remittance-agencies"],
+          affectedUi: ["Payroll tax summary","Remittance panel","Tax filing page"],
+          testCases: [
+            "Single/Married filing status W-4 — verify bracket lookup for 2024 tables",
+            "CA SDI at 1.1% of gross wages — capped at $153,164 (2024 wage base)",
+            "FUTA: 6% on first $7,000 gross — verify $420 max per employee",
+            "FICA: 6.2% SS + 1.45% Medicare — verify 50/50 employer/employee split",
+            "Additional Medicare (0.9%) for wages over $200k single filer",
+          ],
+          owner: "Tax Compliance Team",
+          blockingIssue: payItemsWithTax === 0 ? "No payroll items contain tax deductions" : null,
+        },
+        {
+          id: "pay_period_schedules", name: "Pay Period Schedules", recommendedFixOrder: 3,
+          riskLevel: "high",
+          status: payPeriodScheduleCount > 0 && companiesWithoutSchedule === 0 ? "pass" : payPeriodScheduleCount > 0 ? "warning" : "fail",
+          summary: `${payPeriodScheduleCount} schedules, ${companiesWithoutSchedule} active companies missing a schedule`,
+          evidence: { payPeriodScheduleCount, companiesWithoutSchedule },
+          missingPieces: [
+            ...(companiesWithoutSchedule > 0 ? [`${companiesWithoutSchedule} companies have no pay period schedule`] : []),
+            "Semi-monthly anchor date drift on weekends not auto-adjusted",
+            "Pay date holiday shifting (e.g. Fri if Mon falls on holiday) not enforced",
+            "Bi-weekly vs bi-monthly confusion in UI labels unresolved",
+          ],
+          affectedTables: ["pay_period_schedules","pay_periods","payroll_runs","companies"],
+          affectedRoutes: ["GET /api/pay-period-schedules","POST /api/pay-period-schedules","GET /api/pay-periods"],
+          affectedUi: ["Pay period setup wizard","Payroll run list","Company settings"],
+          testCases: [
+            "Weekly schedule — verify 52 periods in a year with correct start/end dates",
+            "Bi-weekly — verify 26 periods, no overlap at year boundary",
+            "Semi-monthly — verify 24 periods, anchor dates 1st and 16th",
+            "Monthly — verify period spans full month including Feb 28/29",
+            "Holiday pay date shift — payday on holiday moves to prior Friday",
+          ],
+          owner: "Payroll Team",
+          blockingIssue: payPeriodScheduleCount === 0 ? "No pay period schedules configured" : null,
+        },
+        {
+          id: "multi_company_income", name: "Multi-Company Income Tracking", recommendedFixOrder: 4,
+          riskLevel: "high",
+          status: legalEntityCount > 0 ? "warning" : "fail",
+          summary: `${legalEntityCount} legal entities, ${multiCompanyWorkers} workers active at multiple companies`,
+          evidence: { legalEntityCount, multiCompanyWorkers },
+          missingPieces: [
+            legalEntityCount === 0 ? "No legal_entities records — EIN/FEIN tracking absent" : "",
+            "W-2 per-EIN aggregation not verified",
+            "Cross-company FICA cap enforcement across legal entities absent",
+            "Per-legal-entity payroll run isolation not enforced at DB level",
+            "Multi-state worker — which EIN withholds CA SDI vs other state SUI?",
+          ].filter(Boolean),
+          affectedTables: ["legal_entities","payroll_runs","payroll_items","time_entries","companies","workers"],
+          affectedRoutes: ["GET /api/legal-entities","POST /api/payroll-runs (company_id scoping)"],
+          affectedUi: ["Company settings","Payroll run creation","W-2 export"],
+          testCases: [
+            "Worker with hours at Company A and Company B — verify separate payroll line items per company",
+            "FICA cap: worker earning $100k at Co A + $70k at Co B — cap enforcement per EIN",
+            "W-2 box totals per EIN for shared worker — verify no double-counting",
+          ],
+          owner: "Payroll Team",
+          blockingIssue: legalEntityCount === 0 ? "legal_entities table is empty — per-EIN tracking impossible" : null,
+        },
+        {
+          id: "paystubs", name: "Paystubs", recommendedFixOrder: 5,
+          riskLevel: "high",
+          status: payStubLineCount > 0 ? "pass" : stubsPerRun > 0 ? "warning" : "fail",
+          summary: `${payStubLineCount} pay stub line items, ${stubsPerRun} payroll runs with stub data`,
+          evidence: { payStubLineCount, stubsPerRun },
+          missingPieces: [
+            payStubLineCount === 0 ? "No pay_stub_line_items — stubs not generated" : "",
+            "PDF generation for print/download not verified",
+            "YTD totals on stub not validated against payroll_items history",
+            "Deduction itemization (pre-tax vs post-tax) not clearly labeled",
+          ].filter(Boolean),
+          affectedTables: ["pay_stub_accounts","pay_stub_line_items","pay_stub_transactions","pay_stub_amendments","payroll_runs"],
+          affectedRoutes: ["GET /api/payroll-runs/:id/paystubs","GET /api/workers/:id/paystubs"],
+          affectedUi: ["Paystub view modal","Employee portal pay history"],
+          testCases: [
+            "Employee with OT — verify stub shows regular + OT line items separately",
+            "Employee with 401k deduction — verify pre-tax basis reduces federal WH",
+            "YTD gross: sum of current + prior stubs matches payroll_items total",
+            "Print/PDF — verify formatting, employer info, EIN, pay period dates",
+          ],
+          owner: "Payroll Team",
+          blockingIssue: payStubLineCount === 0 ? "No pay stub line items exist — stub generation broken or never run" : null,
+        },
+        {
+          id: "check_printing", name: "Check Printing", recommendedFixOrder: 6,
+          riskLevel: "high",
+          status: checkLogCount > 0 && checkTemplateCount > 0 ? "pass" : checkTemplateCount > 0 ? "warning" : "fail",
+          summary: `${checkLogCount} print events logged, ${checkTemplateCount} check templates`,
+          evidence: { checkLogCount, checkTemplateCount },
+          missingPieces: [
+            checkTemplateCount === 0 ? "No check templates configured" : "",
+            checkLogCount === 0 ? "No check print events recorded — never tested end-to-end" : "",
+            "MICR line encoding (routing + account) not verified against bank spec",
+            "Check number sequential uniqueness not enforced at DB level",
+            "Void and reprint workflow missing audit trail linkage",
+          ].filter(Boolean),
+          affectedTables: ["check_print_audit_logs","check_templates","payroll_runs","payroll_items"],
+          affectedRoutes: ["POST /api/payroll-runs/:id/print-checks","GET /api/check-templates"],
+          affectedUi: ["Print check page","Payroll actions menu"],
+          testCases: [
+            "Print check for one employee — verify MICR line correct, amount in words correct",
+            "Void a check — verify voided status in audit log, balance adjustment",
+            "Sequential check numbers — no gaps or duplicates across payroll runs",
+            "Multi-page check run — verify all employees included, none duplicated",
+          ],
+          owner: "Payroll Team",
+          blockingIssue: checkTemplateCount === 0 ? "No check templates — check printing cannot function" : null,
+        },
+        {
+          id: "ach_stripe", name: "ACH / Stripe Payments", recommendedFixOrder: 7,
+          riskLevel: "critical",
+          status: stripeKeySet > 0 && treasuryPaymentCount > 0 ? "warning" : stripeKeySet > 0 ? "fail" : "fail",
+          summary: `Stripe key: ${stripeKeySet > 0 ? "configured" : "MISSING"}, ${treasuryPaymentCount} treasury payments`,
+          evidence: { stripeKeySet: stripeKeySet > 0, treasuryPaymentCount },
+          missingPieces: [
+            stripeKeySet === 0 ? "STRIPE_SECRET_KEY not set — all payment flows blocked" : "",
+            treasuryPaymentCount === 0 ? "No treasury_outbound_payments — ACH direct deposit never completed" : "",
+            "Nacha ACH file format compliance (PPD/CCD entries) not verified",
+            "Prenote workflow (bank account verification) not implemented",
+            "Return/rejection handling (R01-R03 codes) not wired to UI",
+            "Same-day ACH vs standard ACH cutoff times not enforced",
+          ].filter(Boolean),
+          affectedTables: ["treasury_outbound_payments","pay_methods","payroll_payment_records","funding_accounts","payments"],
+          affectedRoutes: ["POST /api/treasury/initiate-ach","GET /api/treasury/outbound-payments","POST /api/payroll-runs/:id/submit-ach"],
+          affectedUi: ["ACH payment panel","Payroll run actions","Funding account setup"],
+          testCases: [
+            "Direct deposit for one employee — verify ACH entry created with correct routing/account",
+            "Insufficient funds — verify run blocked, employee notified",
+            "ACH return R02 (account closed) — verify worker flagged, payment voided",
+            "Dual bank accounts (split deposit) — correct % allocation",
+          ],
+          owner: "Finance / Payments Team",
+          blockingIssue: stripeKeySet === 0 ? "STRIPE_SECRET_KEY missing — no payment processing possible" : "No ACH payments completed end-to-end",
+        },
+        {
+          id: "reports_exports", name: "Reports / Exports", recommendedFixOrder: 8,
+          riskLevel: "medium",
+          status: savedReportCount > 0 ? "pass" : "warning",
+          summary: `${savedReportCount} saved reports`,
+          evidence: { savedReportCount },
+          missingPieces: [
+            savedReportCount === 0 ? "No saved reports — report module not used" : "",
+            "941 quarterly tax return export not verified",
+            "W-2/W-3 bulk export accuracy not audited",
+            "1099-NEC contractor export not verified",
+            "California DE 9/DE 9C export format not implemented",
+            "FLSA overtime audit report missing",
+          ].filter(Boolean),
+          affectedTables: ["saved_reports","payroll_runs","payroll_items","workers","tax_filing_snapshots"],
+          affectedRoutes: ["GET /api/reports","POST /api/reports","GET /api/payroll-runs/export-csv"],
+          affectedUi: ["Reports page","Payroll export modal","Tax filing page"],
+          testCases: [
+            "Payroll summary CSV — verify all workers, correct gross/net columns",
+            "941 export — verify line 2 (wages), line 5a-5d (FICA), line 6 (total tax)",
+            "W-2 per worker — verify Box 1 (wages), Box 4 (SS), Box 6 (Medicare)",
+            "1099-NEC — verify Box 1 ≥ $600 threshold filtering",
+          ],
+          owner: "Reporting Team",
+          blockingIssue: null,
+        },
+        {
+          id: "ca_compliance", name: "California Labor Compliance", recommendedFixOrder: 9,
+          riskLevel: "critical",
+          status: caWorkerCount > 0 && caOvertimeCount > 0 ? "warning" : caWorkerCount > 0 ? "fail" : "warning",
+          summary: `${caWorkerCount} CA workers, ${caOvertimeCount} entries with CA double-time, ${mealPolicyCount} meal policies`,
+          evidence: { caWorkerCount, caOvertimeCount, mealPolicyCount },
+          missingPieces: [
+            caWorkerCount > 0 && caOvertimeCount === 0 ? "CA workers exist but no double-time hours recorded" : "",
+            "CA daily OT: 1.5x after 8h, 2x after 12h — not unit-tested per IWC Wage Order",
+            "7th consecutive day rule (2x all hours) not verified",
+            "Meal break: 30 min after 5h, 2nd break after 10h — not tracked in system",
+            "Rest break: 10 min per 4h — not tracked or enforced",
+            "CA SDI (1.1%) + VPDI check for voluntary plans absent",
+            "Piece-rate employee rest period pay (Bluford rule) not implemented",
+            mealPolicyCount === 0 ? "No meal_policies configured — CA break compliance impossible" : "",
+          ].filter(Boolean),
+          affectedTables: ["time_entries","workers","meal_policies","schedules","payroll_items","taxes_deductions"],
+          affectedRoutes: ["POST /api/time-punches/clock-out","GET /api/time-entries","GET /api/payroll-runs/:id/hours"],
+          affectedUi: ["Time clock","Schedule","Payroll hours summary","Compliance alerts"],
+          testCases: [
+            "10-hour CA shift — verify 2h OT at 1.5x, correct daily OT trigger at 8h",
+            "13-hour CA shift — verify 4h at 1.5x + 1h at 2x (after 12h)",
+            "7th consecutive day — verify all hours at 2x regardless of daily total",
+            "Missed meal break (>5h no 30min break) — verify meal premium shows in payroll",
+            "CA SDI at 1.1% of gross — verify deduction on CA workers only",
+          ],
+          owner: "Compliance Team",
+          blockingIssue: caWorkerCount > 0 && mealPolicyCount === 0 ? "CA workers exist but zero meal policies — break compliance unenforceable" : null,
+        },
+        {
+          id: "multi_state", name: "Multi-State Compliance Framework", recommendedFixOrder: 10,
+          riskLevel: "high",
+          status: distinctStateCount >= 3 ? "warning" : distinctStateCount > 0 ? "fail" : "fail",
+          summary: `${distinctStateCount} distinct worker states in system`,
+          evidence: { distinctStateCount },
+          missingPieces: [
+            "State withholding tables only implemented for CA — all other states missing",
+            "SUI rate per-state configuration not automated",
+            "Reciprocity agreements (e.g. PA-NJ, DC-MD-VA) not handled",
+            "Work-state vs residence-state split withholding not implemented",
+            "Multi-state W-2 Box 15-17 population not verified",
+            "State registration (employer account) tracking per-state absent",
+          ],
+          affectedTables: ["workers","payroll_items","taxes_deductions","tax_filing_snapshots","remittance_agencies"],
+          affectedRoutes: ["GET /api/workers","POST /api/payroll-runs","GET /api/tax-rates"],
+          affectedUi: ["Worker profile state field","Payroll tax summary","Tax remittance"],
+          testCases: [
+            "TX worker — verify no state income tax withheld",
+            "NY worker — verify NY SDI ($0.60/wk cap) + NY SIT bracket",
+            "CA resident working in NV — verify CA WH applied (CA source-of-income rule)",
+            "Worker changes state mid-year — verify W-2 split across Box 15-17",
+          ],
+          owner: "Compliance Team",
+          blockingIssue: "State income tax withholding not implemented beyond California",
+        },
+        {
+          id: "document_mgmt", name: "Document Management", recommendedFixOrder: 11,
+          riskLevel: "medium",
+          status: damDocCount > 0 || workerDocCount > 0 ? "pass" : "warning",
+          summary: `${damDocCount} DAM docs, ${workerDocCount} worker docs, ${docFolderCount} folders`,
+          evidence: { damDocCount, workerDocCount, docFolderCount },
+          missingPieces: [
+            damDocCount === 0 ? "No documents in DAM — document library empty" : "",
+            "Document expiry / renewal reminders not linked to worker employment status",
+            "Version control for policy documents not verified (rolling vs supersede)",
+            "ACL enforcement (who can see which docs) not audited per role",
+            "Bulk document assignment to employee groups not implemented",
+          ].filter(Boolean),
+          affectedTables: ["dam_documents","dam_document_access_logs","worker_documents","document_folders","document_acls","document_versions"],
+          affectedRoutes: ["GET /api/dam-documents","POST /api/dam-documents","GET /api/worker-documents"],
+          affectedUi: ["Document library","Worker profile docs tab","HR documents page"],
+          testCases: [
+            "Upload policy PDF — verify version 1 created, accessible by HR role",
+            "Employee view — verify they can only see docs ACL'd to their role/group",
+            "Expire a doc — verify expiry alert generated, renewal workflow triggered",
+            "Download audit — verify dam_document_access_logs entry created",
+          ],
+          owner: "HR Team",
+          blockingIssue: null,
+        },
+        {
+          id: "onboarding_packets", name: "Employee Onboarding Packets", recommendedFixOrder: 12,
+          riskLevel: "medium",
+          status: onboardingPacketCount > 0 && onboardingTemplateCount > 0 ? "pass" : onboardingTemplateCount > 0 ? "warning" : "fail",
+          summary: `${onboardingPacketCount} packets, ${onboardingTemplateCount} templates, ${workerOnboardingCount} worker onboardings`,
+          evidence: { onboardingPacketCount, onboardingTemplateCount, workerOnboardingCount },
+          missingPieces: [
+            onboardingTemplateCount === 0 ? "No onboarding templates — packet generation impossible" : "",
+            onboardingPacketCount === 0 ? "No onboarding packets created" : "",
+            "I-9 Employment Eligibility step not tracked in onboarding checklist",
+            "W-4 collection within onboarding flow not linked to payroll_items setup",
+            "Direct deposit form collection not integrated with pay_methods setup",
+            "Reminder cadence for incomplete onboarding not configured",
+          ].filter(Boolean),
+          affectedTables: ["onboarding_packets","onboarding_templates","onboarding_steps","onboarding_progress","worker_onboarding","onboarding_documents"],
+          affectedRoutes: ["POST /api/onboarding-packets","GET /api/onboarding-templates","GET /api/worker-onboarding"],
+          affectedUi: ["HR onboarding dashboard","Worker onboarding portal","New hire defaults"],
+          testCases: [
+            "Create new hire — verify onboarding packet auto-assigned from default template",
+            "Complete I-9 step — verify employer certification required within 3 days",
+            "W-4 submitted — verify linked to payroll withholding setup",
+            "Overdue step — verify reminder email sent at configured cadence",
+          ],
+          owner: "HR Team",
+          blockingIssue: onboardingTemplateCount === 0 ? "No onboarding templates configured" : null,
+        },
+        {
+          id: "contractor_workflow", name: "Contractor Proposals / Invoices / Contracts", recommendedFixOrder: 13,
+          riskLevel: "high",
+          status: proposalCount > 0 && invoiceCount > 0 && contractCount > 0 ? "pass" : proposalCount > 0 ? "warning" : "fail",
+          summary: `${proposalCount} proposals, ${invoiceCount} invoices, ${contractCount} contracts`,
+          evidence: { proposalCount, invoiceCount, contractCount },
+          missingPieces: [
+            proposalCount === 0 ? "No contractor proposals created" : "",
+            invoiceCount === 0 ? "No contractor invoices created" : "",
+            contractCount === 0 ? "No contractor contracts created" : "",
+            "1099-NEC auto-generation from invoice totals not verified",
+            "Invoice payment reconciliation against treasury_outbound_payments not linked",
+            "Contract auto-expiry and renewal workflow incomplete",
+          ].filter(Boolean),
+          affectedTables: ["contractor_proposals","contractor_invoices","contractor_contracts","proposal_line_items","contractor_payments","contractor_reminders"],
+          affectedRoutes: ["POST /api/contractor-proposals","POST /api/contractor-invoices","POST /api/contractor-contracts"],
+          affectedUi: ["Contractor Hub — Proposals","Contractor Hub — Invoices","Contractor Hub — Contracts"],
+          testCases: [
+            "Full proposal lifecycle: draft → submit → approve → convert to contract",
+            "Invoice from approved contract — verify budget guardrail enforced",
+            "Mark invoice paid — verify contractor_payments record + balance_due = 0",
+            "Contract expiry — verify renewal reminder sent 30 days before end date",
+          ],
+          owner: "Contractor Team",
+          blockingIssue: proposalCount === 0 ? "No proposals exist — workflow never tested end-to-end" : null,
+        },
+        {
+          id: "esignatures", name: "E-Signatures", recommendedFixOrder: 14,
+          riskLevel: "high",
+          status: signedSignerCount > 0 ? "warning" : sigPackageCount > 0 ? "warning" : "fail",
+          summary: `${signedSignerCount} signed contract signers, ${sigReqCount} doc signature requests, ${sigPackageCount} signature packages`,
+          evidence: { signedSignerCount, sigReqCount, sigPackageCount },
+          missingPieces: [
+            signedSignerCount === 0 ? "No completed e-signatures on contracts" : "",
+            "UETA / ESIGN Act audit trail (IP, timestamp, intent) completeness not verified",
+            "Signature image stored as data URL — not SVG normalized or validated",
+            "Multi-party signing order enforcement not tested",
+            "Certificate of completion PDF generation not implemented",
+            "Wet-ink fallback / decline flow incomplete",
+          ].filter(Boolean),
+          affectedTables: ["contract_signers","document_signature_requests","document_signers","signature_packages"],
+          affectedRoutes: ["POST /api/contractor-contracts/:id/sign","GET /api/contractor-contracts/:id/signers","POST /api/signature-packages"],
+          affectedUi: ["Contract detail panel","Document signing modal","Contractor Hub contracts tab"],
+          testCases: [
+            "Sign a contract — verify signed_at, signature_data, ip_address all populated",
+            "Multi-signer: contractor signs first, then company admin — verify correct order",
+            "Attempt to sign already-signed contract — verify idempotent block",
+            "UETA audit: verify IP, user agent, and timestamp captured for each signature",
+          ],
+          owner: "Legal / Contractor Team",
+          blockingIssue: signedSignerCount === 0 && sigPackageCount === 0 ? "No e-signatures completed — signing flow never tested" : null,
+        },
+        {
+          id: "notifications", name: "Notifications & Reminders", recommendedFixOrder: 15,
+          riskLevel: "medium",
+          status: notifTemplateCount > 0 && smtpConfigCount > 0 ? "pass" : notifTemplateCount > 0 ? "warning" : "fail",
+          summary: `${notifTemplateCount} templates, SMTP: ${smtpConfigCount > 0 ? "configured" : "NOT configured"}, ${reminderCount} contractor reminders`,
+          evidence: { notifTemplateCount, smtpConfigCount, reminderCount },
+          missingPieces: [
+            smtpConfigCount === 0 ? "SMTP not configured — all email notifications silently fail" : "",
+            notifTemplateCount === 0 ? "No notification templates — email content undefined" : "",
+            "Unsubscribe / opt-out compliance (CAN-SPAM) not implemented",
+            "SMS fallback for critical payroll notifications absent",
+            "Notification delivery tracking (opened, bounced) not implemented",
+            "Payroll run completion notification to employees not wired",
+          ].filter(Boolean),
+          affectedTables: ["notification_templates","notifications","smtp_config","sms_config","contractor_reminders","contractor_reminder_logs"],
+          affectedRoutes: ["POST /api/notifications/send","GET /api/notification-templates","GET /api/contractor-reminders"],
+          affectedUi: ["Notification settings","Email template editor","Contractor reminder panel"],
+          testCases: [
+            "Payroll completed — verify email sent to each employee with stub link",
+            "New contractor proposal — verify admin receives email notification",
+            "Overdue invoice reminder — verify sent at configured cadence",
+            "Bounce handling — verify failed delivery logged and retried",
+          ],
+          owner: "Platform Team",
+          blockingIssue: smtpConfigCount === 0 ? "SMTP not configured — no email delivery possible" : null,
+        },
+        {
+          id: "rbac", name: "Permissions / RBAC", recommendedFixOrder: 16,
+          riskLevel: "high",
+          status: rolePermCount > 50 && (scopeColExists as any[]).length > 0 ? "pass" : rolePermCount > 0 ? "warning" : "fail",
+          summary: `${rolePermCount} permission rows, ${resourceCount} resources covered, scope columns: ${(scopeColExists as any[]).length > 0 ? "present" : "MISSING"}`,
+          evidence: { rolePermCount, resourceCount, hasScopeColumns: (scopeColExists as any[]).length > 0 },
+          missingPieces: [
+            (scopeColExists as any[]).length === 0 ? "Scope columns (can_view_own etc) missing from role_permissions" : "",
+            "Platform role isolation from tenant roles not integration-tested",
+            "User-level permission overrides (user_permission_overrides) not surfaced in UI",
+            "Row-level security at DB layer (PostgreSQL RLS) not implemented",
+            "Permission audit: which routes are unguarded (no requireRole) not tracked",
+          ].filter(Boolean),
+          affectedTables: ["role_permissions","roles","user_roles","user_permission_overrides","enterprise_role_permissions"],
+          affectedRoutes: ["GET /api/role-permissions","POST /api/role-permissions/bulk","GET /api/debug/permissions/me","GET /api/permissions/matrix"],
+          affectedUi: ["Role Management page","Permission Overrides tab","Platform permissions"],
+          testCases: [
+            "Contractor login — verify can access Contractor Hub, cannot access Payroll",
+            "Employee login — verify can view own records, cannot view other workers",
+            "Supervisor — verify can approve subordinate timesheets, cannot edit payroll",
+            "Platform admin — verify cannot access tenant data across companies",
+          ],
+          owner: "Security Team",
+          blockingIssue: null,
+        },
+        {
+          id: "tenant_isolation", name: "Tenant Isolation", recommendedFixOrder: 17,
+          riskLevel: "critical",
+          status: isoPass ? "pass" : "fail",
+          summary: `${isoChecks.filter(c=>c.hasCompanyId).length}/${isoChecks.length} key tables have company_id`,
+          evidence: { isoChecks },
+          missingPieces: [
+            ...isoChecks.filter(c=>!c.hasCompanyId).map(c=>`${c.table} missing company_id column`),
+            "API route-level company_id filtering not audited for every endpoint",
+            "Cross-tenant data leak via worker_id lookups without company check",
+            "Session fixation attack (switching company via session replay) not tested",
+          ],
+          affectedTables: ["companies","workers","payroll_runs","payroll_items","schedules","time_entries","expenses"],
+          affectedRoutes: ["All /api/* routes — company_id must be enforced everywhere"],
+          affectedUi: ["All tenant-facing pages"],
+          testCases: [
+            "Company A admin — cannot fetch Company B workers via /api/workers?companyId=",
+            "Company A user — /api/payroll-runs returns only Company A runs",
+            "Direct URL manipulation — verify 403 returned, no data leaked",
+          ],
+          owner: "Security Team",
+          blockingIssue: !isoPass ? "One or more key tables missing company_id — tenant isolation not guaranteed" : null,
+        },
+        {
+          id: "audit_logs", name: "Audit Logs", recommendedFixOrder: 18,
+          riskLevel: "high",
+          status: auditLogCount > 0 && scheduleAuditCount > 0 ? "pass" : auditLogCount > 0 ? "warning" : "fail",
+          summary: `${auditLogCount} authorization events, ${scheduleAuditCount} schedule audit entries`,
+          evidence: { auditLogCount, scheduleAuditCount },
+          missingPieces: [
+            auditLogCount === 0 ? "No authorization audit log entries — RBAC changes not tracked" : "",
+            "Payroll run approval audit trail not writing to audit log",
+            "Admin override events (reset-to-draft, gate-override) not uniformly logged",
+            "Log retention policy (e.g. 7 years IRS requirement) not enforced",
+            "Log tampering protection (append-only, signed) not implemented",
+          ].filter(Boolean),
+          affectedTables: ["authorization_audit_log","schedule_audit_logs","onboarding_audit_log","document_audit_logs","trade_audit_logs"],
+          affectedRoutes: ["GET /api/platform/audit-log","GET /api/permissions/audit-log"],
+          affectedUi: ["Platform audit log page","Payroll audit trail"],
+          testCases: [
+            "Role change — verify authorization_audit_log entry with before/after",
+            "Admin reset payroll — verify audit entry with actor, timestamp, reason",
+            "Permission override — verify log entry shows who changed what",
+          ],
+          owner: "Security / Compliance Team",
+          blockingIssue: null,
+        },
+        {
+          id: "soc2", name: "SOC 2 Controls", recommendedFixOrder: 19,
+          riskLevel: "high",
+          status: soc2PassCount >= 5 ? "warning" : soc2PassCount >= 3 ? "warning" : "fail",
+          summary: `${soc2PassCount}/${soc2Checks.length} baseline controls passing`,
+          evidence: { checks: soc2Checks },
+          missingPieces: [
+            ...soc2Checks.filter(c=>!c.pass).map(c=>`FAIL: ${c.label}`),
+            "Formal security policy documentation not generated",
+            "Penetration test / vulnerability scan not completed",
+            "Vendor risk assessment for Stripe, Twilio, OpenAI not documented",
+            "Incident response plan not documented",
+            "Employee security training acknowledgment not tracked",
+            "MFA enforcement for admin accounts not implemented",
+            "Data encryption at rest verification (DB storage) not documented",
+          ],
+          affectedTables: ["authorization_audit_log","users","session","document_retention_policies"],
+          affectedRoutes: ["All authenticated routes — verify rate limiting, HTTPS redirect"],
+          affectedUi: ["Admin login","Platform console","User settings"],
+          testCases: [
+            "HTTPS redirect — verify HTTP requests redirected to HTTPS in production",
+            "Session expiry — verify session invalidated after timeout",
+            "Brute force protection — verify lockout after N failed login attempts",
+            "Rate limiting — verify /api/auth/* endpoints throttled",
+            "CSP headers — verify Content-Security-Policy header present",
+          ],
+          owner: "Security Team",
+          blockingIssue: !process.env.SESSION_SECRET ? "SESSION_SECRET not set — session security broken" : null,
+        },
+        {
+          id: "gdpr", name: "GDPR / Privacy Controls", recommendedFixOrder: 20,
+          riskLevel: "high",
+          status: retentionPolicyCount > 0 ? "warning" : "fail",
+          summary: `${retentionPolicyCount} retention policies defined`,
+          evidence: { retentionPolicyCount },
+          missingPieces: [
+            retentionPolicyCount === 0 ? "No document_retention_policies — data lifecycle undefined" : "",
+            "Right to erasure (GDPR Art. 17) — worker data deletion not implemented",
+            "Data portability (GDPR Art. 20) — structured export for individual not implemented",
+            "Privacy policy version tracking not linked to user acceptance",
+            "Cookie consent banner not implemented",
+            "Data Processing Agreement (DPA) template not generated per tenant",
+            "Cross-border data transfer compliance (SCCs) not documented",
+          ].filter(Boolean),
+          affectedTables: ["workers","users","documents","payroll_items","document_retention_policies"],
+          affectedRoutes: ["DELETE /api/workers/:id","GET /api/workers/:id/data-export"],
+          affectedUi: ["Worker profile","Privacy settings","Account deletion"],
+          testCases: [
+            "Worker data export — verify JSON contains all PII fields, no missing tables",
+            "Worker deletion — verify anonymization of payroll records (IRS 4-year rule)",
+            "Retention policy enforcement — verify old documents archived/deleted per policy",
+          ],
+          owner: "Legal / Compliance Team",
+          blockingIssue: null,
+        },
+        {
+          id: "demo_provisioning", name: "Demo Tenant Provisioning", recommendedFixOrder: 21,
+          riskLevel: "medium",
+          status: demoCompanyCount > 0 && provAuditLogCount > 0 ? "pass" : demoCompanyCount > 0 ? "warning" : "fail",
+          summary: `${demoCompanyCount} demo companies, ${provAuditLogCount} provisioning audit entries`,
+          evidence: { demoCompanyCount, provAuditLogCount },
+          missingPieces: [
+            demoCompanyCount === 0 ? "No demo companies exist — cannot demo product to prospects" : "",
+            provAuditLogCount === 0 ? "No provisioning audit log — tenant creation untracked" : "",
+            "Demo data reset / refresh flow not automated",
+            "Demo-to-paid conversion workflow not implemented",
+            "Time-boxed demo expiry not enforced",
+          ].filter(Boolean),
+          affectedTables: ["companies","tenant_provisioning_audit_logs","trial_signups"],
+          affectedRoutes: ["POST /api/platform/provision","GET /api/platform/provisioning"],
+          affectedUi: ["Platform provisioning page","Demo mode banner"],
+          testCases: [
+            "Provision demo tenant — verify all seed data created, is_demo=true",
+            "Demo expiry — verify access blocked after trial_end date",
+            "Demo-to-paid — verify subscription_status updated, features unlocked",
+          ],
+          owner: "Platform Team",
+          blockingIssue: demoCompanyCount === 0 ? "No demo companies — impossible to demonstrate product" : null,
+        },
+        {
+          id: "customer_onboarding", name: "Customer Onboarding Flow", recommendedFixOrder: 22,
+          riskLevel: "medium",
+          status: custOnboardingCount > 0 ? "pass" : "warning",
+          summary: `${custOnboardingCount} customer onboarding projects`,
+          evidence: { custOnboardingCount },
+          missingPieces: [
+            custOnboardingCount === 0 ? "No customer_onboarding_projects — B2B onboarding never used" : "",
+            "Onboarding checklist items not linked to required configuration steps",
+            "Implementation project handoff (from sales to CS) not tracked",
+            "Go-live readiness checklist for each tenant not enforced",
+            "Success milestone tracking (first payroll, first clock-in) not automated",
+          ].filter(Boolean),
+          affectedTables: ["customer_onboarding_projects","tenant_implementation_projects","tenant_provisioning_audit_logs"],
+          affectedRoutes: ["GET /api/onboarding-projects","POST /api/onboarding-projects","GET /api/platform/onboarding-projects"],
+          affectedUi: ["Platform onboarding projects","Customer onboarding portal"],
+          testCases: [
+            "New customer provisioned — verify onboarding project auto-created",
+            "Complete checklist item — verify progress percentage updated",
+            "All items complete — verify go-live notification sent to customer",
+          ],
+          owner: "Customer Success Team",
+          blockingIssue: null,
+        },
+      ];
+
+      const summary = {
+        pass: areas.filter(a=>a.status==="pass").length,
+        warning: areas.filter(a=>a.status==="warning").length,
+        fail: areas.filter(a=>a.status==="fail").length,
+        critical_fails: areas.filter(a=>a.status==="fail" && a.riskLevel==="critical").length,
+        lastRun: new Date().toISOString(),
+      };
+
+      res.json({ areas, summary });
+    } catch (e: any) {
+      console.error("[readiness audit]", e);
+      res.status(500).json({ message: e?.message || "Readiness audit failed" });
+    }
+  });
+
   // ── Inventory ──────────────────────────────────────────────────────────────
   app.get("/api/inventory", requireAuth, requireRole("admin", "manager", "employee"), async (req, res) => {
     try {

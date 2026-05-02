@@ -13,7 +13,10 @@ import {
 import {
   Download, RefreshCw, Server, GitBranch, Shield, Key, Plug, Database,
   Building2, FileText, Terminal, CheckCircle2, XCircle, AlertCircle, Clock,
-  Rocket, Layers, CreditCard, BarChart3, ScrollText, Lock, Unlock, AlertTriangle
+  Rocket, Layers, CreditCard, BarChart3, ScrollText, Lock, Unlock, AlertTriangle,
+  ClipboardCheck, ChevronDown, ChevronRight, Filter, AlertOctagon,
+  FlaskConical, BookOpen, Users, Cpu, Globe, FileSignature, Bell,
+  ShieldCheck, UserCheck, Banknote, Receipt, Printer, FileCheck2
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -745,6 +748,296 @@ function PermissionsTab() {
   );
 }
 
+// ─── Readiness tab helpers ────────────────────────────────────────────────────
+const AREA_ICONS: Record<string, any> = {
+  payroll_engine: Cpu, tax_calculations: Receipt, pay_period_schedules: Clock,
+  multi_company_income: Building2, paystubs: FileText, check_printing: Printer,
+  ach_stripe: Banknote, reports_exports: BarChart3, ca_compliance: Globe,
+  multi_state: Globe, document_mgmt: BookOpen, onboarding_packets: UserCheck,
+  contractor_workflow: FileSignature, esignatures: FileCheck2, notifications: Bell,
+  rbac: Shield, tenant_isolation: Lock, audit_logs: ScrollText, soc2: ShieldCheck,
+  gdpr: Shield, demo_provisioning: FlaskConical, customer_onboarding: Users,
+};
+
+function RiskBadge({ level }: { level: string }) {
+  const cls: Record<string, string> = {
+    critical: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+    high: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+    medium: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
+    low: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+  };
+  return <Badge className={`text-xs font-medium ${cls[level] ?? ""}`}>{level}</Badge>;
+}
+
+function AreaStatusIcon({ status }: { status: string }) {
+  if (status === "pass") return <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />;
+  if (status === "warning") return <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0" />;
+  return <AlertOctagon className="h-5 w-5 text-red-500 shrink-0" />;
+}
+
+function AreaCard({ area }: { area: any }) {
+  const [open, setOpen] = useState(false);
+  const Icon = AREA_ICONS[area.id] ?? FileText;
+  const borderCls = area.status === "pass"
+    ? "border-emerald-200 dark:border-emerald-800"
+    : area.status === "warning"
+    ? "border-amber-200 dark:border-amber-800"
+    : "border-red-200 dark:border-red-800";
+
+  return (
+    <div className={`border rounded-lg overflow-hidden ${borderCls}`} data-testid={`card-readiness-${area.id}`}>
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-muted/50 transition-colors"
+        onClick={() => setOpen(o => !o)}
+        data-testid={`button-readiness-expand-${area.id}`}
+      >
+        <span className="text-muted-foreground shrink-0 text-xs font-mono w-5 text-right">{area.recommendedFixOrder}</span>
+        <AreaStatusIcon status={area.status} />
+        <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium text-sm">{area.name}</span>
+            <RiskBadge level={area.riskLevel} />
+          </div>
+          <p className="text-xs text-muted-foreground mt-0.5 truncate">{area.summary}</p>
+        </div>
+        {area.blockingIssue && (
+          <span className="text-xs text-red-600 dark:text-red-400 font-medium shrink-0 hidden sm:block max-w-[200px] truncate">
+            ⛔ {area.blockingIssue}
+          </span>
+        )}
+        {open ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
+      </button>
+
+      {open && (
+        <div className="border-t bg-muted/20 px-4 pb-4 pt-3 space-y-4">
+          {area.blockingIssue && (
+            <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 dark:bg-red-950/30 px-3 py-2">
+              <AlertOctagon className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+              <p className="text-sm text-red-700 dark:text-red-300 font-medium">{area.blockingIssue}</p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Missing pieces */}
+            {area.missingPieces?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Missing / Gaps</p>
+                <ul className="space-y-1">
+                  {area.missingPieces.map((m: string, i: number) => (
+                    <li key={i} className="flex items-start gap-1.5 text-xs">
+                      <XCircle className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
+                      <span>{m}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Test cases */}
+            {area.testCases?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Test Cases</p>
+                <ul className="space-y-1">
+                  {area.testCases.map((t: string, i: number) => (
+                    <li key={i} className="flex items-start gap-1.5 text-xs">
+                      <FlaskConical className="h-3.5 w-3.5 text-blue-500 shrink-0 mt-0.5" />
+                      <span>{t}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            {/* Affected tables */}
+            <div>
+              <p className="font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Affected Tables</p>
+              <div className="flex flex-wrap gap-1">
+                {area.affectedTables?.map((t: string) => (
+                  <span key={t} className="font-mono bg-muted border rounded px-1.5 py-0.5 text-xs">{t}</span>
+                ))}
+              </div>
+            </div>
+
+            {/* Affected routes */}
+            <div>
+              <p className="font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Affected Routes</p>
+              <div className="space-y-0.5">
+                {area.affectedRoutes?.map((r: string, i: number) => (
+                  <p key={i} className="font-mono text-xs text-muted-foreground">{r}</p>
+                ))}
+              </div>
+            </div>
+
+            {/* Affected UI + owner */}
+            <div>
+              <p className="font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Affected UI</p>
+              <div className="flex flex-wrap gap-1 mb-2">
+                {area.affectedUi?.map((u: string) => (
+                  <span key={u} className="bg-purple-100 dark:bg-purple-900/40 text-purple-800 dark:text-purple-200 rounded px-1.5 py-0.5 text-xs">{u}</span>
+                ))}
+              </div>
+              <p className="text-muted-foreground">Owner: <span className="font-medium text-foreground">{area.owner}</span></p>
+            </div>
+          </div>
+
+          {/* SOC2 checks (special) */}
+          {area.id === "soc2" && Array.isArray(area.evidence?.checks) && (
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Baseline Control Checks</p>
+              <div className="space-y-1">
+                {area.evidence.checks.map((c: any, i: number) => (
+                  <div key={i} className="flex items-center gap-2">
+                    {c.pass ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <XCircle className="h-3.5 w-3.5 text-red-500" />}
+                    <span className="text-xs">{c.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tenant isolation checks (special) */}
+          {area.id === "tenant_isolation" && Array.isArray(area.evidence?.isoChecks) && (
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Table Isolation Checks</p>
+              <div className="flex flex-wrap gap-2">
+                {area.evidence.isoChecks.map((c: any, i: number) => (
+                  <div key={i} className="flex items-center gap-1.5 text-xs">
+                    {c.hasCompanyId ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <XCircle className="h-3.5 w-3.5 text-red-500" />}
+                    <span className="font-mono">{c.table}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Readiness tab ────────────────────────────────────────────────────────────
+function ReadinessTab() {
+  const { data, isLoading, refetch, isFetching } = useQuery<any>({
+    queryKey: ["/api/platform/audit/readiness"],
+    staleTime: 60000,
+  });
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [riskFilter, setRiskFilter] = useState("all");
+  const [search, setSearch] = useState("");
+
+  if (isLoading) return <LoadingState />;
+  if (!data) return <ErrorState />;
+
+  const areas: any[] = data.areas ?? [];
+  const summary = data.summary ?? {};
+
+  const filtered = areas.filter((a: any) => {
+    if (statusFilter !== "all" && a.status !== statusFilter) return false;
+    if (riskFilter !== "all" && a.riskLevel !== riskFilter) return false;
+    if (search && !a.name.toLowerCase().includes(search.toLowerCase()) && !a.summary.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  return (
+    <div className="space-y-5">
+      {/* Summary scorecard */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: "Pass", count: summary.pass ?? 0, cls: "text-emerald-600", bg: "border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20" },
+          { label: "Warning", count: summary.warning ?? 0, cls: "text-amber-600", bg: "border-amber-200 bg-amber-50 dark:bg-amber-950/20" },
+          { label: "Fail", count: summary.fail ?? 0, cls: "text-red-600", bg: "border-red-200 bg-red-50 dark:bg-red-950/20" },
+          { label: "Critical Fails", count: summary.critical_fails ?? 0, cls: "text-red-800 font-bold", bg: "border-red-400 bg-red-100 dark:bg-red-950/40" },
+        ].map(({ label, count, cls, bg }) => (
+          <Card key={label} className={`border ${bg}`}>
+            <CardContent className="pt-4 pb-3 text-center">
+              <p className={`text-3xl font-bold ${cls}`}>{count}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Overall status banner */}
+      {summary.critical_fails > 0 ? (
+        <div className="flex items-center gap-3 rounded-lg border-2 border-red-500 bg-red-50 dark:bg-red-950/30 px-4 py-3">
+          <AlertOctagon className="h-5 w-5 text-red-600 shrink-0" />
+          <div>
+            <p className="font-semibold text-red-800 dark:text-red-200">Not Production Ready — {summary.critical_fails} critical area{summary.critical_fails !== 1 ? "s" : ""} failing</p>
+            <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">Resolve all critical fails before going live. See fix order (column #) for priority.</p>
+          </div>
+        </div>
+      ) : summary.fail > 0 ? (
+        <div className="flex items-center gap-3 rounded-lg border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 px-4 py-3">
+          <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0" />
+          <div>
+            <p className="font-semibold text-amber-800 dark:text-amber-200">{summary.fail} area{summary.fail !== 1 ? "s" : ""} failing — review before production</p>
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">No critical failures, but {summary.warning} warnings remain. Address in order.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3 rounded-lg border-2 border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 px-4 py-3">
+          <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
+          <div>
+            <p className="font-semibold text-emerald-800 dark:text-emerald-200">All areas passing — {summary.warning} warning{summary.warning !== 1 ? "s" : ""} to investigate</p>
+            <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">No failures detected. Review warnings and test cases for full confidence.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Filter bar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Filter className="h-4 w-4 text-muted-foreground shrink-0" />
+        <input
+          className="border rounded px-3 py-1.5 text-sm flex-1 max-w-xs bg-background"
+          placeholder="Search areas…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          data-testid="input-readiness-search"
+        />
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="h-8 text-xs w-32" data-testid="select-readiness-status"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All statuses</SelectItem>
+            <SelectItem value="fail">Fail</SelectItem>
+            <SelectItem value="warning">Warning</SelectItem>
+            <SelectItem value="pass">Pass</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={riskFilter} onValueChange={setRiskFilter}>
+          <SelectTrigger className="h-8 text-xs w-32" data-testid="select-readiness-risk"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All risks</SelectItem>
+            <SelectItem value="critical">Critical</SelectItem>
+            <SelectItem value="high">High</SelectItem>
+            <SelectItem value="medium">Medium</SelectItem>
+            <SelectItem value="low">Low</SelectItem>
+          </SelectContent>
+        </Select>
+        <Badge variant="secondary" className="shrink-0">{filtered.length} / {areas.length}</Badge>
+        <Button size="sm" variant="ghost" className="h-8 text-xs shrink-0" onClick={() => refetch()} disabled={isFetching} data-testid="button-readiness-refresh">
+          <RefreshCw className={`h-3.5 w-3.5 mr-1 ${isFetching ? "animate-spin" : ""}`} />
+          Refresh
+        </Button>
+      </div>
+
+      {/* Area cards sorted by fix order */}
+      <div className="space-y-2">
+        {filtered.length === 0 && (
+          <p className="text-sm text-muted-foreground py-6 text-center">No areas match the current filters.</p>
+        )}
+        {filtered.map((area: any) => <AreaCard key={area.id} area={area} />)}
+      </div>
+
+      <p className="text-xs text-muted-foreground text-right">
+        Last checked: {data.summary?.lastRun ? new Date(data.summary.lastRun).toLocaleString() : "—"}
+      </p>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function PlatformAuditPage() {
   const { toast } = useToast();
@@ -800,6 +1093,7 @@ export default function PlatformAuditPage() {
           <TabsTrigger value="billing" data-testid="tab-audit-billing"><CreditCard className="h-3.5 w-3.5 mr-1" />Billing</TabsTrigger>
           <TabsTrigger value="migrations" data-testid="tab-audit-migrations"><Database className="h-3.5 w-3.5 mr-1" />Migrations</TabsTrigger>
           <TabsTrigger value="logs" data-testid="tab-audit-logs"><ScrollText className="h-3.5 w-3.5 mr-1" />Logs</TabsTrigger>
+          <TabsTrigger value="readiness" data-testid="tab-audit-readiness" className="font-semibold"><ClipboardCheck className="h-3.5 w-3.5 mr-1" />Readiness</TabsTrigger>
         </TabsList>
 
         <TabsContent value="system" className="mt-6"><SystemTab /></TabsContent>
@@ -815,6 +1109,7 @@ export default function PlatformAuditPage() {
         <TabsContent value="billing" className="mt-6"><BillingTab /></TabsContent>
         <TabsContent value="migrations" className="mt-6"><MigrationsTab /></TabsContent>
         <TabsContent value="logs" className="mt-6"><LogsTab /></TabsContent>
+        <TabsContent value="readiness" className="mt-6"><ReadinessTab /></TabsContent>
       </Tabs>
     </div>
   );

@@ -102,6 +102,13 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 -   **Native UI Pages:** Notification settings, biometric toggle in profile.
 -   **NativeFileUpload component:** Replaces file inputs for native camera/photo library integration.
 
+**Platform Audit — Readiness Tab:**
+- `GET /api/platform/audit/readiness` — platform_super_admin only; runs parallel DB queries against all 22 product areas and returns per-area: status (pass/warning/fail), riskLevel (critical/high/medium/low), evidence counts, missingPieces, affectedTables, affectedRoutes, affectedUi, testCases, owner, blockingIssue, recommendedFixOrder.
+- The 22 areas: payroll engine, tax calculations, pay period schedules, multi-company income, paystubs, check printing, ACH/Stripe, reports/exports, CA labor compliance, multi-state compliance, document management, employee onboarding, contractor proposals/invoices/contracts, e-signatures, notifications, RBAC, tenant isolation, audit logs, SOC 2, GDPR, demo provisioning, customer onboarding.
+- Frontend: `ReadinessTab` component added to `platform-audit.tsx` — shows summary scorecard (pass/warning/fail/critical counts), overall readiness banner, filterable/searchable area list with expandable detail cards showing all fields. Registered as 14th tab in the Platform Audit page.
+- RBAC scope columns (`can_view_own`, `can_edit_own`, `can_view_subordinates`, `can_edit_subordinates`, `can_approve_subordinates`, `can_view_department`, `can_edit_department`, `can_view_company`, `can_edit_company`) added to `role_permissions` table; surfaced in RBAC readiness area evidence and in role-management.tsx permissions matrix.
+- Debug endpoint: `GET /api/debug/permissions/me` — returns the authenticated user's full effective permission set.
+
 ## External Dependencies
 -   **PostgreSQL:** Primary application database.
 -   **NGINX:** Reverse proxy for production deployments.
