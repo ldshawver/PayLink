@@ -24515,6 +24515,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
       await db.execute(sql`UPDATE users SET mfa_enabled = TRUE WHERE id = ${userId}`);
 
+      // Clear enrollment-required session flag so the user regains full access immediately
+      delete req.session.mfaEnrollmentRequired;
+
       const user = await storage.getUser(userId);
       await writePrivacyAuditLog({
         actorUserId: userId,
@@ -24611,7 +24614,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // Admin: enforce MFA for all users in a company
-  app.post("/api/auth/mfa/enforce", requireAuth, requireRole("admin"), async (req: any, res) => {
+  app.post("/api/auth/mfa/enforce", requireAuth, requireRole("admin", "tenant_admin", "tenant_owner"), async (req: any, res) => {
     try {
       const userId = req.session.userId as string;
       const user = await storage.getUser(userId);
