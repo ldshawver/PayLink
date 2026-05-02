@@ -126,7 +126,9 @@
 
 ## 3. Remaining Blockers
 
-No severity-critical blockers remain. All gate checks pass.
+No severity-critical engineering blockers remain for the application. **However, Task #10 (Security Compliance) is code-complete only — the items below must be documented and tested before the platform may be called SOC 2 or GDPR ready.**
+
+### 3.1 Functional / Engineering
 
 | # | Description | Severity | Owner / Task | ETA |
 |---|-------------|----------|-------------|-----|
@@ -135,6 +137,21 @@ No severity-critical blockers remain. All gate checks pass.
 | 3 | ACH `submit` immediately marks status=paid (sandbox only); no real bank connection | Low | Task #8 — ACH Banking | Future |
 | 4 | Meal break per-shift violation detection requires timesheet-level data analysis | Low | Task #7 | Next sprint |
 | 5 | VPS rsync permissions broken — marketing site auto-deploy fails silently | Low | DevOps (see `replit.md` rule #9) | VPS access needed |
+
+### 3.2 Required Before SOC 2 / GDPR Compliance-Ready
+
+| # | Requirement | Severity | Notes |
+|---|-------------|----------|-------|
+| 6  | Verify audit logs are immutable / append-only | **Critical** | Add DB constraint or trigger preventing UPDATE/DELETE on `authorization_audit_log`; add test asserting denial |
+| 7  | Add audit coverage for payroll, payment, document, and admin actions | **Critical** | `writeAuditLog()` calls on payroll create/approve/lock/submit, ACH submit, document upload/download/delete, admin endpoints (provision-demo, role assignment, etc.) |
+| 8  | Data export workflow test (GDPR Art. 15/20) | High | E2E test: request export → verify all PII categories present → verify audit row written |
+| 9  | Data anonymization / deletion workflow test (GDPR Art. 17) | High | E2E test: anonymize worker → verify `[ANONYMIZED]` placeholders → verify referential integrity → verify audit row |
+| 10 | Tenant isolation tests | **Critical** | Negative tests: tenant A cannot read/write tenant B's workers, payroll, documents, audit logs, breach incidents |
+| 11 | Backup / restore evidence | High | Documented backup cadence, retention period, restore drill log, encryption-at-rest evidence |
+| 12 | Role / permission change audit logs | High | Confirm `role_assigned`, `role_removed`, `permission_changed`, `override_added/removed` are emitted on every code path; add tests |
+| 13 | Breach / incident notification workflow | High | Document detection → triage → 72-hour GDPR notification path; UI + API tested end-to-end |
+| 14 | SOC 2 control matrix | **Required** | Map Trust Services Criteria (CC1–CC9, A1, C1, PI1, P1–P8) to implemented controls + evidence locations |
+| 15 | GDPR data inventory + retention matrix | **Required** | Catalog every PII column, lawful basis, retention period, deletion mechanism, sub-processor list |
 
 ---
 
@@ -151,6 +168,32 @@ No severity-critical blockers remain. All gate checks pass.
 | Audit log | `server/routes.ts`: `writeAuditLog()` called on approve, process, lock, submit-ach |
 | Demo payroll run ID | Created by `POST /api/admin/provision-demo` — run for period 2025-05-01 → 2025-05-14, status=paid |
 | Contractor lifecycle | `server/routes.ts` ~lines 8200–8600: proposal/contract/invoice/payment routes all present |
+
+### 4.1 Security / SOC 2 / GDPR (Task #10)
+
+**Code-complete items — PASS:**
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| Worker `POST`/`PATCH`/`DELETE` audit logging | PASS | `server/routes.ts` ~lines 1086–1144: `writeAuditLog()` emitted on `worker_created` / `worker_updated` / `worker_deleted` with `targetResource="workers"`, actor, company, before/after values |
+| `targetResource` audit filtering (API) | PASS | `server/storage.ts`: `getAuthorizationAuditLogsFiltered({ targetResource })` adds `eq(authorizationAuditLog.targetResource, ...)` condition; `IStorage` interface updated |
+| `targetResource` filter on `GET /api/audit-log` | PASS | `server/routes.ts` ~line 19742: query param extracted and forwarded to storage |
+| Audit CSV export `targetResource` filter | PASS | `server/routes.ts` ~line 19766: `GET /api/audit-log/export-csv` accepts and applies `targetResource` |
+| Expanded audit event types in UI | PASS | `client/src/pages/audit-log.tsx`: `EVENT_TYPE_LABELS` + `<SelectItem>` dropdown extended with `worker_*`, `payroll_run_*`, `pay_method_*`, `data_export`, `data_anonymization`, `breach_notification`, `mfa_enabled/disabled` |
+| Resource Type filter dropdown | PASS | `audit-log.tsx`: new `resourceFilter` state + `<Select data-testid="select-resource-filter">` with 8 resource options; included in queryKey for cache correctness |
+| CI secrets-in-code scan | PASS | `.github/workflows/deploy-app.yml` ~line 62: grep-based step fails build on hardcoded credential patterns in `server/`, `client/`, `shared/` (excludes `process.env`, placeholders, test strings) |
+| CI npm audit (high severity gate) | PASS | `.github/workflows/deploy-app.yml`: `npm audit --audit-level=high` (no `\|\| true`) |
+| Stripe CSP allowance | PASS | `server/index.ts`: `script-src` and `connect-src` include `https://js.stripe.com` / `https://api.stripe.com` |
+| Breach incidents API restricted | PASS | `server/routes.ts`: `breach-incidents` routes guarded by `platform_super_admin` / `platform_admin` only |
+| RFC 4180 CSV escaping | PASS | `client/src/pages/privacy-audit-log.tsx` + audit export: quotes escaped as `""`, fields wrapped in `"..."` |
+| MFA re-enrollment guard | PASS | `server/routes.ts`: 409 returned when MFA already enabled |
+| MFA UI uses InputOTP components | PASS | `client/src/pages/mfa-settings.tsx` |
+| GDPR data export (full bank details) | PASS | `server/routes.ts` data-export route includes worker bank/payment data |
+| GDPR anonymization placeholders | PASS | Anonymize route writes `[ANONYMIZED]` rather than NULL/blank |
+| Configurable VPS deploy secrets | PASS | `APP_VPS_USER` / `APP_VPS_PORT` consumed by deploy job |
+| Security test suite | **57/57 PASS** | `tests/security.test.ts` — auth, RBAC, tenant isolation, MFA, audit, CSP, GDPR routes |
+
+**Compliance status: NOT YET SOC 2 / GDPR READY.** The above are code-complete signals only. Items 6–15 in §3 below must be documented and tested before any external compliance claim.
 
 ---
 
