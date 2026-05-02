@@ -236,12 +236,14 @@ app.use((_req, res, next) => {
   if (isProduction) {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
-  // Content-Security-Policy — strict policy for all environments
+  // Content-Security-Policy — strict in production, relaxed for Vite HMR in dev
   const csp = [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline'",                                   // unsafe-inline needed for Vite HMR + shadcn
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",       // Google Fonts CSS
-    "img-src 'self' data: blob: https:",                                   // allow remote images (avatars, QR codes)
+    // In production Vite outputs <script src="..."> with no inline scripts → no unsafe-inline needed.
+    // In development Vite HMR injects inline scripts so unsafe-inline is required there.
+    isProduction ? "script-src 'self'" : "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",       // Google Fonts CSS + Tailwind runtime
+    "img-src 'self' data: blob: https:",                                   // allow remote images (avatars)
     "font-src 'self' data: https://fonts.gstatic.com",                     // Google Fonts files
     "connect-src 'self' https: wss:",                                      // wss: Vite HMR; https: Stripe/API calls
     "frame-ancestors 'none'",
@@ -2914,6 +2916,7 @@ Thank you,
     await run("breach_incidents table", sql`CREATE TABLE IF NOT EXISTS breach_incidents (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       actor_user_id VARCHAR NOT NULL,
+      tenant_id VARCHAR,
       discovered_at TIMESTAMP NOT NULL,
       nature TEXT NOT NULL,
       data_categories TEXT NOT NULL,
@@ -2924,6 +2927,10 @@ Thank you,
       containment_complete BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+    // Backfill: add tenant_id column to existing breach_incidents tables that predate this migration
+    await run("breach_incidents.tenant_id column", sql`
+      ALTER TABLE breach_incidents ADD COLUMN IF NOT EXISTS tenant_id VARCHAR
+    `);
   }
 
   // Fix: ensure the platform 'admin' user is never scoped to a company.

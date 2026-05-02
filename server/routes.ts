@@ -24623,11 +24623,23 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.get("/api/privacy-audit-log", requireAuth, requireRole("admin", "manager"), async (req: any, res) => {
     try {
+      const userId = req.session.userId as string;
+      const user = await storage.getUser(userId);
       const { limit = "50", offset = "0", actionType, dataSubjectId, fromDate, toDate } = req.query;
+
+      // Platform super/admin can see all tenants; all others are scoped to their own company
+      const isGlobalViewer = isPlatformUser(user?.role);
 
       let whereClause = "WHERE 1=1";
       const params: any[] = [];
       let paramIdx = 1;
+
+      // Tenant isolation: non-platform users only see their own company's privacy events
+      if (!isGlobalViewer) {
+        if (!user?.companyId) return res.status(403).json({ message: "No company context" });
+        whereClause += ` AND tenant_id = $${paramIdx++}`;
+        params.push(user.companyId);
+      }
 
       if (actionType) {
         whereClause += ` AND action_type = $${paramIdx++}`;
@@ -24671,11 +24683,26 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   app.get("/api/privacy-audit-log/export-csv", requireAuth, requireRole("admin"), async (req: any, res) => {
     try {
+      const userId = req.session.userId as string;
+      const user = await storage.getUser(userId);
+      const isGlobalViewer = isPlatformUser(user?.role);
+
       const { db: dbRaw } = await import("./db");
-      const rows = await dbRaw.$client.query(`
-        SELECT id, actor_user_id, action_type, data_subject_id, tenant_id, detail, created_at
-        FROM privacy_audit_log ORDER BY created_at DESC LIMIT 10000
-      `);
+      let query: string;
+      let queryParams: any[];
+
+      if (isGlobalViewer) {
+        query = `SELECT id, actor_user_id, action_type, data_subject_id, tenant_id, detail, created_at
+                 FROM privacy_audit_log ORDER BY created_at DESC LIMIT 10000`;
+        queryParams = [];
+      } else {
+        if (!user?.companyId) return res.status(403).json({ message: "No company context" });
+        query = `SELECT id, actor_user_id, action_type, data_subject_id, tenant_id, detail, created_at
+                 FROM privacy_audit_log WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 10000`;
+        queryParams = [user.companyId];
+      }
+
+      const rows = await dbRaw.$client.query(query, queryParams);
       const headers = ["id", "actorUserId", "actionType", "dataSubjectId", "tenantId", "detail", "createdAt"];
       const csvRows = rows.rows.map((r: any) =>
         [r.id, r.actor_user_id, r.action_type, r.data_subject_id ?? "", r.tenant_id ?? "", (r.detail ?? "").replace(/,/g, ";"), r.created_at].join(",")
@@ -24690,28 +24717,49 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // ── Breach Incidents API ─────────────────────────────────────────────────────
+  // Platform super/admin see all incidents. Tenant admins see only their company's incidents.
 
-  app.get("/api/breach-incidents", requireAuth, requireRole("admin"), async (_req, res) => {
+  app.get("/api/breach-incidents", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin"), async (req: any, res) => {
     try {
+      const userId = req.session.userId as string;
+      const user = await storage.getUser(userId);
+      const isGlobalViewer = isPlatformUser(user?.role);
+
       const { db: dbRaw } = await import("./db");
-      const rows = await dbRaw.$client.query(`
-        SELECT id, actor_user_id AS "actorUserId", discovered_at AS "discoveredAt",
-               nature, data_categories AS "dataCategories",
-               approximate_subjects AS "approximateSubjects",
-               response_actions AS "responseActions",
-               dpa_notified AS "dpaNotified",
-               subjects_notified AS "subjectsNotified",
-               containment_complete AS "containmentComplete",
-               created_at AS "createdAt"
-        FROM breach_incidents ORDER BY created_at DESC
-      `);
+      let rows;
+      if (isGlobalViewer) {
+        rows = await dbRaw.$client.query(`
+          SELECT id, actor_user_id AS "actorUserId", tenant_id AS "tenantId",
+                 discovered_at AS "discoveredAt", nature, data_categories AS "dataCategories",
+                 approximate_subjects AS "approximateSubjects",
+                 response_actions AS "responseActions",
+                 dpa_notified AS "dpaNotified",
+                 subjects_notified AS "subjectsNotified",
+                 containment_complete AS "containmentComplete",
+                 created_at AS "createdAt"
+          FROM breach_incidents ORDER BY created_at DESC
+        `);
+      } else {
+        if (!user?.companyId) return res.status(403).json({ message: "No company context" });
+        rows = await dbRaw.$client.query(`
+          SELECT id, actor_user_id AS "actorUserId", tenant_id AS "tenantId",
+                 discovered_at AS "discoveredAt", nature, data_categories AS "dataCategories",
+                 approximate_subjects AS "approximateSubjects",
+                 response_actions AS "responseActions",
+                 dpa_notified AS "dpaNotified",
+                 subjects_notified AS "subjectsNotified",
+                 containment_complete AS "containmentComplete",
+                 created_at AS "createdAt"
+          FROM breach_incidents WHERE tenant_id = $1 ORDER BY created_at DESC
+        `, [user.companyId]);
+      }
       res.json(rows.rows);
     } catch (e) {
       res.status(500).json({ message: "Failed to fetch breach incidents" });
     }
   });
 
-  app.post("/api/breach-incidents", requireAuth, requireRole("admin"), async (req: any, res) => {
+  app.post("/api/breach-incidents", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin"), async (req: any, res) => {
     try {
       const userId = req.session.userId as string;
       const user = await storage.getUser(userId);
@@ -24724,25 +24772,28 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         return res.status(400).json({ message: "discoveredAt, nature, dataCategories, and responseActions are required" });
       }
 
+      // Always record the tenant_id so incidents are scoped correctly
+      const tenantId = user?.companyId ?? null;
+
       const { db: dbRaw } = await import("./db");
       const result = await dbRaw.$client.query(`
         INSERT INTO breach_incidents
-          (actor_user_id, discovered_at, nature, data_categories, approximate_subjects,
+          (actor_user_id, tenant_id, discovered_at, nature, data_categories, approximate_subjects,
            response_actions, dpa_notified, subjects_notified, containment_complete)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING *
-      `, [userId, discoveredAt, nature, dataCategories, approximateSubjects,
+      `, [userId, tenantId, discoveredAt, nature, dataCategories, approximateSubjects,
           responseActions, dpaNotified, subjectsNotified, containmentComplete]);
 
       await writePrivacyAuditLog({
         actorUserId: userId,
         actionType: "breach_notification",
-        tenantId: user?.companyId ?? null,
+        tenantId,
         detail: JSON.stringify({ nature, dataCategories, approximateSubjects, dpaNotified, subjectsNotified }),
       });
       await writeAuditLog({
         actorUserId: userId, targetResource: "breach_incidents", changeType: "breach_notification",
-        note: `Breach incident recorded: ${nature.substring(0, 100)}`, companyId: user?.companyId ?? null,
+        note: `Breach incident recorded: ${nature.substring(0, 100)}`, companyId: tenantId,
       });
 
       res.status(201).json(result.rows[0]);

@@ -4384,6 +4384,8 @@ export type InsertPrivacyAuditLog = z.infer<typeof insertPrivacyAuditLogSchema>;
 export const breachIncidents = pgTable("breach_incidents", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   actorUserId: varchar("actor_user_id").notNull(),
+  /** Tenant (company) that reported the breach — NULL means platform-wide */
+  tenantId: varchar("tenant_id"),
   discoveredAt: timestamp("discovered_at").notNull(),
   nature: text("nature").notNull(),
   dataCategories: text("data_categories").notNull(),

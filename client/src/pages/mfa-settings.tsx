@@ -22,6 +22,7 @@ type CodeValues = z.infer<typeof codeSchema>;
 
 function QRCodeDisplay({ otpauthUri, secret }: { otpauthUri: string; secret: string }) {
   const [copied, setCopied] = useState(false);
+  const [copiedUri, setCopiedUri] = useState(false);
 
   function copySecret() {
     navigator.clipboard.writeText(secret).then(() => {
@@ -30,28 +31,49 @@ function QRCodeDisplay({ otpauthUri, secret }: { otpauthUri: string; secret: str
     });
   }
 
-  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(otpauthUri)}`;
+  function copyUri() {
+    navigator.clipboard.writeText(otpauthUri).then(() => {
+      setCopiedUri(true);
+      setTimeout(() => setCopiedUri(false), 2000);
+    });
+  }
 
   return (
-    <div className="flex flex-col items-center gap-4">
-      <img
-        src={qrSrc}
-        alt="QR code — scan with your authenticator app"
-        className="rounded-lg border p-1 bg-white"
-        width={200}
-        height={200}
-        data-testid="img-totp-qr"
-      />
-      <div className="w-full space-y-2">
-        <p className="text-xs text-muted-foreground text-center">
-          Can't scan? Enter this code manually in your authenticator app:
-        </p>
+    <div className="space-y-4 w-full">
+      <div className="rounded-lg border bg-blue-50 dark:bg-blue-950 p-3 text-sm text-blue-800 dark:text-blue-200 space-y-1">
+        <p className="font-medium">On your mobile device:</p>
+        <ol className="list-decimal list-inside space-y-1 text-xs">
+          <li>Open your authenticator app (Google Authenticator, Authy, 1Password, etc.)</li>
+          <li>Tap "+" or "Add account"</li>
+          <li>Choose "Enter setup key" and enter the key below</li>
+        </ol>
+      </div>
+
+      <div className="space-y-1">
+        <p className="text-xs font-medium text-muted-foreground">Setup key (base32)</p>
         <div className="flex items-center gap-2">
-          <code className="flex-1 text-xs font-mono bg-muted px-3 py-2 rounded-lg break-all" data-testid="text-totp-secret">
+          <code className="flex-1 text-sm font-mono bg-muted px-3 py-2 rounded-lg break-all tracking-widest" data-testid="text-totp-secret">
             {secret}
           </code>
-          <Button variant="outline" size="icon" onClick={copySecret} data-testid="button-copy-secret">
+          <Button variant="outline" size="icon" onClick={copySecret} title="Copy setup key" data-testid="button-copy-secret">
             {copied ? <ShieldCheck className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">Algorithm: TOTP · Digits: 6 · Period: 30 s</p>
+      </div>
+
+      <div className="space-y-1">
+        <p className="text-xs font-medium text-muted-foreground">Open in authenticator app (mobile)</p>
+        <div className="flex items-center gap-2">
+          <a
+            href={otpauthUri}
+            className="flex-1 text-xs font-mono bg-muted px-3 py-2 rounded-lg break-all text-blue-600 dark:text-blue-400 underline truncate"
+            data-testid="link-otpauth-uri"
+          >
+            {otpauthUri.substring(0, 60)}…
+          </a>
+          <Button variant="outline" size="icon" onClick={copyUri} title="Copy full URI" data-testid="button-copy-uri">
+            {copiedUri ? <ShieldCheck className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
           </Button>
         </div>
       </div>
@@ -200,8 +222,8 @@ export default function MfaSettingsPage() {
       {enrollData && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Step 1 — Scan QR Code</CardTitle>
-            <CardDescription>Open your authenticator app and scan the QR code below.</CardDescription>
+            <CardTitle className="text-base">Step 1 — Add to Authenticator App</CardTitle>
+            <CardDescription>Enter the setup key below into your authenticator app.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             <QRCodeDisplay otpauthUri={enrollData.otpauthUri} secret={enrollData.secret} />
