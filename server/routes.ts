@@ -206,6 +206,19 @@ function requirePlatformRole() {
   };
 }
 
+function requireSuperAdmin() {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.session?.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const user = await storage.getUser(req.session.userId);
+    if (!user || user.role !== "platform_super_admin") {
+      return res.status(403).json({ message: "platform_super_admin role required" });
+    }
+    next();
+  };
+}
+
 function blockDemoWrites(req: Request, res: Response, next: NextFunction) {
   if (req.session?.isDemo && req.method !== "GET") {
     return res.status(403).json({ message: "Demo mode is read-only. Sign up for a free trial to make changes." });
@@ -926,9 +939,15 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/companies", async (_req, res) => {
+  app.get("/api/companies", requireAuth, async (req, res) => {
     try {
-      const companies = await storage.getCompanies();
+      const user = await storage.getUser(req.session.userId!);
+      let companies = await storage.getCompanies();
+      // Tenant users can only see their own company; platform users see all
+      if (user && !isPlatformUser(user.role)) {
+        if (!user.companyId) return res.status(403).json({ message: "Access denied" });
+        companies = companies.filter(c => c.id === user.companyId);
+      }
       res.json(companies);
     } catch (error) {
       console.error(error);
@@ -936,11 +955,16 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/companies/:id", async (req, res) => {
+  app.get("/api/companies/:id", requireAuth, async (req, res) => {
     try {
+      const user = await storage.getUser(req.session.userId!);
       const company = await storage.getCompany(req.params.id);
       if (!company) {
         return res.status(404).json({ message: "Company not found" });
+      }
+      // Tenant users can only read their own company record
+      if (user && !isPlatformUser(user.role) && user.companyId && user.companyId !== req.params.id) {
+        return res.status(403).json({ message: "Access denied: company mismatch" });
       }
       res.json(company);
     } catch (error) {
@@ -14940,6 +14964,306 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) {
       console.error("Demo provision error:", e);
       res.status(500).json({ message: safeErrorMessage(e, "Failed to provision demo") });
+    }
+  });
+
+  // Admin demo provisioning — platform_super_admin only, idempotent
+  app.post("/api/admin/provision-demo", requireAuth, requireSuperAdmin(), async (req, res) => {
+    try {
+      const DEMO_COMPANY_NAME = "__demo_provision__";
+
+      function extractId(result: { rows: unknown[] }): string {
+        const row = result.rows[0] as Record<string, unknown>;
+        if (!row || typeof row.id !== "string") throw new Error("Expected RETURNING id row");
+        return row.id;
+      }
+
+      await db.transaction(async (tx) => {
+        // Idempotent reset: wipe previous demo data if it exists
+        const existingRes = await tx.execute(sql`SELECT id, enterprise_id FROM companies WHERE name = ${DEMO_COMPANY_NAME} LIMIT 1`);
+        if (existingRes.rows.length > 0) {
+          const oldRow = existingRes.rows[0] as Record<string, unknown>;
+          const oldId = oldRow.id as string;
+          const oldEnterpriseId = oldRow.enterprise_id as string | null;
+
+          // Step 1: delete tables that lack company_id but are linked via FK to demo rows
+          await tx.execute(sql`
+            DELETE FROM pay_stub_line_items
+            WHERE payroll_item_id IN (
+              SELECT id FROM payroll_items WHERE company_id = ${oldId}
+            )
+          `);
+          await tx.execute(sql`
+            DELETE FROM proposal_line_items
+            WHERE proposal_id IN (
+              SELECT id FROM contractor_proposals WHERE company_id = ${oldId}
+            )
+          `);
+          await tx.execute(sql`
+            DELETE FROM proposal_attachments
+            WHERE proposal_id IN (
+              SELECT id FROM contractor_proposals WHERE company_id = ${oldId}
+            )
+          `);
+          await tx.execute(sql`
+            DELETE FROM proposal_approval_events
+            WHERE proposal_id IN (
+              SELECT id FROM contractor_proposals WHERE company_id = ${oldId}
+            )
+          `);
+          await tx.execute(sql`
+            DELETE FROM proposal_negotiations
+            WHERE proposal_id IN (
+              SELECT id FROM contractor_proposals WHERE company_id = ${oldId}
+            )
+          `);
+          await tx.execute(sql`
+            DELETE FROM contract_signers
+            WHERE contract_id IN (
+              SELECT id FROM contractor_contracts WHERE company_id = ${oldId}
+            )
+          `);
+          await tx.execute(sql`
+            DELETE FROM contract_versions
+            WHERE contract_id IN (
+              SELECT id FROM contractor_contracts WHERE company_id = ${oldId}
+            )
+          `);
+
+          // Step 2: discover company_id-linked tables and delete in FK-safe order (leaves first)
+          const colRes = await tx.execute(sql`
+            SELECT DISTINCT table_name
+            FROM information_schema.columns
+            WHERE column_name = 'company_id'
+              AND table_schema = 'public'
+              AND table_name != 'companies'
+          `);
+          const allLinkedTables = new Set(
+            colRes.rows.map((r: unknown) => (r as Record<string, unknown>).table_name as string)
+          );
+
+          const fkRes = await tx.execute(sql`
+            SELECT
+              kcu.table_name  AS child_table,
+              ccu.table_name  AS parent_table
+            FROM information_schema.referential_constraints rc
+            JOIN information_schema.key_column_usage kcu
+              ON kcu.constraint_name = rc.constraint_name
+             AND kcu.constraint_schema = rc.constraint_schema
+            JOIN information_schema.constraint_column_usage ccu
+              ON ccu.constraint_name  = rc.unique_constraint_name
+             AND ccu.constraint_schema = rc.constraint_schema
+            WHERE kcu.table_schema = 'public'
+              AND ccu.table_schema = 'public'
+          `);
+
+          // childCount[parent] = # of company-linked tables that reference parent
+          // parentsOf[child]   = parents this child references
+          const childCount = new Map<string, number>();
+          const parentsOf = new Map<string, Set<string>>();
+          for (const t of allLinkedTables) {
+            childCount.set(t, 0);
+            parentsOf.set(t, new Set());
+          }
+          for (const row of fkRes.rows) {
+            const { child_table, parent_table } = row as Record<string, unknown>;
+            const child = child_table as string;
+            const parent = parent_table as string;
+            if (allLinkedTables.has(child) && allLinkedTables.has(parent) && child !== parent) {
+              if (!parentsOf.get(child)!.has(parent)) {
+                parentsOf.get(child)!.add(parent);
+                childCount.set(parent, (childCount.get(parent) ?? 0) + 1);
+              }
+            }
+          }
+
+          // Kahn's sort: seed with leaves (nothing references them), work toward roots
+          const queue: string[] = [];
+          for (const [tbl, cnt] of childCount) {
+            if (cnt === 0) queue.push(tbl);
+          }
+          const deleteOrder: string[] = [];
+          while (queue.length > 0) {
+            const tbl = queue.shift()!;
+            deleteOrder.push(tbl);
+            for (const parent of parentsOf.get(tbl) ?? []) {
+              const newCnt = (childCount.get(parent) ?? 1) - 1;
+              childCount.set(parent, newCnt);
+              if (newCnt === 0) queue.push(parent);
+            }
+          }
+          for (const t of allLinkedTables) {
+            if (!deleteOrder.includes(t)) deleteOrder.push(t);
+          }
+
+          for (const table of deleteOrder) {
+            await tx.execute(sql`DELETE FROM ${sql.identifier(table)} WHERE company_id = ${oldId}`);
+          }
+          await tx.execute(sql`DELETE FROM companies WHERE id = ${oldId}`);
+          if (oldEnterpriseId) {
+            await tx.execute(sql`DELETE FROM enterprises WHERE id = ${oldEnterpriseId}`);
+          }
+        }
+
+        // 1. Create enterprise & company
+        const entRes = await tx.execute(sql`
+          INSERT INTO enterprises (name, description, is_active)
+          VALUES (${DEMO_COMPANY_NAME + ' Enterprise'}, 'Demo enterprise for customer walk-throughs', TRUE)
+          RETURNING id
+        `);
+        const enterpriseId = extractId(entRes);
+
+        const coRes = await tx.execute(sql`
+          INSERT INTO companies (name, enterprise_id, subscription_status, plan_name, is_demo, pay_frequency, overtime_threshold, timezone, timezone_confirmed, state)
+          VALUES (${DEMO_COMPANY_NAME}, ${enterpriseId}, 'active_paid', 'professional', TRUE, 'biweekly', 40, 'America/Los_Angeles', TRUE, 'CA')
+          RETURNING id
+        `);
+        const companyId = extractId(coRes);
+
+        // 2. Divisions & departments
+        const divRes = await tx.execute(sql`
+          INSERT INTO divisions (company_id, name, code) VALUES (${companyId}, 'Operations', 'OPS'), (${companyId}, 'Administration', 'ADM') RETURNING id, name
+        `);
+        const rowId = (r: unknown): string => ((r as Record<string, unknown>).id as string);
+        const divOps = rowId(divRes.rows[0]);
+        const divAdm = rowId(divRes.rows[1]);
+
+        await tx.execute(sql`
+          INSERT INTO departments (company_id, division_id, name) VALUES
+          (${companyId}, ${divOps}, 'Field Services'),
+          (${companyId}, ${divOps}, 'Warehouse'),
+          (${companyId}, ${divAdm}, 'HR'),
+          (${companyId}, ${divAdm}, 'Finance')
+        `);
+
+        // 3. Workers — 5 employees (2 pay types), 2 managers, 1 contractor
+        const pw = await bcrypt.hash("demo1234", 10);
+        const workers = [
+          { first: "Alice",   last: "Navarro",  type: "employee",   payType: "hourly",  rate: "24.00", role: "employee",  dept: "Field Services" },
+          { first: "Ben",     last: "Torres",   type: "employee",   payType: "hourly",  rate: "20.00", role: "employee",  dept: "Warehouse" },
+          { first: "Carol",   last: "Kim",      type: "employee",   payType: "salary",  rate: "72000", role: "employee",  dept: "HR" },
+          { first: "David",   last: "Singh",    type: "employee",   payType: "salary",  rate: "85000", role: "employee",  dept: "Finance" },
+          { first: "Eva",     last: "Brooks",   type: "employee",   payType: "hourly",  rate: "22.50", role: "employee",  dept: "Field Services" },
+          { first: "Frank",   last: "Delgado",  type: "employee",   payType: "hourly",  rate: "26.00", role: "manager",   dept: "Field Services" },
+          { first: "Grace",   last: "Okafor",   type: "employee",   payType: "salary",  rate: "95000", role: "manager",   dept: "Administration" },
+          { first: "Hector",  last: "Lee",      type: "contractor", payType: "hourly",  rate: "55.00", role: "contractor",dept: "Field Services" },
+        ];
+
+        const workerIds: string[] = [];
+        for (const w of workers) {
+          const wRes = await tx.execute(sql`
+            INSERT INTO workers (company_id, first_name, last_name, worker_type, status, hire_date, pay_rate, pay_type, department, worker_group)
+            VALUES (${companyId}, ${w.first}, ${w.last}, ${w.type}, 'active', '2024-01-15', ${w.rate}, ${w.payType}, ${w.dept}, ${w.type === 'contractor' ? 'hourly_contractor' : 'hourly_employee'})
+            RETURNING id
+          `);
+          const wid = extractId(wRes);
+          workerIds.push(wid);
+
+          await tx.execute(sql`
+            INSERT INTO users (username, password, role, company_id, worker_id)
+            VALUES (${('demo_' + w.first.toLowerCase())}, ${pw}, ${w.role}, ${companyId}, ${wid})
+          `);
+        }
+
+        // 4. Admin user
+        const adminRes = await tx.execute(sql`
+          INSERT INTO users (username, password, role, company_id)
+          VALUES ('demo_admin', ${pw}, 'admin', ${companyId})
+          RETURNING id
+        `);
+        const adminUserId = extractId(adminRes);
+
+        // 5. Completed payroll run (biweekly, CA)
+        const periodStart = "2025-05-01";
+        const periodEnd = "2025-05-14";
+        const payDate = "2025-05-21";
+
+        const runRes = await tx.execute(sql`
+          INSERT INTO payroll_runs (company_id, period_start, period_end, pay_date, status, processed_at, approved_at, total_gross, total_net, total_hours, worker_count)
+          VALUES (${companyId}, ${periodStart}, ${periodEnd}, ${payDate}, 'paid', NOW() - INTERVAL '10 days', NOW() - INTERVAL '9 days', '14240.00', '10180.00', 320, 7)
+          RETURNING id
+        `);
+        const runId = extractId(runRes);
+
+        // Payroll items for ALL workers (hourly + salaried) in the run
+        type WorkerSeed = { wid: string; payType: string; rate: string };
+        const allWorkerSeeds: WorkerSeed[] = [
+          { wid: workerIds[0], payType: "hourly",  rate: "24.00" },   // Alice
+          { wid: workerIds[1], payType: "hourly",  rate: "20.00" },   // Ben
+          { wid: workerIds[2], payType: "salary",  rate: "72000" },   // Carol
+          { wid: workerIds[3], payType: "salary",  rate: "85000" },   // David
+          { wid: workerIds[4], payType: "hourly",  rate: "22.50" },   // Eva
+          { wid: workerIds[5], payType: "hourly",  rate: "26.00" },   // Frank (manager)
+          { wid: workerIds[6], payType: "salary",  rate: "95000" },   // Grace (manager)
+        ];
+        for (const w of allWorkerSeeds) {
+          let gross: string;
+          let regularHours: string;
+          if (w.payType === "hourly") {
+            gross = (parseFloat(w.rate) * 80).toFixed(2);
+            regularHours = "80";
+          } else {
+            // biweekly: annual / 26 pay periods
+            gross = (parseFloat(w.rate) / 26).toFixed(2);
+            regularHours = "80";
+          }
+          const net = (parseFloat(gross) * 0.72).toFixed(2);
+          const deductions = (parseFloat(gross) * 0.28).toFixed(2);
+          await tx.execute(sql`
+            INSERT INTO payroll_items (payroll_run_id, worker_id, company_id, regular_hours, overtime_hours, regular_pay, salary_pay, gross_pay, deductions, net_pay, payment_method, status)
+            VALUES (
+              ${runId}, ${w.wid}, ${companyId},
+              ${regularHours}, '0',
+              ${w.payType === "hourly" ? gross : "0"},
+              ${w.payType === "salary" ? gross : "0"},
+              ${gross}, ${deductions}, ${net},
+              'direct_deposit', 'paid'
+            )
+          `);
+        }
+
+        // 6. DMS documents (offer letter + NDA)
+        const folderRes = await tx.execute(sql`
+          INSERT INTO document_folders (company_id, name, category, color)
+          VALUES (${companyId}, 'Onboarding Documents', 'hr', '#3B82F6')
+          RETURNING id
+        `);
+        const folderId = extractId(folderRes);
+
+        await tx.execute(sql`
+          INSERT INTO documents (company_id, folder_id, title, file_name, file_url, is_template, status, category)
+          VALUES
+          (${companyId}, ${folderId}, 'Offer Letter — Alice Navarro', 'offer_alice.pdf', '/demo/offer_alice.pdf', FALSE, 'signed', 'hr'),
+          (${companyId}, ${folderId}, 'NDA — Alice Navarro', 'nda_alice.pdf', '/demo/nda_alice.pdf', FALSE, 'signed', 'legal')
+        `);
+
+        // 7. Contractor proposal (approved)
+        const propRes = await tx.execute(sql`
+          INSERT INTO contractor_proposals (company_id, contractor_id, title, status, subtotal, amount, issue_date)
+          VALUES (${companyId}, ${workerIds[7]}, 'Site Maintenance — May 2025', 'approved', '4400.00', '4400.00', '2025-05-01')
+          RETURNING id
+        `);
+
+        // Write provisioning audit log
+        await tx.execute(sql`
+          INSERT INTO analytics_events (event_name, page_source, metadata)
+          VALUES ('admin_demo_provisioned', 'api', ${JSON.stringify({ companyId, by: req.session?.userId })})
+        `);
+
+        return { companyId, adminUserId };
+      });
+
+      res.json({
+        message: "Demo company provisioned successfully",
+        demoCompanyName: "__demo_provision__",
+        adminUsername: "demo_admin",
+        adminPassword: "demo1234",
+        workerPassword: "demo1234",
+        note: "This endpoint is idempotent — re-running will reset the demo company to a clean state.",
+      });
+    } catch (e: any) {
+      console.error("[AdminDemoProvision]", e);
+      res.status(500).json({ message: safeErrorMessage(e, "Failed to provision demo company") });
     }
   });
 

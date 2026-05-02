@@ -1425,6 +1425,34 @@ function PayrollRunCard({
                 );
               })()}
 
+              {/* ── CA Labor Compliance Warning Banner ───────────────────── */}
+              {items.length > 0 && (() => {
+                const dtWorkers = items.filter(i => Number(i.doubleTimeHours || 0) > 0);
+                const highHrsWorkers = items.filter(i => {
+                  const total = Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0);
+                  return total > 60;
+                });
+                const weeklyOtWorkers = items.filter(i => {
+                  const total = Number(i.regularHours || 0) + Number(i.overtimeHours || 0) + Number(i.doubleTimeHours || 0);
+                  return total > 40;
+                });
+                const warnings: string[] = [];
+                if (dtWorkers.length > 0) warnings.push(`${dtWorkers.length} worker${dtWorkers.length > 1 ? "s" : ""} with double-time hours (CA Labor Code § 510 — verify 2× rate applied)`);
+                if (highHrsWorkers.length > 0) warnings.push(`${highHrsWorkers.length} worker${highHrsWorkers.length > 1 ? "s" : ""} exceed 60 hrs/period — verify 7th-consecutive-day rule (2× all hours)`);
+                else if (weeklyOtWorkers.length > 0 && dtWorkers.length === 0) warnings.push(`${weeklyOtWorkers.length} worker${weeklyOtWorkers.length > 1 ? "s" : ""} worked >40 hrs — verify weekly overtime and daily OT thresholds`);
+                if (warnings.length === 0) return null;
+                return (
+                  <div className="flex items-start gap-2 p-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700" data-testid={`compliance-warning-${run.id}`}>
+                    <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <div className="text-xs text-amber-800 dark:text-amber-300 space-y-0.5">
+                      <p className="font-semibold">Labor Compliance Notices</p>
+                      {warnings.map((w, i) => <p key={i}>• {w}</p>)}
+                      <p className="text-amber-600 dark:text-amber-400 mt-1">Use Pre-Flight Check for a full compliance audit. Meal break violations require manual timesheet review.</p>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* ── Action buttons ───────────────────────────────────────── */}
               {isLocked ? (
                 <div className="flex items-center gap-2 p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30 text-sm text-slate-600 dark:text-slate-400" data-testid={`locked-notice-${run.id}`}>
