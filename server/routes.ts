@@ -2253,6 +2253,31 @@ export async function registerRoutes(
         });
       }
 
+      // ── Period-alignment pre-flight check ────────────────────────────────────
+      // Verify the run's stored periodStart/periodEnd match what the active
+      // schedule resolves for this payDate.  Misaligned runs must be repaired
+      // via POST /api/payroll-runs/:id/repair-period before processing.
+      {
+        const schedules = await storage.getPayPeriodSchedules(run.companyId);
+        const active = schedules.filter(s => s.isActive);
+        if (active.length === 1 && run.payDate) {
+          const expectedPeriod = resolvePayPeriod(active[0], run.payDate);
+          if (expectedPeriod &&
+              (expectedPeriod.periodStart !== run.periodStart ||
+               expectedPeriod.periodEnd   !== run.periodEnd)) {
+            return res.status(422).json({
+              message:
+                `Period alignment mismatch: the stored period (${run.periodStart} – ${run.periodEnd}) ` +
+                `does not match what the active schedule resolves for payDate ${run.payDate} ` +
+                `(expected ${expectedPeriod.periodStart} – ${expectedPeriod.periodEnd}). ` +
+                `Use POST /api/payroll-runs/${run.id}/repair-period to realign before processing.`,
+              stored: { periodStart: run.periodStart, periodEnd: run.periodEnd },
+              expected: expectedPeriod,
+            });
+          }
+        }
+      }
+
       // Auto-convert approved punches → time entries before the gate runs.
       // This way "approving timecards" in the attendance view is sufficient;
       // users don't need a separate manual "convert punches" step.
@@ -3658,6 +3683,144 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Reset-to-draft error:", error);
       res.status(500).json({ message: "Failed to reset payroll run" });
+    }
+  });
+
+  // ── Repair-period: realign periodStart/periodEnd/payDate for a single draft/processed run ──
+  app.post("/api/payroll-runs/:id/repair-period", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+
+      const repairUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(repairUser?.role) && repairUser?.companyId && run.companyId !== repairUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
+      }
+      if (run.status === "paid") {
+        return res.status(403).json({ message: "Cannot repair a paid payroll run — paid records are immutable." });
+      }
+      if (!run.payDate) {
+        return res.status(422).json({ message: "Payroll run has no payDate — cannot resolve period without a pay date." });
+      }
+
+      const schedules = await storage.getPayPeriodSchedules(run.companyId);
+      const active = schedules.filter(s => s.isActive);
+      if (active.length === 0) {
+        return res.status(422).json({ message: "No active Pay Period Schedule found for this company." });
+      }
+      if (active.length > 1) {
+        return res.status(422).json({
+          message: `${active.length} active schedules found — only one may be active. Deactivate extras first.`,
+          activeScheduleIds: active.map(s => s.id),
+        });
+      }
+
+      const schedule = active[0];
+      const resolved = resolvePayPeriod(schedule, run.payDate);
+      if (!resolved) {
+        return res.status(422).json({ message: "Could not resolve pay period from the active schedule and run payDate." });
+      }
+
+      // Recompute payDate: periodEnd + transactionDayOffset
+      const defaultOffset = schedule.type === "weekly" ? 4 : (schedule.transactionDayOffset ?? 3);
+      const offset = schedule.transactionDayOffset ?? defaultOffset;
+      const periodEndDate = new Date(resolved.periodEnd + "T12:00:00");
+      periodEndDate.setDate(periodEndDate.getDate() + offset);
+      const recomputedPayDate = periodEndDate.toISOString().split("T")[0];
+
+      if (resolved.periodStart === run.periodStart &&
+          resolved.periodEnd   === run.periodEnd   &&
+          recomputedPayDate    === run.payDate) {
+        return res.json({ alreadyAligned: true, run });
+      }
+
+      const updated = await storage.updatePayrollRun(run.id, {
+        periodStart: resolved.periodStart,
+        periodEnd:   resolved.periodEnd,
+        payDate:     recomputedPayDate,
+      } as any);
+
+      res.json({
+        alreadyAligned: false,
+        before: { periodStart: run.periodStart, periodEnd: run.periodEnd, payDate: run.payDate },
+        after:  { periodStart: resolved.periodStart, periodEnd: resolved.periodEnd, payDate: recomputedPayDate },
+        run: updated,
+      });
+    } catch (error) {
+      console.error("repair-period error:", error);
+      res.status(500).json({ message: "Failed to repair payroll run period" });
+    }
+  });
+
+  // ── Bulk-repair: realign all draft/processed runs for a company ────────────
+  app.post("/api/companies/:companyId/repair-payroll-periods", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const { companyId } = req.params;
+      const repairUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(repairUser?.role) && repairUser?.companyId && companyId !== repairUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: cannot repair payroll for a different company" });
+      }
+
+      const schedules = await storage.getPayPeriodSchedules(companyId);
+      const active = schedules.filter(s => s.isActive);
+      if (active.length === 0) {
+        return res.status(422).json({ message: "No active Pay Period Schedule found for this company." });
+      }
+      if (active.length > 1) {
+        return res.status(422).json({
+          message: `${active.length} active schedules found — only one may be active. Deactivate extras first.`,
+          activeScheduleIds: active.map(s => s.id),
+        });
+      }
+      const schedule = active[0];
+      const defaultOffset = schedule.type === "weekly" ? 4 : (schedule.transactionDayOffset ?? 3);
+      const offset = schedule.transactionDayOffset ?? defaultOffset;
+
+      const allRuns = await storage.getPayrollRuns(companyId);
+      const eligibleRuns = allRuns.filter(r => r.status === "draft" || r.status === "processed");
+
+      let repaired = 0, skipped = 0, alreadyAligned = 0;
+      const errors: Array<{ runId: string; error: string }> = [];
+
+      for (const run of eligibleRuns) {
+        if (!run.payDate) { skipped++; continue; }
+        try {
+          const resolved = resolvePayPeriod(schedule, run.payDate);
+          if (!resolved) { skipped++; continue; }
+
+          const periodEndDate = new Date(resolved.periodEnd + "T12:00:00");
+          periodEndDate.setDate(periodEndDate.getDate() + offset);
+          const recomputedPayDate = periodEndDate.toISOString().split("T")[0];
+
+          if (resolved.periodStart === run.periodStart &&
+              resolved.periodEnd   === run.periodEnd   &&
+              recomputedPayDate    === run.payDate) {
+            alreadyAligned++;
+            continue;
+          }
+
+          await storage.updatePayrollRun(run.id, {
+            periodStart: resolved.periodStart,
+            periodEnd:   resolved.periodEnd,
+            payDate:     recomputedPayDate,
+          } as any);
+          repaired++;
+        } catch (e: any) {
+          errors.push({ runId: run.id, error: e?.message ?? "Unknown error" });
+        }
+      }
+
+      res.json({
+        companyId,
+        total: eligibleRuns.length,
+        repaired,
+        alreadyAligned,
+        skipped,
+        errors,
+      });
+    } catch (error) {
+      console.error("bulk repair-payroll-periods error:", error);
+      res.status(500).json({ message: "Failed to bulk-repair payroll periods" });
     }
   });
 
