@@ -457,6 +457,13 @@ const TENANT_NAV: NavGroup[] = [
           { title: "Permission Overrides", url: "/app/role-management?tab=overrides", icon: KeyRound },
         ],
       },
+      {
+        label: "Privacy Audit Log",
+        icon: ShieldCheck,
+        url: "/app/privacy-audit-log",
+        roles: ["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"],
+        items: [],
+      },
     ],
   },
 ];

@@ -187,6 +187,7 @@ function AuthenticatedRouter() {
         <Route path="/app/role-management">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"]}><RoleManagementPage /></StrictRoleGuard>}</Route>
         <Route path="/app/kpi-goals">{() => <RoleGuard roles={["admin", "manager"]}><KpiGoalsPage /></RoleGuard>}</Route>
         <Route path="/app/mfa-settings" component={MfaSettingsPage} />
+        <Route path="/app/privacy-audit-log">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"]}><PrivacyAuditLogPage /></StrictRoleGuard>}</Route>
         <Route component={NotFound} />
       </Switch>
     </Suspense>
