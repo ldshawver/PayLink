@@ -247,7 +247,8 @@ app.use((_req, res, next) => {
     "default-src 'self'",
     // In production Vite outputs <script src="..."> with no inline scripts → no unsafe-inline needed.
     // In development Vite HMR injects inline scripts so unsafe-inline is required there.
-    isProduction ? "script-src 'self'" : "script-src 'self' 'unsafe-inline'",
+    // https://js.stripe.com is required for Stripe.js (payment UI); *.stripe.com covers Stripe Elements iframes
+    isProduction ? "script-src 'self' https://js.stripe.com https://*.stripe.com" : "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",       // Google Fonts CSS + Tailwind runtime
     "img-src 'self' data: blob: https:",                                   // allow remote images (avatars)
     "font-src 'self' data: https://fonts.gstatic.com",                     // Google Fonts files

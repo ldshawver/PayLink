@@ -24976,7 +24976,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   // ── Breach Incidents API ─────────────────────────────────────────────────────
   // Platform super/admin see all incidents. Tenant admins see only their company's incidents.
 
-  app.get("/api/breach-incidents", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin"), async (req: any, res) => {
+  app.get("/api/breach-incidents", requireAuth, requireRole("platform_super_admin", "platform_admin"), async (req: any, res) => {
     try {
       const userId = req.session.userId as string;
       const user = await storage.getUser(userId);
@@ -25016,7 +25016,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
-  app.post("/api/breach-incidents", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin"), async (req: any, res) => {
+  app.post("/api/breach-incidents", requireAuth, requireRole("platform_super_admin", "platform_admin"), async (req: any, res) => {
     try {
       const userId = req.session.userId as string;
       const user = await storage.getUser(userId);
