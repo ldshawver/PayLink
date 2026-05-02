@@ -21948,6 +21948,74 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
+  // ─── npm Audit (/api/platform/audit/npm-audit) ───────────────────────────
+  app.get("/api/platform/audit/npm-audit", requirePlatformAudit, (_req, res) => {
+    try {
+      const raw = execSync("npm audit --json --audit-level=none 2>/dev/null", {
+        cwd: process.cwd(), timeout: 30000, maxBuffer: 4 * 1024 * 1024,
+      }).toString();
+      const parsed = JSON.parse(raw);
+      const meta = parsed.metadata ?? {};
+      const vulns = parsed.vulnerabilities ?? {};
+      const summary = meta.vulnerabilities ?? { critical: 0, high: 0, moderate: 0, low: 0, info: 0, total: 0 };
+      const findings = Object.values(vulns).map((v: any) => ({
+        name: v.name,
+        severity: v.severity,
+        range: v.range,
+        fixAvailable: v.fixAvailable,
+        via: Array.isArray(v.via) ? v.via.filter((x: any) => typeof x === "object").map((x: any) => x.title ?? x.name).slice(0, 3) : [],
+      }));
+      res.json({ ok: true, summary, findings, scannedAt: new Date().toISOString() });
+    } catch (e: any) {
+      // npm audit exits non-zero when vulnerabilities are found — parse stdout from error
+      try {
+        const raw = e.stdout?.toString() ?? "{}";
+        const parsed = JSON.parse(raw);
+        const meta = parsed.metadata ?? {};
+        const vulns = parsed.vulnerabilities ?? {};
+        const summary = meta.vulnerabilities ?? { critical: 0, high: 0, moderate: 0, low: 0, info: 0, total: 0 };
+        const findings = Object.values(vulns).map((v: any) => ({
+          name: v.name, severity: v.severity, range: v.range,
+          fixAvailable: v.fixAvailable,
+          via: Array.isArray(v.via) ? v.via.filter((x: any) => typeof x === "object").map((x: any) => x.title ?? x.name).slice(0, 3) : [],
+        }));
+        res.json({ ok: summary.critical === 0 && summary.high === 0, summary, findings, scannedAt: new Date().toISOString() });
+      } catch {
+        res.status(500).json({ message: "npm audit failed to parse output", error: String(e?.message ?? e) });
+      }
+    }
+  });
+
+  // ─── Security Audit: breach incidents + privacy audit log for platform admins ──
+  app.get("/api/platform/audit/security", requirePlatformAudit, async (_req, res) => {
+    try {
+      const { db: dbRaw } = await import("./db");
+      const [breachRows, privacyRows] = await Promise.all([
+        dbRaw.$client.query(`
+          SELECT id, actor_user_id AS "actorUserId", tenant_id AS "tenantId",
+                 discovered_at AS "discoveredAt", nature, data_categories AS "dataCategories",
+                 approximate_subjects AS "approximateSubjects", dpa_notified AS "dpaNotified",
+                 subjects_notified AS "subjectsNotified", containment_complete AS "containmentComplete",
+                 created_at AS "createdAt"
+          FROM breach_incidents ORDER BY created_at DESC LIMIT 50
+        `),
+        dbRaw.$client.query(`
+          SELECT id, actor_user_id AS "actorUserId", action_type AS "actionType",
+                 data_subject_id AS "dataSubjectId", tenant_id AS "tenantId",
+                 detail, created_at AS "createdAt"
+          FROM privacy_audit_log ORDER BY created_at DESC LIMIT 100
+        `),
+      ]);
+      res.json({
+        breachIncidents: breachRows.rows,
+        privacyAuditLog: privacyRows.rows,
+        fetchedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      res.status(500).json({ message: "Failed to fetch security audit data" });
+    }
+  });
+
   // ─── Readiness Audit (/api/platform/audit/readiness) ──────────────────────
   app.get("/api/platform/audit/readiness", requirePlatformAudit, async (_req, res) => {
     try {
@@ -24893,6 +24961,12 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       await writeAuditLog({
         actorUserId: userId, targetResource: "breach_incidents", changeType: "breach_notification",
         note: `Breach incident recorded: ${nature.substring(0, 100)}`, companyId: tenantId,
+      });
+      // Platform-scoped notification so platform_super_admin users see it in the global audit log
+      await writeAuditLog({
+        actorUserId: userId, targetResource: "breach_incidents", changeType: "breach_notification",
+        note: `[PLATFORM ALERT] Breach incident submitted by tenant ${tenantId ?? "unknown"}: ${nature.substring(0, 100)}`,
+        companyId: null,
       });
 
       res.status(201).json(result.rows[0]);

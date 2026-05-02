@@ -1038,6 +1038,166 @@ function ReadinessTab() {
   );
 }
 
+// ─── npm Audit Tab ────────────────────────────────────────────────────────────
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+  high: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+  moderate: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
+  low: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+  info: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+};
+
+function NpmAuditTab() {
+  const { data, isLoading, refetch, isFetching } = useQuery<any>({
+    queryKey: ["/api/platform/audit/npm-audit"],
+    staleTime: 120000,
+  });
+
+  if (isLoading) return <LoadingState />;
+  if (!data) return <ErrorState msg="Failed to run npm audit" />;
+
+  const s = data.summary ?? {};
+  const findings: any[] = data.findings ?? [];
+  const hasVulns = (s.critical ?? 0) + (s.high ?? 0) > 0;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {hasVulns
+            ? <AlertOctagon className="h-5 w-5 text-red-500" />
+            : <CheckCircle2 className="h-5 w-5 text-emerald-500" />}
+          <span className="font-semibold text-sm">
+            {hasVulns ? `${(s.critical ?? 0) + (s.high ?? 0)} critical/high vulnerabilities found` : "No critical/high vulnerabilities"}
+          </span>
+        </div>
+        <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => refetch()} disabled={isFetching} data-testid="button-npm-audit-refresh">
+          <RefreshCw className={`h-3.5 w-3.5 mr-1 ${isFetching ? "animate-spin" : ""}`} />Refresh
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+        {["critical", "high", "moderate", "low", "info", "total"].map(k => (
+          <Card key={k} className={`border ${k === "critical" && s[k] > 0 ? "border-red-400 bg-red-50 dark:bg-red-950/30" : ""}`}>
+            <CardContent className="pt-3 pb-2 text-center">
+              <p className={`text-2xl font-bold ${k === "critical" && s[k] > 0 ? "text-red-700" : k === "high" && s[k] > 0 ? "text-orange-600" : ""}`}>{s[k] ?? 0}</p>
+              <p className="text-xs text-muted-foreground capitalize">{k}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {findings.length > 0 && (
+        <SectionCard title="Vulnerability Details" icon={AlertTriangle} description={`${findings.length} packages with known vulnerabilities`}>
+          <div className="space-y-2">
+            {findings.map((f: any, i: number) => (
+              <div key={i} className="flex items-start justify-between gap-2 py-2 border-b last:border-0" data-testid={`row-npm-vuln-${i}`}>
+                <div>
+                  <span className="font-mono text-sm font-medium">{f.name}</span>
+                  {f.range && <span className="text-xs text-muted-foreground ml-2">@ {f.range}</span>}
+                  {f.via?.length > 0 && <p className="text-xs text-muted-foreground mt-0.5">Via: {f.via.join(", ")}</p>}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Badge className={`text-xs capitalize ${SEVERITY_COLORS[f.severity] ?? ""}`}>{f.severity}</Badge>
+                  {f.fixAvailable === true && <Badge className="text-xs bg-emerald-100 text-emerald-800">Fix available</Badge>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
+      {findings.length === 0 && (
+        <SectionCard title="All Clear" icon={CheckCircle2}>
+          <p className="text-sm text-muted-foreground">No known vulnerabilities in direct or transitive dependencies.</p>
+        </SectionCard>
+      )}
+
+      <p className="text-xs text-muted-foreground text-right">
+        Scanned: {data.scannedAt ? new Date(data.scannedAt).toLocaleString() : "—"}
+      </p>
+    </div>
+  );
+}
+
+// ─── Security Audit Tab (unified breach + privacy audit log) ─────────────────
+function SecurityAuditTab() {
+  const { data, isLoading, refetch, isFetching } = useQuery<any>({
+    queryKey: ["/api/platform/audit/security"],
+    staleTime: 30000,
+  });
+
+  if (isLoading) return <LoadingState />;
+  if (!data) return <ErrorState />;
+
+  const breachIncidents: any[] = data.breachIncidents ?? [];
+  const privacyLog: any[] = data.privacyAuditLog ?? [];
+
+  const ACTION_COLORS: Record<string, string> = {
+    data_export: "bg-blue-100 text-blue-800",
+    data_anonymization: "bg-red-100 text-red-800",
+    breach_notification: "bg-orange-100 text-orange-800",
+    mfa_enrolled: "bg-green-100 text-green-800",
+    mfa_disabled: "bg-yellow-100 text-yellow-800",
+    retention_policy_change: "bg-purple-100 text-purple-800",
+    consent_change: "bg-pink-100 text-pink-800",
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-sm flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-red-500" />
+          Security — Breach Incidents &amp; Privacy Audit Log
+        </h3>
+        <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => refetch()} disabled={isFetching} data-testid="button-security-refresh">
+          <RefreshCw className={`h-3.5 w-3.5 mr-1 ${isFetching ? "animate-spin" : ""}`} />Refresh
+        </Button>
+      </div>
+
+      <SectionCard title={`Breach Incidents (${breachIncidents.length})`} icon={AlertOctagon}
+        description="All breach incidents across all tenants. New submissions trigger a platform-level audit log entry.">
+        {breachIncidents.length === 0 ? (
+          <p className="text-sm text-muted-foreground flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 text-emerald-500" />No breach incidents recorded
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {breachIncidents.map((inc: any, i: number) => (
+              <div key={inc.id ?? i} className="rounded-lg border p-3 space-y-1" data-testid={`row-breach-${i}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium">{new Date(inc.discoveredAt).toLocaleDateString()} — {inc.nature?.substring(0, 80)}</span>
+                  <div className="flex gap-1">
+                    {inc.containmentComplete && <Badge className="text-xs bg-green-100 text-green-800">Contained</Badge>}
+                    {inc.dpaNotified && <Badge className="text-xs bg-blue-100 text-blue-800">DPA Notified</Badge>}
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">Tenant: {inc.tenantId ?? "platform"} · Subjects: ~{inc.approximateSubjects}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard title={`Privacy Audit Log — Recent 100 Events`} icon={ScrollText}
+        description="All privacy-relevant events across all tenants (data exports, anonymizations, MFA changes, breach notifications).">
+        <div className="space-y-1 max-h-96 overflow-y-auto">
+          {privacyLog.length === 0 && <p className="text-sm text-muted-foreground">No events recorded</p>}
+          {privacyLog.map((entry: any, i: number) => (
+            <div key={entry.id ?? i} className="flex items-center justify-between gap-2 py-1.5 border-b last:border-0 text-xs" data-testid={`row-privacy-${i}`}>
+              <div className="flex items-center gap-2 min-w-0">
+                <Badge className={`text-[10px] shrink-0 ${ACTION_COLORS[entry.actionType] ?? "bg-gray-100 text-gray-700"}`}>{entry.actionType}</Badge>
+                <span className="text-muted-foreground truncate">{entry.detail}</span>
+              </div>
+              <span className="text-muted-foreground shrink-0">{new Date(entry.createdAt).toLocaleDateString()}</span>
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function PlatformAuditPage() {
   const { toast } = useToast();
@@ -1094,6 +1254,8 @@ export default function PlatformAuditPage() {
           <TabsTrigger value="migrations" data-testid="tab-audit-migrations"><Database className="h-3.5 w-3.5 mr-1" />Migrations</TabsTrigger>
           <TabsTrigger value="logs" data-testid="tab-audit-logs"><ScrollText className="h-3.5 w-3.5 mr-1" />Logs</TabsTrigger>
           <TabsTrigger value="readiness" data-testid="tab-audit-readiness" className="font-semibold"><ClipboardCheck className="h-3.5 w-3.5 mr-1" />Readiness</TabsTrigger>
+          <TabsTrigger value="npm-audit" data-testid="tab-audit-npm"><ShieldCheck className="h-3.5 w-3.5 mr-1" />npm Audit</TabsTrigger>
+          <TabsTrigger value="security" data-testid="tab-audit-security"><AlertTriangle className="h-3.5 w-3.5 mr-1" />Security</TabsTrigger>
         </TabsList>
 
         <TabsContent value="system" className="mt-6"><SystemTab /></TabsContent>
@@ -1110,6 +1272,8 @@ export default function PlatformAuditPage() {
         <TabsContent value="migrations" className="mt-6"><MigrationsTab /></TabsContent>
         <TabsContent value="logs" className="mt-6"><LogsTab /></TabsContent>
         <TabsContent value="readiness" className="mt-6"><ReadinessTab /></TabsContent>
+        <TabsContent value="npm-audit" className="mt-6"><NpmAuditTab /></TabsContent>
+        <TabsContent value="security" className="mt-6"><SecurityAuditTab /></TabsContent>
       </Tabs>
     </div>
   );

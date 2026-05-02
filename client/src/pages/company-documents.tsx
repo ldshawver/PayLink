@@ -1266,14 +1266,39 @@ function RetentionTab({ companyId, userRole }: { companyId?: string; userRole?: 
           <CardContent>
             <div className="space-y-2">
               {policies.map(p => (
-                <div key={p.id} className="flex items-center justify-between py-2 border-b last:border-0" data-testid={`row-retention-${p.id}`}>
+                <div key={p.id} className="flex items-start justify-between py-2 border-b last:border-0" data-testid={`row-retention-${p.id}`}>
                   <div>
                     <p className="font-medium text-sm">{p.name}</p>
                     <p className="text-xs text-muted-foreground">{p.description || `${p.retentionYears || 0}y ${p.retentionMonths || 0}m - ${p.documentType || "All types"}`}</p>
+                    {(p as any).legalBasis && (
+                      <Badge className="mt-1 text-[10px]" variant="secondary">
+                        {({legal_obligation:"Legal Obligation",legitimate_interest:"Legitimate Interest",contract:"Contract",consent:"Consent"} as Record<string,string>)[(p as any).legalBasis] ?? (p as any).legalBasis}
+                      </Badge>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge variant="secondary">{p.retentionYears || 0}y {p.retentionMonths || 0}m</Badge>
                     <Badge variant="outline" className="capitalize">{p.dispositionAction}</Badge>
+                    {isAdmin && (
+                      <Select
+                        value={(p as any).legalBasis ?? ""}
+                        onValueChange={async (val) => {
+                          try {
+                            await apiRequest("PATCH", `/api/document-retention-policies/${p.id}/legal-basis`, { legalBasis: val || null });
+                            queryClient.invalidateQueries({ queryKey: ["/api/document-retention-policies", companyId] });
+                            toast({ title: "Legal basis updated" });
+                          } catch { toast({ title: "Failed to update legal basis", variant: "destructive" }); }
+                        }}
+                      >
+                        <SelectTrigger className="h-7 text-xs w-36" data-testid={`select-legal-basis-${p.id}`}><SelectValue placeholder="Set legal basis" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="legal_obligation">Legal Obligation</SelectItem>
+                          <SelectItem value="legitimate_interest">Legitimate Interest</SelectItem>
+                          <SelectItem value="contract">Contract</SelectItem>
+                          <SelectItem value="consent">Consent</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
                     {isAdmin && <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => deleteMutation.mutate(p.id)}><Trash2 className="h-3.5 w-3.5" /></Button>}
                   </div>
                 </div>

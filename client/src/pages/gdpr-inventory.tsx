@@ -1,8 +1,15 @@
+import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Shield, Database, Globe, FileText, ExternalLink } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { Shield, Database, Globe, FileText, ExternalLink, Download, Eraser, UserX } from "lucide-react";
 
 const LEGAL_BASIS_COLORS: Record<string, string> = {
   legal_obligation: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
@@ -178,6 +185,115 @@ const SUBPROCESSORS: Subprocessor[] = [
   },
 ];
 
+function WorkerPiiActionsTab() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [workerId, setWorkerId] = useState("");
+  const [exported, setExported] = useState<any>(null);
+
+  const exportMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/workers/${id}/data-export`, { credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message ?? "Export failed");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setExported(data);
+      queryClient.invalidateQueries({ queryKey: ["/api/privacy-audit-log"] });
+      toast({ title: "PII export complete", description: "Worker data exported and logged to the privacy audit trail." });
+    },
+    onError: (e: any) => toast({ title: "Export failed", description: e.message, variant: "destructive" }),
+  });
+
+  const anonymizeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/workers/${id}/anonymize`);
+      return res;
+    },
+    onSuccess: () => {
+      setExported(null);
+      setWorkerId("");
+      queryClient.invalidateQueries({ queryKey: ["/api/privacy-audit-log"] });
+      toast({ title: "Worker anonymized", description: "PII fields have been cleared and the action logged to the privacy audit trail." });
+    },
+    onError: (e: any) => toast({ title: "Anonymization failed", description: String(e?.message ?? e), variant: "destructive" }),
+  });
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <UserX className="h-4 w-4" />
+            Worker PII Actions (GDPR Art. 15 &amp; 17)
+          </CardTitle>
+          <CardDescription>
+            Export a worker's personal data (Right of Access) or anonymize their record (Right to Erasure).
+            All actions are written to the privacy audit log.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-end gap-3">
+            <div className="flex-1">
+              <Label htmlFor="input-worker-id">Worker ID</Label>
+              <Input
+                id="input-worker-id"
+                data-testid="input-worker-id"
+                value={workerId}
+                onChange={e => { setWorkerId(e.target.value); setExported(null); }}
+                placeholder="e.g. 3f2a1b0c-…"
+              />
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => exportMutation.mutate(workerId)}
+              disabled={!workerId || exportMutation.isPending}
+              data-testid="button-export-worker-pii"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              {exportMutation.isPending ? "Exporting…" : "Export PII"}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (window.confirm("This will permanently erase PII fields for this worker. Continue?")) {
+                  anonymizeMutation.mutate(workerId);
+                }
+              }}
+              disabled={!workerId || anonymizeMutation.isPending}
+              data-testid="button-anonymize-worker"
+            >
+              <Eraser className="h-4 w-4 mr-2" />
+              {anonymizeMutation.isPending ? "Anonymizing…" : "Anonymize"}
+            </Button>
+          </div>
+
+          {exported && (
+            <div className="rounded-lg border bg-muted/30 p-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium">Exported PII — {exported.worker?.firstName} {exported.worker?.lastName}</span>
+                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => {
+                  const blob = new Blob([JSON.stringify(exported, null, 2)], { type: "application/json" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url; a.download = `worker-pii-${workerId}.json`; a.click();
+                  URL.revokeObjectURL(url);
+                }} data-testid="button-download-exported-pii">
+                  <Download className="h-3.5 w-3.5 mr-1" />Download JSON
+                </Button>
+              </div>
+              <pre className="text-xs overflow-auto max-h-64 font-mono">{JSON.stringify(exported, null, 2)}</pre>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export default function GdprInventoryPage() {
   return (
     <div className="p-4 md:p-6 space-y-6">
@@ -198,6 +314,10 @@ export default function GdprInventoryPage() {
           <TabsTrigger value="subprocessors" data-testid="tab-subprocessors">
             <Globe className="h-4 w-4 mr-2" />
             Subprocessors
+          </TabsTrigger>
+          <TabsTrigger value="pii-actions" data-testid="tab-pii-actions">
+            <UserX className="h-4 w-4 mr-2" />
+            Worker PII Actions
           </TabsTrigger>
         </TabsList>
 
@@ -346,6 +466,10 @@ export default function GdprInventoryPage() {
               </p>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="pii-actions" className="space-y-4 mt-4">
+          <WorkerPiiActionsTab />
         </TabsContent>
       </Tabs>
     </div>
