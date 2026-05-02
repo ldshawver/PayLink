@@ -538,11 +538,25 @@ export async function registerRoutes(
       if (user.isActive === false) {
         return res.status(403).json({ message: "Account is disabled. Contact your administrator." });
       }
-      // MFA step-up: if the user has TOTP MFA enabled, do NOT create a session yet.
-      // Return 202 so the client can present a code input before access is granted.
-      const mfaCheck = await db.execute(sql`SELECT mfa_enabled FROM users WHERE id = ${user.id}`);
-      const mfaEnabled = (mfaCheck.rows[0] as any)?.mfa_enabled;
-      if (mfaEnabled) {
+      // MFA step-up: check mfa_enabled and mfa_enforced_at on the user
+      const mfaCheck = await db.execute(sql`
+        SELECT mfa_enabled, mfa_enforced_at, totp_secret FROM users WHERE id = ${user.id}
+      `);
+      const mfaRow = mfaCheck.rows[0] as any;
+
+      // If MFA is company-enforced but this user has not yet enrolled, block login
+      if (mfaRow?.mfa_enforced_at && !mfaRow?.mfa_enabled) {
+        return res.status(403).json({
+          mfaEnrollmentRequired: true,
+          message: "Multi-factor authentication is required for your account. Please contact your administrator to enroll.",
+        });
+      }
+
+      // If MFA is enrolled, do NOT create a full session yet — require a code
+      if (mfaRow?.mfa_enabled) {
+        // Bind the challenge to this browser session so login-verify cannot be
+        // called without a prior successful password check
+        req.session.pendingMfaUserId = user.id;
         return res.status(202).json({ mfaRequired: true, userId: user.id });
       }
 
@@ -560,14 +574,23 @@ export async function registerRoutes(
     }
   });
 
-  // MFA login step-up: verify a TOTP code after the initial credential check returned 202.
-  // On success this endpoint sets the session exactly like a normal login.
+  // MFA login step-up: verify a TOTP code after password was already validated.
+  // SECURITY: The session must have pendingMfaUserId set by the login endpoint
+  // (meaning the caller completed a successful password check in this same browser
+  // session). This prevents an attacker from calling this endpoint directly with
+  // only a userId + TOTP code — they must have passed password auth first.
   app.post("/api/auth/mfa/login-verify", async (req: any, res) => {
     try {
       const { userId, token } = req.body;
       if (!userId || !token) {
         return res.status(400).json({ message: "userId and token are required" });
       }
+
+      // Reject if there is no password-validated pending challenge bound to this session
+      if (!req.session.pendingMfaUserId || req.session.pendingMfaUserId !== userId) {
+        return res.status(401).json({ message: "No active MFA challenge. Please sign in again." });
+      }
+
       const user = await storage.getUser(userId);
       if (!user) return res.status(401).json({ message: "Invalid request" });
 
@@ -583,7 +606,8 @@ export async function registerRoutes(
         return res.status(401).json({ message: "Invalid or expired authentication code" });
       }
 
-      // Code verified — grant session
+      // Code verified — consume the pending challenge and grant a full session
+      delete req.session.pendingMfaUserId;
       req.session.userId = user.id;
       req.session.username = user.username;
       let workerInfo = null;
@@ -24667,7 +24691,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
   // ── Privacy Audit Log API ───────────────────────────────────────────────────
 
-  app.get("/api/privacy-audit-log", requireAuth, requireRole("admin"), async (req: any, res) => {
+  app.get("/api/privacy-audit-log", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin", "tenant_owner"), async (req: any, res) => {
     try {
       const userId = req.session.userId as string;
       const user = await storage.getUser(userId);
@@ -24727,7 +24751,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
-  app.get("/api/privacy-audit-log/export-csv", requireAuth, requireRole("admin"), async (req: any, res) => {
+  app.get("/api/privacy-audit-log/export-csv", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin", "tenant_owner"), async (req: any, res) => {
     try {
       const userId = req.session.userId as string;
       const user = await storage.getUser(userId);

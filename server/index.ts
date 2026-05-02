@@ -71,6 +71,9 @@ declare module "express-session" {
     username: string;
     role: string;
     isDemo: boolean;
+    /** Short-lived marker set after password verification when MFA is required.
+     *  The MFA login-verify endpoint checks this before granting a full session. */
+    pendingMfaUserId: string;
   }
 }
 
