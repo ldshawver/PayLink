@@ -1944,10 +1944,10 @@ export default function PrintCheckPage() {
     },
     enabled: !!runId,
   });
-  // Workers eligible for reprint: those with a prior 'print' or 'void' audit event (matches backend policy).
+  // Workers eligible for reprint: those with a prior 'print' audit event for this run.
   const printedWorkerIds = new Set<string>(
     runPrintAudit
-      .filter((l: any) => !l.event_type || l.event_type === "print" || l.event_type === "void")
+      .filter((l: any) => !l.event_type || l.event_type === "print")
       .map((l: any) => l.worker_id)
       .filter(Boolean)
   );

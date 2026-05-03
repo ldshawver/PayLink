@@ -14360,7 +14360,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Log calibration_test audit event after successful render.
       const calUserId = (req.session as any)?.userId;
-      const calCompanyId = rs.company_id || null;
       await db.execute(sql`
         INSERT INTO check_print_audit_logs (
           company_id, initiated_by_user_id,
