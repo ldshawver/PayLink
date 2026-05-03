@@ -46,20 +46,7 @@ export const PERMISSION_COLUMN: Record<Permission, keyof typeof rolePermissions.
   approve_company:      "canApproveCompany",
 };
 
-/**
- * Maps users.role field values to the canonical scope-aware template names
- * seeded by seedDefaultRoleTemplates(). Primary path for users without
- * explicit user_roles rows. Template names use lowercase_underscore to match
- * exactly the names inserted during seeding.
- *
- * Alias mappings (tenant_admin → company_admin, owner → company_admin, etc.)
- * redirect legacy users.role values to the canonical scope-aware templates.
- * No tenant alias ever resolves to platform_super_admin (least-privilege).
- */
 const ROLE_NAME_MAP: Record<string, string> = {
-  // ── Exact matches for scope-aware templates ───────────────────────────────
-  // Note: "platform_super_admin" hits the early-return in checkPermission
-  // before this map is consulted, but is listed for completeness.
   "platform_super_admin": "platform_super_admin",
   "company_admin":        "company_admin",
   "hr_manager":           "hr_manager",
@@ -69,9 +56,6 @@ const ROLE_NAME_MAP: Record<string, string> = {
   "employee":             "employee",
   "contractor":           "contractor",
 
-  // ── Tenant-scoped aliases → company_admin or role-appropriate template ────
-  // All tenant aliases resolve to company_admin or lower — never to
-  // platform_super_admin — to enforce least-privilege for tenant users.
   "owner":              "company_admin",
   "tenant_owner":       "company_admin",
   "tenant_admin":       "company_admin",   // tenant admin ≠ platform super admin
@@ -80,9 +64,6 @@ const ROLE_NAME_MAP: Record<string, string> = {
   "tenant_finance_admin": "payroll_manager",
   "tenant_manager":     "department_manager",
   "tenant_supervisor":  "supervisor",
-  // "admin" and "system_administrator" are intentionally omitted:
-  // the actual platform admin uses users.role = "platform_super_admin" directly
-  // and hits the checkPermission early-return before this map is reached.
 };
 
 const FLAT_PERMISSIONS = new Set<Permission>([
@@ -138,15 +119,6 @@ async function getUserScopeInfo(userId: string, userCompanyId?: string | null): 
   };
 }
 
-/**
- * Evaluates whether a role_permissions row satisfies a permission request.
- *
- * @param effectiveDept - The effective department for scope comparison.
- *   For department-scoped roles, this is the role assignment's scopeId.
- *   For other roles, this is userScope.department.
- *   This separation ensures scoped role assignments compare against the right
- *   department, not just the user's physical worker department.
- */
 function permSatisfiedByRow(
   row: RolePermRow,
   permission: Permission,
@@ -158,7 +130,6 @@ function permSatisfiedByRow(
     return !!(row[PERMISSION_COLUMN[permission] as keyof RolePermRow]);
   }
 
-  // Use effectiveDept (role's scope dept or user's own dept) for all department comparisons
   const dept = effectiveDept ?? userScope?.department;
 
   switch (permission) {
@@ -191,11 +162,9 @@ function permSatisfiedByRow(
           return isView ? !!(row.canViewCompany) : !!(row.canEditCompany);
         }
 
-        // ownerId present but no scope match → deny
-        return false;
+          return false;
       }
 
-      // No ownerId in context: if the resource belongs to a different dept, require company scope
       if (ctx.departmentId && dept && ctx.departmentId !== dept) {
         return isView ? !!(row.canViewCompany) : !!(row.canEditCompany);
       }
@@ -279,10 +248,6 @@ function permSatisfiedByRow(
   }
 }
 
-/**
- * Applies role-assignment scope constraints to the ScopeContext.
- * Returns null when the resource is definitively outside the role's scope.
- */
 function applyRoleScopeGate(
   ctx: ScopeContext | undefined,
   userScope: UserScopeInfo,
@@ -291,7 +256,6 @@ function applyRoleScopeGate(
 ): { ctx: ScopeContext | undefined; effectiveDept: string | undefined } | null {
   const gated: ScopeContext = { ...ctx };
 
-  // Propagate user's known company into context when caller didn't provide it
   if (!gated.companyId && userScope.companyId) {
     gated.companyId = userScope.companyId;
   }
@@ -311,7 +275,6 @@ function applyRoleScopeGate(
   }
 
   if (scopeType === "department") {
-    // For dept-scoped roles, the effective department is the scopeId (not user's own dept)
     const effectiveDept = scopeId ?? userScope.department;
     if (effectiveDept) {
       if (gated.departmentId && gated.departmentId !== effectiveDept) {
@@ -325,7 +288,6 @@ function applyRoleScopeGate(
     return { ctx: gated, effectiveDept };
   }
 
-  // Unknown scope types: no additional restriction
   return { ctx: gated, effectiveDept: userScope.department };
 }
 
