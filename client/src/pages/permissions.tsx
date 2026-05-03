@@ -45,17 +45,17 @@ const FLAT_PERMS: { key: keyof RolePermission; label: string; abbr: string; colo
 ];
 
 const SCOPE_PERMS: { key: keyof RolePermission; label: string; abbr: string; color: string; scope: string }[] = [
-  { key: "canViewOwn",             label: "View Own",             abbr: "Vo", scope: "own",   color: "border border-blue-400 text-blue-700 dark:text-blue-300 bg-transparent" },
-  { key: "canEditOwn",             label: "Edit Own",             abbr: "Eo", scope: "own",   color: "border border-yellow-400 text-yellow-700 dark:text-yellow-300 bg-transparent" },
-  { key: "canViewSubordinates",    label: "View Subordinates",    abbr: "Vs", scope: "subs",  color: "border border-cyan-500 text-cyan-700 dark:text-cyan-300 bg-transparent" },
-  { key: "canEditSubordinates",    label: "Edit Subordinates",    abbr: "Es", scope: "subs",  color: "border border-orange-400 text-orange-700 dark:text-orange-300 bg-transparent" },
-  { key: "canApproveSubordinates", label: "Approve Subordinates", abbr: "As", scope: "subs",  color: "border border-teal-500 text-teal-700 dark:text-teal-300 bg-transparent" },
-  { key: "canViewDepartment",      label: "View Dept",            abbr: "Vd", scope: "dept",  color: "border border-indigo-500 text-indigo-700 dark:text-indigo-300 bg-transparent" },
-  { key: "canEditDepartment",      label: "Edit Dept",            abbr: "Ed", scope: "dept",  color: "border border-amber-500 text-amber-700 dark:text-amber-300 bg-transparent" },
-  { key: "canApproveDepartment",   label: "Approve Dept",         abbr: "Ad", scope: "dept",  color: "border border-emerald-500 text-emerald-700 dark:text-emerald-300 bg-transparent" },
-  { key: "canViewCompany",         label: "View Company",         abbr: "Vc", scope: "co",    color: "border border-violet-500 text-violet-700 dark:text-violet-300 bg-transparent" },
-  { key: "canEditCompany",         label: "Edit Company",         abbr: "Ec", scope: "co",    color: "border border-rose-500 text-rose-700 dark:text-rose-300 bg-transparent" },
-  { key: "canApproveCompany",      label: "Approve Company",      abbr: "Ac", scope: "co",    color: "border border-green-600 text-green-700 dark:text-green-300 bg-transparent" },
+  { key: "canViewOwn",             label: "View own",             abbr: "V↑ own",  scope: "own",   color: "border border-blue-400 text-blue-700 dark:text-blue-300 bg-transparent" },
+  { key: "canEditOwn",             label: "Edit own",             abbr: "E↑ own",  scope: "own",   color: "border border-yellow-400 text-yellow-700 dark:text-yellow-300 bg-transparent" },
+  { key: "canViewSubordinates",    label: "View subordinates",    abbr: "V↓ subs", scope: "subs",  color: "border border-cyan-500 text-cyan-700 dark:text-cyan-300 bg-transparent" },
+  { key: "canEditSubordinates",    label: "Edit subordinates",    abbr: "E↓ subs", scope: "subs",  color: "border border-orange-400 text-orange-700 dark:text-orange-300 bg-transparent" },
+  { key: "canApproveSubordinates", label: "Approve subordinates", abbr: "A↓ subs", scope: "subs",  color: "border border-teal-500 text-teal-700 dark:text-teal-300 bg-transparent" },
+  { key: "canViewDepartment",      label: "View dept",            abbr: "V↓ dept", scope: "dept",  color: "border border-indigo-500 text-indigo-700 dark:text-indigo-300 bg-transparent" },
+  { key: "canEditDepartment",      label: "Edit dept",            abbr: "E↓ dept", scope: "dept",  color: "border border-amber-500 text-amber-700 dark:text-amber-300 bg-transparent" },
+  { key: "canApproveDepartment",   label: "Approve dept",         abbr: "A↓ dept", scope: "dept",  color: "border border-emerald-500 text-emerald-700 dark:text-emerald-300 bg-transparent" },
+  { key: "canViewCompany",         label: "View company",         abbr: "V↓ co",   scope: "co",    color: "border border-violet-500 text-violet-700 dark:text-violet-300 bg-transparent" },
+  { key: "canEditCompany",         label: "Edit company",         abbr: "E↓ co",   scope: "co",    color: "border border-rose-500 text-rose-700 dark:text-rose-300 bg-transparent" },
+  { key: "canApproveCompany",      label: "Approve company",      abbr: "A↓ co",   scope: "co",    color: "border border-green-600 text-green-700 dark:text-green-300 bg-transparent" },
 ];
 
 const ALL_PERM_META = [
