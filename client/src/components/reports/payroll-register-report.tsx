@@ -59,7 +59,7 @@ export function PayrollRegisterReport({ run, items, company, workers, taxLines =
     const method = (item.paymentMethod || "—").replace(/_/g, " ");
     const rate = w?.payType === "salary"
       ? `Salary`
-      : (w as any)?.hourlyRate ? `$${Number((w as any).hourlyRate).toFixed(2)}/hr` : "—";
+      : w?.payRate ? `$${Number(w.payRate).toFixed(2)}/hr` : "—";
 
     return [
       name,
@@ -147,7 +147,7 @@ export function PayrollRegisterReport({ run, items, company, workers, taxLines =
       const reg = Number(item.regularHours || 0);
       const ot = Number(item.overtimeHours || 0);
       const dt = Number(item.doubleTimeHours || 0);
-      const rate = w?.payType === "salary" ? "Salary" : (w as any)?.hourlyRate ? Number((w as any).hourlyRate).toFixed(2) : "";
+      const rate = w?.payType === "salary" ? "Salary" : w?.payRate ? Number(w.payRate).toFixed(2) : "";
       return [
         name, rate, reg.toFixed(2), ot.toFixed(2), dt.toFixed(2), (reg + ot + dt).toFixed(2),
         Number(item.grossPay || 0).toFixed(2), Number(item.deductions || 0).toFixed(2), Number(item.netPay || 0).toFixed(2),

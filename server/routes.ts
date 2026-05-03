@@ -12,7 +12,7 @@ import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
 import { db } from "./db";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, type LaborRule, type InsertLaborRule } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, type LaborRule, type InsertLaborRule, payrollItemTaxes, payrollItems } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
@@ -2658,7 +2658,7 @@ export async function registerRoutes(
         // Step 1: Pre-tax deductions reduce federal/state taxable wages before bracket calc
         const preTaxDedRecords = (isContractor || isContractorGroup) ? [] : companyDeductions.filter(d =>
           d.isActive && !d.isEmployerPaid && !d.isReferenceOnly &&
-          (d as any).deductionTiming === "pre_tax" &&
+          d.deductionTiming === "pre_tax" &&
           (d.appliesTo || "all") !== "contractor"
         );
         const preTaxDedAmount = preTaxDedRecords.reduce((s, d) => {
@@ -2668,13 +2668,13 @@ export async function registerRoutes(
 
         // Step 1b: Taxable benefits add to taxable wage base; reimbursements from deduction records reduce it
         const taxableBenefitsAmount = (isContractor || isContractorGroup) ? 0 : companyDeductions
-          .filter(d => d.isActive && !d.isReferenceOnly && (d as any).isTaxableBenefit === true)
+          .filter(d => d.isActive && !d.isReferenceOnly && d.isTaxableBenefit === true)
           .reduce((s, d) => {
             if (d.calculationType === "percentage") return s + grossPay * (parseFloat(d.rate || "0") / 100);
             return s + parseFloat(d.rate || "0");
           }, 0);
         const reimbursementsFromDeductions = (isContractor || isContractorGroup) ? 0 : companyDeductions
-          .filter(d => d.isActive && !d.isReferenceOnly && (d as any).isReimbursement === true)
+          .filter(d => d.isActive && !d.isReferenceOnly && d.isReimbursement === true)
           .reduce((s, d) => {
             if (d.calculationType === "percentage") return s + grossPay * (parseFloat(d.rate || "0") / 100);
             return s + parseFloat(d.rate || "0");
@@ -2688,11 +2688,11 @@ export async function registerRoutes(
           taxableBenefits: taxableBenefitsAmount,
           ytdGross: ytd.gross,
           ytdFedTaxableWages: ytd.gross,
-          filingStatus: ((worker as any).w4FilingStatus || "single") as FilingStatus,
-          w4Allowances: parseInt(String((worker as any).w4Allowances || 0), 10),
-          additionalWithholding: parseFloat(String((worker as any).additionalWithholding || "0")),
-          caFilingStatus: ((worker as any).w4FilingStatus || "single") as FilingStatus,
-          caAllowances: parseInt(String((worker as any).w4Allowances || 0), 10),
+          filingStatus: (worker.w4FilingStatus || "single") as FilingStatus,
+          w4Allowances: parseInt(String(worker.w4Allowances ?? 0), 10),
+          additionalWithholding: parseFloat(String(worker.additionalWithholding || "0")),
+          caFilingStatus: (worker.w4FilingStatus || "single") as FilingStatus,
+          caAllowances: parseInt(String(worker.w4Allowances ?? 0), 10),
           payPeriodType: payPeriodTypeFromSchedule(activeSchedule?.type),
           isContractor: isContractor || isContractorGroup,
         };
@@ -2703,8 +2703,8 @@ export async function registerRoutes(
         const customPostTaxDedRecords = (isContractor || isContractorGroup) ? [] : companyDeductions.filter(d => {
           if (!d.isActive || d.isEmployerPaid || d.isReferenceOnly) return false;
           if ((d.appliesTo || "all") === "contractor") return false;
-          if ((d as any).taxCode) return false; // engine already handles statutory taxes
-          if ((d as any).deductionTiming === "pre_tax") return false; // already counted above
+          if (d.taxCode) return false; // engine already handles statutory taxes
+          if (d.deductionTiming === "pre_tax") return false; // already counted above in preTaxDedAmount
           const nameLower = d.name.toLowerCase();
           if (nameLower.includes("se tax") || nameLower.includes("self-employment") || nameLower.includes("self employment")) return false;
           return true;
@@ -2722,8 +2722,9 @@ export async function registerRoutes(
           return s + parseFloat(d.rate || "0");
         }, 0);
 
-        // totalDeductions = engine employee taxes + custom post-tax deductions + amendment deductions
-        let totalDeductions = taxResult.employeeTaxTotal + customPostTaxDed + amendmentDeductions;
+        // totalDeductions = pre-tax deductions (401k etc.) + engine employee taxes + custom post-tax deductions + amendment deductions
+        // Pre-tax deductions reduce taxable wages AND come out of the employee's paycheck (net pay)
+        let totalDeductions = preTaxDedAmount + taxResult.employeeTaxTotal + customPostTaxDed + amendmentDeductions;
 
         const netPay = grossPay - totalDeductions;
 
@@ -5617,19 +5618,29 @@ export async function registerRoutes(
           .filter(t => !t.isEmployerPaid)
           .reduce((s, t) => s + parseFloat(String(t.amount)), 0);
         try {
-          const [currentItem] = await db.select().from(payrollItems).where(eq(payrollItems.id, req.params.id));
+          const itemId = req.params.id as string;
+          const [currentItem] = await db.select().from(payrollItems).where(eq(payrollItems.id, itemId));
           if (currentItem) {
             const gross = parseFloat(String(currentItem.grossPay || "0"));
             const oldDeductions = parseFloat(String(currentItem.deductions || "0"));
             const newDeductions = oldDeductions - oldEmployeeTaxTotal + newEmployeeTaxTotal;
             const newNetPay = Math.max(0, gross - newDeductions);
             await db.update(payrollItems)
-              .set({ deductions: newDeductions.toFixed(2), netPay: newNetPay.toFixed(2) } as any)
-              .where(eq(payrollItems.id, req.params.id));
+              .set({ deductions: newDeductions.toFixed(2), netPay: newNetPay.toFixed(2) })
+              .where(eq(payrollItems.id, itemId));
           }
         } catch (netPayErr) {
           console.warn("[TAX OVERRIDE] Could not update net pay:", netPayErr);
         }
+      }
+
+      // Update the stored payroll_item_taxes row so downstream reports reflect the override
+      try {
+        await db.update(payrollItemTaxes)
+          .set({ amount: String(overrideAmount) })
+          .where(and(eq(payrollItemTaxes.payrollItemId, req.params.id as string), eq(payrollItemTaxes.taxCode, String(taxCode))));
+      } catch (pitErr) {
+        console.warn("[TAX OVERRIDE] Could not update payroll_item_taxes row:", pitErr);
       }
 
       res.json(override);
