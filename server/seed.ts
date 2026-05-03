@@ -321,25 +321,14 @@ async function seedDefaultRoleTemplates() {
       "hr_manager", "payroll_manager", "company_admin", "platform_super_admin",
     ];
 
+    // Bootstrap guard: skip if all 8 system role templates already exist
     const existing = await db
       .select({ name: roles.name })
       .from(roles)
       .where(and(eq(roles.isSystem, true), inArray(roles.name, REQUIRED_ROLE_NAMES)));
-    const existingNames = new Set(existing.map(r => r.name));
-    const allRolesExist = REQUIRED_ROLE_NAMES.every(n => existingNames.has(n));
-
-    if (allRolesExist) {
-      const counts = await db
-        .select({ name: roles.name, cnt: sql<number>`count(${rolePermissions.id})::int` })
-        .from(roles)
-        .leftJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
-        .where(inArray(roles.name, REQUIRED_ROLE_NAMES))
-        .groupBy(roles.name);
-      const allComplete = counts.every(r => (r.cnt ?? 0) >= 16);
-      if (allComplete) {
-        console.log("Scope-aware role templates already seeded, skipping");
-        return;
-      }
+    if (existing.length === REQUIRED_ROLE_NAMES.length) {
+      console.log("Scope-aware role templates already seeded, skipping");
+      return;
     }
 
     type AllFlags = {
@@ -385,17 +374,19 @@ async function seedDefaultRoleTemplates() {
 
     // Canonical 16 operational resources for scope-aware templates.
     // Excludes platform-only resources (companies, branches, divisions, system_admin).
-    // Includes self-service resources (profile, paystubs, preferences).
+    // Includes self-service resources (profile, paystubs, documents).
     const BASE_RESOURCES = [
       "dashboard", "workers", "schedules", "payroll", "timesheets", "timeclock",
       "departments", "positions", "policies", "hr", "reports",
       "settings", "permissions",
-      "profile", "paystubs", "preferences",
-    ] as const; // exactly 16
+      "profile", "paystubs", "documents",
+    ] as const;
 
-    // Extra resources added per-role beyond the 16 base
+    // Per-role extras beyond the 16 base (contractor_hub, system_admin where applicable)
     const EXTRA_RESOURCES: Record<string, Record<string, AllFlags>> = {
+      "employee":             { contractor_hub: none },
       "contractor":           { contractor_hub: oRW },
+      "supervisor":           { contractor_hub: none },
       "department_manager":   { contractor_hub: oR },
       "hr_manager":           { contractor_hub: coR },
       "payroll_manager":      { contractor_hub: oR },
@@ -414,28 +405,29 @@ async function seedDefaultRoleTemplates() {
       "platform_super_admin": { description: "Platform super administrator — full unrestricted access", level: 0 },
     };
 
+    // 8 roles × 16 base resources permission matrix
     const MATRIX: Record<string, Record<string, AllFlags>> = {
       "employee": {
         dashboard: oR, timesheets: oRW, schedules: oR, timeclock: oRW,
-        payroll: oR, policies: oR, profile: oRW, paystubs: oR, preferences: oRW,
+        payroll: oR, policies: oR, profile: oRW, paystubs: oR, documents: oR,
         workers: none, departments: none, positions: none,
         hr: none, reports: none, settings: none, permissions: none,
       },
       "contractor": {
         dashboard: oR, timesheets: oRW, schedules: oR, timeclock: oRW,
-        payroll: oR, profile: oRW, preferences: oRW, paystubs: oR,
+        payroll: oR, profile: oRW, paystubs: oR, documents: oR,
         workers: none, departments: none, positions: none,
         policies: none, hr: none, reports: none, settings: none, permissions: none,
       },
       "supervisor": {
         dashboard: sR, workers: sR, timesheets: sRW, schedules: sRW, timeclock: sRW,
-        payroll: oR, hr: oR, reports: oR, profile: sR, paystubs: oR, preferences: oRW,
+        payroll: oR, reports: sR, profile: sR, paystubs: oR, documents: sR,
         departments: oR, positions: oR, policies: oR,
-        settings: none, permissions: none,
+        hr: none, settings: none, permissions: none,
       },
       "department_manager": {
         dashboard: dR, workers: dRW, timesheets: dRW, schedules: dRW, timeclock: dRW,
-        hr: dR, reports: dR, payroll: oR, profile: dR, paystubs: oR, preferences: oRW,
+        hr: dR, reports: dR, payroll: oR, profile: dR, paystubs: oR, documents: dR,
         departments: oR, positions: oR, policies: oR,
         settings: none, permissions: none,
       },
@@ -443,7 +435,7 @@ async function seedDefaultRoleTemplates() {
         dashboard: coR, workers: coR,
         hr: { canView: true, canCreate: true, canEdit: true, canViewOwn: true, canEditOwn: true, canViewCompany: true, canEditCompany: true },
         reports: coR, timesheets: coR, schedules: coR, timeclock: coR,
-        payroll: oR, profile: coR, paystubs: coR, preferences: oRW,
+        payroll: oR, profile: coR, paystubs: coR, documents: coR,
         departments: coR, positions: coR, policies: coR,
         settings: none, permissions: none,
       },
@@ -452,7 +444,7 @@ async function seedDefaultRoleTemplates() {
         payroll: { canView: true, canCreate: true, canEdit: true, canDelete: true, canExport: true, canApprove: true, canConfigure: true, canViewOwn: true, canViewCompany: true, canEditCompany: true, canApproveCompany: true },
         reports: coR, workers: coR,
         timesheets: { canViewOwn: true, canViewCompany: true, canEditCompany: true, canApproveCompany: true, canApproveSubordinates: true },
-        schedules: oR, profile: coR, paystubs: coR, preferences: oRW,
+        schedules: oR, profile: coR, paystubs: coR, documents: coR,
         departments: oR, positions: oR, policies: oR, hr: oR, timeclock: oR,
         settings: none, permissions: none,
       },
@@ -511,7 +503,15 @@ async function seedDefaultRoleTemplates() {
       }
     }
 
-    console.log(`Scope-aware role templates seeded: ${REQUIRED_ROLE_NAMES.length} roles × 16 base resources`);
+    // Verify seeded state
+    const seededCounts = await db
+      .select({ name: roles.name, cnt: sql<number>`count(${rolePermissions.id})::int` })
+      .from(roles)
+      .leftJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
+      .where(inArray(roles.name, REQUIRED_ROLE_NAMES))
+      .groupBy(roles.name);
+    const allHave16 = seededCounts.every(r => (r.cnt ?? 0) >= 16);
+    console.log(`Scope-aware role templates seeded: ${REQUIRED_ROLE_NAMES.length} roles × 16 base resources (complete: ${allHave16})`);
   } catch (e: any) {
     console.log("Could not seed scope role templates:", e?.message || e);
   }
