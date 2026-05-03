@@ -1,5 +1,5 @@
 import { db } from "../db";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import {
   users, roles, rolePermissions, userRoles,
   authorizationAuditLog, workers, employeeManagerRelations,
@@ -13,8 +13,8 @@ export type Permission =
   | "view_company" | "edit_company" | "approve_company";
 
 export type ScopeContext = {
-  ownerId?: string;       // workerId of the record owner
-  departmentId?: string;  // department slug/id the record belongs to
+  ownerId?: string;       // workerId of the record's owner
+  departmentId?: string;  // department name/id the record belongs to
   companyId?: string;     // companyId the record belongs to
 };
 
@@ -46,7 +46,7 @@ export const PERMISSION_COLUMN: Record<Permission, keyof typeof rolePermissions.
   approve_company:      "canApproveCompany",
 };
 
-const FLAT_PERMISSIONS: Permission[] = ["view", "create", "edit", "delete", "export", "approve", "configure"];
+const FLAT_PERMISSIONS = new Set<Permission>(["view", "create", "edit", "delete", "export", "approve", "configure"]);
 
 type RolePermRow = typeof rolePermissions.$inferSelect;
 
@@ -58,38 +58,42 @@ type UserScopeInfo = {
   directReportIds: string[];
 };
 
-async function getUserScopeInfo(userId: string, companyId?: string | null): Promise<UserScopeInfo> {
+async function getUserScopeInfo(userId: string, userCompanyId?: string | null): Promise<UserScopeInfo> {
+  const userRows = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (userRows.length === 0) return { userId, directReportIds: [] };
+
+  const user = userRows[0];
+  const companyId = userCompanyId ?? user.companyId ?? undefined;
+
+  if (!user.workerId) {
+    return { userId, companyId: companyId ?? undefined, directReportIds: [] };
+  }
+
   const workerRows = await db
     .select({ id: workers.id, companyId: workers.companyId, department: workers.department })
     .from(workers)
-    .where(eq(workers.companyId, companyId ?? ""))
-    .limit(50);
+    .where(eq(workers.id, user.workerId))
+    .limit(1);
 
-  const userRow = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-  const userCompanyId = userRow[0]?.companyId ?? companyId ?? undefined;
+  const worker = workerRows[0];
+  if (!worker) return { userId, companyId: companyId ?? undefined, directReportIds: [] };
 
-  const workerRow = workerRows.find(w => w.companyId === userCompanyId) ?? undefined;
-  let directReportIds: string[] = [];
-
-  if (workerRow) {
-    const reports = await db
-      .select({ employeeId: employeeManagerRelations.employeeId })
-      .from(employeeManagerRelations)
-      .where(
-        and(
-          eq(employeeManagerRelations.managerId, workerRow.id),
-          eq(employeeManagerRelations.isActive, true)
-        )
-      );
-    directReportIds = reports.map(r => r.employeeId);
-  }
+  const reports = await db
+    .select({ employeeId: employeeManagerRelations.employeeId })
+    .from(employeeManagerRelations)
+    .where(
+      and(
+        eq(employeeManagerRelations.managerId, worker.id),
+        eq(employeeManagerRelations.isActive, true)
+      )
+    );
 
   return {
     userId,
-    workerId: workerRow?.id,
-    department: workerRow?.department ?? undefined,
-    companyId: userCompanyId ?? undefined,
-    directReportIds,
+    workerId: worker.id,
+    department: worker.department ?? undefined,
+    companyId: worker.companyId ?? companyId ?? undefined,
+    directReportIds: reports.map(r => r.employeeId),
   };
 }
 
@@ -99,82 +103,144 @@ function permSatisfiedByRow(
   userScope?: UserScopeInfo,
   ctx?: ScopeContext
 ): boolean {
-  const directCol = PERMISSION_COLUMN[permission];
-  const hasDirectFlag = !!(row[directCol as keyof RolePermRow]);
-
-  if (FLAT_PERMISSIONS.includes(permission)) {
-    return hasDirectFlag;
+  if (FLAT_PERMISSIONS.has(permission)) {
+    return !!(row[PERMISSION_COLUMN[permission] as keyof RolePermRow]);
   }
 
   switch (permission) {
     case "view_own":
     case "edit_own": {
       const isView = permission === "view_own";
-      const hasFlag = isView
+      const hasAnyScope = isView
         ? !!(row.canViewOwn || row.canViewSubordinates || row.canViewDepartment || row.canViewCompany)
         : !!(row.canEditOwn || row.canEditSubordinates || row.canEditDepartment || row.canEditCompany);
-      if (!hasFlag) return false;
-      if (!ctx || !userScope) return hasFlag;
+      if (!hasAnyScope) return false;
+      if (!ctx || !userScope) return hasAnyScope;
+
       if (ctx.ownerId) {
-        return ctx.ownerId === userScope.workerId || ctx.ownerId === userScope.userId;
+        const isSelf = ctx.ownerId === userScope.workerId || ctx.ownerId === userScope.userId;
+        if (isSelf) return hasAnyScope;
+
+        const isSubordinate = userScope.directReportIds.includes(ctx.ownerId);
+        if (isSubordinate) {
+          return isView
+            ? !!(row.canViewSubordinates || row.canViewDepartment || row.canViewCompany)
+            : !!(row.canEditSubordinates || row.canEditDepartment || row.canEditCompany);
+        }
+
+        const deptMatch = ctx.departmentId && userScope.department && ctx.departmentId === userScope.department;
+        if (deptMatch) {
+          return isView ? !!(row.canViewDepartment || row.canViewCompany) : !!(row.canEditDepartment || row.canEditCompany);
+        }
+
+        const compMatch = ctx.companyId && userScope.companyId && ctx.companyId === userScope.companyId;
+        if (compMatch) {
+          return isView ? !!(row.canViewCompany) : !!(row.canEditCompany);
+        }
+        return false;
       }
-      if (ctx.companyId && userScope.companyId) return ctx.companyId === userScope.companyId;
-      return hasFlag;
+      return hasAnyScope;
     }
+
     case "view_subordinates":
     case "edit_subordinates":
     case "approve_subordinates": {
       const isView = permission === "view_subordinates";
       const isEdit = permission === "edit_subordinates";
-      const hasFlag = isView
+      const hasSubFlag = isView
         ? !!(row.canViewSubordinates || row.canViewDepartment || row.canViewCompany)
         : isEdit
         ? !!(row.canEditSubordinates || row.canEditDepartment || row.canEditCompany)
         : !!(row.canApproveSubordinates || row.canApproveDepartment || row.canApproveCompany);
-      if (!hasFlag) return false;
-      if (!ctx || !userScope) return hasFlag;
+      if (!hasSubFlag) return false;
+      if (!ctx || !userScope) return hasSubFlag;
+
       if (ctx.ownerId) {
-        return userScope.directReportIds.includes(ctx.ownerId);
+        if (userScope.directReportIds.includes(ctx.ownerId)) return hasSubFlag;
+
+        const deptMatch = ctx.departmentId && userScope.department && ctx.departmentId === userScope.department;
+        if (deptMatch) {
+          return isView
+            ? !!(row.canViewDepartment || row.canViewCompany)
+            : isEdit
+            ? !!(row.canEditDepartment || row.canEditCompany)
+            : !!(row.canApproveDepartment || row.canApproveCompany);
+        }
+
+        const compMatch = ctx.companyId && userScope.companyId && ctx.companyId === userScope.companyId;
+        if (compMatch) {
+          return isView ? !!(row.canViewCompany) : isEdit ? !!(row.canEditCompany) : !!(row.canApproveCompany);
+        }
+        return false;
       }
-      if (ctx.companyId && userScope.companyId) return ctx.companyId === userScope.companyId;
-      return hasFlag;
+      return hasSubFlag;
     }
+
     case "view_department":
     case "edit_department":
     case "approve_department": {
       const isView = permission === "view_department";
       const isEdit = permission === "edit_department";
-      const hasFlag = isView
+      const hasDeptFlag = isView
         ? !!(row.canViewDepartment || row.canViewCompany)
         : isEdit
         ? !!(row.canEditDepartment || row.canEditCompany)
         : !!(row.canApproveDepartment || row.canApproveCompany);
-      if (!hasFlag) return false;
-      if (!ctx || !userScope) return hasFlag;
-      if (ctx.departmentId && userScope.department) {
-        return ctx.departmentId === userScope.department;
+      if (!hasDeptFlag) return false;
+      if (!ctx || !userScope) return hasDeptFlag;
+
+      const deptMatch = ctx.departmentId && userScope.department && ctx.departmentId === userScope.department;
+      if (deptMatch) return hasDeptFlag;
+
+      const compMatch = ctx.companyId && userScope.companyId && ctx.companyId === userScope.companyId;
+      if (compMatch) {
+        return isView ? !!(row.canViewCompany) : isEdit ? !!(row.canEditCompany) : !!(row.canApproveCompany);
       }
-      if (ctx.companyId && userScope.companyId) return ctx.companyId === userScope.companyId;
-      return hasFlag;
+
+      if (ctx.departmentId || ctx.companyId) return false;
+      return hasDeptFlag;
     }
+
     case "view_company":
     case "edit_company":
     case "approve_company": {
       const isView = permission === "view_company";
       const isApprove = permission === "approve_company";
-      const hasFlag = isView
+      const hasCoFlag = isView
         ? !!(row.canViewCompany)
         : isApprove
         ? !!(row.canApproveCompany)
         : !!(row.canEditCompany);
-      if (!hasFlag) return false;
-      if (!ctx || !userScope) return hasFlag;
+      if (!hasCoFlag) return false;
+      if (!ctx || !userScope) return hasCoFlag;
+
       if (ctx.companyId && userScope.companyId) return ctx.companyId === userScope.companyId;
-      return hasFlag;
+      return hasCoFlag;
     }
+
     default:
-      return hasDirectFlag;
+      return !!(row[PERMISSION_COLUMN[permission] as keyof RolePermRow]);
   }
+}
+
+function applyRoleScopeGate(
+  ctx: ScopeContext | undefined,
+  userScope: UserScopeInfo,
+  scopeType: string | null | undefined
+): ScopeContext | undefined {
+  if (!ctx) return ctx;
+
+  const gated: ScopeContext = { ...ctx };
+
+  if (!gated.companyId && userScope.companyId) {
+    gated.companyId = userScope.companyId;
+  }
+
+  if (scopeType === "department" && !gated.departmentId && userScope.department) {
+    gated.departmentId = userScope.department;
+  }
+
+  return gated;
 }
 
 async function checkRolePermissions(
@@ -183,30 +249,27 @@ async function checkRolePermissions(
   resource: string,
   permission: Permission,
   userScope: UserScopeInfo,
-  scopeType: string | undefined | null,
+  scopeType: string | null | undefined,
   ctx?: ScopeContext
 ): Promise<AuthorizationResult | null> {
   const rolePerms = await db
     .select()
     .from(rolePermissions)
-    .where(
-      and(
-        eq(rolePermissions.roleId, roleId),
-        eq(rolePermissions.resource, resource)
-      )
-    )
+    .where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.resource, resource)))
     .limit(1);
 
-  if (rolePerms.length > 0) {
-    const row = rolePerms[0];
-    if (permSatisfiedByRow(row, permission, userScope, ctx)) {
-      return {
-        granted: true,
-        reason: `Role '${roleName}' grants '${permission}' on '${resource}'`,
-        role: roleName,
-        scope: scopeType ?? undefined,
-      };
-    }
+  if (rolePerms.length === 0) return null;
+
+  const row = rolePerms[0];
+  const gatedCtx = applyRoleScopeGate(ctx, userScope, scopeType);
+
+  if (permSatisfiedByRow(row, permission, userScope, gatedCtx)) {
+    return {
+      granted: true,
+      reason: `Role '${roleName}' grants '${permission}' on '${resource}'`,
+      role: roleName,
+      scope: scopeType ?? undefined,
+    };
   }
   return null;
 }
@@ -218,10 +281,7 @@ export async function checkPermission(
   scopeContext?: ScopeContext
 ): Promise<AuthorizationResult> {
   const userRows = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-
-  if (userRows.length === 0) {
-    return { granted: false, reason: "User not found" };
-  }
+  if (userRows.length === 0) return { granted: false, reason: "User not found" };
 
   const user = userRows[0];
   const systemRole = user.role || "employee";
@@ -237,26 +297,29 @@ export async function checkPermission(
     .from(userRoles)
     .where(eq(userRoles.userId, userId));
 
-  if (userRoleRows.length > 0) {
-    for (const ur of userRoleRows) {
-      const roleRows = await db.select().from(roles).where(eq(roles.id, ur.roleId)).limit(1);
-      const roleName = roleRows[0]?.name || ur.roleId;
-      const result = await checkRolePermissions(
-        ur.roleId, roleName, resource, permission,
-        userScope, ur.scopeType, scopeContext
-      );
-      if (result) return result;
-    }
-  } else {
-    const namedRoleRows = await db.select().from(roles).where(eq(roles.name, systemRole)).limit(1);
-    if (namedRoleRows.length > 0) {
-      const r = namedRoleRows[0];
-      const result = await checkRolePermissions(
-        r.id, r.name, resource, permission,
-        userScope, "company", scopeContext
-      );
-      if (result) return result;
-    }
+  const assignedRoles = userRoleRows.length > 0
+    ? userRoleRows
+    : await (async () => {
+        const namedRole = await db
+          .select({ id: roles.id, name: roles.name })
+          .from(roles)
+          .where(eq(roles.name, systemRole))
+          .limit(1);
+        return namedRole.map(r => ({
+          roleId: r.id,
+          scopeType: "company" as const,
+          scopeId: null as string | null,
+        }));
+      })();
+
+  for (const ur of assignedRoles) {
+    const roleRows = await db.select().from(roles).where(eq(roles.id, ur.roleId)).limit(1);
+    const roleName = roleRows[0]?.name || ur.roleId;
+    const result = await checkRolePermissions(
+      ur.roleId, roleName, resource, permission,
+      userScope, ur.scopeType, scopeContext
+    );
+    if (result) return result;
   }
 
   return {
@@ -294,9 +357,7 @@ export async function getEffectivePermissions(
     if (!result.has(resource)) {
       result.set(resource, { permissions: new Set(), source, scope });
     }
-    for (const p of perms) {
-      result.get(resource)!.permissions.add(p);
-    }
+    for (const p of perms) result.get(resource)!.permissions.add(p);
   };
 
   if (systemRole === "platform_super_admin") {
@@ -307,13 +368,11 @@ export async function getEffectivePermissions(
       "view_department", "edit_department", "approve_department",
       "view_company", "edit_company", "approve_company",
     ];
-    const allResources = [
+    for (const r of [
       "payroll", "hr", "workers", "timesheets", "schedules", "reports",
       "billing", "permissions", "users", "company", "settings", "system_admin",
-    ];
-    for (const r of allResources) {
-      addPerms(r, allPerms, `system role: ${systemRole}`);
-    }
+      "profile", "paystubs", "preferences", "documents", "contractor_hub",
+    ]) addPerms(r, allPerms, `system role: ${systemRole}`);
     return Array.from(result.entries()).map(([resource, { permissions, source, scope }]) => ({
       resource, permissions: Array.from(permissions), source, scope,
     }));
@@ -328,7 +387,7 @@ export async function getEffectivePermissions(
     ? userRoleRows
     : await (async () => {
         const namedRole = await db.select().from(roles).where(eq(roles.name, systemRole)).limit(1);
-        return namedRole.map(r => ({ roleId: r.id, scopeType: "company" as const, scopeId: null }));
+        return namedRole.map(r => ({ roleId: r.id, scopeType: "company" as const, scopeId: null as string | null }));
       })();
 
   for (const ur of allRoleRows) {
@@ -363,10 +422,7 @@ export async function getEffectivePermissions(
   }
 
   return Array.from(result.entries()).map(([resource, { permissions, source, scope }]) => ({
-    resource,
-    permissions: Array.from(permissions),
-    source,
-    scope,
+    resource, permissions: Array.from(permissions), source, scope,
   }));
 }
 

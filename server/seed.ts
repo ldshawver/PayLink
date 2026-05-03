@@ -316,13 +316,17 @@ async function seedRolesAndPermissions() {
 
 async function seedDefaultRoleTemplates() {
   try {
-    const sysAdminRole = await db.select({ id: roles.id }).from(roles)
-      .where(and(eq(roles.name, "System Administrator"), eq(roles.isSystem, true))).limit(1);
-    if (sysAdminRole.length > 0) {
-      const scopeCheck = await db.select().from(rolePermissions)
-        .where(and(eq(rolePermissions.roleId, sysAdminRole[0].id), eq(rolePermissions.canViewCompany, true)))
-        .limit(1);
-      if (scopeCheck.length > 0) {
+    // Idempotency guard: check if Contractor role has 'profile' row (last new resource inserted)
+    // Contractor is processed last; if its profile row exists the full seed completed successfully
+    const contractorRole = await db.select({ id: roles.id }).from(roles)
+      .where(and(eq(roles.name, "Contractor"), eq(roles.isSystem, true))).limit(1);
+    if (contractorRole.length > 0) {
+      const contractorProfileCheck = await db.select().from(rolePermissions)
+        .where(and(
+          eq(rolePermissions.roleId, contractorRole[0].id),
+          eq(rolePermissions.resource, "profile")
+        )).limit(1);
+      if (contractorProfileCheck.length > 0) {
         console.log("Scope-aware role templates already seeded, skipping");
         return;
       }
@@ -342,86 +346,175 @@ async function seedDefaultRoleTemplates() {
       canViewDepartment?: boolean; canEditDepartment?: boolean; canApproveDepartment?: boolean;
       canViewCompany?: boolean; canEditCompany?: boolean; canApproveCompany?: boolean;
     };
+    type FlatFlags = {
+      canView?: boolean; canCreate?: boolean; canEdit?: boolean;
+      canDelete?: boolean; canExport?: boolean; canApprove?: boolean;
+    };
+    type ResourcePerms = ScopeFlags & FlatFlags;
 
+    // Scope flag presets
     const fullCompany: ScopeFlags = {
       canViewOwn: true, canEditOwn: true,
       canViewSubordinates: true, canEditSubordinates: true, canApproveSubordinates: true,
       canViewDepartment: true, canEditDepartment: true, canApproveDepartment: true,
       canViewCompany: true, canEditCompany: true, canApproveCompany: true,
     };
-    const companyReadWrite: ScopeFlags = { canViewOwn: true, canEditOwn: true, canViewCompany: true, canEditCompany: true, canApproveCompany: true };
-    const companyRead: ScopeFlags = { canViewOwn: true, canViewCompany: true };
-    const deptReadWrite: ScopeFlags = { canViewOwn: true, canEditOwn: true, canViewDepartment: true, canEditDepartment: true, canApproveSubordinates: true };
-    const deptRead: ScopeFlags = { canViewOwn: true, canViewDepartment: true };
-    const subsReadWrite: ScopeFlags = { canViewOwn: true, canEditOwn: true, canViewSubordinates: true, canApproveSubordinates: true };
-    const subsRead: ScopeFlags = { canViewOwn: true, canViewSubordinates: true };
-    const ownReadWrite: ScopeFlags = { canViewOwn: true, canEditOwn: true };
-    const ownRead: ScopeFlags = { canViewOwn: true };
+    const companyRW: ScopeFlags = { canViewOwn: true, canEditOwn: true, canViewCompany: true, canEditCompany: true, canApproveCompany: true };
+    const companyR: ScopeFlags  = { canViewOwn: true, canViewCompany: true };
+    const deptRW: ScopeFlags    = { canViewOwn: true, canEditOwn: true, canViewDepartment: true, canEditDepartment: true, canApproveSubordinates: true };
+    const deptR: ScopeFlags     = { canViewOwn: true, canViewDepartment: true };
+    const subsRW: ScopeFlags    = { canViewOwn: true, canEditOwn: true, canViewSubordinates: true, canApproveSubordinates: true };
+    const subsR: ScopeFlags     = { canViewOwn: true, canViewSubordinates: true };
+    const ownRW: ScopeFlags     = { canViewOwn: true, canEditOwn: true };
+    const ownR: ScopeFlags      = { canViewOwn: true };
+    const noScope: ScopeFlags   = {};
 
-    const ROLE_SCOPE_MATRIX: Record<string, Record<string, ScopeFlags>> = {
-      "System Administrator": Object.fromEntries(PERMISSION_RESOURCES.map(r => [r, fullCompany])),
-      "Owner": Object.fromEntries(PERMISSION_RESOURCES.map(r => [r, r === "system_admin" ? {} : companyReadWrite])),
-      "HR Manager": {
-        dashboard: ownRead, companies: ownRead,
-        workers: companyReadWrite, hr: companyReadWrite,
-        payroll: companyRead, timesheets: companyRead, reports: companyRead,
-        schedules: companyRead,
-        departments: companyRead, branches: companyRead, divisions: companyRead,
-        positions: companyRead, policies: companyRead, timeclock: companyRead,
-        settings: {}, permissions: {}, system_admin: {},
+    // Flat flag presets
+    const fFull: FlatFlags     = { canView: true, canCreate: true, canEdit: true, canDelete: true, canExport: true, canApprove: true };
+    const fViewOnly: FlatFlags = { canView: true };
+    const fViewExp: FlatFlags  = { canView: true, canExport: true };
+    const fNone: FlatFlags     = {};
+
+    // Extended resource list: original 17 + 5 task-spec additions
+    const EXTENDED_RESOURCES = [
+      ...PERMISSION_RESOURCES,
+      "profile", "paystubs", "preferences", "contractor_hub", "documents",
+    ];
+
+    // For new resources not in PERMISSION_RESOURCES, define flat flags per role
+    const NEW_RESOURCE_FLAT: Record<string, Record<string, FlatFlags>> = {
+      profile: {
+        "System Administrator": fFull, "Owner": fFull,
+        "HR Manager": fFull, "Payroll Manager": fViewOnly,
+        "Department Manager": fViewOnly, "Supervisor": fViewOnly,
+        "Employee": fViewOnly, "Contractor": fViewOnly,
       },
-      "Payroll Manager": {
-        dashboard: ownRead,
-        payroll: companyReadWrite,
-        timesheets: { canViewOwn: true, canViewCompany: true, canApproveSubordinates: true },
-        reports: { canViewOwn: true, canViewCompany: true },
-        workers: companyRead,
-        companies: ownRead, schedules: ownRead, departments: ownRead, branches: ownRead,
-        divisions: ownRead, positions: ownRead, policies: ownRead, hr: ownRead, timeclock: ownRead,
-        settings: {}, permissions: {}, system_admin: {},
+      paystubs: {
+        "System Administrator": fFull, "Owner": fFull,
+        "HR Manager": fViewExp, "Payroll Manager": fFull,
+        "Department Manager": fViewOnly, "Supervisor": fViewOnly,
+        "Employee": fViewOnly, "Contractor": fViewOnly,
       },
-      "Department Manager": {
-        dashboard: ownRead,
-        workers: deptReadWrite, timesheets: deptReadWrite, schedules: deptReadWrite,
-        hr: deptRead, reports: deptRead,
-        payroll: ownRead, companies: ownRead, departments: ownRead, branches: ownRead,
-        divisions: ownRead, positions: ownRead, policies: ownRead, timeclock: ownReadWrite,
-        settings: {}, permissions: {}, system_admin: {},
+      preferences: {
+        "System Administrator": fFull, "Owner": fFull,
+        "HR Manager": fViewOnly, "Payroll Manager": fViewOnly,
+        "Department Manager": fViewOnly, "Supervisor": fViewOnly,
+        "Employee": fFull, "Contractor": fFull,
       },
-      "Supervisor": {
-        dashboard: ownRead,
-        workers: subsRead, timesheets: subsReadWrite, schedules: subsReadWrite,
-        payroll: ownRead, companies: ownRead, departments: ownRead, branches: ownRead,
-        divisions: ownRead, positions: ownRead, policies: ownRead, hr: ownRead,
-        reports: ownRead, timeclock: ownReadWrite,
-        settings: {}, permissions: {}, system_admin: {},
+      contractor_hub: {
+        "System Administrator": fFull, "Owner": fFull,
+        "HR Manager": fFull, "Payroll Manager": fViewOnly,
+        "Department Manager": fViewOnly, "Supervisor": fViewOnly,
+        "Employee": fNone, "Contractor": fFull,
       },
-      "Employee": {
-        dashboard: ownRead, timesheets: ownReadWrite, schedules: ownRead,
-        payroll: ownRead, timeclock: ownReadWrite, policies: ownRead,
-        companies: {}, workers: {}, departments: {}, branches: {}, divisions: {},
-        positions: {}, hr: {}, reports: {}, settings: {}, permissions: {}, system_admin: {},
-      },
-      "Contractor": {
-        dashboard: ownRead, timesheets: ownRead, schedules: ownRead,
-        payroll: ownRead, timeclock: ownReadWrite,
-        companies: {}, workers: {}, departments: {}, branches: {}, divisions: {},
-        positions: {}, policies: {}, hr: {}, reports: {}, settings: {}, permissions: {}, system_admin: {},
+      documents: {
+        "System Administrator": fFull, "Owner": fFull,
+        "HR Manager": fFull, "Payroll Manager": fViewOnly,
+        "Department Manager": fViewOnly, "Supervisor": fViewOnly,
+        "Employee": fViewOnly, "Contractor": fViewOnly,
       },
     };
+
+    // Scope matrix per role per resource (covers all EXTENDED_RESOURCES)
+    const ROLE_SCOPE_MATRIX: Record<string, Record<string, ScopeFlags>> = {
+      "System Administrator": Object.fromEntries(EXTENDED_RESOURCES.map(r => [r, fullCompany])),
+      "Owner": Object.fromEntries(EXTENDED_RESOURCES.map(r => [r, r === "system_admin" ? noScope : companyRW])),
+      "HR Manager": {
+        dashboard: ownR, companies: ownR,
+        workers: companyRW, hr: companyRW, documents: companyRW,
+        payroll: companyR, timesheets: companyR, reports: companyR, schedules: companyR,
+        departments: companyR, branches: companyR, divisions: companyR,
+        positions: companyR, policies: companyR, timeclock: companyR,
+        profile: companyR, paystubs: companyR, preferences: ownR,
+        contractor_hub: companyRW,
+        settings: noScope, permissions: noScope, system_admin: noScope,
+      },
+      "Payroll Manager": {
+        dashboard: ownR, payroll: companyRW,
+        timesheets: { canViewOwn: true, canViewCompany: true, canApproveSubordinates: true },
+        paystubs: companyR,
+        reports: companyR, workers: companyR,
+        companies: ownR, schedules: ownR, departments: ownR, branches: ownR,
+        divisions: ownR, positions: ownR, policies: ownR, hr: ownR, timeclock: ownR,
+        profile: ownR, preferences: ownRW, documents: ownR, contractor_hub: ownR,
+        settings: noScope, permissions: noScope, system_admin: noScope,
+      },
+      "Department Manager": {
+        dashboard: ownR,
+        workers: deptRW, timesheets: deptRW, schedules: deptRW,
+        hr: deptR, reports: deptR, documents: deptR,
+        payroll: ownR, companies: ownR, departments: ownR, branches: ownR,
+        divisions: ownR, positions: ownR, policies: ownR, timeclock: ownRW,
+        profile: subsR, paystubs: ownR, preferences: ownRW, contractor_hub: ownR,
+        settings: noScope, permissions: noScope, system_admin: noScope,
+      },
+      "Supervisor": {
+        dashboard: ownR,
+        workers: subsR, timesheets: subsRW, schedules: subsRW,
+        payroll: ownR, companies: ownR, departments: ownR, branches: ownR,
+        divisions: ownR, positions: ownR, policies: ownR, hr: ownR,
+        reports: ownR, timeclock: ownRW, documents: ownR,
+        profile: subsR, paystubs: ownR, preferences: ownRW, contractor_hub: ownR,
+        settings: noScope, permissions: noScope, system_admin: noScope,
+      },
+      "Employee": {
+        dashboard: ownR, timesheets: ownRW, schedules: ownR,
+        payroll: ownR, timeclock: ownRW, policies: ownR,
+        profile: ownRW, paystubs: ownR, preferences: ownRW,
+        documents: ownR, contractor_hub: noScope,
+        companies: noScope, workers: noScope, departments: noScope, branches: noScope,
+        divisions: noScope, positions: noScope, hr: noScope, reports: noScope,
+        settings: noScope, permissions: noScope, system_admin: noScope,
+      },
+      "Contractor": {
+        dashboard: ownR, timesheets: ownR, schedules: ownR,
+        payroll: ownR, timeclock: ownRW,
+        profile: ownRW, paystubs: ownR, preferences: ownRW,
+        contractor_hub: ownRW, documents: ownR,
+        companies: noScope, workers: noScope, departments: noScope, branches: noScope,
+        divisions: noScope, positions: noScope, policies: noScope, hr: noScope,
+        reports: noScope, settings: noScope, permissions: noScope, system_admin: noScope,
+      },
+    };
+
+    const newResources = new Set(["profile", "paystubs", "preferences", "contractor_hub", "documents"]);
 
     for (const [roleName, resourceScopes] of Object.entries(ROLE_SCOPE_MATRIX)) {
       const roleId = roleMap[roleName];
       if (!roleId) continue;
-      for (const [resource, scopeFlags] of Object.entries(resourceScopes)) {
-        if (Object.keys(scopeFlags).length === 0) continue;
-        await db.update(rolePermissions)
-          .set(scopeFlags)
-          .where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.resource, resource)));
+
+      for (const resource of EXTENDED_RESOURCES) {
+        const scopeFlags = resourceScopes[resource] ?? noScope;
+
+        if (newResources.has(resource)) {
+          // New resource: check if row exists, INSERT or UPDATE
+          const existing = await db.select({ id: rolePermissions.id }).from(rolePermissions)
+            .where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.resource, resource)))
+            .limit(1);
+
+          const flatFlags: FlatFlags = (NEW_RESOURCE_FLAT[resource] ?? {})[roleName] ?? fNone;
+          const allFlags: ResourcePerms = { ...flatFlags, ...scopeFlags };
+
+          if (existing.length > 0) {
+            if (Object.keys(allFlags).length > 0) {
+              await db.update(rolePermissions).set(allFlags)
+                .where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.resource, resource)));
+            }
+          } else {
+            // Always insert the row so it exists; columns default to false
+            await db.insert(rolePermissions).values({ roleId, resource, ...allFlags });
+          }
+        } else {
+          // Existing resource: update scope columns only (flat flags set by seedRolesAndPermissions)
+          if (Object.keys(scopeFlags).length > 0) {
+            await db.update(rolePermissions).set(scopeFlags)
+              .where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.resource, resource)));
+          }
+        }
       }
     }
 
-    console.log("Scope-aware role templates seeded for all 8 system roles");
+    console.log("Scope-aware role templates seeded for all 8 system roles (22 resources)");
   } catch (e: any) {
     console.log("Could not seed scope role templates:", e?.message || e);
   }
