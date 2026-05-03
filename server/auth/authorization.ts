@@ -52,31 +52,37 @@ export const PERMISSION_COLUMN: Record<Permission, keyof typeof rolePermissions.
  * explicit user_roles rows. Template names use lowercase_underscore to match
  * exactly the names inserted during seeding.
  *
- * Alias mappings (tenant_admin → platform_super_admin, owner → company_admin,
- * etc.) redirect legacy users.role values to the canonical scope-aware templates.
+ * Alias mappings (tenant_admin → company_admin, owner → company_admin, etc.)
+ * redirect legacy users.role values to the canonical scope-aware templates.
+ * No tenant alias ever resolves to platform_super_admin (least-privilege).
  */
 const ROLE_NAME_MAP: Record<string, string> = {
-  // ── Primary scope-aware template mappings ──────────────────────────
-  "platform_super_admin":   "platform_super_admin",
-  "company_admin":          "company_admin",
-  "hr_manager":             "hr_manager",
-  "payroll_manager":        "payroll_manager",
-  "department_manager":     "department_manager",
-  "supervisor":             "supervisor",
-  "employee":               "employee",
-  "contractor":             "contractor",
+  // ── Exact matches for scope-aware templates ───────────────────────────────
+  // Note: "platform_super_admin" hits the early-return in checkPermission
+  // before this map is consulted, but is listed for completeness.
+  "platform_super_admin": "platform_super_admin",
+  "company_admin":        "company_admin",
+  "hr_manager":           "hr_manager",
+  "payroll_manager":      "payroll_manager",
+  "department_manager":   "department_manager",
+  "supervisor":           "supervisor",
+  "employee":             "employee",
+  "contractor":           "contractor",
 
-  // ── Alias mappings → scope-aware templates ─────────────────────────
-  "system_administrator":   "platform_super_admin",
-  "admin":                  "platform_super_admin",
-  "tenant_admin":           "platform_super_admin",
-  "owner":                  "company_admin",
-  "tenant_owner":           "company_admin",
-  "tenant_hr_admin":        "hr_manager",
-  "tenant_payroll_admin":   "payroll_manager",
-  "tenant_finance_admin":   "payroll_manager",
-  "tenant_manager":         "department_manager",
-  "tenant_supervisor":      "supervisor",
+  // ── Tenant-scoped aliases → company_admin or role-appropriate template ────
+  // All tenant aliases resolve to company_admin or lower — never to
+  // platform_super_admin — to enforce least-privilege for tenant users.
+  "owner":              "company_admin",
+  "tenant_owner":       "company_admin",
+  "tenant_admin":       "company_admin",   // tenant admin ≠ platform super admin
+  "tenant_hr_admin":    "hr_manager",
+  "tenant_payroll_admin": "payroll_manager",
+  "tenant_finance_admin": "payroll_manager",
+  "tenant_manager":     "department_manager",
+  "tenant_supervisor":  "supervisor",
+  // "admin" and "system_administrator" are intentionally omitted:
+  // the actual platform admin uses users.role = "platform_super_admin" directly
+  // and hits the checkPermission early-return before this map is reached.
 };
 
 const FLAT_PERMISSIONS = new Set<Permission>([
