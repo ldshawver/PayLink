@@ -345,6 +345,7 @@ const complianceInfo = [
 function JurisdictionComplianceSection() {
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: jurisdictions = [] } = useQuery<any[]>({ queryKey: ["/api/compliance/jurisdictions"] });
+  const { data: wageOrders = [] } = useQuery<{ number: string; name: string }[]>({ queryKey: ["/api/compliance/wage-orders"] });
   const { toast } = useToast();
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
 
@@ -421,6 +422,28 @@ function JurisdictionComplianceSection() {
                 <Badge variant="outline" className="text-xs" data-testid="badge-jurisdiction">
                   {jurisdictions.find(j => j.id === profile?.jurisdictionId)?.name ?? "California (default)"}
                 </Badge>
+              </div>
+
+              {/* IWC Wage Order selector */}
+              <div className="flex items-center gap-3">
+                <Label className="shrink-0 text-xs whitespace-nowrap">IWC Wage Order</Label>
+                <Select
+                  value={profile?.wageOrderNumber ?? ""}
+                  onValueChange={(val) => profileMutation.mutate({ wageOrderNumber: val || null })}
+                  disabled={profileMutation.isPending}
+                >
+                  <SelectTrigger className="h-8 text-xs" data-testid="select-wage-order">
+                    <SelectValue placeholder="Select applicable wage order…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Not set</SelectItem>
+                    {wageOrders.map(wo => (
+                      <SelectItem key={wo.number} value={wo.number}>
+                        Order {wo.number} — {wo.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               {/* Enforcement toggles */}

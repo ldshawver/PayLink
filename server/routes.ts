@@ -2946,6 +2946,16 @@ export async function registerRoutes(
                 scheduledHours: e.scheduledHours ? parseFloat(String(e.scheduledHours)) : undefined,
               }));
 
+            const enforceFlags = {
+              enforceDailyOt:       companyProfile?.enforceDailyOt    ?? true,
+              enforceWeeklyOt:      companyProfile?.enforceWeeklyOt   ?? true,
+              enforceSeventhDay:    companyProfile?.enforceSeventhDay  ?? true,
+              enforceMealBreaks:    companyProfile?.enforceMealBreaks  ?? true,
+              enforceRestBreaks:    companyProfile?.enforceRestBreaks  ?? true,
+              enforceMinWage:       companyProfile?.enforceMinWage     ?? true,
+              enforceFinalPaycheck: companyProfile?.enforceFinalPaycheck ?? true,
+            };
+
             const ctx = {
               worker: {
                 id: worker.id,
@@ -2965,12 +2975,33 @@ export async function registerRoutes(
               periodStart: run.periodStart,
               periodEnd: run.periodEnd,
               grossPay: parseFloat(String(item.grossPay ?? 0)),
+              enforceFlags,
+              workerMinWageOverride: workerProfile?.minWageOverride
+                ? parseFloat(String(workerProfile.minWageOverride))
+                : null,
+              wageOrderNumber: companyProfile?.wageOrderNumber ?? null,
             };
 
             const workerResults = evaluateCompliance(ctx);
-            const workerBlocks = workerResults.filter(r => r.severity === "block");
-            for (const b of workerBlocks) {
-              allBlocks.push({ ...b, workerId: worker.id, workerName: `${worker.firstName} ${worker.lastName}` });
+            for (const r of workerResults) {
+              // Write every evaluation result as an audit event
+              try {
+                await storage.createComplianceAuditEvent({
+                  companyId: run.companyId,
+                  payrollRunId: run.id,
+                  workerId: worker.id,
+                  ruleId: r.ruleId ?? null,
+                  ruleType: r.ruleType,
+                  entityType: "worker",
+                  entityId: worker.id,
+                  severity: r.severity,
+                  message: r.message,
+                  detail: r.detail,
+                });
+              } catch (_) { /* non-fatal */ }
+              if (r.severity === "block") {
+                allBlocks.push({ ...r, workerId: worker.id, workerName: `${worker.firstName} ${worker.lastName}` });
+              }
             }
           }
 
@@ -25804,6 +25835,29 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
+  // GET /api/compliance/wage-orders — static IWC wage order list for CA
+  app.get("/api/compliance/wage-orders", requireAuth, (_req, res) => {
+    res.json([
+      { number: "1",  name: "Manufacturing Industry" },
+      { number: "2",  name: "Personal Service Industry" },
+      { number: "3",  name: "Canning, Freezing & Preserving Industry" },
+      { number: "4",  name: "Professional, Technical, Clerical & Similar" },
+      { number: "5",  name: "Public Housekeeping Industry (Hotels, Restaurants)" },
+      { number: "6",  name: "Laundry, Linen Supply, Dry Cleaning & Dyeing" },
+      { number: "7",  name: "Mercantile Industry" },
+      { number: "8",  name: "Industries Handling Products After Harvest" },
+      { number: "9",  name: "Transportation Industry" },
+      { number: "10", name: "Amusement & Recreation Industry" },
+      { number: "11", name: "Broadcasting Industry" },
+      { number: "12", name: "Motion Picture Industry" },
+      { number: "13", name: "Preparing Agricultural Products for Market" },
+      { number: "14", name: "Agricultural Occupations" },
+      { number: "15", name: "Household Occupation" },
+      { number: "16", name: "On-Site Construction, Drilling, Logging & Mining" },
+      { number: "17", name: "Miscellaneous Employees" },
+    ]);
+  });
+
   // GET /api/compliance/company/:companyId — current profile + recent violations
   app.get("/api/compliance/company/:companyId", requireAuth, async (req, res) => {
     try {
@@ -25911,6 +25965,16 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
 
         const payRateNum = parseFloat(String(worker.payRate ?? 0));
 
+        const enforceFlags = {
+          enforceDailyOt:       companyProfile?.enforceDailyOt    ?? true,
+          enforceWeeklyOt:      companyProfile?.enforceWeeklyOt   ?? true,
+          enforceSeventhDay:    companyProfile?.enforceSeventhDay  ?? true,
+          enforceMealBreaks:    companyProfile?.enforceMealBreaks  ?? true,
+          enforceRestBreaks:    companyProfile?.enforceRestBreaks  ?? true,
+          enforceMinWage:       companyProfile?.enforceMinWage     ?? true,
+          enforceFinalPaycheck: companyProfile?.enforceFinalPaycheck ?? true,
+        };
+
         const ctx = {
           worker: {
             id: worker.id,
@@ -25930,6 +25994,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           periodStart: run.periodStart,
           periodEnd: run.periodEnd,
           grossPay: parseFloat(String(item.grossPay ?? 0)),
+          enforceFlags,
+          workerMinWageOverride: workerProfile?.minWageOverride
+            ? parseFloat(String(workerProfile.minWageOverride))
+            : null,
+          wageOrderNumber: companyProfile?.wageOrderNumber ?? null,
         };
 
         const results = evaluateCompliance(ctx);
