@@ -141,15 +141,20 @@ const R = {
 /**
  * Resolve the effective value for a rule type, respecting the full override hierarchy.
  *
- * Priority (highest wins):
- *   4 — wage-order-specific rule whose wageOrderNumber matches ctx
+ * Step 1 — Eligibility filter: rules tagged with a wageOrderNumber are only
+ *   eligible when that number matches the active wage order. Rules with no
+ *   wageOrderNumber (generic state rules) are always eligible. Rules tagged
+ *   for a DIFFERENT wage order are excluded entirely — they must never bleed
+ *   into a company on a different or unset wage order.
+ *
+ * Step 2 — Priority among eligible rules (highest wins):
+ *   4 — wage-order-specific rule (wageOrderNumber === activeWageOrder)
  *   3 — worker-level override
  *   2 — company-level override
  *   1 — generic state rule (no wage-order tag)
  *
- * This means an IWC Wage Order rule (e.g. WO-14 Agricultural daily OT at 8.5h)
- * will supersede the generic state rule (8h) when the company's active wage
- * order matches.
+ * Step 3 — Tie-break: among equal-priority rules pick the highest value
+ *   (most protective for the worker).
  */
 function ruleVal(
   rules: LaborRuleInput[],
@@ -160,16 +165,21 @@ function ruleVal(
   const matching = rules.filter(r => r.ruleType === type);
   if (matching.length === 0) return fallback;
 
+  // Exclude rules tagged for a DIFFERENT wage order (they don't apply here)
+  const eligible = matching.filter(r =>
+    r.wageOrderNumber == null || r.wageOrderNumber === (activeWageOrder ?? null),
+  );
+  if (eligible.length === 0) return fallback;
+
   const priority = (r: LaborRuleInput): number => {
-    // Wage-order-specific rules win over everything when the order matches
     if (r.wageOrderNumber && activeWageOrder && r.wageOrderNumber === activeWageOrder) return 4;
     if (r.overrideLevel === "worker")  return 3;
     if (r.overrideLevel === "company") return 2;
-    return 1; // state or undefined
+    return 1; // generic state rule
   };
 
-  // Among rules with equal priority, pick the highest value (most protective)
-  const best = matching.reduce((a, b) => {
+  // Among eligible rules: highest priority wins; tie → highest value (most protective)
+  const best = eligible.reduce((a, b) => {
     const pa = priority(a);
     const pb = priority(b);
     if (pa !== pb) return pa > pb ? a : b;
