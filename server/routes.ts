@@ -2432,6 +2432,7 @@ export async function registerRoutes(
       // Pre-seed run totals with the values from preserved manual-override items
       // so the final run totals include both auto and manually-set pay.
       let totalGross = 0, totalNet = 0, totalHours = 0, totalOT = 0;
+      await db.execute(sql`SELECT pg_advisory_lock(abs(hashtext(${run.companyId}))::bigint)`);
       let checkNum = company.nextCheckNumber || 1;
       for (const mi of manualOverrideItems) {
         totalGross += parseFloat((mi as any).grossPay || "0");
@@ -2906,6 +2907,7 @@ export async function registerRoutes(
       }
 
       await storage.updateCompany(run.companyId, { nextCheckNumber: checkNum });
+      await db.execute(sql`SELECT pg_advisory_unlock(abs(hashtext(${run.companyId}))::bigint)`);
 
       await storage.updatePayrollRun(run.id, {
         status: "processed",
@@ -5992,6 +5994,7 @@ export async function registerRoutes(
 
       const items: any[] = [];
       let totalGross = 0, totalNet = 0, totalHoursSum = 0, totalOT = 0;
+      await db.execute(sql`SELECT pg_advisory_lock(abs(hashtext(${companyId}))::bigint)`);
       let checkNum = company.nextCheckNumber || 1;
 
       for (const worker of activeWorkers) {
@@ -6171,6 +6174,7 @@ export async function registerRoutes(
       }
 
       await storage.updateCompany(companyId, { nextCheckNumber: checkNum });
+      await db.execute(sql`SELECT pg_advisory_unlock(abs(hashtext(${companyId}))::bigint)`);
 
       res.status(201).json(payrollRun);
     } catch (error: any) {
@@ -13935,6 +13939,474 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (error: any) {
       console.error("Check print audit log failed:", error.message);
       res.json({ success: false, error: error.message });
+    }
+  });
+
+  // ── Check PDF / Void / Reprint ────────────────────────────────────────────
+
+  function numToWords(num: number): string {
+    const ones = ["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
+    const tens = ["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
+    function conv(n: number): string {
+      if (n < 20) return ones[n];
+      if (n < 100) return tens[Math.floor(n/10)] + (n%10 ? "-"+ones[n%10] : "");
+      if (n < 1000) return ones[Math.floor(n/100)] + " Hundred" + (n%100 ? " "+conv(n%100) : "");
+      if (n < 1000000) return conv(Math.floor(n/1000)) + " Thousand" + (n%1000 ? " "+conv(n%1000) : "");
+      return conv(Math.floor(n/1000000)) + " Million" + (n%1000000 ? " "+conv(n%1000000) : "");
+    }
+    const dollars = Math.floor(num);
+    const cents = Math.round((num - dollars) * 100);
+    return (dollars === 0 ? "Zero" : conv(dollars)) + " and " + String(cents).padStart(2, "0") + "/100";
+  }
+
+  function buildMicrStr(routing: string, account: string, checkNum: string): string {
+    const T = "c", O = "d";
+    const r = routing.replace(/\D/g, "").slice(0, 9).padStart(9, "0");
+    const a = account.replace(/\D/g, "").slice(0, 17);
+    const chk = checkNum.replace(/\D/g, "").slice(0, 10).padStart(10, " ");
+    return `${O}${chk}${O} ${T}${r}${T} ${a}${O}`;
+  }
+
+  async function renderCheckPdf(params: {
+    item: any; worker: any; run: any; company: any; remittanceSource: any;
+    isCalibration?: boolean; isVoid?: boolean;
+  }): Promise<Uint8Array> {
+    const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+    const { item, worker, run, company, remittanceSource, isCalibration, isVoid } = params;
+    const doc = await PDFDocument.create();
+    const hv  = await doc.embedFont(StandardFonts.Helvetica);
+    const hvB = await doc.embedFont(StandardFonts.HelveticaBold);
+    const cour = await doc.embedFont(StandardFonts.Courier);
+    let micrFont: any = cour;
+    try {
+      const micrPath = path.join(process.cwd(), "client", "public", "fonts", "micrenc.ttf");
+      const micrBytes = fs.readFileSync(micrPath);
+      micrFont = await doc.embedFont(micrBytes as any);
+    } catch { /* courier fallback */ }
+
+    const page = doc.addPage([612, 792]);
+    const W = 612, H = 792;
+    const checkH    = Math.round(3.667 * 72); // 264pt
+    const micrBandH = Math.round(0.625 * 72); // 45pt
+    const lm        = Math.round(0.55  * 72); // 40pt left margin
+    const rm        = W - lm;
+    const checkBot  = H - checkH;             // 528
+    const micrBase  = checkBot + Math.round(0.15 * 72); // ~539
+
+    const netPay   = isCalibration ? 1234.56 : Number(item?.netPay   || 0);
+    const grossPay = isCalibration ? 1380.23 : Number(item?.grossPay || 0);
+    const totalDed = isCalibration ? 145.67  : Number(item?.deductions || 0);
+    const checkNum = isCalibration ? "0001"  : String(item?.checkNumber || "0000");
+    const routing  = isCalibration ? "123456789"  : (remittanceSource?.routingNumber  || "").replace(/\D/g, "");
+    const account  = isCalibration ? "1234567890" : (remittanceSource?.accountNumber  || "").replace(/\D/g, "");
+    const wName    = isCalibration ? "John Q Employee" : `${worker?.firstName || ""} ${worker?.lastName || ""}`.trim();
+    const coName   = isCalibration ? "ACME Corporation" : (company?.name || "");
+    const coAddr   = isCalibration
+      ? "123 Main St, Anytown CA 90210"
+      : [company?.address, [company?.city, company?.state].filter(Boolean).join(", ") + (company?.zip ? " " + company.zip : "")].filter(Boolean).join(", ");
+    const fmtDate = (d: string | null | undefined) =>
+      d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "—";
+    const payDate = isCalibration
+      ? new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+      : fmtDate(run?.payDate);
+    const pStart = isCalibration ? "01/01/2025" : fmtDate(run?.periodStart);
+    const pEnd   = isCalibration ? "01/15/2025" : fmtDate(run?.periodEnd);
+    const amtWords = numToWords(netPay);
+    const fmt2 = (v: any) => Number(v || 0).toFixed(2);
+    const fmtMoney = (v: number) => v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const drawGuide = (x: number, y: number, w: number, h: number, label: string) => {
+      if (!isCalibration) return;
+      page.drawRectangle({ x, y, width: w, height: h, borderColor: rgb(0.8, 0.2, 0.2), borderWidth: 0.5, borderDashArray: [3, 3] });
+      page.drawText(label, { x: x + 2, y: y + h - 8, size: 5.5, font: hv, color: rgb(0.8, 0.2, 0.2) });
+    };
+
+    // Check border
+    page.drawRectangle({ x: lm - 4, y: checkBot, width: W - (lm - 4) * 2, height: checkH, borderColor: rgb(0.7, 0.7, 0.7), borderWidth: 0.5 });
+    page.drawLine({ start: { x: lm - 4, y: checkBot + micrBandH }, end: { x: rm + 4, y: checkBot + micrBandH }, color: rgb(0.8, 0.8, 0.8), thickness: 0.3 });
+
+    // VOID watermark
+    if (isVoid) {
+      page.drawText("VOID", { x: 140, y: checkBot + 120, size: 80, font: hvB, color: rgb(0.85, 0.1, 0.1), opacity: 0.25, rotate: { type: "degrees" as const, angle: 30 } });
+    }
+
+    // Company header
+    let curY = H - 16;
+    drawGuide(lm, curY - 42, 220, 42, "COMPANY BLOCK");
+    page.drawText(coName, { x: lm, y: curY - 12, size: 11, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(coAddr, { x: lm, y: curY - 24, size:  8, font: hv,  color: rgb(0.2, 0.2, 0.2) });
+
+    // Check number box (top-right)
+    const cnBoxX = rm - 102, cnBoxY = curY - 32;
+    drawGuide(cnBoxX, cnBoxY, 102, 24, "CHECK #");
+    page.drawRectangle({ x: cnBoxX, y: cnBoxY, width: 102, height: 24, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+    page.drawText(`No. ${checkNum}`, { x: cnBoxX + 6, y: cnBoxY + 8, size: 10, font: hvB, color: rgb(0, 0, 0) });
+
+    // Date (below check number)
+    const dtY = cnBoxY - 22;
+    drawGuide(cnBoxX, dtY, 102, 18, "DATE");
+    page.drawText("DATE", { x: cnBoxX, y: dtY + 9, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
+    page.drawLine({ start: { x: cnBoxX, y: dtY }, end: { x: rm, y: dtY }, color: rgb(0, 0, 0), thickness: 0.8 });
+    page.drawText(payDate, { x: cnBoxX + 2, y: dtY + 2, size: 9, font: hv, color: rgb(0, 0, 0) });
+    page.drawText("VOID AFTER 90 DAYS", { x: cnBoxX, y: dtY - 9, size: 6, font: hv, color: rgb(0.5, 0.5, 0.5) });
+
+    // Pay to order row
+    const payRowY = curY - 58;
+    const amtBoxW = 102, amtBoxX = rm - amtBoxW;
+    const payeeEnd = amtBoxX - 8;
+    page.drawText("PAY TO THE ORDER OF", { x: lm, y: payRowY + 4, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    drawGuide(lm + 138, payRowY - 4, payeeEnd - (lm + 138), 20, "PAYEE NAME");
+    page.drawText(wName, { x: lm + 140, y: payRowY + 3, size: 12, font: hvB, color: rgb(0, 0, 0) });
+    page.drawLine({ start: { x: lm + 138, y: payRowY }, end: { x: payeeEnd, y: payRowY }, color: rgb(0, 0, 0), thickness: 1 });
+    drawGuide(amtBoxX, payRowY - 4, amtBoxW, 22, "AMOUNT BOX");
+    page.drawRectangle({ x: amtBoxX, y: payRowY - 4, width: amtBoxW, height: 22, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+    page.drawLine({ start: { x: amtBoxX + 4, y: payRowY - 4 }, end: { x: amtBoxX + 4, y: payRowY + 18 }, color: rgb(0, 0, 0), thickness: 2 });
+    page.drawText(`$${fmtMoney(netPay)}`, { x: amtBoxX + 8, y: payRowY + 2, size: 11, font: hvB, color: rgb(0, 0, 0) });
+
+    // Amount in words
+    const wordsY = payRowY - 18;
+    drawGuide(lm, wordsY - 2, rm - lm, 14, "AMOUNT WORDS");
+    const wordsStr = (amtWords.length > 80 ? amtWords.slice(0, 77) + "..." : amtWords) + " ————————";
+    page.drawText(wordsStr, { x: lm, y: wordsY, size: 9, font: hv, color: rgb(0, 0, 0) });
+    page.drawLine({ start: { x: lm, y: wordsY - 3 }, end: { x: rm, y: wordsY - 3 }, color: rgb(0, 0, 0), thickness: 0.5 });
+
+    // Memo
+    const memoY = wordsY - 22;
+    const memoText = pStart !== "—" && pEnd !== "—" ? `Pay period ${pStart} – ${pEnd}` : "";
+    drawGuide(lm, memoY - 2, 200, 14, "MEMO");
+    page.drawText("MEMO:", { x: lm, y: memoY, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
+    page.drawText(memoText, { x: lm + 32, y: memoY, size: 8, font: hv, color: rgb(0, 0, 0) });
+    page.drawLine({ start: { x: lm, y: memoY - 3 }, end: { x: lm + 240, y: memoY - 3 }, color: rgb(0, 0, 0), thickness: 0.5 });
+
+    // Signature line
+    const sigY = memoY - 22;
+    drawGuide(rm - 162, sigY - 2, 162, 14, "SIGNATURE");
+    page.drawLine({ start: { x: rm - 162, y: sigY }, end: { x: rm, y: sigY }, color: rgb(0, 0, 0), thickness: 0.5 });
+    page.drawText("AUTHORIZED SIGNATURE", { x: rm - 157, y: sigY - 9, size: 6, font: hv, color: rgb(0.4, 0.4, 0.4) });
+
+    // MICR line
+    page.drawText(buildMicrStr(routing, account, checkNum), { x: lm, y: micrBase, size: 12, font: micrFont, color: rgb(0, 0, 0) });
+
+    // Stub separator
+    page.drawLine({ start: { x: 0, y: checkBot - 2 }, end: { x: W, y: checkBot - 2 }, color: rgb(0.6, 0.6, 0.6), thickness: 0.5, dashArray: [4, 4] });
+
+    // Stub header
+    const sHdrY = checkBot - 16;
+    page.drawRectangle({ x: lm - 4, y: sHdrY - 4, width: rm - lm + 8, height: 16, color: rgb(0.93, 0.93, 0.93) });
+    page.drawText("EMPLOYEE EARNINGS STATEMENT — DETACH BEFORE CASHING", { x: lm, y: sHdrY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+
+    // Stub employee/period info
+    let sY = sHdrY - 16;
+    page.drawText(`Employee: ${wName}`,    { x: lm,       y: sY, size: 8, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(`Company: ${coName}`,    { x: lm + 250, y: sY, size: 8, font: hv,  color: rgb(0, 0, 0) });
+    sY -= 12;
+    page.drawText(`Pay Period: ${pStart} – ${pEnd}`, { x: lm,       y: sY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText(`Pay Date: ${payDate}`,             { x: lm + 250, y: sY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
+    sY -= 12;
+    page.drawText(`Check No: ${checkNum}`, { x: lm, y: sY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
+    sY -= 16;
+
+    // Earnings table
+    const c1 = lm, c2 = lm + 185, c3 = lm + 280, c4 = rm - 75;
+    page.drawRectangle({ x: c1 - 2, y: sY - 4, width: rm - c1 + 2, height: 14, color: rgb(0.88, 0.88, 0.88) });
+    page.drawText("DESCRIPTION", { x: c1, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("HOURS",       { x: c2, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("RATE",        { x: c3, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("CURRENT",     { x: c4, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    sY -= 14;
+
+    type ERow = [string, string, string, string];
+    const earningRows: ERow[] = [];
+    if (isCalibration) {
+      earningRows.push(["Regular",            "80.00", "$15.45/hr", "$1,236.00"]);
+      earningRows.push(["Overtime (1.5x)",     "2.50", "$23.18/hr",    "$57.95"]);
+      earningRows.push(["Holiday",             "8.00", "$15.45/hr",   "$123.60"]);
+    } else if (item) {
+      const rate = Number(item.payRate || 0);
+      if (Number(item.regularHours     || 0) > 0) earningRows.push(["Regular",          fmt2(item.regularHours),    rate > 0 ? `$${fmt2(rate)}/hr`       : "", `$${fmt2(item.regularPay)}`]);
+      if (Number(item.overtimeHours    || 0) > 0) earningRows.push(["Overtime (1.5x)",  fmt2(item.overtimeHours),   rate > 0 ? `$${fmt2(rate*1.5)}/hr`   : "", `$${fmt2(item.overtimePay)}`]);
+      if (Number(item.doubleTimeHours  || 0) > 0) earningRows.push(["Double Time (2x)", fmt2(item.doubleTimeHours), rate > 0 ? `$${fmt2(rate*2)}/hr`     : "", `$${fmt2(item.doubleTimePay)}`]);
+      if (Number(item.salaryPay        || 0) > 0) earningRows.push(["Salary",           "",                         "",                                        `$${fmt2(item.salaryPay)}`]);
+      if (Number(item.bonusPay         || 0) > 0) earningRows.push(["Bonus",            "",                         "",                                        `$${fmt2(item.bonusPay)}`]);
+      if (Number(item.tipsPay          || 0) > 0) earningRows.push(["Tips",             "",                         "",                                        `$${fmt2(item.tipsPay)}`]);
+      if (Number(item.ptoPay           || 0) > 0) earningRows.push(["PTO",              fmt2(item.ptoHours),        "",                                        `$${fmt2(item.ptoPay)}`]);
+      if (Number(item.sickPay          || 0) > 0) earningRows.push(["Sick Leave",       fmt2(item.sickHours),       "",                                        `$${fmt2(item.sickPay)}`]);
+      if (Number(item.holidayPay       || 0) > 0) earningRows.push(["Holiday",          fmt2(item.holidayHours),    "",                                        `$${fmt2(item.holidayPay)}`]);
+    }
+    for (const [desc, hrs, rate, amt] of earningRows) {
+      page.drawText(desc, { x: c1, y: sY, size: 7.5, font: hv,   color: rgb(0, 0, 0) });
+      page.drawText(hrs,  { x: c2, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
+      page.drawText(rate, { x: c3, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
+      page.drawText(amt,  { x: c4, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
+      sY -= 11;
+    }
+
+    sY -= 4;
+    // Deductions header
+    page.drawRectangle({ x: c1 - 2, y: sY - 4, width: rm - c1 + 2, height: 14, color: rgb(0.88, 0.88, 0.88) });
+    page.drawText("DEDUCTIONS", { x: c1, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("CURRENT",    { x: c4, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    sY -= 14;
+    if (isCalibration) {
+      page.drawText("Federal Income Tax",      { x: c1, y: sY, size: 7.5, font: hv,   color: rgb(0, 0, 0) });
+      page.drawText("-$98.45",                 { x: c4, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) }); sY -= 11;
+      page.drawText("Social Security (6.2%)",  { x: c1, y: sY, size: 7.5, font: hv,   color: rgb(0, 0, 0) });
+      page.drawText("-$47.22",                 { x: c4, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) }); sY -= 11;
+    } else if (totalDed > 0) {
+      page.drawText("Taxes & Deductions",             { x: c1, y: sY, size: 7.5, font: hv,   color: rgb(0, 0, 0) });
+      page.drawText(`-$${fmtMoney(totalDed)}`,        { x: c4, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) }); sY -= 11;
+    }
+
+    sY -= 4;
+    page.drawLine({ start: { x: c1 - 2, y: sY + 8 }, end: { x: rm + 2, y: sY + 8 }, color: rgb(0.5, 0.5, 0.5), thickness: 0.5 });
+    page.drawText("GROSS PAY",        { x: c1, y: sY, size: 8, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(`$${fmtMoney(grossPay)}`, { x: c4, y: sY, size: 8, font: hvB, color: rgb(0, 0, 0) }); sY -= 11;
+    page.drawText("TOTAL DEDUCTIONS", { x: c1, y: sY, size: 8, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(`-$${fmtMoney(totalDed)}`, { x: c4, y: sY, size: 8, font: hvB, color: rgb(0.65, 0, 0) }); sY -= 11;
+    page.drawRectangle({ x: c1 - 2, y: sY - 3, width: rm - c1 + 2, height: 14, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
+    page.drawText("NET PAY",               { x: c1, y: sY, size: 9, font: hvB, color: rgb(0, 0, 0.55) });
+    page.drawText(`$${fmtMoney(netPay)}`,  { x: c4, y: sY, size: 9, font: hvB, color: rgb(0, 0, 0.55) });
+
+    if (!isCalibration && item) {
+      sY -= 14;
+      page.drawText(`YTD Gross: $${fmtMoney(Number(item.ytdGross || 0))}`,      { x: c1,       y: sY, size: 7.5, font: hv, color: rgb(0.35, 0.35, 0.35) });
+      page.drawText(`YTD Deductions: $${fmtMoney(Number(item.ytdDeductions||0))}`, { x: c1+160, y: sY, size: 7.5, font: hv, color: rgb(0.35, 0.35, 0.35) });
+      page.drawText(`YTD Net: $${fmtMoney(Number(item.ytdNet || 0))}`,          { x: c3 + 20,  y: sY, size: 7.5, font: hv, color: rgb(0.35, 0.35, 0.35) });
+    }
+
+    // Calibration grid + watermark
+    if (isCalibration) {
+      const gc = rgb(0.5, 0.7, 0.9);
+      for (let gy = 0; gy < H; gy += 18)
+        page.drawLine({ start: { x: 0, y: gy }, end: { x: W, y: gy }, color: gc, thickness: 0.15, opacity: 0.4 });
+      for (let gx = 0; gx < W; gx += 18)
+        page.drawLine({ start: { x: gx, y: 0 }, end: { x: gx, y: H }, color: gc, thickness: 0.15, opacity: 0.4 });
+      page.drawText("CALIBRATION TEST — NOT A REAL CHECK", {
+        x: 85, y: H / 2 + 20, size: 18, font: hvB, color: rgb(0.7, 0.7, 0.7), opacity: 0.45,
+        rotate: { type: "degrees" as const, angle: 45 },
+      });
+    }
+
+    return doc.save();
+  }
+
+  // GET /api/checks/:payrollItemId/pdf — single-check server PDF
+  app.get("/api/checks/:payrollItemId/pdf", requireAuth, async (req, res) => {
+    try {
+      const { payrollItemId } = req.params;
+      const isCalibration = req.query.mode === "calibration";
+      const isVoid        = req.query.mode === "void";
+
+      const [itemRow] = await db.select().from(payrollItems).where(eq(payrollItems.id, payrollItemId));
+      if (!itemRow) return res.status(404).json({ message: "Payroll item not found" });
+
+      const runRaw = await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`);
+      const runRow = ((runRaw as any).rows || runRaw as any[])[0];
+      const compId = (runRow as any)?.company_id || itemRow.companyId;
+
+      const coRaw = await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`);
+      const company = ((coRaw as any).rows || coRaw as any[])[0];
+
+      const wRaw = await db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`);
+      const worker = ((wRaw as any).rows || wRaw as any[])[0];
+
+      const rsRaw = await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`);
+      const rs = ((rsRaw as any).rows || rsRaw as any[])[0] || null;
+
+      if (!isCalibration) {
+        if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source." });
+        if (!rs?.account_number) return res.status(422).json({ message: "No account number configured." });
+      }
+
+      const pdfBytes = await renderCheckPdf({
+        item: itemRow,
+        worker: worker ? { firstName: (worker as any).first_name, lastName: (worker as any).last_name } : null,
+        run: runRow ? { payDate: (runRow as any).pay_date, periodStart: (runRow as any).period_start, periodEnd: (runRow as any).period_end } : null,
+        company: company ? { name: (company as any).name, address: (company as any).address, city: (company as any).city, state: (company as any).state, zip: (company as any).zip } : null,
+        remittanceSource: rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number } : null,
+        isCalibration,
+        isVoid,
+      });
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="check-${String(itemRow.checkNumber || payrollItemId.slice(0,8))}.pdf"`);
+      res.send(Buffer.from(pdfBytes));
+    } catch (err: any) {
+      console.error("[checkPDF]", err);
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to generate check PDF") });
+    }
+  });
+
+  // GET /api/payroll-runs/:id/checks-pdf — all checks for a run as merged PDF
+  app.get("/api/payroll-runs/:id/checks-pdf", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const runId = req.params.id;
+      const isCalibration = req.query.mode === "calibration";
+
+      const runRaw = await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${runId}`);
+      const run    = ((runRaw as any).rows || runRaw as any[])[0];
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+
+      const compId = (run as any).company_id;
+      const coRaw  = await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`);
+      const company = ((coRaw as any).rows || coRaw as any[])[0];
+
+      const rsRaw = await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`);
+      const rs    = ((rsRaw as any).rows || rsRaw as any[])[0] || null;
+
+      if (!isCalibration) {
+        if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured. Add one in Payroll → Bank Accounts." });
+        if (!rs?.account_number) return res.status(422).json({ message: "No account number configured." });
+      }
+
+      const itemsRaw = await db.execute(sql`
+        SELECT * FROM payroll_items
+        WHERE payroll_run_id = ${runId}
+          AND (payment_method IS NULL OR payment_method = 'check')
+          AND CAST(net_pay AS numeric) > 0
+        ORDER BY check_number
+      `);
+      const items = ((itemsRaw as any).rows || itemsRaw as any[]);
+
+      const workerIds = [...new Set(items.map((i: any) => i.worker_id).filter(Boolean))] as string[];
+      let workerMap: Record<string, any> = {};
+      if (workerIds.length > 0) {
+        const wRaw = await db.execute(sql`SELECT * FROM workers WHERE id = ANY(${workerIds}::text[])`);
+        for (const w of ((wRaw as any).rows || wRaw as any[])) workerMap[w.id] = w;
+      }
+
+      const runNorm = { payDate: (run as any).pay_date, periodStart: (run as any).period_start, periodEnd: (run as any).period_end };
+      const coNorm  = company ? { name: (company as any).name, address: (company as any).address, city: (company as any).city, state: (company as any).state, zip: (company as any).zip } : null;
+      const remSrc  = rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number } : null;
+
+      const { PDFDocument } = await import("pdf-lib");
+      const merged = await PDFDocument.create();
+
+      if (isCalibration || items.length === 0) {
+        const bytes = await renderCheckPdf({ item: null, worker: null, run: runNorm, company: coNorm, remittanceSource: remSrc, isCalibration: true });
+        const [pg]  = await merged.copyPages(await PDFDocument.load(bytes), [0]);
+        merged.addPage(pg);
+      } else {
+        for (const item of items) {
+          const w = workerMap[item.worker_id] || null;
+          const bytes = await renderCheckPdf({
+            item,
+            worker: w ? { firstName: w.first_name, lastName: w.last_name } : null,
+            run: runNorm, company: coNorm, remittanceSource: remSrc,
+          });
+          const [pg] = await merged.copyPages(await PDFDocument.load(bytes), [0]);
+          merged.addPage(pg);
+        }
+      }
+
+      const pdfBytes = await merged.save();
+      const userId   = (req.session as any)?.userId;
+      const totalAmt = items.reduce((s: number, i: any) => s + Number(i.net_pay || 0), 0);
+
+      await db.execute(sql`
+        INSERT INTO check_print_audit_logs (
+          payroll_run_id, company_id, initiated_by_user_id,
+          check_count, total_amount, micr_validation,
+          validation_errors, print_blocked, render_engine, event_type
+        ) VALUES (
+          ${runId}, ${compId}, ${userId || null},
+          ${items.length}, ${totalAmt},
+          ${isCalibration ? "calibration_test" : "ok"},
+          '[]', false, 'server-pdf',
+          ${isCalibration ? "calibration_test" : "print"}
+        )
+      `);
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="checks-${runId.slice(0, 8)}.pdf"`);
+      res.send(Buffer.from(pdfBytes));
+    } catch (err: any) {
+      console.error("[checksBatchPDF]", err);
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to generate checks PDF") });
+    }
+  });
+
+  // POST /api/checks/:payrollItemId/void — formal void with required reason
+  app.post("/api/checks/:payrollItemId/void", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { payrollItemId } = req.params;
+      const { voidReason }    = req.body;
+      if (!voidReason || !String(voidReason).trim()) return res.status(400).json({ message: "voidReason is required" });
+
+      const userId = (req.session as any)?.userId;
+      const [itemRow] = await db.select().from(payrollItems).where(eq(payrollItems.id, payrollItemId));
+      if (!itemRow) return res.status(404).json({ message: "Payroll item not found" });
+
+      const runRaw = await db.execute(sql`SELECT company_id FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`);
+      const compId = (((runRaw as any).rows || runRaw as any[])[0] as any)?.company_id;
+
+      await db.execute(sql`
+        UPDATE payroll_payment_records
+        SET status = 'voided', voided_at = NOW(), updated_at = NOW()
+        WHERE payroll_item_id = ${payrollItemId} AND status != 'voided'
+      `);
+
+      await db.execute(sql`
+        INSERT INTO check_print_audit_logs (
+          payroll_run_id, company_id, initiated_by_user_id,
+          check_count, total_amount, micr_validation,
+          validation_errors, print_blocked, render_engine,
+          event_type, worker_id, check_number, notes
+        ) VALUES (
+          ${itemRow.payrollRunId || null}, ${compId || null}, ${userId || null},
+          1, ${itemRow.netPay || 0}, 'void',
+          '[]', false, 'server-pdf',
+          'void', ${itemRow.workerId || null}, ${itemRow.checkNumber || null},
+          ${String(voidReason).trim()}
+        )
+      `);
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("[voidCheck]", err);
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to void check") });
+    }
+  });
+
+  // POST /api/checks/:payrollItemId/reprint — log a reprint event
+  app.post("/api/checks/:payrollItemId/reprint", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { payrollItemId } = req.params;
+      const userId = (req.session as any)?.userId;
+
+      const [itemRow] = await db.select().from(payrollItems).where(eq(payrollItems.id, payrollItemId));
+      if (!itemRow) return res.status(404).json({ message: "Payroll item not found" });
+
+      const origRaw = await db.execute(sql`
+        SELECT id FROM check_print_audit_logs
+        WHERE (worker_id = ${itemRow.workerId} OR check_number = ${itemRow.checkNumber || null})
+          AND (event_type = 'print' OR event_type IS NULL)
+        ORDER BY created_at DESC LIMIT 1
+      `);
+      if (((origRaw as any).rows || origRaw as any[]).length === 0)
+        return res.status(422).json({ message: "No original print event found. Cannot mark as reprint." });
+
+      const runRaw = await db.execute(sql`SELECT company_id FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`);
+      const compId = (((runRaw as any).rows || runRaw as any[])[0] as any)?.company_id;
+
+      await db.execute(sql`
+        INSERT INTO check_print_audit_logs (
+          payroll_run_id, company_id, initiated_by_user_id,
+          check_count, total_amount, micr_validation,
+          validation_errors, print_blocked, render_engine,
+          event_type, worker_id, check_number
+        ) VALUES (
+          ${itemRow.payrollRunId || null}, ${compId || null}, ${userId || null},
+          1, ${itemRow.netPay || 0}, 'ok',
+          '[]', false, 'server-pdf',
+          'reprint', ${itemRow.workerId || null}, ${itemRow.checkNumber || null}
+        )
+      `);
+
+      res.json({ success: true, payrollItemId });
+    } catch (err: any) {
+      console.error("[reprintCheck]", err);
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to log reprint") });
     }
   });
 

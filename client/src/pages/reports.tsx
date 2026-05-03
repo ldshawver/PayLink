@@ -3945,7 +3945,7 @@ function VoidedChecksDialog({ open, onOpenChange }: { open: boolean; onOpenChang
     enabled: open,
   });
 
-  const logs = allLogs.filter(l => l.event_type === "void" || l.event_type === "reissue");
+  const logs = allLogs.filter(l => l.event_type === "void" || l.event_type === "reissue" || l.event_type === "reprint");
   const companyName = (id: string) => companies.find(c => c.id === id)?.name || id;
 
   function exportCsv() {
@@ -4020,8 +4020,11 @@ function VoidedChecksDialog({ open, onOpenChange }: { open: boolean; onOpenChang
                     <TableCell className="text-xs">{companyName(l.company_id)}</TableCell>
                     <TableCell className="text-xs font-mono">{l.payroll_run_id}</TableCell>
                     <TableCell>
-                      <Badge variant={l.event_type === "void" ? "destructive" : "outline"} className="text-xs capitalize">
-                        {l.event_type}
+                      <Badge
+                        variant={l.event_type === "void" ? "destructive" : l.event_type === "reprint" ? "secondary" : "outline"}
+                        className="text-xs capitalize"
+                      >
+                        {l.event_type === "reissue" ? "reissued" : l.event_type}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-xs font-mono">{l.check_number || "—"}</TableCell>

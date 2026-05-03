@@ -6406,9 +6406,27 @@ function PaymentRecordsTab() {
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/payroll-payment-records"] }); toast({ title: "Deleted" }); },
   });
 
+  const [voidDialogOpen, setVoidDialogOpen] = useState(false);
+  const [voidTarget, setVoidTarget] = useState<PayrollPaymentRecord | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+
   const voidMutation = useMutation({
-    mutationFn: async (id: string) => { const res = await apiRequest("PATCH", `/api/payroll-payment-records/${id}`, { status: "voided", voidedAt: new Date().toISOString() }); return res.json(); },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/payroll-payment-records"] }); toast({ title: "Payment record voided" }); },
+    mutationFn: async ({ record, reason }: { record: PayrollPaymentRecord; reason: string }) => {
+      if (record.payrollItemId) {
+        const res = await apiRequest("POST", `/api/checks/${record.payrollItemId}/void`, { voidReason: reason });
+        return res.json();
+      }
+      const res = await apiRequest("PATCH", `/api/payroll-payment-records/${record.id}`, { status: "voided", voidedAt: new Date().toISOString() });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-payment-records"] });
+      toast({ title: "Check voided", description: "The check has been voided and the event logged." });
+      setVoidDialogOpen(false);
+      setVoidTarget(null);
+      setVoidReason("");
+    },
+    onError: (err: Error) => toast({ title: "Void failed", description: err.message, variant: "destructive" }),
   });
 
   const openEdit = (r: PayrollPaymentRecord) => {
@@ -6631,7 +6649,7 @@ function PaymentRecordsTab() {
                       <div className="flex items-center gap-1">
                         <Button size="icon" variant="ghost" onClick={() => openEdit(r)} data-testid={`button-edit-pr-${r.id}`}><Pencil className="h-4 w-4" /></Button>
                         {r.status !== "voided" && (
-                          <Button size="icon" variant="ghost" onClick={() => voidMutation.mutate(r.id)} title="Void" data-testid={`button-void-pr-${r.id}`}><AlertCircle className="h-4 w-4 text-amber-500" /></Button>
+                          <Button size="icon" variant="ghost" onClick={() => { setVoidTarget(r); setVoidReason(""); setVoidDialogOpen(true); }} title="Void check" data-testid={`button-void-pr-${r.id}`}><AlertCircle className="h-4 w-4 text-amber-500" /></Button>
                         )}
                         <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(r.id)} data-testid={`button-delete-pr-${r.id}`}><Trash2 className="h-4 w-4" /></Button>
                       </div>
@@ -6643,6 +6661,45 @@ function PaymentRecordsTab() {
           </div>
         </CardContent></Card>
       )}
+
+      {/* Void reason dialog */}
+      <Dialog open={voidDialogOpen} onOpenChange={v => { setVoidDialogOpen(v); if (!v) { setVoidTarget(null); setVoidReason(""); } }}>
+        <DialogContent className="max-w-md" data-testid="dialog-void-check">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertCircle className="h-5 w-5" />Void Check
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">
+              You are about to void{voidTarget?.checkNumber ? ` check #${voidTarget.checkNumber}` : " this check"}
+              {voidTarget?.netPayAmount ? ` ($${Number(voidTarget.netPayAmount).toFixed(2)})` : ""}. This action will be logged in the check audit trail and cannot be undone.
+            </p>
+            <div className="space-y-1">
+              <Label htmlFor="void-reason">Void Reason <span className="text-destructive">*</span></Label>
+              <Textarea
+                id="void-reason"
+                data-testid="input-void-reason"
+                placeholder="e.g. Lost in mail, employee name error, duplicate payment…"
+                value={voidReason}
+                onChange={e => setVoidReason(e.target.value)}
+                rows={3}
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setVoidDialogOpen(false)} data-testid="button-void-cancel">Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={!voidReason.trim() || voidMutation.isPending}
+              data-testid="button-void-confirm"
+              onClick={() => voidTarget && voidMutation.mutate({ record: voidTarget, reason: voidReason })}
+            >
+              {voidMutation.isPending ? "Voiding…" : "Void Check"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

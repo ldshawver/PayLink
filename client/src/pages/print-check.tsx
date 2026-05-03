@@ -1894,8 +1894,19 @@ export default function PrintCheckPage() {
       }),
     }).catch(() => {});
     if (hasBlocking) return;
-    await document.fonts.ready;
-    window.print();
+    try {
+      const pdfRes = await fetch(`/api/payroll-runs/${runId}/checks-pdf`, { credentials: "include" });
+      if (!pdfRes.ok) {
+        const err = await pdfRes.json().catch(() => ({}));
+        toast({ title: "PDF generation failed", description: (err as any).message || "Server error", variant: "destructive" });
+        return;
+      }
+      const blob = await pdfRes.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      window.open(blobUrl, "_blank");
+    } catch (e: any) {
+      toast({ title: "PDF generation failed", description: e.message || "Network error", variant: "destructive" });
+    }
   }
 
   const { data: run } = useQuery<PayrollRun>({
@@ -1976,29 +1987,23 @@ export default function PrintCheckPage() {
     },
   });
 
-  // Test print — turns on guides then prints, then turns off guides
+  // Test print — opens server-generated calibration PDF in new tab
   async function handleCalibrationTestPrint() {
     setCalibrationTestMode(true);
-    await new Promise(r => setTimeout(r, 300)); // allow re-render
-    fetch("/api/check-print-audit", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        payrollRunId: runId,
-        companyId: company?.id || null,
-        checkCount: 0,
-        totalAmount: 0,
-        micrValidation: "calibration_test",
-        validationErrors: [],
-        printBlocked: false,
-        templateId: null,
-        eventType: "calibration_test",
-      }),
-    }).catch(() => {});
-    await document.fonts.ready;
-    window.print();
-    setTimeout(() => setCalibrationTestMode(false), 500);
+    try {
+      const pdfRes = await fetch(`/api/payroll-runs/${runId}/checks-pdf?mode=calibration`, { credentials: "include" });
+      if (pdfRes.ok) {
+        const blob = await pdfRes.blob();
+        window.open(URL.createObjectURL(blob), "_blank");
+      } else {
+        const err = await pdfRes.json().catch(() => ({}));
+        toast({ title: "Calibration PDF failed", description: (err as any).message || "Server error", variant: "destructive" });
+      }
+    } catch (e: any) {
+      toast({ title: "Calibration PDF failed", description: e.message, variant: "destructive" });
+    } finally {
+      setCalibrationTestMode(false);
+    }
   }
 
   const { data: templates = [] } = useQuery<CheckTemplate[]>({
