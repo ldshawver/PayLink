@@ -11,7 +11,10 @@
  *      1. Daily OT/DT is computed first per day.
  *      2. Weekly OT is computed on remaining regular hours (after daily OT).
  *      3. 7th-consecutive-day rule is scoped to the CA workweek (Sun–Sat).
- *  - Override layers: state < company < worker (higher layer wins).
+ *  - Override layers: state < company < worker < wage-order (higher layer wins).
+ *  - Wage-order rules (tagged with wageOrderNumber) override generic state rules
+ *    when the company's active IWC wage order matches the rule's order number.
+ *  - Sick-leave validation checks employer cap and accrual rate against CA minimums.
  */
 
 export type ComplianceSeverity = "block" | "warn" | "info";
@@ -54,6 +57,8 @@ export interface LaborRuleInput {
   ruleValue: number;
   ruleUnit?: string | null;
   overrideLevel?: string | null;  // "state" | "company" | "worker"
+  /** IWC Wage Order this rule applies to (null = applies to all orders) */
+  wageOrderNumber?: string | null;
 }
 
 /** Which enforcement checks are active (from company compliance profile) */
@@ -86,8 +91,30 @@ export interface ComplianceContext {
    * Takes precedence over the state labor rule when set.
    */
   workerMinWageOverride?: number | null;
-  /** IWC Wage Order number (e.g. "4") — informational, stored on profile */
+  /**
+   * Active IWC Wage Order number for the company (e.g. "4", "14", "15").
+   * When set, wage-order-specific rules are preferred over generic state rules.
+   */
   wageOrderNumber?: string | null;
+  /**
+   * Employer's configured sick leave annual cap in hours (from accrual account maxBalance).
+   * Used to validate against CA minimum (40 usable hours per year, SB 616 2024).
+   * null = not configured (skip cap validation).
+   */
+  sickLeaveMaxHours?: number | null;
+  /**
+   * Employer's sick leave accrual divisor: how many hours worked earn 1 sick hour.
+   * CA minimum: 1 hour per 30 hours worked (divisor = 30).
+   * A divisor > 30 means the employer accrues slower than CA requires.
+   * null = not configured or using per-period accrual (skip divisor validation).
+   */
+  sickLeaveAccrualDivisor?: number | null;
+  /**
+   * Worker's current sick leave balance in hours (from accrual_balances).
+   * Used to warn when balance is near the employer's annual cap.
+   * null = not tracked.
+   */
+  sickLeaveBalance?: number | null;
 }
 
 // ── Rule type constants ───────────────────────────────────────────────────────
@@ -101,7 +128,7 @@ const R = {
   REST_BREAK_PERIOD:   "rest_break_period",          // hours per rest break entitlement
   MIN_WAGE:            "min_wage",                   // $/hr
   SICK_ACCRUAL_RATE:   "sick_leave_accrual_rate",    // 1 hr per N hrs worked
-  SICK_MAX_HOURS:      "sick_leave_max_hours",       // annual cap
+  SICK_MAX_HOURS:      "sick_leave_max_hours",       // annual usable cap
   FINAL_DISCHARGE:     "final_paycheck_discharge",   // days (0 = immediately)
   FINAL_RESIGNATION:   "final_paycheck_resignation", // days (3 = 72 hrs)
   EXEMPT_MULTIPLIER:   "exempt_salary_multiplier",   // 2x (state min × 2080)
@@ -112,19 +139,43 @@ const R = {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Resolve the effective value for a rule type, respecting the override layer hierarchy.
- * Layer priority: worker > company > state (highest wins).
+ * Resolve the effective value for a rule type, respecting the full override hierarchy.
+ *
+ * Priority (highest wins):
+ *   4 — wage-order-specific rule whose wageOrderNumber matches ctx
+ *   3 — worker-level override
+ *   2 — company-level override
+ *   1 — generic state rule (no wage-order tag)
+ *
+ * This means an IWC Wage Order rule (e.g. WO-14 Agricultural daily OT at 8.5h)
+ * will supersede the generic state rule (8h) when the company's active wage
+ * order matches.
  */
-function ruleVal(rules: LaborRuleInput[], type: string, fallback: number): number {
+function ruleVal(
+  rules: LaborRuleInput[],
+  type: string,
+  fallback: number,
+  activeWageOrder?: string | null,
+): number {
   const matching = rules.filter(r => r.ruleType === type);
   if (matching.length === 0) return fallback;
-  // Sort by override level: worker=3, company=2, state=1 — highest wins
-  const priority = (r: LaborRuleInput) => {
+
+  const priority = (r: LaborRuleInput): number => {
+    // Wage-order-specific rules win over everything when the order matches
+    if (r.wageOrderNumber && activeWageOrder && r.wageOrderNumber === activeWageOrder) return 4;
     if (r.overrideLevel === "worker")  return 3;
     if (r.overrideLevel === "company") return 2;
     return 1; // state or undefined
   };
-  const best = matching.reduce((a, b) => priority(a) >= priority(b) ? a : b);
+
+  // Among rules with equal priority, pick the highest value (most protective)
+  const best = matching.reduce((a, b) => {
+    const pa = priority(a);
+    const pb = priority(b);
+    if (pa !== pb) return pa > pb ? a : b;
+    return a.ruleValue >= b.ruleValue ? a : b;
+  });
+
   return Number(best.ruleValue);
 }
 
@@ -176,9 +227,12 @@ function consecutive7thDayInWorkweek(entries: ComplianceTimeEntry[]): Set<string
     // Build the full 7-day window Sun–Sat
     const weekDates: string[] = [];
     for (let i = 0; i < 7; i++) {
-      const d = isoToDate(sun);
-      d.setDate(d.getDate() + i);
-      weekDates.push(d.toISOString().split("T")[0]);
+      const sunTs = isoToDate(sun).getTime() + i * 86400000;
+      const d = new Date(sunTs);
+      const yr = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, "0");
+      const dy = String(d.getDate()).padStart(2, "0");
+      weekDates.push(`${yr}-${mo}-${dy}`);
     }
 
     // All 7 must be worked
@@ -214,6 +268,7 @@ function isEnforced(flags: ComplianceEnforceFlags | undefined, key: keyof Compli
 export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
   const { worker, entries, rules } = ctx;
   const ef = ctx.enforceFlags;
+  const wo = ctx.wageOrderNumber ?? null; // active IWC wage order
   const results: ComplianceResult[] = [];
 
   const isExempt = (worker.exemptStatus ?? "nonexempt") !== "nonexempt";
@@ -238,7 +293,7 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
   // ── Minimum wage check ────────────────────────────────────────────────────
   const minWage = ctx.workerMinWageOverride != null && ctx.workerMinWageOverride > 0
     ? ctx.workerMinWageOverride
-    : ruleVal(rules, R.MIN_WAGE, 16.50);
+    : ruleVal(rules, R.MIN_WAGE, 16.50, wo);
   const effectiveRate = worker.payRate;
   if (isEnforced(ef, "enforceMinWage") && !isExempt && worker.workerType === "employee" && effectiveRate < minWage) {
     results.push({
@@ -253,7 +308,7 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
   // ── Exempt classification salary basis test ───────────────────────────────
   // Only applies to workers who ARE classified as exempt — block if their salary
   // falls below the statutory threshold (2× min wage × 2080 hrs/year).
-  const exemptMultiplier = ruleVal(rules, R.EXEMPT_MULTIPLIER, 2);
+  const exemptMultiplier = ruleVal(rules, R.EXEMPT_MULTIPLIER, 2, wo);
   if (isEnforced(ef, "enforceMinWage") && isExempt && worker.workerType === "employee") {
     // payRate >= 500 is treated as already annual; otherwise multiply by 2080
     const actualAnnual = worker.payRate >= 500 ? worker.payRate : worker.payRate * 2080;
@@ -271,8 +326,8 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
 
   // ── Final paycheck timing ─────────────────────────────────────────────────
   if (isEnforced(ef, "enforceFinalPaycheck") && worker.status === "terminated" && worker.terminationDate && ctx.periodEnd >= worker.terminationDate) {
-    const dischargeDays = ruleVal(rules, R.FINAL_DISCHARGE, 0);
-    const resignDays    = ruleVal(rules, R.FINAL_RESIGNATION, 3);
+    const dischargeDays = ruleVal(rules, R.FINAL_DISCHARGE, 0, wo);
+    const resignDays    = ruleVal(rules, R.FINAL_RESIGNATION, 3, wo);
     results.push({
       ruleType: "final_paycheck_timing",
       ruleId: ruleId(rules, R.FINAL_DISCHARGE),
@@ -282,34 +337,70 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
     });
   }
 
+  // ── Sick leave compliance validation ──────────────────────────────────────
+  // CA SB 616 (effective Jan 1, 2024):
+  //   • Minimum accrual rate: 1 hour per 30 hours worked
+  //   • Minimum usable annual hours: 40 (5 days)
+  //   • Accrual cap: 80 hours
+  //
+  // We validate the EMPLOYER'S sick leave configuration against these minimums.
+  // A cap below 40h or accrual divisor above 30 (slower rate) is a violation.
+  const caMinSickUsable  = ruleVal(rules, R.SICK_MAX_HOURS, 40, wo);   // CA required usable floor
+  const caMinAccrualDiv  = ruleVal(rules, R.SICK_ACCRUAL_RATE, 30, wo); // CA required divisor (max allowed)
+
+  if (isEnforced(ef, "enforceMinWage") && worker.workerType === "employee") {
+    // 1. Employer cap below CA minimum usable hours → block
+    if (ctx.sickLeaveMaxHours != null && ctx.sickLeaveMaxHours < caMinSickUsable) {
+      results.push({
+        ruleType: R.SICK_MAX_HOURS,
+        ruleId: ruleId(rules, R.SICK_MAX_HOURS),
+        severity: "block",
+        message: `Employer sick leave cap (${ctx.sickLeaveMaxHours}h) is below CA minimum usable annual sick leave (${caMinSickUsable}h per SB 616). Update the sick leave account cap to at least ${caMinSickUsable} hours.`,
+        detail: { workerId: worker.id, employerCap: ctx.sickLeaveMaxHours, caMinimum: caMinSickUsable, wageOrder: wo },
+      });
+    }
+
+    // 2. Employer accrual rate slower than CA minimum → block
+    // Divisor is hours worked per 1 sick hour earned; higher = slower.
+    if (ctx.sickLeaveAccrualDivisor != null && ctx.sickLeaveAccrualDivisor > caMinAccrualDiv) {
+      results.push({
+        ruleType: R.SICK_ACCRUAL_RATE,
+        ruleId: ruleId(rules, R.SICK_ACCRUAL_RATE),
+        severity: "block",
+        message: `Employer sick leave accrual rate (1 hr per ${ctx.sickLeaveAccrualDivisor.toFixed(0)} hrs worked) is slower than CA minimum (1 hr per ${caMinAccrualDiv.toFixed(0)} hrs worked, per SB 616). Adjust the accrual account configuration.`,
+        detail: { workerId: worker.id, employerDivisor: ctx.sickLeaveAccrualDivisor, caMaxDivisor: caMinAccrualDiv, wageOrder: wo },
+      });
+    }
+
+    // 3. Worker balance near employer cap → warn (upcoming accrual will be lost)
+    if (ctx.sickLeaveBalance != null && ctx.sickLeaveMaxHours != null && ctx.sickLeaveMaxHours > 0) {
+      const capPct = ctx.sickLeaveBalance / ctx.sickLeaveMaxHours;
+      if (capPct >= 0.9) {
+        results.push({
+          ruleType: R.SICK_MAX_HOURS,
+          ruleId: ruleId(rules, R.SICK_MAX_HOURS),
+          severity: "warn",
+          message: `Worker sick leave balance (${ctx.sickLeaveBalance.toFixed(1)}h) is ${Math.round(capPct * 100)}% of the ${ctx.sickLeaveMaxHours}h cap — future accruals may be forfeited. Encourage time-off usage.`,
+          detail: { workerId: worker.id, balance: ctx.sickLeaveBalance, cap: ctx.sickLeaveMaxHours, pct: Math.round(capPct * 100) },
+        });
+      }
+    }
+  }
+
   // ── Per-day / hourly rules (skip for exempt) ──────────────────────────────
   if (isExempt || entries.length === 0) return results;
 
-  const dailyOt1   = ruleVal(rules, R.DAILY_OT_1, 8);
-  const dailyOt2   = ruleVal(rules, R.DAILY_OT_2, 12);
-  const seventh    = ruleVal(rules, R.SEVENTH_DAY_OT, 8);
-  const weeklyOt   = ruleVal(rules, R.WEEKLY_OT, 40);
-  const meal1Trig  = ruleVal(rules, R.MEAL_BREAK_1, 5);
-  const meal2Trig  = ruleVal(rules, R.MEAL_BREAK_2, 10);
-  const restPeriod = ruleVal(rules, R.REST_BREAK_PERIOD, 4);
-  const splitFlag  = ruleVal(rules, R.SPLIT_SHIFT_PREMIUM, 1);
+  const dailyOt1   = ruleVal(rules, R.DAILY_OT_1, 8, wo);
+  const dailyOt2   = ruleVal(rules, R.DAILY_OT_2, 12, wo);
+  const seventh    = ruleVal(rules, R.SEVENTH_DAY_OT, 8, wo);
+  const weeklyOt   = ruleVal(rules, R.WEEKLY_OT, 40, wo);
+  const meal1Trig  = ruleVal(rules, R.MEAL_BREAK_1, 5, wo);
+  const meal2Trig  = ruleVal(rules, R.MEAL_BREAK_2, 10, wo);
+  const restPeriod = ruleVal(rules, R.REST_BREAK_PERIOD, 4, wo);
+  const splitFlag  = ruleVal(rules, R.SPLIT_SHIFT_PREMIUM, 1, wo);
 
   // 7th-day detection scoped to CA workweek (Sun–Sat)
   const seventhDayDates = consecutive7thDayInWorkweek(entries);
-
-  // ── Sick leave accrual quick check ────────────────────────────────────────
-  const sickRate    = ruleVal(rules, R.SICK_ACCRUAL_RATE, 30);
-  const totalWorked = entries.reduce((s, e) => s + e.totalHours, 0);
-  const sickAccrued = totalWorked / sickRate;
-  if (sickAccrued > 0) {
-    results.push({
-      ruleType: R.SICK_ACCRUAL_RATE,
-      ruleId: ruleId(rules, R.SICK_ACCRUAL_RATE),
-      severity: "info",
-      message: `Worker accrued ~${sickAccrued.toFixed(2)} sick leave hours this period (1 hr per ${sickRate} hrs worked).`,
-      detail: { workerId: worker.id, hoursWorked: totalWorked, accrued: sickAccrued },
-    });
-  }
 
   // ── Group entries by CA workweek (Sun–Sat) for per-week OT accumulation ──
   // Weekly OT must be computed within each workweek independently to avoid
@@ -336,15 +427,15 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
             ruleId: ruleId(rules, R.DAILY_OT_2),
             severity: "warn",
             message: `CA double time: ${h.toFixed(2)}h on ${entry.date} exceeds ${dailyOt2}h threshold (2× on excess hours).`,
-            detail: { date: entry.date, hours: h, threshold: dailyOt2, rate: "2x" },
+            detail: { date: entry.date, hours: h, threshold: dailyOt2, rate: "2x", wageOrder: wo },
           });
         } else if (h > dailyOt1) {
           results.push({
             ruleType: R.DAILY_OT_1,
             ruleId: ruleId(rules, R.DAILY_OT_1),
             severity: "info",
-            message: `CA daily OT: ${h.toFixed(2)}h on ${entry.date} exceeds ${dailyOt1}h (1.5× applies to excess ${(h - dailyOt1).toFixed(2)}h).`,
-            detail: { date: entry.date, hours: h, threshold: dailyOt1, rate: "1.5x" },
+            message: `CA daily OT: ${h.toFixed(2)}h on ${entry.date} exceeds ${dailyOt1}h (1.5× applies to excess ${(h - dailyOt1).toFixed(2)}h).${wo ? ` [WO-${wo}]` : ""}`,
+            detail: { date: entry.date, hours: h, threshold: dailyOt1, rate: "1.5x", wageOrder: wo },
           });
         }
       }
@@ -380,7 +471,7 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
           ruleId: ruleId(rules, R.MEAL_BREAK_2),
           severity: "warn",
           message: `Possible second meal break violation on ${entry.date}: ${h.toFixed(2)}h shift, only ${(breakHours * 60).toFixed(0)}min break recorded (second 30-min meal required after ${meal2Trig}h).`,
-          detail: { date: entry.date, hoursWorked: h, breakHours, trigger: meal2Trig },
+          detail: { date: entry.date, hoursWorked: h, breakHours, trigger: meal2Trig, wageOrder: wo },
         });
       } else if (h > meal1Trig && breakHours < 0.5) {
         results.push({
@@ -449,17 +540,15 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
       }
       if (weeklyRegularHours > weeklyOt) {
         const excess = weeklyRegularHours - weeklyOt;
-        const weekEnd = (() => {
-          const d = isoToDate(weekSun);
-          d.setDate(d.getDate() + 6);
-          return d.toISOString().split("T")[0];
-        })();
+        const weekEndTs = isoToDate(weekSun).getTime() + 6 * 86400000;
+        const we = new Date(weekEndTs);
+        const weekEnd = `${we.getFullYear()}-${String(we.getMonth() + 1).padStart(2, "0")}-${String(we.getDate()).padStart(2, "0")}`;
         results.push({
           ruleType: R.WEEKLY_OT,
           ruleId: ruleId(rules, R.WEEKLY_OT),
           severity: "info",
-          message: `Weekly OT (week of ${weekSun}–${weekEnd}): ${weeklyRegularHours.toFixed(2)} regular hours exceeds ${weeklyOt}h — ${excess.toFixed(2)}h at 1.5× applies.`,
-          detail: { weekStart: weekSun, weekEnd, weeklyHours: weeklyRegularHours, threshold: weeklyOt, excessHours: excess },
+          message: `Weekly OT (week of ${weekSun}–${weekEnd}): ${weeklyRegularHours.toFixed(2)} regular hours exceeds ${weeklyOt}h — ${excess.toFixed(2)}h at 1.5× applies.${wo ? ` [WO-${wo}]` : ""}`,
+          detail: { weekStart: weekSun, weekEnd, weeklyHours: weeklyRegularHours, threshold: weeklyOt, excessHours: excess, wageOrder: wo },
         });
       }
     }

@@ -4428,6 +4428,7 @@ export const laborRules = pgTable("labor_rules", {
   ruleValue: numeric("rule_value").notNull(),  // numeric threshold or rate
   ruleUnit: text("rule_unit"),                 // "hours", "dollars", "days", "multiplier"
   overrideLevel: text("override_level").default("state"),  // state | company | worker
+  wageOrderNumber: text("wage_order_number"),  // IWC Wage Order (e.g. "14") — null = all orders
   effectiveDate: date("effective_date").notNull(),
   expirationDate: date("expiration_date"),
   description: text("description"),

@@ -2927,7 +2927,21 @@ export async function registerRoutes(
             ruleValue: parseFloat(String(r.ruleValue)),
             ruleUnit: r.ruleUnit ?? null,
             overrideLevel: r.overrideLevel ?? null,
+            wageOrderNumber: (r as any).wageOrderNumber ?? null,
           }));
+
+          // Load company sick leave account config for compliance validation
+          const companySickAccounts = await storage.getAccrualAccounts(run.companyId);
+          const sickAccount = companySickAccounts.find((a: any) => a.type === "sick" && a.isActive !== false);
+          // sickLeaveMaxHours: employer's annual cap — must be >= CA minimum (40h)
+          const sickLeaveMaxHours = sickAccount?.maxBalance != null
+            ? parseFloat(String(sickAccount.maxBalance))
+            : null;
+          // sickLeaveAccrualDivisor: hours worked per 1 sick hour earned
+          // Only meaningful when accrualFrequency is "hourly"; otherwise null (skip rate check)
+          const sickLeaveAccrualDivisor = (sickAccount?.accrualFrequency === "hourly" && sickAccount?.accrualRate != null)
+            ? (1 / parseFloat(String(sickAccount.accrualRate)))
+            : null;
 
           const items = await storage.getPayrollItems(run.id);
           const allBlocks: any[] = [];
@@ -2980,6 +2994,14 @@ export async function registerRoutes(
                 ? parseFloat(String(workerProfile.minWageOverride))
                 : null,
               wageOrderNumber: companyProfile?.wageOrderNumber ?? null,
+              sickLeaveMaxHours,
+              sickLeaveAccrualDivisor,
+              sickLeaveBalance: await (async () => {
+                if (!sickAccount) return null;
+                const balances = await storage.getAccrualBalances(worker.id);
+                const sb = balances.find((b: any) => b.accrualAccountId === sickAccount.id);
+                return sb?.balance != null ? parseFloat(String(sb.balance)) : null;
+              })(),
             };
 
             const workerResults = evaluateCompliance(ctx);
@@ -25941,7 +25963,18 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         ruleValue: parseFloat(String(r.ruleValue)),
         ruleUnit: r.ruleUnit ?? null,
         overrideLevel: r.overrideLevel ?? null,
+        wageOrderNumber: (r as any).wageOrderNumber ?? null,
       }));
+
+      // Load company sick leave account config for compliance validation
+      const companySickAccounts = await storage.getAccrualAccounts(run.companyId);
+      const sickAccount = companySickAccounts.find((a: any) => a.type === "sick" && a.isActive !== false);
+      const sickLeaveMaxHours = sickAccount?.maxBalance != null
+        ? parseFloat(String(sickAccount.maxBalance))
+        : null;
+      const sickLeaveAccrualDivisor = (sickAccount?.accrualFrequency === "hourly" && sickAccount?.accrualRate != null)
+        ? (1 / parseFloat(String(sickAccount.accrualRate)))
+        : null;
 
       // Load workers + time entries for the period
       const items = await storage.getPayrollItems(run.id);
@@ -25999,6 +26032,14 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
             ? parseFloat(String(workerProfile.minWageOverride))
             : null,
           wageOrderNumber: companyProfile?.wageOrderNumber ?? null,
+          sickLeaveMaxHours,
+          sickLeaveAccrualDivisor,
+          sickLeaveBalance: await (async () => {
+            if (!sickAccount) return null;
+            const balances = await storage.getAccrualBalances(worker.id);
+            const sb = balances.find((b: any) => b.accrualAccountId === sickAccount.id);
+            return sb?.balance != null ? parseFloat(String(sb.balance)) : null;
+          })(),
         };
 
         const results = evaluateCompliance(ctx);
@@ -26055,42 +26096,91 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       }
 
       const existingRules = await storage.getLaborRules(caJurisdiction.id);
-      if (existingRules.length > 0) {
-        console.log(`[ComplianceSeed] CA already has ${existingRules.length} labor rules — skipping seed`);
-        return;
-      }
-
       const jId = caJurisdiction.id;
       const eff = "2024-01-01"; // effective date for current CA rules
 
-      const caRules = [
-        { jurisdictionId: jId, ruleType: "daily_ot_threshold_1",   ruleValue: "8",    ruleUnit: "hours",      effectiveDate: eff, description: "CA daily OT starts at 8 hours (1.5×)" },
-        { jurisdictionId: jId, ruleType: "daily_ot_threshold_2",   ruleValue: "12",   ruleUnit: "hours",      effectiveDate: eff, description: "CA double time starts at 12 hours (2×)" },
-        { jurisdictionId: jId, ruleType: "seventh_day_ot_threshold",ruleValue: "8",   ruleUnit: "hours",      effectiveDate: eff, description: "CA 7th-consecutive-day: all hours at 1.5×; >8h at 2×" },
-        { jurisdictionId: jId, ruleType: "weekly_ot_threshold",    ruleValue: "40",   ruleUnit: "hours",      effectiveDate: eff, description: "CA weekly OT threshold (1.5× on hours >40, after daily OT)" },
-        { jurisdictionId: jId, ruleType: "meal_break_trigger_1",   ruleValue: "5",    ruleUnit: "hours",      effectiveDate: eff, description: "First 30-min unpaid meal required after 5 hours" },
-        { jurisdictionId: jId, ruleType: "meal_break_trigger_2",   ruleValue: "10",   ruleUnit: "hours",      effectiveDate: eff, description: "Second 30-min unpaid meal required after 10 hours" },
-        { jurisdictionId: jId, ruleType: "rest_break_period",      ruleValue: "4",    ruleUnit: "hours",      effectiveDate: eff, description: "One 10-min paid rest break per 4 hours worked" },
-        { jurisdictionId: jId, ruleType: "min_wage",               ruleValue: "16.50",ruleUnit: "dollars",    effectiveDate: eff, description: "CA state minimum wage $16.50/hr (2024)" },
-        { jurisdictionId: jId, ruleType: "sick_leave_accrual_rate",ruleValue: "30",   ruleUnit: "hours",      effectiveDate: eff, description: "1 hour sick leave per 30 hours worked (CA 2024)" },
-        { jurisdictionId: jId, ruleType: "sick_leave_max_hours",   ruleValue: "40",   ruleUnit: "hours",      effectiveDate: eff, description: "Max 40 hours (5 days) usable sick leave per year (CA 2024)" },
-        { jurisdictionId: jId, ruleType: "final_paycheck_discharge",ruleValue: "0",   ruleUnit: "days",       effectiveDate: eff, description: "Final paycheck due immediately on discharge/termination" },
-        { jurisdictionId: jId, ruleType: "final_paycheck_resignation",ruleValue: "3", ruleUnit: "days",       effectiveDate: eff, description: "Final paycheck due within 72 hours of resignation" },
-        { jurisdictionId: jId, ruleType: "exempt_salary_multiplier",ruleValue: "2",   ruleUnit: "multiplier", effectiveDate: eff, description: "CA exempt salary basis: 2× state min wage × 2080 hours" },
-        { jurisdictionId: jId, ruleType: "split_shift_premium",    ruleValue: "1",    ruleUnit: "flag",       effectiveDate: eff, description: "Split shift premium: 1 extra hour at min wage" },
-        { jurisdictionId: jId, ruleType: "reporting_time_min_pay", ruleValue: "2",    ruleUnit: "hours",      effectiveDate: eff, description: "Reporting time pay: minimum 2 hours when sent home early" },
-      ];
-
-      for (const rule of caRules) {
-        await storage.createLaborRule(rule as any);
+      // ── Generic CA state rules (seeded once) ───────────────────────────────
+      const genericExists = existingRules.filter((r: any) => !r.wageOrderNumber).length > 0;
+      if (!genericExists) {
+        const caRules = [
+          { jurisdictionId: jId, ruleType: "daily_ot_threshold_1",    ruleValue: "8",    ruleUnit: "hours",      effectiveDate: eff, description: "CA daily OT starts at 8 hours (1.5×)" },
+          { jurisdictionId: jId, ruleType: "daily_ot_threshold_2",    ruleValue: "12",   ruleUnit: "hours",      effectiveDate: eff, description: "CA double time starts at 12 hours (2×)" },
+          { jurisdictionId: jId, ruleType: "seventh_day_ot_threshold", ruleValue: "8",   ruleUnit: "hours",      effectiveDate: eff, description: "CA 7th-consecutive-day: all hours at 1.5×; >8h at 2×" },
+          { jurisdictionId: jId, ruleType: "weekly_ot_threshold",     ruleValue: "40",   ruleUnit: "hours",      effectiveDate: eff, description: "CA weekly OT threshold (1.5× on hours >40, after daily OT)" },
+          { jurisdictionId: jId, ruleType: "meal_break_trigger_1",    ruleValue: "5",    ruleUnit: "hours",      effectiveDate: eff, description: "First 30-min unpaid meal required after 5 hours" },
+          { jurisdictionId: jId, ruleType: "meal_break_trigger_2",    ruleValue: "10",   ruleUnit: "hours",      effectiveDate: eff, description: "Second 30-min unpaid meal required after 10 hours" },
+          { jurisdictionId: jId, ruleType: "rest_break_period",       ruleValue: "4",    ruleUnit: "hours",      effectiveDate: eff, description: "One 10-min paid rest break per 4 hours worked" },
+          { jurisdictionId: jId, ruleType: "min_wage",                ruleValue: "16.50",ruleUnit: "dollars",    effectiveDate: eff, description: "CA state minimum wage $16.50/hr (2024)" },
+          { jurisdictionId: jId, ruleType: "sick_leave_accrual_rate", ruleValue: "30",   ruleUnit: "hours",      effectiveDate: eff, description: "CA minimum: 1 hour sick leave per 30 hours worked (SB 616 2024)" },
+          { jurisdictionId: jId, ruleType: "sick_leave_max_hours",    ruleValue: "40",   ruleUnit: "hours",      effectiveDate: eff, description: "CA minimum usable sick leave: 40 hours (5 days) per year (SB 616 2024)" },
+          { jurisdictionId: jId, ruleType: "final_paycheck_discharge", ruleValue: "0",   ruleUnit: "days",       effectiveDate: eff, description: "Final paycheck due immediately on discharge/termination" },
+          { jurisdictionId: jId, ruleType: "final_paycheck_resignation",ruleValue: "3",  ruleUnit: "days",       effectiveDate: eff, description: "Final paycheck due within 72 hours of resignation" },
+          { jurisdictionId: jId, ruleType: "exempt_salary_multiplier", ruleValue: "2",   ruleUnit: "multiplier", effectiveDate: eff, description: "CA exempt salary basis: 2× state min wage × 2080 hours" },
+          { jurisdictionId: jId, ruleType: "split_shift_premium",     ruleValue: "1",    ruleUnit: "flag",       effectiveDate: eff, description: "Split shift premium: 1 extra hour at min wage" },
+          { jurisdictionId: jId, ruleType: "reporting_time_min_pay",  ruleValue: "2",    ruleUnit: "hours",      effectiveDate: eff, description: "Reporting time pay: minimum 2 hours when sent home early" },
+        ];
+        for (const rule of caRules) {
+          await storage.createLaborRule(rule as any);
+        }
+        // CA tax rules
+        await storage.createTaxRule({ jurisdictionId: jId, ruleType: "sdi_rate",          ruleValue: "0.009", ruleUnit: "rate", effectiveDate: eff, description: "CA SDI employee contribution rate 0.9% (2024)" });
+        await storage.createTaxRule({ jurisdictionId: jId, ruleType: "sui_employer_rate", ruleValue: "0.034", ruleUnit: "rate", effectiveDate: eff, description: "CA SUI new employer rate 3.4%" });
+        await storage.createTaxRule({ jurisdictionId: jId, ruleType: "ett_rate",          ruleValue: "0.001", ruleUnit: "rate", effectiveDate: eff, description: "CA Employment Training Tax 0.1%" });
+        console.log(`[ComplianceSeed] Seeded ${caRules.length} CA labor rules + 3 tax rules`);
+      } else {
+        console.log(`[ComplianceSeed] CA generic rules already seeded (${existingRules.length} total)`);
       }
 
-      // CA tax rules (informational — not used in payroll calculator yet)
-      await storage.createTaxRule({ jurisdictionId: jId, ruleType: "sdi_rate", ruleValue: "0.009", ruleUnit: "rate", effectiveDate: eff, description: "CA SDI employee contribution rate 0.9% (2024)" });
-      await storage.createTaxRule({ jurisdictionId: jId, ruleType: "sui_employer_rate", ruleValue: "0.034", ruleUnit: "rate", effectiveDate: eff, description: "CA SUI new employer rate 3.4%" });
-      await storage.createTaxRule({ jurisdictionId: jId, ruleType: "ett_rate", ruleValue: "0.001", ruleUnit: "rate", effectiveDate: eff, description: "CA Employment Training Tax 0.1%" });
+      // ── IWC Wage-Order–specific rule overrides (seeded once, idempotent) ───
+      // These rules override generic state thresholds for specific industries.
+      // The engine's ruleVal() prefers wage-order rules (priority=4) over state (priority=1).
+      const wageOrderRulesExist = existingRules.filter((r: any) => r.wageOrderNumber != null).length > 0;
+      if (!wageOrderRulesExist) {
+        const woRules: any[] = [
+          // ── WO-14 Agricultural Occupations ───────────────────────────────────
+          // AB 1066 phase-in: agricultural workers reached 8h/day OT by 2022 for
+          // employers with 26+ workers. The 2024 threshold is 8.5h for smaller
+          // employers still in transition (we use 8.5h as a conservative override).
+          // Double time begins at 13h (vs 12h general) for Ag workers.
+          { jurisdictionId: jId, wageOrderNumber: "14", ruleType: "daily_ot_threshold_1",   ruleValue: "8.5",  ruleUnit: "hours",   effectiveDate: eff, description: "WO-14 Ag: daily OT after 8.5h (AB 1066 small-employer transition, 2024)" },
+          { jurisdictionId: jId, wageOrderNumber: "14", ruleType: "daily_ot_threshold_2",   ruleValue: "13",   ruleUnit: "hours",   effectiveDate: eff, description: "WO-14 Ag: double time after 13h (vs 12h general)" },
+          // Ag workers: first meal required after 6h (vs 5h general) — IWC WO-14 §11
+          { jurisdictionId: jId, wageOrderNumber: "14", ruleType: "meal_break_trigger_1",   ruleValue: "6",    ruleUnit: "hours",   effectiveDate: eff, description: "WO-14 Ag: first meal required after 6 hours (IWC WO-14 §11)" },
+          // Ag workers: no second meal break required (no 10h trigger in WO-14)
+          { jurisdictionId: jId, wageOrderNumber: "14", ruleType: "meal_break_trigger_2",   ruleValue: "99",   ruleUnit: "hours",   effectiveDate: eff, description: "WO-14 Ag: no second meal break rule (99h = effectively never)" },
+          // Ag workers: higher minimum wage (Fast Food / Ag worker special rates)
+          { jurisdictionId: jId, wageOrderNumber: "14", ruleType: "min_wage",               ruleValue: "16.50",ruleUnit: "dollars", effectiveDate: eff, description: "WO-14 Ag: CA state minimum wage applies ($16.50/hr 2024)" },
 
-      console.log(`[ComplianceSeed] Seeded ${caRules.length} CA labor rules + 3 tax rules`);
+          // ── WO-15 Household Domestic Service ─────────────────────────────────
+          // Personal attendants/domestic workers: no daily OT for personal attendants
+          // who work in a private household (Labor Code §1454). We set threshold high.
+          // Non-personal-attendant household workers: standard 8h/12h rules apply.
+          // For personal attendants: OT after 9h/day (IWC WO-15 §3(J) attendant exception).
+          { jurisdictionId: jId, wageOrderNumber: "15", ruleType: "daily_ot_threshold_1",   ruleValue: "9",    ruleUnit: "hours",   effectiveDate: eff, description: "WO-15 Household: personal attendants OT after 9h/day (Labor Code §1454)" },
+          // Second meal not required until 12h (vs 10h general) for live-in employees
+          { jurisdictionId: jId, wageOrderNumber: "15", ruleType: "meal_break_trigger_2",   ruleValue: "12",   ruleUnit: "hours",   effectiveDate: eff, description: "WO-15 Household: second meal required after 12h for live-in workers (vs 10h)" },
+          // Household workers: rest break every 4h (same as general) — no override needed,
+          // but we seed it explicitly so the engine uses the wage-order tagged rule.
+          { jurisdictionId: jId, wageOrderNumber: "15", ruleType: "rest_break_period",      ruleValue: "4",    ruleUnit: "hours",   effectiveDate: eff, description: "WO-15 Household: 10-min rest break per 4 hours worked" },
+
+          // ── WO-4 Professional, Technical, Clerical ───────────────────────────
+          // Same daily OT thresholds as general, but explicitly tagged so compliance
+          // reports can identify the applicable order for office/tech employers.
+          { jurisdictionId: jId, wageOrderNumber: "4",  ruleType: "daily_ot_threshold_1",   ruleValue: "8",    ruleUnit: "hours",   effectiveDate: eff, description: "WO-4 Professional/Technical: standard CA daily OT after 8h" },
+          { jurisdictionId: jId, wageOrderNumber: "4",  ruleType: "daily_ot_threshold_2",   ruleValue: "12",   ruleUnit: "hours",   effectiveDate: eff, description: "WO-4 Professional/Technical: double time after 12h" },
+
+          // ── WO-7 Mercantile Industry ──────────────────────────────────────────
+          { jurisdictionId: jId, wageOrderNumber: "7",  ruleType: "daily_ot_threshold_1",   ruleValue: "8",    ruleUnit: "hours",   effectiveDate: eff, description: "WO-7 Mercantile: standard CA daily OT after 8h" },
+          { jurisdictionId: jId, wageOrderNumber: "7",  ruleType: "daily_ot_threshold_2",   ruleValue: "12",   ruleUnit: "hours",   effectiveDate: eff, description: "WO-7 Mercantile: double time after 12h" },
+        ];
+
+        for (const rule of woRules) {
+          await storage.createLaborRule(rule as any);
+        }
+        console.log(`[ComplianceSeed] Seeded ${woRules.length} IWC wage-order–specific labor rules (WO-4, WO-7, WO-14, WO-15)`);
+      } else {
+        console.log(`[ComplianceSeed] Wage-order rules already seeded`);
+      }
     } catch (e) {
       console.warn("[ComplianceSeed] Seed error (non-fatal):", e);
     }
