@@ -1821,6 +1821,78 @@ function usePayrollSummary(open: boolean, year: string, quarter: string, company
   return data || { workerTotals: [], grandTotal: emptyGrand, runCount: 0 };
 }
 
+type QuarterlyTaxLine = { taxCode: string; taxName: string; isEmployerPaid: boolean; stateCode: string | null; totalTaxableWages: number; totalAmount: number; itemCount: number };
+type QuarterlyTaxes = { totals: QuarterlyTaxLine[]; byWorker: Record<string, Record<string, { taxableWages: number; amount: number; taxName: string; stateCode: string | null }>>; runCount: number; year: number; quarter: string | null };
+
+function useQuarterlyTaxes(open: boolean, year: string, quarter: string, companyId: string, companies: Company[]) {
+  return useQuery<QuarterlyTaxes>({
+    queryKey: ["/api/companies", companyId, "quarterly-taxes", year, quarter],
+    queryFn: async () => {
+      const params = new URLSearchParams({ year });
+      if (quarter) params.set("quarter", quarter);
+      const empty: QuarterlyTaxes = { totals: [], byWorker: {}, runCount: 0, year: Number(year), quarter: quarter || null };
+      const fetchOne = async (cid: string): Promise<QuarterlyTaxes> => {
+        const r = await fetch(`/api/companies/${cid}/quarterly-taxes?${params}`, { credentials: "include" });
+        if (!r.ok) return empty;
+        return r.json();
+      };
+      if (companyId !== "all") return fetchOne(companyId);
+      const all = await Promise.all(companies.map(c => fetchOne(c.id)));
+      const merged: QuarterlyTaxes = { totals: [], byWorker: {}, runCount: 0, year: Number(year), quarter: quarter || null };
+      for (const d of all) {
+        merged.runCount += d.runCount;
+        for (const t of d.totals) {
+          const existing = merged.totals.find(x => x.taxCode === t.taxCode);
+          if (existing) { existing.totalTaxableWages += t.totalTaxableWages; existing.totalAmount += t.totalAmount; existing.itemCount += t.itemCount; }
+          else merged.totals.push({ ...t });
+        }
+        for (const [wid, lines] of Object.entries(d.byWorker)) {
+          if (!merged.byWorker[wid]) merged.byWorker[wid] = {};
+          for (const [code, line] of Object.entries(lines)) {
+            if (!merged.byWorker[wid][code]) merged.byWorker[wid][code] = { taxableWages: 0, amount: 0, taxName: line.taxName, stateCode: line.stateCode };
+            merged.byWorker[wid][code].taxableWages += line.taxableWages;
+            merged.byWorker[wid][code].amount += line.amount;
+          }
+        }
+      }
+      return merged;
+    },
+    enabled: open && (companyId !== "all" || companies.length > 0),
+  });
+}
+
+type WorkerYTD = { workerId: string; grossPay: number; federalTaxableWages: number; federalWithheld: number; ssWages: number; ssTaxEmployee: number; medicareWages: number; medicareTaxEmployee: number; caPitWages: number; caPitWithheld: number; caSdiWithheld: number; employerSsTax: number; employerMedicareTax: number; futaTax: number; caUiTax: number; caEttTax: number; netPay: number };
+
+function useCompanyYTDTaxes(open: boolean, year: string, companyId: string, companies: Company[]) {
+  return useQuery<WorkerYTD[]>({
+    queryKey: ["/api/companies", companyId, "ytd-taxes", year],
+    queryFn: async () => {
+      const fetchOne = async (cid: string): Promise<WorkerYTD[]> => {
+        const r = await fetch(`/api/companies/${cid}/ytd-taxes?year=${year}`, { credentials: "include" });
+        if (!r.ok) return [];
+        return r.json();
+      };
+      if (companyId !== "all") return fetchOne(companyId);
+      const all = await Promise.all(companies.map(c => fetchOne(c.id)));
+      const merged: Record<string, WorkerYTD> = {};
+      for (const rows of all) {
+        for (const row of rows) {
+          if (!merged[row.workerId]) { merged[row.workerId] = { ...row }; continue; }
+          const m = merged[row.workerId];
+          m.grossPay += row.grossPay; m.federalTaxableWages += row.federalTaxableWages;
+          m.federalWithheld += row.federalWithheld; m.ssWages += row.ssWages;
+          m.ssTaxEmployee += row.ssTaxEmployee; m.medicareWages += row.medicareWages;
+          m.medicareTaxEmployee += row.medicareTaxEmployee; m.caPitWages += row.caPitWages;
+          m.caPitWithheld += row.caPitWithheld; m.caSdiWithheld += row.caSdiWithheld;
+          m.netPay += row.netPay;
+        }
+      }
+      return Object.values(merged);
+    },
+    enabled: open && (companyId !== "all" || companies.length > 0),
+  });
+}
+
 function filterRunsByPeriod(runs: PayrollRun[], year: string, quarter?: string) {
   return runs.filter(r => {
     if (r.status === "draft") return false;
@@ -1838,24 +1910,23 @@ function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [companyId, setCompanyId] = useState("all");
   const { workers, companies } = usePayrollData(open);
-  const summary = usePayrollSummary(open, year, "", companyId);
+  const { data: ytdRows = [], isLoading: loadingYtd } = useCompanyYTDTaxes(open, year, companyId, companies);
 
   const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
   const companyEmployees = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
 
   const getWorkerTotals = (worker: typeof employees[0]) => {
-    const wt = summary.workerTotals.find(t => t.workerId === worker.id);
-    if (!wt) return { grossPay: 0, netPay: 0, deductions: 0, fedTax: 0, ssTax: 0, medicareTax: 0, stateTax: 0, ssWages: 0, medicareWages: 0 };
+    const ytd = ytdRows.find(r => r.workerId === worker.id);
+    if (!ytd) return { grossPay: 0, netPay: 0, fedTax: 0, ssTax: 0, medicareTax: 0, stateTax: 0, ssWages: 0, medicareWages: 0 };
     return {
-      grossPay: wt.grossPay,
-      netPay: wt.netPay,
-      deductions: wt.deductions,
-      fedTax: wt.fedWithholding,
-      ssTax: wt.ssTaxEmployee,
-      medicareTax: wt.medicareTaxEmployee,
-      stateTax: wt.stateWithholding,
-      ssWages: wt.ssTaxableWages,
-      medicareWages: wt.grossPay,
+      grossPay: ytd.grossPay,
+      netPay: ytd.netPay,
+      fedTax: ytd.federalWithheld,
+      ssTax: ytd.ssTaxEmployee,
+      medicareTax: ytd.medicareTaxEmployee,
+      stateTax: ytd.caPitWithheld,
+      ssWages: ytd.ssWages,
+      medicareWages: ytd.medicareWages,
     };
   };
 
@@ -2035,20 +2106,24 @@ function Form941Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
   const [quarter, setQuarter] = useState("Q1");
   const [companyId, setCompanyId] = useState("all");
   const { workers, companies } = usePayrollData(open);
-  const summary = usePayrollSummary(open, year, quarter, companyId);
+  const { data: qTaxes, isLoading: loadingQTaxes } = useQuarterlyTaxes(open, year, quarter, companyId, companies);
 
   const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
   const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
 
-  const g = summary.grandTotal;
-  const totalWages = g.grossPay;
-  const fedWithholding = g.fedWithholding;
-  const ssEmployee = g.ssTaxEmployee;
-  const ssEmployer = g.ssTaxEmployer;
-  const medicareEmployee = g.medicareTaxEmployee;
-  const medicareEmployer = g.medicareTaxEmployer;
-  const ssTaxableWages = g.ssTaxableWages;
+  const totals = qTaxes?.totals || [];
+  const getAmt = (code: string) => totals.find(t => t.taxCode === code)?.totalAmount || 0;
+  const getTaxableWages = (code: string) => totals.find(t => t.taxCode === code)?.totalTaxableWages || 0;
+
+  const totalWages = Object.values(qTaxes?.byWorker || {}).reduce((s, lines) => s + (lines["__grossPay"]?.amount || 0), 0);
+  const fedWithholding = getAmt("fed_income_tax");
+  const ssEmployee = getAmt("ss_employee");
+  const ssEmployer = getAmt("ss_employer");
+  const medicareEmployee = getAmt("medicare_employee");
+  const medicareEmployer = getAmt("medicare_employer");
+  const ssTaxableWages = getTaxableWages("ss_employee");
   const totalTaxDeposits = fedWithholding + ssEmployee + ssEmployer + medicareEmployee + medicareEmployer;
+  const dataSource = (qTaxes?.runCount || 0) > 0 ? `Based on ${qTaxes?.runCount} processed payroll runs` : "No processed payroll runs found for this period";
 
   const handleExportCSV = () => {
     const headers = ["Line Item", "Amount"];
@@ -2084,6 +2159,8 @@ function Form941Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
         </div>
         <div className="border rounded-lg p-4 space-y-3 mt-2">
           <h3 className="font-semibold text-sm">Form 941 — {quarter} {year}</h3>
+          <p className="text-xs text-muted-foreground italic">{dataSource}</p>
+          {loadingQTaxes && <div className="py-4 text-center text-muted-foreground text-sm">Loading stored tax data…</div>}
           <div className="overflow-x-auto">
           <Table>
             <TableBody>

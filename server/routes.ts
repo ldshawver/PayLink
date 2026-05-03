@@ -2666,12 +2666,26 @@ export async function registerRoutes(
           return s + parseFloat(d.rate || "0");
         }, 0);
 
+        // Step 1b: Taxable benefits add to taxable wage base; reimbursements from deduction records reduce it
+        const taxableBenefitsAmount = (isContractor || isContractorGroup) ? 0 : companyDeductions
+          .filter(d => d.isActive && !d.isReferenceOnly && (d as any).isTaxableBenefit === true)
+          .reduce((s, d) => {
+            if (d.calculationType === "percentage") return s + grossPay * (parseFloat(d.rate || "0") / 100);
+            return s + parseFloat(d.rate || "0");
+          }, 0);
+        const reimbursementsFromDeductions = (isContractor || isContractorGroup) ? 0 : companyDeductions
+          .filter(d => d.isActive && !d.isReferenceOnly && (d as any).isReimbursement === true)
+          .reduce((s, d) => {
+            if (d.calculationType === "percentage") return s + grossPay * (parseFloat(d.rate || "0") / 100);
+            return s + parseFloat(d.rate || "0");
+          }, 0);
+
         // Step 2: Run the tax engine (federal + CA)
         const taxEngineInput: TaxEngineInput = {
           grossWages: grossPay,
           preTaxDeductions: preTaxDedAmount,
-          reimbursements: processCalcResult.reimburseAmount || 0,
-          taxableBenefits: 0,
+          reimbursements: (processCalcResult.reimburseAmount || 0) + reimbursementsFromDeductions,
+          taxableBenefits: taxableBenefitsAmount,
           ytdGross: ytd.gross,
           ytdFedTaxableWages: ytd.gross,
           filingStatus: ((worker as any).w4FilingStatus || "single") as FilingStatus,
@@ -5561,18 +5575,63 @@ export async function registerRoutes(
 
   app.patch("/api/payroll-items/:id/tax-override", requireAuth, requireRole("admin", "platform_super_admin"), async (req, res) => {
     try {
-      const { taxCode, overriddenAmount, reason } = req.body;
-      if (!taxCode || overriddenAmount === undefined) {
-        return res.status(400).json({ message: "taxCode and overriddenAmount are required" });
+      const { taxCode, overrideAmount, reason } = req.body;
+      if (!taxCode || overrideAmount === undefined) {
+        return res.status(400).json({ message: "taxCode and overrideAmount are required" });
       }
-      const user = (req as any).user;
+      if (!reason || !String(reason).trim()) {
+        return res.status(400).json({ message: "reason is required for all tax overrides" });
+      }
+      const overriddenBy = req.session?.userId;
+      if (!overriddenBy) {
+        return res.status(401).json({ message: "Not authenticated" });
+      }
+
+      // Fetch the existing tax line to get the originalAmount
+      const existingTaxLines = await storage.getPayrollItemTaxes(req.params.id);
+      const taxLine = existingTaxLines.find(t => t.taxCode === taxCode);
+      if (!taxLine) {
+        return res.status(404).json({ message: `No tax line found for taxCode '${taxCode}' on this payroll item` });
+      }
+      const originalAmount = taxLine.amount;
+
       const override = await storage.createPayrollOverride({
         payrollItemId: req.params.id,
         taxCode,
-        overriddenAmount: String(overriddenAmount),
-        reason: reason ?? null,
-        overriddenBy: user?.id ?? null,
+        originalAmount: String(originalAmount),
+        overrideAmount: String(overrideAmount),
+        reason: String(reason).trim(),
+        overriddenBy,
       });
+
+      // Recalculate net pay: replace the original tax amount with the override for employee-paid taxes
+      if (!taxLine.isEmployerPaid) {
+        const newEmployeeTaxTotal = existingTaxLines.reduce((sum, t) => {
+          if (t.isEmployerPaid) return sum;
+          const amt = t.taxCode === taxCode
+            ? parseFloat(String(overrideAmount))
+            : parseFloat(String(t.amount));
+          return sum + (isNaN(amt) ? 0 : amt);
+        }, 0);
+        const oldEmployeeTaxTotal = existingTaxLines
+          .filter(t => !t.isEmployerPaid)
+          .reduce((s, t) => s + parseFloat(String(t.amount)), 0);
+        try {
+          const [currentItem] = await db.select().from(payrollItems).where(eq(payrollItems.id, req.params.id));
+          if (currentItem) {
+            const gross = parseFloat(String(currentItem.grossPay || "0"));
+            const oldDeductions = parseFloat(String(currentItem.deductions || "0"));
+            const newDeductions = oldDeductions - oldEmployeeTaxTotal + newEmployeeTaxTotal;
+            const newNetPay = Math.max(0, gross - newDeductions);
+            await db.update(payrollItems)
+              .set({ deductions: newDeductions.toFixed(2), netPay: newNetPay.toFixed(2) } as any)
+              .where(eq(payrollItems.id, req.params.id));
+          }
+        } catch (netPayErr) {
+          console.warn("[TAX OVERRIDE] Could not update net pay:", netPayErr);
+        }
+      }
+
       res.json(override);
     } catch (error) {
       console.error(error);
@@ -5591,6 +5650,113 @@ export async function registerRoutes(
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Failed to fetch tax liability" });
+    }
+  });
+
+  /**
+   * GET /api/companies/:id/quarterly-taxes?year=2024&quarter=Q1
+   * Aggregates payroll_item_taxes from stored data for the given year/quarter.
+   * Used by Form 941, DE 9, DE 9C, and Employee Earnings reports.
+   */
+  app.get("/api/companies/:id/quarterly-taxes", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { year, quarter } = req.query as { year?: string; quarter?: string };
+      const targetYear = parseInt(year || String(new Date().getFullYear()), 10);
+      const quarterMonths: Record<string, number[]> = { Q1: [0,1,2], Q2: [3,4,5], Q3: [6,7,8], Q4: [9,10,11] };
+      const qMonths = quarter && quarterMonths[quarter] ? quarterMonths[quarter] : null;
+
+      // Get all processed runs for this company
+      const allRuns = await storage.getPayrollRuns(req.params.id);
+      const processedRuns = allRuns.filter(r => {
+        if (r.status === "draft") return false;
+        const payDate = r.payDate ? new Date(r.payDate) : new Date(r.periodEnd);
+        if (payDate.getFullYear() !== targetYear) return false;
+        if (qMonths && !qMonths.includes(payDate.getMonth())) return false;
+        return true;
+      });
+
+      // Aggregate payroll_item_taxes across all qualifying items
+      const taxTotals: Record<string, { taxCode: string; taxName: string; isEmployerPaid: boolean; stateCode: string | null; totalTaxableWages: number; totalAmount: number; itemCount: number }> = {};
+      const workerTaxLines: Record<string, Record<string, { taxableWages: number; amount: number; taxName: string; stateCode: string | null }>> = {};
+
+      for (const run of processedRuns) {
+        const items = await storage.getPayrollItems(run.id);
+        for (const item of items) {
+          const taxLines = await storage.getPayrollItemTaxes(item.id);
+          for (const line of taxLines) {
+            const key = line.taxCode;
+            if (!taxTotals[key]) {
+              taxTotals[key] = { taxCode: line.taxCode, taxName: line.taxName, isEmployerPaid: !!line.isEmployerPaid, stateCode: line.stateCode ?? null, totalTaxableWages: 0, totalAmount: 0, itemCount: 0 };
+            }
+            taxTotals[key].totalTaxableWages += parseFloat(String(line.taxableWages || "0"));
+            taxTotals[key].totalAmount += parseFloat(String(line.amount || "0"));
+            taxTotals[key].itemCount += 1;
+
+            // Per-worker aggregation for DE 9C
+            if (!workerTaxLines[item.workerId]) workerTaxLines[item.workerId] = {};
+            if (!workerTaxLines[item.workerId][key]) {
+              workerTaxLines[item.workerId][key] = { taxableWages: 0, amount: 0, taxName: line.taxName, stateCode: line.stateCode ?? null };
+            }
+            workerTaxLines[item.workerId][key].taxableWages += parseFloat(String(line.taxableWages || "0"));
+            workerTaxLines[item.workerId][key].amount += parseFloat(String(line.amount || "0"));
+          }
+          // Also accumulate gross pay per worker
+          if (!workerTaxLines[item.workerId]) workerTaxLines[item.workerId] = {};
+          if (!workerTaxLines[item.workerId]["__grossPay"]) {
+            workerTaxLines[item.workerId]["__grossPay"] = { taxableWages: 0, amount: 0, taxName: "Gross Pay", stateCode: null };
+          }
+          workerTaxLines[item.workerId]["__grossPay"].amount += parseFloat(String(item.grossPay || "0"));
+        }
+      }
+
+      res.json({
+        totals: Object.values(taxTotals).sort((a, b) => a.taxCode.localeCompare(b.taxCode)),
+        byWorker: workerTaxLines,
+        runCount: processedRuns.length,
+        year: targetYear,
+        quarter: quarter || null,
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch quarterly taxes" });
+    }
+  });
+
+  /**
+   * GET /api/workers/:id/ytd-taxes?year=2024
+   * Returns per-employee YTD tax totals from stored payroll_item_taxes.
+   * Used by W-2 and Employee Earnings reports.
+   */
+  app.get("/api/workers/:id/ytd-taxes", requireAuth, requireRole("admin", "manager", "employee"), async (req, res) => {
+    try {
+      const year = parseInt((req.query.year as string) || String(new Date().getFullYear()), 10);
+      const ytd = await storage.getEmployeeYTD(req.params.id, year);
+      res.json(ytd);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch YTD taxes" });
+    }
+  });
+
+  /**
+   * GET /api/companies/:id/ytd-taxes?year=2024
+   * Returns YTD tax totals for ALL workers at a company from stored payroll_item_taxes.
+   * Used by W-2 annual report to get per-employee stored actuals.
+   */
+  app.get("/api/companies/:id/ytd-taxes", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const year = parseInt((req.query.year as string) || String(new Date().getFullYear()), 10);
+      const workers = await storage.getWorkers(req.params.id);
+      const results = await Promise.all(
+        workers.map(async (w) => {
+          const ytd = await storage.getEmployeeYTD(w.id, year);
+          return { workerId: w.id, ...ytd };
+        })
+      );
+      res.json(results);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch company YTD taxes" });
     }
   });
 
