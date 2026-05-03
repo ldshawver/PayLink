@@ -348,7 +348,10 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
   const caMinSickUsable  = ruleVal(rules, R.SICK_MAX_HOURS, 40, wo);   // CA required usable floor
   const caMinAccrualDiv  = ruleVal(rules, R.SICK_ACCRUAL_RATE, 30, wo); // CA required divisor (max allowed)
 
-  if (isEnforced(ef, "enforceMinWage") && worker.workerType === "employee") {
+  // Sick leave validation is always enforced — it is independent of the min-wage
+  // enforcement toggle. CA SB 616 sick leave obligations apply regardless of whether
+  // the company has opted to suppress minimum wage checks.
+  if (worker.workerType === "employee") {
     // 1. Employer cap below CA minimum usable hours → block
     if (ctx.sickLeaveMaxHours != null && ctx.sickLeaveMaxHours < caMinSickUsable) {
       results.push({

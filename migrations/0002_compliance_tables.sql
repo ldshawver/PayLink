@@ -22,11 +22,15 @@ CREATE TABLE IF NOT EXISTS "labor_rules" (
   "rule_value" numeric NOT NULL,
   "rule_unit" text,
   "override_level" text DEFAULT 'state',
+  "wage_order_number" text,
   "effective_date" date NOT NULL,
   "expiration_date" date,
   "description" text,
   "created_at" timestamp DEFAULT now()
 );
+
+--> statement-breakpoint
+ALTER TABLE "labor_rules" ADD COLUMN IF NOT EXISTS "wage_order_number" text;
 
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "tax_rules" (
