@@ -1882,13 +1882,17 @@ export default function PrintCheckPage() {
     if (hasBlocking) return;
 
     // Packet mode: print the HTML packet pages via browser (summary + per-worker stub sections).
-    // Non-packet mode: fetch server-generated check PDFs.
     if (isPacketMode) {
       window.print();
       return;
     }
+    // Single-worker filtered mode: use per-item PDF endpoint to avoid printing the full run.
+    const singleItemId = checkItemsWithValidation.length === 1 ? checkItemsWithValidation[0]?.item?.id : undefined;
+    const pdfUrl = (workerFilter && singleItemId)
+      ? `/api/checks/${singleItemId}/pdf`
+      : `/api/payroll-runs/${runId}/checks-pdf`;
     try {
-      const pdfRes = await fetch(`/api/payroll-runs/${runId}/checks-pdf`, { credentials: "include" });
+      const pdfRes = await fetch(pdfUrl, { credentials: "include" });
       if (!pdfRes.ok) {
         const err = await pdfRes.json().catch(() => ({}));
         toast({ title: "PDF generation failed", description: (err as any).message || "Server error", variant: "destructive" });
@@ -2149,9 +2153,9 @@ export default function PrintCheckPage() {
         </Link>
         <Button
           onClick={() => handlePrint(checkItemsWithValidation, runId!, company?.id, activeTemplate?.id, totalCheckAmount)}
-          disabled={!fontReady || hasBlockingIssues || noAnyTemplate || noDefaultTemplate}
+          disabled={!fontReady || hasBlockingIssues}
           data-testid="button-print-checks"
-          title={noAnyTemplate ? "No check layout template configured — create one in Payroll → Check Templates" : noDefaultTemplate ? "No default check layout template set — mark one as default in Payroll → Check Templates" : hasBlockingIssues ? "Resolve blocking issues in the diagnostics panel below before printing" : undefined}
+          title={hasBlockingIssues ? "Resolve blocking issues in the diagnostics panel below before printing" : undefined}
         >
           <Printer className="mr-2 h-4 w-4" />{fontReady ? printLabel : "Loading fonts…"}
         </Button>
@@ -2185,21 +2189,21 @@ export default function PrintCheckPage() {
       )}
 
       {noAnyTemplate && (
-        <div className="mx-4 mb-3 rounded-md border border-red-400 bg-red-50 dark:bg-red-950/20 p-3 text-sm text-red-700 dark:text-red-400 flex items-start gap-2 print-hide" data-testid="banner-no-template">
+        <div className="mx-4 mb-3 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-700 dark:text-amber-400 flex items-start gap-2 print-hide" data-testid="banner-no-template">
           <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
           <span>
-            <strong>No check layout template configured.</strong> Create and set a default check template before printing.{" "}
-            <Link href="/app/payroll?tab=check-templates" className="underline font-medium">Open Check Templates</Link>
+            <strong>No check layout template configured.</strong> Checks will print with the built-in standard layout. Create a custom template in{" "}
+            <Link href="/app/payroll?tab=check-templates" className="underline font-medium">Check Templates</Link> to adjust field positions.
           </span>
         </div>
       )}
 
       {noDefaultTemplate && (
-        <div className="mx-4 mb-3 rounded-md border border-amber-400 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-700 dark:text-amber-400 flex items-start gap-2 print-hide" data-testid="banner-no-default-template">
+        <div className="mx-4 mb-3 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-700 dark:text-amber-400 flex items-start gap-2 print-hide" data-testid="banner-no-default-template">
           <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
           <span>
-            <strong>No default check layout template set.</strong> Mark one as the default before printing.{" "}
-            <Link href="/app/payroll?tab=check-templates" className="underline font-medium">Open Check Templates</Link>
+            <strong>No default template set.</strong> Checks will print with the built-in standard layout. Mark a template as default in{" "}
+            <Link href="/app/payroll?tab=check-templates" className="underline font-medium">Check Templates</Link> to apply custom positions.
           </span>
         </div>
       )}

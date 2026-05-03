@@ -14372,7 +14372,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRaw = await db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`);
       const worker = ((wRaw as any).rows || wRaw as any[])[0];
 
-      // Resolve remittance source: prefer the one linked via run's funding account, fall back to first enabled.
+      // Resolve remittance source via the run's funding account. No silent fallback — wrong bank account is a compliance defect.
       let rs: any = null;
       const runFaId = (runRow as any)?.funding_account_id;
       if (runFaId) {
@@ -14384,9 +14384,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         `);
         rs = ((rsViaFaRaw as any).rows || rsViaFaRaw as any[])[0] || null;
       }
-      if (!rs) {
-        const rsFallbackRaw = await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`);
-        rs = ((rsFallbackRaw as any).rows || rsFallbackRaw as any[])[0] || null;
+      if (!rs && !isCalibration) {
+        return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
       }
 
       if (!isCalibration) {
@@ -14394,16 +14393,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured for this company's remittance source." });
       }
 
-      // Load active check template for show/hide flags and positional overrides.
-      // 422 when no default template is configured (production checks require an explicit layout).
+      // Load default check template for positional overrides. Falls back to built-in standard layout when no template is configured.
       const tplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow = ((tplRaw as any).rows || tplRaw as any[])[0] || null;
-      if (!tplRow && !isCalibration) {
-        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      }
       let layoutConfig: Record<string, any> | undefined;
       if (tplRow?.layout_config) {
-        try { layoutConfig = typeof tplRow.layout_config === "string" ? JSON.parse(tplRow.layout_config) : tplRow.layout_config; } catch { /* use defaults */ }
+        try { layoutConfig = typeof tplRow.layout_config === "string" ? JSON.parse(tplRow.layout_config) : tplRow.layout_config; } catch { /* use built-in defaults */ }
       }
 
       // Load calibration offsets from remittance source
@@ -14456,7 +14451,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const coRaw  = await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`);
       const company = ((coRaw as any).rows || coRaw as any[])[0];
 
-      // Resolve remittance source: prefer the one linked via run's funding account, fall back to first enabled.
+      // Resolve remittance source via the run's funding account. No silent fallback — wrong bank account is a compliance defect.
       let rs: any = null;
       const batchFaId = (run as any)?.funding_account_id;
       if (batchFaId) {
@@ -14468,9 +14463,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         `);
         rs = ((rsViaFaRaw2 as any).rows || rsViaFaRaw2 as any[])[0] || null;
       }
-      if (!rs) {
-        const rsFallbackRaw2 = await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`);
-        rs = ((rsFallbackRaw2 as any).rows || rsFallbackRaw2 as any[])[0] || null;
+      if (!rs && !isCalibration) {
+        return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
       }
 
       if (!isCalibration) {
@@ -14478,16 +14472,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured." });
       }
 
-      // Load active check template for show/hide flags and positional overrides.
-      // 422 when no default template is configured.
+      // Load default check template for positional overrides. Falls back to built-in standard layout when no template is configured.
       const tplRaw2 = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow2 = ((tplRaw2 as any).rows || tplRaw2 as any[])[0] || null;
-      if (!tplRow2 && !isCalibration) {
-        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      }
       let batchLayoutConfig: Record<string, any> | undefined;
       if (tplRow2?.layout_config) {
-        try { batchLayoutConfig = typeof tplRow2.layout_config === "string" ? JSON.parse(tplRow2.layout_config) : tplRow2.layout_config; } catch { /* use defaults */ }
+        try { batchLayoutConfig = typeof tplRow2.layout_config === "string" ? JSON.parse(tplRow2.layout_config) : tplRow2.layout_config; } catch { /* use built-in defaults */ }
       }
 
       // Load calibration offsets from remittance source
@@ -14708,7 +14698,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRaw = await db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`);
       const worker = ((wRaw as any).rows || wRaw as any[])[0];
 
-      // Resolve remittance source: prefer the one linked via run's funding account, fall back to first enabled.
+      // Resolve remittance source via the run's funding account. No silent fallback — wrong bank account is a compliance defect.
       let rs: any = null;
       const reprintFaId = (runRow as any)?.funding_account_id;
       if (reprintFaId) {
@@ -14721,22 +14711,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         rs = ((rsViaFaRaw3 as any).rows || rsViaFaRaw3 as any[])[0] || null;
       }
       if (!rs) {
-        const rsFallbackRaw3 = await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`);
-        rs = ((rsFallbackRaw3 as any).rows || rsFallbackRaw3 as any[])[0] || null;
+        return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
       }
 
       if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source." });
       if (!rs?.account_number)  return res.status(422).json({ message: "No account number configured for this company's remittance source." });
 
-      // Load active check template; 422 when no default template configured.
+      // Load default check template for positional overrides. Falls back to built-in standard layout when no template is configured.
       const reprintTplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const reprintTplRow = ((reprintTplRaw as any).rows || reprintTplRaw as any[])[0] || null;
-      if (!reprintTplRow) {
-        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      }
       let reprintLayoutConfig: Record<string, any> | undefined;
       if (reprintTplRow?.layout_config) {
-        try { reprintLayoutConfig = typeof reprintTplRow.layout_config === "string" ? JSON.parse(reprintTplRow.layout_config) : reprintTplRow.layout_config; } catch { /* use defaults */ }
+        try { reprintLayoutConfig = typeof reprintTplRow.layout_config === "string" ? JSON.parse(reprintTplRow.layout_config) : reprintTplRow.layout_config; } catch { /* use built-in defaults */ }
       }
       let reprintCalibrationOffsets: { globalTop?: number; globalLeft?: number } | undefined;
       if (rs?.calibration_config) {
