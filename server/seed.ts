@@ -316,18 +316,18 @@ async function seedRolesAndPermissions() {
 
 async function seedDefaultRoleTemplates() {
   try {
-    // Idempotency guard: Contractor role having a "profile" row means the full seed ran.
-    const contractorRoleChk = await db
+    // Idempotency guard: company_admin profile row means full seed completed
+    const caRoleChk = await db
       .select({ id: roles.id })
       .from(roles)
-      .where(and(eq(roles.name, "Contractor"), eq(roles.isSystem, true)))
+      .where(eq(roles.name, "company_admin"))
       .limit(1);
-    if (contractorRoleChk.length > 0) {
+    if (caRoleChk.length > 0) {
       const profileChk = await db
         .select({ id: rolePermissions.id })
         .from(rolePermissions)
         .where(and(
-          eq(rolePermissions.roleId, contractorRoleChk[0].id),
+          eq(rolePermissions.roleId, caRoleChk[0].id),
           eq(rolePermissions.resource, "profile")
         ))
         .limit(1);
@@ -337,7 +337,7 @@ async function seedDefaultRoleTemplates() {
       }
     }
 
-    // Type for combined flat + scope flags
+    // Combined flat + scope flags type
     type AllFlags = {
       canView?: boolean; canCreate?: boolean; canEdit?: boolean;
       canDelete?: boolean; canExport?: boolean; canApprove?: boolean; canConfigure?: boolean;
@@ -347,7 +347,7 @@ async function seedDefaultRoleTemplates() {
       canViewCompany?: boolean; canEditCompany?: boolean; canApproveCompany?: boolean;
     };
 
-    // Preset flag combinations (flat + scope combined)
+    // Presets
     const S_FULL: AllFlags = {
       canView: true, canCreate: true, canEdit: true, canDelete: true,
       canExport: true, canApprove: true, canConfigure: true,
@@ -356,7 +356,7 @@ async function seedDefaultRoleTemplates() {
       canViewDepartment: true, canEditDepartment: true, canApproveDepartment: true,
       canViewCompany: true, canEditCompany: true, canApproveCompany: true,
     };
-    const coRW: AllFlags = { canView: true, canCreate: true, canEdit: true, canDelete: true, canExport: true, canApprove: true, canViewOwn: true, canEditOwn: true, canViewCompany: true, canEditCompany: true, canApproveCompany: true };
+    const coRW: AllFlags = { canView: true, canCreate: true, canEdit: true, canDelete: true, canExport: true, canApprove: true, canConfigure: true, canViewOwn: true, canEditOwn: true, canViewCompany: true, canEditCompany: true, canApproveCompany: true };
     const coR:  AllFlags = { canView: true, canViewOwn: true, canViewCompany: true };
     const dRW:  AllFlags = { canView: true, canCreate: true, canEdit: true, canApprove: true, canViewOwn: true, canEditOwn: true, canViewDepartment: true, canEditDepartment: true, canApproveSubordinates: true };
     const dR:   AllFlags = { canView: true, canViewOwn: true, canViewDepartment: true };
@@ -366,29 +366,32 @@ async function seedDefaultRoleTemplates() {
     const oR:   AllFlags = { canView: true, canViewOwn: true };
     const none: AllFlags = {};
 
-    // All 22 resources: original 17 + 5 task-spec additions
+    // All 22 resources
     const ALL_RESOURCES = [
       ...PERMISSION_RESOURCES,
       "profile", "paystubs", "preferences", "contractor_hub", "documents",
     ];
 
-    // Role definitions for upsert (INSERT if role is missing from roles table)
+    // Role definitions for upsert
     const ROLE_DEFS: Record<string, { description: string; level: number }> = {
-      "System Administrator": { description: "Full access to everything across the entire system", level: 1 },
-      "Owner":                { description: "Company owner with full operational access", level: 1 },
-      "HR Manager":           { description: "Handles employee records and HR compliance", level: 2 },
-      "Payroll Manager":      { description: "Handles payroll processing and tax configuration", level: 2 },
-      "Department Manager":   { description: "Manages employees within their department", level: 3 },
-      "Supervisor":           { description: "Team lead with limited management access", level: 4 },
-      "Employee":             { description: "Self-service access to own data", level: 5 },
-      "Contractor":           { description: "External contractor with limited access", level: 6 },
+      "System Administrator":  { description: "Full system access", level: 1 },
+      "platform_super_admin":  { description: "Platform-level super administrator", level: 0 },
+      "company_admin":         { description: "Full company-level administrator", level: 1 },
+      "Owner":                 { description: "Company owner with full operational access", level: 1 },
+      "HR Manager":            { description: "Handles employee records and HR compliance", level: 2 },
+      "Payroll Manager":       { description: "Handles payroll processing and tax configuration", level: 2 },
+      "Department Manager":    { description: "Manages employees within their department", level: 3 },
+      "Supervisor":            { description: "Team lead with limited management access", level: 4 },
+      "Employee":              { description: "Self-service access to own data", level: 5 },
+      "Contractor":            { description: "External contractor with limited access", level: 6 },
     };
 
-    // Combined flat + scope permission matrix for all 8 roles × 22 resources
+    // Combined permission matrix: 10 roles × 22 resources
     const MATRIX: Record<string, Record<string, AllFlags>> = {
       "System Administrator": Object.fromEntries(ALL_RESOURCES.map(r => [r, S_FULL])),
-
-      "Owner": Object.fromEntries(ALL_RESOURCES.map(r => [r, r === "system_admin" ? none : coRW])),
+      "platform_super_admin": Object.fromEntries(ALL_RESOURCES.map(r => [r, S_FULL])),
+      "company_admin":        Object.fromEntries(ALL_RESOURCES.map(r => [r, r === "system_admin" ? none : coRW])),
+      "Owner":                Object.fromEntries(ALL_RESOURCES.map(r => [r, r === "system_admin" ? none : coRW])),
 
       "HR Manager": {
         dashboard: oR, companies: oR,
@@ -406,7 +409,8 @@ async function seedDefaultRoleTemplates() {
         companies: oR, schedules: oR, departments: oR, branches: oR,
         divisions: oR, positions: oR, policies: oR, hr: oR, timeclock: oR,
         profile: oR, preferences: oRW, documents: oR, contractor_hub: oR,
-        settings: { canView: true, canEdit: true, canViewOwn: true }, permissions: none, system_admin: none,
+        // Payroll Manager must NOT have settings or system_admin access
+        settings: none, permissions: none, system_admin: none,
       },
 
       "Department Manager": {
@@ -452,9 +456,9 @@ async function seedDefaultRoleTemplates() {
       },
     };
 
-    // Upsert each role, then upsert all 22 resource rows (INSERT if missing, UPDATE if exists)
+    // Upsert each role and all 22 resource rows
     for (const [roleName, permsMatrix] of Object.entries(MATRIX)) {
-      // 1. Ensure the role exists in the roles table
+      // Ensure the role exists
       const existingRole = await db
         .select({ id: roles.id })
         .from(roles)
@@ -473,7 +477,7 @@ async function seedDefaultRoleTemplates() {
         roleId = newRole.id;
       }
 
-      // 2. Upsert every resource row with combined flat + scope flags
+      // Upsert every resource row with combined flat + scope flags
       for (const resource of ALL_RESOURCES) {
         const flags: AllFlags = permsMatrix[resource] ?? none;
 
@@ -483,19 +487,28 @@ async function seedDefaultRoleTemplates() {
           .where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.resource, resource)))
           .limit(1);
 
+        // Full reset object ensures `none` flags clear previously set columns
+        const resetAll: AllFlags = {
+          canView: false, canCreate: false, canEdit: false, canDelete: false,
+          canExport: false, canApprove: false, canConfigure: false,
+          canViewOwn: false, canEditOwn: false,
+          canViewSubordinates: false, canEditSubordinates: false, canApproveSubordinates: false,
+          canViewDepartment: false, canEditDepartment: false, canApproveDepartment: false,
+          canViewCompany: false, canEditCompany: false, canApproveCompany: false,
+        };
+        const merged = { ...resetAll, ...flags };
+
         if (existingRow.length > 0) {
-          if (Object.keys(flags).length > 0) {
-            await db.update(rolePermissions)
-              .set(flags)
-              .where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.resource, resource)));
-          }
+          await db.update(rolePermissions)
+            .set(merged)
+            .where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.resource, resource)));
         } else {
-          await db.insert(rolePermissions).values({ roleId, resource, ...flags });
+          await db.insert(rolePermissions).values({ roleId, resource, ...merged });
         }
       }
     }
 
-    console.log("Scope-aware role templates seeded for all 8 system roles (22 resources)");
+    console.log("Scope-aware role templates seeded for 10 system roles (22 resources each)");
   } catch (e: any) {
     console.log("Could not seed scope role templates:", e?.message || e);
   }

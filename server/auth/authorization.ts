@@ -46,11 +46,16 @@ export const PERMISSION_COLUMN: Record<Permission, keyof typeof rolePermissions.
   approve_company:      "canApproveCompany",
 };
 
-// Maps users.role (lowercase/underscore) to canonical role names in the roles table
+/**
+ * Maps users.role field values (lowercase/underscore) to canonical role names
+ * stored in the roles table. Used when a user has no explicit user_roles rows.
+ */
 const ROLE_NAME_MAP: Record<string, string> = {
   "system_administrator":   "System Administrator",
   "admin":                  "System Administrator",
   "tenant_admin":           "System Administrator",
+  "platform_super_admin":   "platform_super_admin",
+  "company_admin":          "company_admin",
   "owner":                  "Owner",
   "tenant_owner":           "Owner",
   "hr_manager":             "HR Manager",
@@ -119,15 +124,28 @@ async function getUserScopeInfo(userId: string, userCompanyId?: string | null): 
   };
 }
 
+/**
+ * Evaluates whether a role_permissions row satisfies a permission request.
+ *
+ * @param effectiveDept - The effective department for scope comparison.
+ *   For department-scoped roles, this is the role assignment's scopeId.
+ *   For other roles, this is userScope.department.
+ *   This separation ensures scoped role assignments compare against the right
+ *   department, not just the user's physical worker department.
+ */
 function permSatisfiedByRow(
   row: RolePermRow,
   permission: Permission,
   userScope?: UserScopeInfo,
-  ctx?: ScopeContext
+  ctx?: ScopeContext,
+  effectiveDept?: string
 ): boolean {
   if (FLAT_PERMISSIONS.has(permission)) {
     return !!(row[PERMISSION_COLUMN[permission] as keyof RolePermRow]);
   }
+
+  // Use effectiveDept (role's scope dept or user's own dept) for all department comparisons
+  const dept = effectiveDept ?? userScope?.department;
 
   switch (permission) {
     case "view_own":
@@ -149,7 +167,7 @@ function permSatisfiedByRow(
             : !!(row.canEditSubordinates || row.canEditDepartment || row.canEditCompany);
         }
 
-        if (ctx.departmentId && userScope.department && ctx.departmentId === userScope.department) {
+        if (ctx.departmentId && dept && ctx.departmentId === dept) {
           return isView
             ? !!(row.canViewDepartment || row.canViewCompany)
             : !!(row.canEditDepartment || row.canEditCompany);
@@ -159,14 +177,13 @@ function permSatisfiedByRow(
           return isView ? !!(row.canViewCompany) : !!(row.canEditCompany);
         }
 
-        // ownerId present but no scope match
+        // ownerId present but no scope match → deny
         return false;
       }
-      // No ownerId in context — cascade applies; if dept/company in context, check those
-      if (ctx.departmentId && userScope?.department && ctx.departmentId !== userScope.department) {
-        return isView
-          ? !!(row.canViewDepartment || row.canViewCompany)
-          : !!(row.canEditDepartment || row.canEditCompany);
+
+      // No ownerId in context: if the resource belongs to a different dept, require company scope
+      if (ctx.departmentId && dept && ctx.departmentId !== dept) {
+        return isView ? !!(row.canViewCompany) : !!(row.canEditCompany);
       }
       return hasAnyScope;
     }
@@ -187,7 +204,7 @@ function permSatisfiedByRow(
       if (ctx.ownerId) {
         if (userScope.directReportIds.includes(ctx.ownerId)) return hasFlag;
 
-        if (ctx.departmentId && userScope.department && ctx.departmentId === userScope.department) {
+        if (ctx.departmentId && dept && ctx.departmentId === dept) {
           return isView
             ? !!(row.canViewDepartment || row.canViewCompany)
             : isEdit
@@ -216,9 +233,9 @@ function permSatisfiedByRow(
       if (!hasDeptFlag) return false;
       if (!ctx || !userScope) return hasDeptFlag;
 
-      if (ctx.departmentId && userScope.department) {
-        if (ctx.departmentId === userScope.department) return hasDeptFlag;
-        // Different dept — need company scope
+      if (ctx.departmentId && dept) {
+        if (ctx.departmentId === dept) return hasDeptFlag;
+        // Resource is in a different department — only company-level access applies
         if (ctx.companyId && userScope.companyId && ctx.companyId === userScope.companyId) {
           return isView ? !!(row.canViewCompany) : isEdit ? !!(row.canEditCompany) : !!(row.canApproveCompany);
         }
@@ -250,15 +267,14 @@ function permSatisfiedByRow(
 
 /**
  * Applies role-assignment scope constraints to the ScopeContext.
- * Returns null when the resource is definitively outside the role's scope boundaries.
- * Returns an enriched ScopeContext when the resource is within scope.
+ * Returns null when the resource is definitively outside the role's scope.
  */
 function applyRoleScopeGate(
   ctx: ScopeContext | undefined,
   userScope: UserScopeInfo,
   scopeType: string | null | undefined,
   scopeId: string | null | undefined
-): ScopeContext | null | undefined {
+): { ctx: ScopeContext | undefined; effectiveDept: string | undefined } | null {
   const gated: ScopeContext = { ...ctx };
 
   // Propagate user's known company into context when caller didn't provide it
@@ -267,39 +283,36 @@ function applyRoleScopeGate(
   }
 
   if (!scopeType || scopeType === "enterprise") {
-    // Enterprise scope: no additional restriction
-    return gated;
+    return { ctx: gated, effectiveDept: userScope.department };
   }
 
   if (scopeType === "company") {
-    // Company-scoped role: scopeId is the allowed companyId
     if (scopeId) {
       if (gated.companyId && gated.companyId !== scopeId) {
         return null; // Resource belongs to a different company
       }
       if (!gated.companyId) gated.companyId = scopeId;
     }
-    return gated;
+    return { ctx: gated, effectiveDept: userScope.department };
   }
 
   if (scopeType === "department") {
-    // Department-scoped role: scopeId is the allowed departmentId
-    const requiredDept = scopeId ?? userScope.department;
-    if (requiredDept) {
-      if (gated.departmentId && gated.departmentId !== requiredDept) {
+    // For dept-scoped roles, the effective department is the scopeId (not user's own dept)
+    const effectiveDept = scopeId ?? userScope.department;
+    if (effectiveDept) {
+      if (gated.departmentId && gated.departmentId !== effectiveDept) {
         return null; // Resource belongs to a different department
       }
-      if (!gated.departmentId) gated.departmentId = requiredDept;
+      if (!gated.departmentId) gated.departmentId = effectiveDept;
     }
-    // Also enforce company boundary
     if (scopeId && gated.companyId && userScope.companyId && gated.companyId !== userScope.companyId) {
       return null;
     }
-    return gated;
+    return { ctx: gated, effectiveDept };
   }
 
-  // location or unknown scope types: no additional restriction for now
-  return gated;
+  // Unknown scope types: no additional restriction
+  return { ctx: gated, effectiveDept: userScope.department };
 }
 
 async function checkRolePermissions(
@@ -320,11 +333,11 @@ async function checkRolePermissions(
 
   if (rolePerms.length === 0) return null;
 
-  const gatedCtx = applyRoleScopeGate(ctx, userScope, scopeType, scopeId);
-  if (gatedCtx === null) return null; // Resource is outside this role assignment's scope
+  const gated = applyRoleScopeGate(ctx, userScope, scopeType, scopeId);
+  if (gated === null) return null; // Resource is outside this role assignment's scope
 
   const row = rolePerms[0];
-  if (permSatisfiedByRow(row, permission, userScope, gatedCtx ?? undefined)) {
+  if (permSatisfiedByRow(row, permission, userScope, gated.ctx, gated.effectiveDept)) {
     return {
       granted: true,
       reason: `Role '${roleName}' grants '${permission}' on '${resource}'`,
@@ -434,7 +447,8 @@ export async function getEffectivePermissions(
       "payroll", "hr", "workers", "timesheets", "schedules", "reports",
       "billing", "permissions", "users", "company", "settings", "system_admin",
       "profile", "paystubs", "preferences", "documents", "contractor_hub",
-      "dashboard", "companies", "departments", "branches", "divisions", "positions", "policies", "timeclock",
+      "dashboard", "companies", "departments", "branches", "divisions",
+      "positions", "policies", "timeclock",
     ];
     for (const r of allResources) addPerms(r, allPerms, `system role: ${systemRole}`);
     return Array.from(result.entries()).map(([resource, { permissions, source, scope }]) => ({
