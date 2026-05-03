@@ -14589,28 +14589,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           )
         `);
       } else {
-        // Determine whether this batch is an initial print or a reprint run.
-        const priorPrintRaw = await db.execute(sql`
-          SELECT id FROM check_print_audit_logs
-          WHERE payroll_run_id = ${runId} AND event_type = 'print'
-          LIMIT 1
-        `);
-        const hasBeenPrinted = ((priorPrintRaw as any).rows || priorPrintRaw as any[]).length > 0;
-        const batchEventType = hasBeenPrinted ? "reprint" : "print";
+        // Pre-fetch all prior 'print' worker_ids for this run in one query; classify per item.
+        const priorPrintedRaw = await db.execute(sql`SELECT DISTINCT worker_id FROM check_print_audit_logs WHERE payroll_run_id = ${runId} AND event_type = 'print'`);
+        const priorPrintedSet = new Set<string>(((priorPrintedRaw as any).rows || priorPrintedRaw as any[]).map((r: any) => r.worker_id).filter(Boolean));
 
         for (const item of items) {
+          const itemEventType = priorPrintedSet.has(item.worker_id) ? "reprint" : "print";
           await db.execute(sql`
-            INSERT INTO check_print_audit_logs (
-              payroll_run_id, company_id, initiated_by_user_id,
-              check_count, total_amount, micr_validation,
-              validation_errors, print_blocked, render_engine,
-              event_type, worker_id, check_number
-            ) VALUES (
-              ${runId}, ${compId}, ${userId || null},
-              1, ${item.net_pay || 0}, 'ok',
-              '[]', false, 'server-pdf',
-              ${batchEventType}, ${item.worker_id || null}, ${item.check_number || null}
-            )
+            INSERT INTO check_print_audit_logs (payroll_run_id, company_id, initiated_by_user_id, check_count, total_amount, micr_validation, validation_errors, print_blocked, render_engine, event_type, worker_id, check_number)
+            VALUES (${runId}, ${compId}, ${userId || null}, 1, ${item.net_pay || 0}, 'ok', '[]', false, 'server-pdf', ${itemEventType}, ${item.worker_id || null}, ${item.check_number || null})
           `);
         }
       }
