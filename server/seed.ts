@@ -321,12 +321,13 @@ async function seedDefaultRoleTemplates() {
       "hr_manager", "payroll_manager", "company_admin", "platform_super_admin",
     ];
 
-    // Skip if all 8 system role templates are already present
+    // Skip if any isSystem role templates already exist (first-run only guard)
     const existing = await db
-      .select({ name: roles.name })
+      .select({ id: roles.id })
       .from(roles)
-      .where(and(eq(roles.isSystem, true), inArray(roles.name, REQUIRED_ROLE_NAMES)));
-    if (existing.length === REQUIRED_ROLE_NAMES.length) {
+      .where(eq(roles.isSystem, true))
+      .limit(1);
+    if (existing.length > 0) {
       console.log("Scope-aware role templates already seeded, skipping");
       return;
     }
@@ -355,7 +356,7 @@ async function seedDefaultRoleTemplates() {
     const sR:   AllFlags = { canViewOwn: true, canViewSubordinates: true };
     const sRW:  AllFlags = { canViewOwn: true, canEditOwn: true, canViewSubordinates: true, canEditSubordinates: true, canApproveSubordinates: true };
     const dR:   AllFlags = { canViewOwn: true, canViewDepartment: true };
-    const dRW:  AllFlags = { canViewOwn: true, canEditOwn: true, canViewDepartment: true, canEditDepartment: true, canApproveDepartment: true, canApproveSubordinates: true };
+    const dRW:  AllFlags = { canViewOwn: true, canEditOwn: true, canViewSubordinates: true, canEditSubordinates: true, canApproveSubordinates: true, canViewDepartment: true, canEditDepartment: true };
     const coR:  AllFlags = { canViewOwn: true, canViewCompany: true };
     const coRW: AllFlags = {
       canView: true, canCreate: true, canEdit: true, canDelete: true,
@@ -408,20 +409,20 @@ async function seedDefaultRoleTemplates() {
     // Admin roles: flat coRW or S_FULL flags.
     const MATRIX: Record<string, Record<string, AllFlags>> = {
 
-      // Employee: self-service only — own timesheets, timeclock, profile, paystubs, preferences, documents
+      // Employee: strict self-service — timesheets/timeclock/profile/paystubs/preferences only
       "employee": {
-        dashboard: oR, timesheets: oRW, timeclock: oRW,
-        profile: oRW, paystubs: oR, preferences: oRW, documents: oR,
-        workers: none, schedules: none, payroll: none, departments: none,
-        positions: none, policies: none, hr: none, reports: none, settings: none,
+        timesheets: oRW, timeclock: oRW, profile: oRW, paystubs: oRW, preferences: oRW,
+        dashboard: none, workers: none, schedules: none, payroll: none, documents: none,
+        departments: none, positions: none, policies: none, hr: none, reports: none, settings: none,
       },
 
-      // Contractor: same self-service baseline; contractor_hub added via EXTRA_RESOURCES
+      // Contractor: profile/paystubs/preferences only; contractor_hub added via EXTRA_RESOURCES
+      // Contractors access their own work portal (contractor_hub) rather than timesheets/timeclock
       "contractor": {
-        dashboard: oR, timesheets: oRW, timeclock: oRW,
-        profile: oRW, paystubs: oR, preferences: oRW, documents: oR,
-        workers: none, schedules: none, payroll: none, departments: none,
-        positions: none, policies: none, hr: none, reports: none, settings: none,
+        profile: oRW, paystubs: oRW, preferences: oRW,
+        dashboard: none, timesheets: none, timeclock: none, workers: none, schedules: none,
+        payroll: none, documents: none, departments: none, positions: none, policies: none,
+        hr: none, reports: none, settings: none,
       },
 
       // Supervisor: own + direct-report subordinates; no hr/payroll access
@@ -440,21 +441,25 @@ async function seedDefaultRoleTemplates() {
         departments: oR, positions: oR, policies: oR, settings: none,
       },
 
-      // HR manager: company-wide HR; payroll own-only (HR does not process payroll)
+      // HR manager: company-wide HR + workers with edit; payroll own-only (does not process payroll)
       "hr_manager": {
-        dashboard: coR, workers: coR,
+        dashboard: coR,
+        workers: { canViewOwn: true, canEditOwn: true, canViewCompany: true, canEditCompany: true },
         hr: { canView: true, canCreate: true, canEdit: true, canViewOwn: true, canEditOwn: true, canViewCompany: true, canEditCompany: true },
-        reports: coR, timesheets: coR, schedules: coR, timeclock: coR,
+        timesheets: { canViewOwn: true, canViewCompany: true, canEditCompany: true },
+        reports: { canViewOwn: true, canViewCompany: true, canEditCompany: true },
+        schedules: coR, timeclock: coR,
         documents: coR, profile: coR, paystubs: coR, preferences: oRW,
         payroll: oR,
         departments: coR, positions: coR, policies: coR, settings: none,
       },
 
-      // Payroll manager: full payroll processing; no admin
+      // Payroll manager: full payroll processing + reports with edit; no admin
       "payroll_manager": {
         dashboard: coR,
         payroll: { canView: true, canCreate: true, canEdit: true, canDelete: true, canExport: true, canApprove: true, canConfigure: true, canViewOwn: true, canViewCompany: true, canEditCompany: true, canApproveCompany: true },
-        reports: coR, workers: coR,
+        reports: { canViewOwn: true, canViewCompany: true, canEditCompany: true, canExport: true },
+        workers: coR,
         timesheets: { canViewOwn: true, canViewCompany: true, canEditCompany: true, canApproveCompany: true, canApproveSubordinates: true },
         schedules: oR, documents: coR, profile: coR, paystubs: coR, preferences: oRW,
         departments: oR, positions: oR, policies: oR, hr: oR, timeclock: oR, settings: none,
@@ -528,19 +533,27 @@ async function seedDefaultRoleTemplates() {
       return rows[0]?.role_permissions ?? null;
     };
     const checks: { label: string; pass: () => Promise<boolean> }[] = [
-      { label: "employee timesheets view_own",          pass: async () => !!(await getRp("employee",          "timesheets"))?.canViewOwn },
-      { label: "employee payroll denied",               pass: async () => !(await getRp("employee",           "payroll"))?.canViewOwn },
-      { label: "employee documents view_own",           pass: async () => !!(await getRp("employee",          "documents"))?.canViewOwn },
-      { label: "supervisor subs timesheets",            pass: async () => !!(await getRp("supervisor",        "timesheets"))?.canViewSubordinates },
-      { label: "supervisor documents view_subs",        pass: async () => !!(await getRp("supervisor",        "documents"))?.canViewSubordinates },
-      { label: "dept_mgr dept timesheets",              pass: async () => !!(await getRp("department_manager","timesheets"))?.canViewDepartment },
-      { label: "dept_mgr documents dept",               pass: async () => !!(await getRp("department_manager","documents"))?.canViewDepartment },
-      { label: "hr_manager payroll own-only",           pass: async () => !!(await getRp("hr_manager",        "payroll"))?.canViewOwn },
-      { label: "hr_manager payroll no-company",         pass: async () => !(await getRp("hr_manager",         "payroll"))?.canViewCompany },
-      { label: "hr_manager documents company",          pass: async () => !!(await getRp("hr_manager",        "documents"))?.canViewCompany },
-      { label: "payroll_mgr settings denied",           pass: async () => !(await getRp("payroll_manager",    "settings"))?.canViewOwn },
-      { label: "company_admin contractor_hub view-co",  pass: async () => !!(await getRp("company_admin",     "contractor_hub"))?.canViewCompany },
-      { label: "company_admin contractor_hub no-edit",  pass: async () => !(await getRp("company_admin",      "contractor_hub"))?.canEditCompany },
+      { label: "employee timesheets view_own",            pass: async () => !!(await getRp("employee",          "timesheets"))?.canViewOwn },
+      { label: "employee timesheets edit_own",            pass: async () => !!(await getRp("employee",          "timesheets"))?.canEditOwn },
+      { label: "employee paystubs edit_own",              pass: async () => !!(await getRp("employee",          "paystubs"))?.canEditOwn },
+      { label: "employee payroll denied",                 pass: async () => !(await getRp("employee",           "payroll"))?.canViewOwn },
+      { label: "employee dashboard denied",               pass: async () => !(await getRp("employee",           "dashboard"))?.canViewOwn },
+      { label: "employee documents denied",               pass: async () => !(await getRp("employee",           "documents"))?.canViewOwn },
+      { label: "contractor timesheets denied",            pass: async () => !(await getRp("contractor",         "timesheets"))?.canViewOwn },
+      { label: "contractor profile edit_own",             pass: async () => !!(await getRp("contractor",        "profile"))?.canEditOwn },
+      { label: "supervisor subs timesheets",              pass: async () => !!(await getRp("supervisor",        "timesheets"))?.canViewSubordinates },
+      { label: "supervisor documents view_subs",          pass: async () => !!(await getRp("supervisor",        "documents"))?.canViewSubordinates },
+      { label: "dept_mgr dept timesheets",                pass: async () => !!(await getRp("department_manager","timesheets"))?.canViewDepartment },
+      { label: "dept_mgr no approve_dept",                pass: async () => !(await getRp("department_manager", "timesheets"))?.canApproveDepartment },
+      { label: "dept_mgr documents dept",                 pass: async () => !!(await getRp("department_manager","documents"))?.canViewDepartment },
+      { label: "hr_manager workers edit_company",         pass: async () => !!(await getRp("hr_manager",        "workers"))?.canEditCompany },
+      { label: "hr_manager payroll own-only",             pass: async () => !!(await getRp("hr_manager",        "payroll"))?.canViewOwn },
+      { label: "hr_manager payroll no-company",           pass: async () => !(await getRp("hr_manager",         "payroll"))?.canViewCompany },
+      { label: "hr_manager documents company",            pass: async () => !!(await getRp("hr_manager",        "documents"))?.canViewCompany },
+      { label: "payroll_mgr reports edit_company",        pass: async () => !!(await getRp("payroll_manager",   "reports"))?.canEditCompany },
+      { label: "payroll_mgr settings denied",             pass: async () => !(await getRp("payroll_manager",    "settings"))?.canViewOwn },
+      { label: "company_admin contractor_hub view-co",    pass: async () => !!(await getRp("company_admin",     "contractor_hub"))?.canViewCompany },
+      { label: "company_admin contractor_hub no-edit",    pass: async () => !(await getRp("company_admin",      "contractor_hub"))?.canEditCompany },
     ];
     const results = await Promise.all(checks.map(async c => ({ label: c.label, pass: await c.pass() })));
     const failed = results.filter(r => !r.pass);
