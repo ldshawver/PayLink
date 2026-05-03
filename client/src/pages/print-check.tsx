@@ -1937,7 +1937,7 @@ export default function PrintCheckPage() {
   const { data: runPrintAudit = [] } = useQuery<any[]>({
     queryKey: ["/api/check-print-audit", "run", runId],
     queryFn: async () => {
-      const res = await fetch(`/api/check-print-audit?runId=${runId}&limit=200`, { credentials: "include" });
+      const res = await fetch(`/api/check-print-audit?runId=${runId}&limit=500`, { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
@@ -2264,24 +2264,17 @@ export default function PrintCheckPage() {
             <PayrollPacketSummaryPage run={run} items={items} workers={workers} company={company} />
             {checkWorkerItems.map((item) => {
               const worker = getWorker(item.workerId);
-              if (!worker || !company) return null;
+              if (!worker) return null;
               return (
-                <CheckComponent
-                  key={item.id}
-                  item={item}
-                  worker={worker}
-                  company={company}
-                  run={run}
-                  deductions={companyDeductions}
-                  config={config}
-                  payStubAccounts={companyPSAccounts}
-                  accrualAccounts={companyAccrualAccounts}
-                  accrualBalances={accrualBalancesList}
-                  amendments={amendments}
-                  remittanceSources={remittanceSources}
-                  calibration={calibration}
-                  showGuides={calibrationTestMode}
-                />
+                <div key={item.id} className="my-4">
+                  <iframe
+                    src={`/api/checks/${item.id}/pdf?preview=1`}
+                    title={`Check PDF — ${worker.firstName} ${worker.lastName}`}
+                    data-testid={`iframe-packet-pdf-${item.id}`}
+                    className="check-page"
+                    style={{ width: "816px", height: "1056px", border: "1px solid #ddd", display: "block", background: "white" }}
+                  />
+                </div>
               );
             })}
           </>
