@@ -11,7 +11,7 @@ import { execSync } from "child_process";
 import { checkTenantGate } from "./tenant-enforcement";
 import { db } from "./db";
 import { sql, eq, and, gte, lte, inArray } from "drizzle-orm";
-import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries } from "@shared/schema";
+import { insertEnterpriseSchema, insertDivisionSchema, insertPositionSchema, insertCostCenterSchema, insertJobSchema, insertBranchSchema, insertRoleSchema, insertRolePermissionSchema, insertUserRoleSchema, insertCheckTemplateSchema, insertStationSchema, insertSecondaryWageGroupSchema, insertCurrencySchema, insertTimeOffRequestSchema, insertSchedulePreferenceSchema, insertShiftOfferSchema, insertDealSchema, insertOnboardingTemplateSchema, insertOnboardingTemplateTaskSchema, insertCustomerOnboardingProjectSchema, insertOnboardingTaskSchema, insertOnboardingDocumentSchema, insertEngagementEventSchema, insertProductApiKeySchema, onboardingTemplateTasks, onboardingTasks, onboardingDocuments, productApiKeys, signaturePackages, documentVersions, documents, type DocumentRetentionPolicy, insertAgreementTemplateSchema, insertWorkerAgreementSchema, insertWorkerOnboardingSchema, insertOnboardingStepSchema, authorizationAuditLog, insertWeeklyLaborGoalSchema, insertWeeklyRevenueGoalSchema, timeEntries, type LaborRule, type InsertLaborRule } from "@shared/schema";
 import crypto from "crypto";
 import { getESignAdapter, getSupportedProviders, AcrobatSignAdapter, type CompanyESignConfig } from "./esign";
 import fs from "fs";
@@ -2911,7 +2911,7 @@ export async function registerRoutes(
         if (preflightRequired) {
           const { evaluateCompliance } = await import("./compliance-engine.js");
 
-          let applicableRules: any[] = [];
+          let applicableRules: LaborRule[] = [];
           if (companyProfile?.jurisdictionId) {
             applicableRules = await storage.getApplicableRules(companyProfile.jurisdictionId, run.periodEnd);
           } else {
@@ -2927,7 +2927,7 @@ export async function registerRoutes(
             ruleValue: parseFloat(String(r.ruleValue)),
             ruleUnit: r.ruleUnit ?? null,
             overrideLevel: r.overrideLevel ?? null,
-            wageOrderNumber: (r as any).wageOrderNumber ?? null,
+            wageOrderNumber: r.wageOrderNumber ?? null,
           }));
 
           // Load company sick leave account config for compliance validation
@@ -3036,7 +3036,8 @@ export async function registerRoutes(
           }
         }
       } catch (preflightErr) {
-        console.warn("[compliance] Server-side preflight error (non-fatal, proceeding):", preflightErr);
+        console.error("[compliance] Server-side preflight error:", preflightErr);
+        return res.status(500).json({ message: "Compliance preflight evaluation failed. Payroll approval cannot proceed." });
       }
       // ────────────────────────────────────────────────────────────────────
 
@@ -25947,7 +25948,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       // Load company compliance profile + jurisdiction
       const companyProfile = await storage.getCompanyComplianceProfile(run.companyId);
       const jurisdictionCode = companyProfile?.jurisdictionId ? null : "CA"; // default CA if no profile
-      let applicableRules: any[] = [];
+      let applicableRules: LaborRule[] = [];
       if (companyProfile?.jurisdictionId) {
         applicableRules = await storage.getApplicableRules(companyProfile.jurisdictionId, run.periodEnd);
       } else {
@@ -25963,7 +25964,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         ruleValue: parseFloat(String(r.ruleValue)),
         ruleUnit: r.ruleUnit ?? null,
         overrideLevel: r.overrideLevel ?? null,
-        wageOrderNumber: (r as any).wageOrderNumber ?? null,
+        wageOrderNumber: r.wageOrderNumber ?? null,
       }));
 
       // Load company sick leave account config for compliance validation
@@ -26100,9 +26101,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const eff = "2024-01-01"; // effective date for current CA rules
 
       // ── Generic CA state rules (seeded once) ───────────────────────────────
-      const genericExists = existingRules.filter((r: any) => !r.wageOrderNumber).length > 0;
+      const genericExists = existingRules.filter(r => !r.wageOrderNumber).length > 0;
       if (!genericExists) {
-        const caRules = [
+        const caRules: InsertLaborRule[] = [
           { jurisdictionId: jId, ruleType: "daily_ot_threshold_1",    ruleValue: "8",    ruleUnit: "hours",      effectiveDate: eff, description: "CA daily OT starts at 8 hours (1.5×)" },
           { jurisdictionId: jId, ruleType: "daily_ot_threshold_2",    ruleValue: "12",   ruleUnit: "hours",      effectiveDate: eff, description: "CA double time starts at 12 hours (2×)" },
           { jurisdictionId: jId, ruleType: "seventh_day_ot_threshold", ruleValue: "8",   ruleUnit: "hours",      effectiveDate: eff, description: "CA 7th-consecutive-day: all hours at 1.5×; >8h at 2×" },
@@ -26120,7 +26121,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           { jurisdictionId: jId, ruleType: "reporting_time_min_pay",  ruleValue: "2",    ruleUnit: "hours",      effectiveDate: eff, description: "Reporting time pay: minimum 2 hours when sent home early" },
         ];
         for (const rule of caRules) {
-          await storage.createLaborRule(rule as any);
+          await storage.createLaborRule(rule);
         }
         // CA tax rules
         await storage.createTaxRule({ jurisdictionId: jId, ruleType: "sdi_rate",          ruleValue: "0.009", ruleUnit: "rate", effectiveDate: eff, description: "CA SDI employee contribution rate 0.9% (2024)" });
@@ -26134,9 +26135,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       // ── IWC Wage-Order–specific rule overrides (seeded once, idempotent) ───
       // These rules override generic state thresholds for specific industries.
       // The engine's ruleVal() prefers wage-order rules (priority=4) over state (priority=1).
-      const wageOrderRulesExist = existingRules.filter((r: any) => r.wageOrderNumber != null).length > 0;
+      const wageOrderRulesExist = existingRules.filter(r => r.wageOrderNumber != null).length > 0;
       if (!wageOrderRulesExist) {
-        const woRules: any[] = [
+        const woRules: InsertLaborRule[] = [
           // ── WO-14 Agricultural Occupations ───────────────────────────────────
           // AB 1066 phase-in: agricultural workers reached 8h/day OT by 2022 for
           // employers with 26+ workers. The 2024 threshold is 8.5h for smaller
@@ -26175,7 +26176,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         ];
 
         for (const rule of woRules) {
-          await storage.createLaborRule(rule as any);
+          await storage.createLaborRule(rule);
         }
         console.log(`[ComplianceSeed] Seeded ${woRules.length} IWC wage-order–specific labor rules (WO-4, WO-7, WO-14, WO-15)`);
       } else {
