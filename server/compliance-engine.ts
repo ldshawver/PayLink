@@ -87,8 +87,14 @@ export interface ComplianceContext {
    */
   enforceFlags?: ComplianceEnforceFlags;
   /**
+   * Company-level local minimum wage override (dollars/hour).
+   * Takes precedence over the state labor rule but is superseded by a worker-level override.
+   * Use to model city/county minimum wages (e.g. LA City $17.28/hr, SF $18.67/hr).
+   */
+  companyLocalMinWage?: number | null;
+  /**
    * Worker-level minimum wage override (dollars/hour).
-   * Takes precedence over the state labor rule when set.
+   * Takes precedence over both the state rule and the company local minimum wage when set.
    */
   workerMinWageOverride?: number | null;
   /**
@@ -301,17 +307,28 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
   }
 
   // ── Minimum wage check ────────────────────────────────────────────────────
+  // Priority: worker-level override > company local min wage > state rule
   const minWage = ctx.workerMinWageOverride != null && ctx.workerMinWageOverride > 0
     ? ctx.workerMinWageOverride
-    : ruleVal(rules, R.MIN_WAGE, 16.50, wo);
+    : ctx.companyLocalMinWage != null && ctx.companyLocalMinWage > 0
+      ? ctx.companyLocalMinWage
+      : ruleVal(rules, R.MIN_WAGE, 16.50, wo);
+  const minWageSource = ctx.workerMinWageOverride != null && ctx.workerMinWageOverride > 0
+    ? "worker_override"
+    : ctx.companyLocalMinWage != null && ctx.companyLocalMinWage > 0
+      ? "company_local"
+      : "state_rule";
   const effectiveRate = worker.payRate;
   if (isEnforced(ef, "enforceMinWage") && !isExempt && worker.workerType === "employee" && effectiveRate < minWage) {
+    const sourceLabel = minWageSource === "worker_override" ? "worker-level"
+      : minWageSource === "company_local" ? "company local"
+      : "CA state";
     results.push({
       ruleType: R.MIN_WAGE,
       ruleId: ruleId(rules, R.MIN_WAGE),
       severity: "block",
-      message: `Worker pay rate $${effectiveRate.toFixed(2)}/hr is below ${ctx.workerMinWageOverride != null ? "worker-level" : "CA"} minimum wage $${minWage.toFixed(2)}/hr.`,
-      detail: { workerId: worker.id, payRate: effectiveRate, minWage, source: ctx.workerMinWageOverride != null ? "worker_override" : "state_rule" },
+      message: `Worker pay rate $${effectiveRate.toFixed(2)}/hr is below ${sourceLabel} minimum wage $${minWage.toFixed(2)}/hr.`,
+      detail: { workerId: worker.id, payRate: effectiveRate, minWage, source: minWageSource },
     });
   }
 

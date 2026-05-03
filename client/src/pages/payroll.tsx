@@ -604,6 +604,68 @@ function PayrollSummaryPanel({ run, items }: { run: PayrollRun; items: PayrollIt
   );
 }
 
+function ComplianceEventsPanel({ runId }: { runId: string }) {
+  const { data: events = [], isLoading } = useQuery<{ id: string; workerId: string | null; ruleType: string; severity: string; message: string; createdAt: string }[]>({
+    queryKey: ["/api/payroll-runs", runId, "compliance-events"],
+    queryFn: async () => {
+      const res = await fetch(`/api/payroll-runs/${runId}/compliance-events`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  if (isLoading || events.length === 0) return null;
+
+  const blocks = events.filter(e => e.severity === "block");
+  const warns  = events.filter(e => e.severity === "warn");
+  const infos  = events.filter(e => e.severity === "info");
+
+  const icon = (sev: string) =>
+    sev === "block" ? <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" /> :
+    sev === "warn"  ? <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-500" /> :
+                     <Info className="h-3.5 w-3.5 shrink-0 text-blue-500" />;
+
+  return (
+    <div className="rounded-lg border bg-muted/10 p-4 space-y-3" data-testid={`compliance-events-panel-${runId}`}>
+      <div className="flex items-center gap-2">
+        <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+        <h3 className="font-semibold text-sm">Compliance Audit Log</h3>
+        <span className="text-xs text-muted-foreground ml-auto">{events.length} event{events.length !== 1 ? "s" : ""}</span>
+      </div>
+      {blocks.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-red-600 dark:text-red-400">Blocks ({blocks.length})</p>
+          {blocks.map(e => (
+            <div key={e.id} className="flex items-start gap-2 text-xs rounded-md bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 px-2.5 py-1.5" data-testid={`compliance-event-block-${e.id}`}>
+              {icon(e.severity)}<span className="text-red-800 dark:text-red-300">{e.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {warns.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">Warnings ({warns.length})</p>
+          {warns.map(e => (
+            <div key={e.id} className="flex items-start gap-2 text-xs rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 px-2.5 py-1.5" data-testid={`compliance-event-warn-${e.id}`}>
+              {icon(e.severity)}<span className="text-amber-800 dark:text-amber-300">{e.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {infos.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-400">Info ({infos.length})</p>
+          {infos.map(e => (
+            <div key={e.id} className="flex items-start gap-2 text-xs rounded-md bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 px-2.5 py-1.5" data-testid={`compliance-event-info-${e.id}`}>
+              {icon(e.severity)}<span className="text-blue-800 dark:text-blue-300">{e.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PayrollRunCard({
   run, companyName, expanded, onToggle, getWorkerName, onExportCSV, filterWorkerId = "all",
 }: {
@@ -1266,6 +1328,9 @@ function PayrollRunCard({
               {(run.status === "processed" || run.status === "paid") && items.length > 0 && (
                 <PayrollSummaryPanel run={run} items={items} />
               )}
+
+              {/* ── Compliance audit events ───────────────────────────────── */}
+              <ComplianceEventsPanel runId={run.id} />
 
               {/* ── Funding account selector ──────────────────────────────── */}
               {expanded && (

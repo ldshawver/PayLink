@@ -4429,6 +4429,10 @@ export const laborRules = pgTable("labor_rules", {
   ruleUnit: text("rule_unit"),                 // "hours", "dollars", "days", "multiplier"
   overrideLevel: text("override_level").default("state"),  // state | company | worker
   wageOrderNumber: text("wage_order_number"),  // IWC Wage Order (e.g. "14") — null = all orders
+  /** When set, this rule applies only to the specified company (company-level override). */
+  companyId: text("company_id").references(() => companies.id),
+  /** When set, this rule applies only to the specified worker (worker-level override). */
+  workerId: text("worker_id").references(() => workers.id),
   effectiveDate: date("effective_date").notNull(),
   expirationDate: date("expiration_date"),
   description: text("description"),

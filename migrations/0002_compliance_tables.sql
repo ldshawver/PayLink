@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS "labor_rules" (
 
 --> statement-breakpoint
 ALTER TABLE "labor_rules" ADD COLUMN IF NOT EXISTS "wage_order_number" text;
+ALTER TABLE "labor_rules" ADD COLUMN IF NOT EXISTS "company_id" text REFERENCES "companies"("id");
+ALTER TABLE "labor_rules" ADD COLUMN IF NOT EXISTS "worker_id" text REFERENCES "workers"("id");
 
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "tax_rules" (

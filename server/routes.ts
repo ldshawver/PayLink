@@ -2913,11 +2913,11 @@ export async function registerRoutes(
 
           let applicableRules: LaborRule[] = [];
           if (companyProfile?.jurisdictionId) {
-            applicableRules = await storage.getApplicableRules(companyProfile.jurisdictionId, run.periodEnd);
+            applicableRules = await storage.getApplicableRules(companyProfile.jurisdictionId, run.periodEnd, run.companyId);
           } else {
             const caJurisdiction = await storage.getJurisdictionByCode("CA");
             if (caJurisdiction) {
-              applicableRules = await storage.getApplicableRules(caJurisdiction.id, run.periodEnd);
+              applicableRules = await storage.getApplicableRules(caJurisdiction.id, run.periodEnd, run.companyId);
             }
           }
 
@@ -2990,6 +2990,9 @@ export async function registerRoutes(
               periodEnd: run.periodEnd,
               grossPay: parseFloat(String(item.grossPay ?? 0)),
               enforceFlags,
+              companyLocalMinWage: companyProfile?.localMinWage != null
+                ? parseFloat(String(companyProfile.localMinWage))
+                : null,
               workerMinWageOverride: workerProfile?.minWageOverride
                 ? parseFloat(String(workerProfile.minWageOverride))
                 : null,
@@ -25938,6 +25941,19 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
+  // GET /api/payroll-runs/:id/compliance-events — compliance audit events for a payroll run
+  app.get("/api/payroll-runs/:id/compliance-events", requireAuth, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const events = await storage.getComplianceAuditEvents({ payrollRunId: run.id });
+      res.json(events);
+    } catch (error) {
+      console.error("Get compliance events error:", error);
+      res.status(500).json({ message: "Failed to fetch compliance events" });
+    }
+  });
+
   // POST /api/payroll-runs/:id/preflight — run compliance engine for the payroll run
   app.post("/api/payroll-runs/:id/preflight", requireAuth, async (req, res) => {
     try {
@@ -25950,11 +25966,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const jurisdictionCode = companyProfile?.jurisdictionId ? null : "CA"; // default CA if no profile
       let applicableRules: LaborRule[] = [];
       if (companyProfile?.jurisdictionId) {
-        applicableRules = await storage.getApplicableRules(companyProfile.jurisdictionId, run.periodEnd);
+        applicableRules = await storage.getApplicableRules(companyProfile.jurisdictionId, run.periodEnd, run.companyId);
       } else {
         const caJurisdiction = await storage.getJurisdictionByCode("CA");
         if (caJurisdiction) {
-          applicableRules = await storage.getApplicableRules(caJurisdiction.id, run.periodEnd);
+          applicableRules = await storage.getApplicableRules(caJurisdiction.id, run.periodEnd, run.companyId);
         }
       }
 
@@ -26029,6 +26045,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           periodEnd: run.periodEnd,
           grossPay: parseFloat(String(item.grossPay ?? 0)),
           enforceFlags,
+          companyLocalMinWage: companyProfile?.localMinWage != null
+            ? parseFloat(String(companyProfile.localMinWage))
+            : null,
           workerMinWageOverride: workerProfile?.minWageOverride
             ? parseFloat(String(workerProfile.minWageOverride))
             : null,

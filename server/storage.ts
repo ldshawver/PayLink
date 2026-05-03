@@ -1045,7 +1045,7 @@ export interface IStorage {
   createLaborRule(data: InsertLaborRule): Promise<LaborRule>;
   updateLaborRule(id: string, data: Partial<LaborRule>): Promise<LaborRule | undefined>;
   deleteLaborRule(id: string): Promise<void>;
-  getApplicableRules(jurisdictionId: string, effectiveDate: string): Promise<LaborRule[]>;
+  getApplicableRules(jurisdictionId: string, effectiveDate: string, companyId?: string | null, workerId?: string | null): Promise<LaborRule[]>;
   getTaxRules(jurisdictionId?: string): Promise<TaxRule[]>;
   createTaxRule(data: InsertTaxRule): Promise<TaxRule>;
   getCompanyComplianceProfile(companyId: string): Promise<CompanyComplianceProfile | undefined>;
@@ -4656,12 +4656,18 @@ export class DatabaseStorage implements IStorage {
     await db.delete(laborRules).where(eq(laborRules.id, id));
   }
   /** Returns active rules for a jurisdiction as of effectiveDate, respecting expiration. */
-  async getApplicableRules(jurisdictionId: string, effectiveDate: string): Promise<LaborRule[]> {
+  async getApplicableRules(jurisdictionId: string, effectiveDate: string, companyId?: string | null, workerId?: string | null): Promise<LaborRule[]> {
     const all = await db.select().from(laborRules).where(eq(laborRules.jurisdictionId, jurisdictionId));
     return all.filter(r => {
       if (r.effectiveDate > effectiveDate) return false;
       if (r.expirationDate && r.expirationDate <= effectiveDate) return false;
-      return true;
+      // State/jurisdiction-level rules: no company or worker scoping
+      if (r.companyId == null && r.workerId == null) return true;
+      // Company-level override rules: only for the matching company
+      if (r.companyId != null && companyId && r.companyId === companyId) return true;
+      // Worker-level override rules: only for the matching worker
+      if (r.workerId != null && workerId && r.workerId === workerId) return true;
+      return false;
     });
   }
 
