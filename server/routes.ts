@@ -2445,7 +2445,7 @@ export async function registerRoutes(
       const _checkNumStart = await db.transaction(async (tx) => {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(abs(hashtext(${run.companyId}))::bigint)`);
         const _r = await tx.execute(sql`SELECT next_check_number FROM companies WHERE id = ${run.companyId} FOR UPDATE`);
-        const _s = Number(((_r as any).rows || (_r as any)[0])?.next_check_number || 1);
+        const _s = Number((((_r as any).rows || (_r as any))[0])?.next_check_number || 1);
         // startFrom skips past all manual-override check numbers so auto-assignment never overlaps them.
         const startFrom = Math.max(_s, maxManualCheck + 1);
         // Reserve exactly enough numbers for non-override workers (plus 1 as buffer).
@@ -13919,7 +13919,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Check Print Audit Log ─────────────────────────────────────────────────
-  app.get("/api/check-print-audit", requireAuth, requireRole("admin", "platform_super_admin", "platform_admin", "platform_support"), async (req, res) => {
+  app.get("/api/check-print-audit", requireAuth, requireRole("admin", "manager", "platform_super_admin", "platform_admin", "platform_support"), async (req, res) => {
     try {
       const { companyId, runId, limit = "100" } = req.query as Record<string, string>;
       let query = `SELECT * FROM check_print_audit_logs`;
@@ -14378,10 +14378,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       // Load active check template for show/hide flags and positional overrides.
-      // When no default template is configured, renderCheckPdf falls back to standard top-check layout
-      // (all show flags true, all positions at their hardcoded defaults).
+      // 422 when no default template is configured (production checks require an explicit layout).
       const tplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow = ((tplRaw as any).rows || tplRaw as any[])[0] || null;
+      if (!tplRow && !isCalibration) {
+        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
+      }
       let layoutConfig: Record<string, any> | undefined;
       if (tplRow?.layout_config) {
         try { layoutConfig = typeof tplRow.layout_config === "string" ? JSON.parse(tplRow.layout_config) : tplRow.layout_config; } catch { /* use defaults */ }
@@ -14460,9 +14462,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       // Load active check template for show/hide flags and positional overrides.
-      // Falls back to standard top-check layout when no default template configured.
+      // 422 when no default template is configured.
       const tplRaw2 = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow2 = ((tplRaw2 as any).rows || tplRaw2 as any[])[0] || null;
+      if (!tplRow2 && !isCalibration) {
+        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
+      }
       let batchLayoutConfig: Record<string, any> | undefined;
       if (tplRow2?.layout_config) {
         try { batchLayoutConfig = typeof tplRow2.layout_config === "string" ? JSON.parse(tplRow2.layout_config) : tplRow2.layout_config; } catch { /* use defaults */ }
@@ -14721,10 +14726,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         )
       `);
 
-      // Load active check template for show/hide flags and positional overrides.
-      // Falls back to standard top-check layout when no default template configured.
+      // Load active check template; 422 when no default template configured.
       const reprintTplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const reprintTplRow = ((reprintTplRaw as any).rows || reprintTplRaw as any[])[0] || null;
+      if (!reprintTplRow) {
+        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
+      }
       let reprintLayoutConfig: Record<string, any> | undefined;
       if (reprintTplRow?.layout_config) {
         try { reprintLayoutConfig = typeof reprintTplRow.layout_config === "string" ? JSON.parse(reprintTplRow.layout_config) : reprintTplRow.layout_config; } catch { /* use defaults */ }
