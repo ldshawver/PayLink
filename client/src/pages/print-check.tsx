@@ -1898,6 +1898,7 @@ export default function PrintCheckPage() {
       const blob = await pdfRes.blob();
       const blobUrl = URL.createObjectURL(blob);
       window.open(blobUrl, "_blank");
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
     } catch (e: any) {
       toast({ title: "PDF generation failed", description: e.message || "Network error", variant: "destructive" });
     }

@@ -13971,7 +13971,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           ${payrollRunId || null}, ${companyId || null}, ${userId || null},
           ${checkCount || 0}, ${totalAmount || 0}, ${fundingAccountId || null},
           ${micrValidation || "unknown"}, ${JSON.stringify(validationErrors || [])},
-          ${printBlocked ? true : false}, ${templateId || null}, 'browser-print',
+          ${printBlocked ? true : false}, ${templateId || null}, 'server-pdf',
           ${eventType || 'print'}, ${workerId || null}, ${checkNumber || null}, ${notes || null}
         )
       `);
