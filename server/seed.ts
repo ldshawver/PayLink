@@ -1050,8 +1050,11 @@ async function seedDemoHierarchy() {
 
 export async function seedDatabase() {
   await ensureAdminUser();
-  await seedRolesAndPermissions();
+  // seedDefaultRoleTemplates runs FIRST so it is the canonical role family on
+  // fresh DBs. seedRolesAndPermissions will then find existing roles and skip,
+  // preventing duplicate title-cased + lowercase role families.
   await seedDefaultRoleTemplates();
+  await seedRolesAndPermissions();
   await seedExpenseCategories();
   await seedPlatformModules();
   await seedEnterprisePermissions();

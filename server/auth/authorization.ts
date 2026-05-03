@@ -52,9 +52,8 @@ export const PERMISSION_COLUMN: Record<Permission, keyof typeof rolePermissions.
  * explicit user_roles rows. Template names use lowercase_underscore to match
  * exactly the names inserted during seeding.
  *
- * Legacy aliases (title-cased: "Employee", "HR Manager", etc.) are kept as
- * secondary fallbacks so existing user_roles assignments keep working during
- * any transition period.
+ * Alias mappings (tenant_admin → platform_super_admin, owner → company_admin,
+ * etc.) redirect legacy users.role values to the canonical scope-aware templates.
  */
 const ROLE_NAME_MAP: Record<string, string> = {
   // ── Primary scope-aware template mappings ──────────────────────────
