@@ -2322,7 +2322,7 @@ export default function PrintCheckPage() {
                 </div>
                 {/* Server PDF iframe — this is exactly what the Print Checks button produces */}
                 <iframe
-                  src={`/api/checks/${item.id}/pdf`}
+                  src={`/api/checks/${item.id}/pdf?preview=1`}
                   title={`Check PDF — ${worker.firstName} ${worker.lastName}`}
                   data-testid={`iframe-check-pdf-${item.id}`}
                   className="check-page"

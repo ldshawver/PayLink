@@ -13934,15 +13934,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         effectiveCompanyId = sessionCompanyId;
       }
 
-      let query = `SELECT * FROM check_print_audit_logs`;
-      const conditions: string[] = [];
-      const params: any[] = [];
-      if (effectiveCompanyId) { conditions.push(`company_id = $${params.length + 1}`); params.push(effectiveCompanyId); }
-      if (runId) { conditions.push(`payroll_run_id = $${params.length + 1}`); params.push(runId); }
-      if (conditions.length > 0) query += ` WHERE ${conditions.join(" AND ")}`;
-      query += ` ORDER BY created_at DESC LIMIT ${Math.min(parseInt(limit) || 100, 500)}`;
-      const result = await db.execute(sql.raw(query));
-      res.json((result as any).rows || result);
+      // Build parameterized query via Drizzle sql`` template to avoid SQL injection and bind errors.
+      const safeLimit = Math.min(parseInt(limit) || 100, 500);
+      let auditResult: any;
+      if (effectiveCompanyId && runId) {
+        auditResult = await db.execute(sql`SELECT * FROM check_print_audit_logs WHERE company_id = ${effectiveCompanyId} AND payroll_run_id = ${runId} ORDER BY created_at DESC LIMIT ${safeLimit}`);
+      } else if (effectiveCompanyId) {
+        auditResult = await db.execute(sql`SELECT * FROM check_print_audit_logs WHERE company_id = ${effectiveCompanyId} ORDER BY created_at DESC LIMIT ${safeLimit}`);
+      } else if (runId) {
+        auditResult = await db.execute(sql`SELECT * FROM check_print_audit_logs WHERE payroll_run_id = ${runId} ORDER BY created_at DESC LIMIT ${safeLimit}`);
+      } else {
+        auditResult = await db.execute(sql`SELECT * FROM check_print_audit_logs ORDER BY created_at DESC LIMIT ${safeLimit}`);
+      }
+      res.json((auditResult as any).rows || auditResult);
     } catch (error: any) {
       res.status(500).json({ message: "Failed to fetch check audit log", error: error.message });
     }
@@ -14437,9 +14441,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         calibrationOffsets,
       });
 
-      // Write print audit event only after successful render (never on failure).
+      // Write print audit event only after successful render, and only for explicit print actions.
+      // ?preview=1 requests (iframe preview) skip audit so previewing does not generate phantom print events.
+      const isPreview = req.query.preview === "1";
       const printUserId = (req.session as any)?.userId;
-      if (!isCalibration && !isVoid) {
+      if (!isCalibration && !isVoid && !isPreview) {
         await db.execute(sql`
           INSERT INTO check_print_audit_logs (
             payroll_run_id, company_id, initiated_by_user_id,
@@ -14447,7 +14453,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             validation_errors, print_blocked, render_engine,
             event_type, worker_id, check_number
           ) VALUES (
-            ${(itemRow as any).payroll_run_id || null}, ${compId || null}, ${printUserId || null},
+            ${itemRow.payrollRunId || null}, ${compId || null}, ${printUserId || null},
             1, ${itemRow.netPay || 0}, 'ok',
             '[]', false, 'server-pdf',
             'print', ${itemRow.workerId || null}, ${itemRow.checkNumber || null}
