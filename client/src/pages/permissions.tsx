@@ -78,7 +78,7 @@ function PermBadge({ type, abbr, color }: { type: string; abbr?: string; color?:
   return (
     <span
       title={type}
-      className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-bold ${displayColor}`}
+      className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${displayColor}`}
     >
       {displayAbbr}
     </span>
@@ -105,7 +105,7 @@ function CellPermissions({ perm }: { perm: RolePermission | undefined }) {
             <span
               key={p.key}
               title={p.label}
-              className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-bold ${p.color}`}
+              className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${p.color}`}
             >
               {p.abbr}
             </span>
@@ -118,7 +118,7 @@ function CellPermissions({ perm }: { perm: RolePermission | undefined }) {
             <span
               key={p.key}
               title={`${p.label} (scope: ${p.scope})`}
-              className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-semibold ${p.color}`}
+              className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${p.color}`}
             >
               {p.abbr}
             </span>
@@ -207,7 +207,7 @@ function EffectivePermissionsPanel({ users }: { users: UserRecord[] }) {
                           <span
                             key={p}
                             title={p}
-                            className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-bold ${meta?.color || "bg-gray-100 text-gray-600"}`}
+                            className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${meta?.color || "bg-gray-100 text-gray-600"}`}
                           >
                             {meta?.abbr || p[0].toUpperCase()}
                           </span>
@@ -314,7 +314,7 @@ export default function PermissionsPage() {
             <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider w-20">Flat:</span>
             {FLAT_PERMS.map(p => (
               <div key={p.key} className="flex items-center gap-1.5">
-                <span className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-bold ${p.color}`}>{p.abbr}</span>
+                <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${p.color}`}>{p.abbr}</span>
                 <span className="text-xs">{p.label}</span>
               </div>
             ))}
@@ -324,7 +324,7 @@ export default function PermissionsPage() {
             <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider w-20">Scope:</span>
             {SCOPE_PERMS.map(p => (
               <div key={p.key} className="flex items-center gap-1.5">
-                <span className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-semibold ${p.color}`}>{p.abbr}</span>
+                <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${p.color}`}>{p.abbr}</span>
                 <span className="text-xs">{p.label}</span>
               </div>
             ))}
