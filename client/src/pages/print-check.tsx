@@ -2192,12 +2192,10 @@ export default function PrintCheckPage() {
         </div>
       )}
 
-      {/* MICR font warning banner — screen only */}
+      {/* MICR font status — informational only; MICR E-13B is embedded server-side in the PDF */}
       {micrFontLoaded === false && (
-        <div className="mx-4 mb-3 p-3 bg-amber-50 border border-amber-300 rounded text-amber-800 text-sm print-hide" style={{ maxWidth: "8.5in" }}>
-          <strong>⚠ MICR font not detected.</strong> The MICRNumeric (micrenc.ttf) font failed to load.
-          The MICR line on printed checks will fall back to a plain monospace font and will <strong>not</strong> be magnetically readable.
-          Verify that <code>/fonts/micrenc.ttf</code> is accessible and reload this page.
+        <div className="mx-4 mb-3 p-3 bg-blue-50 border border-blue-200 rounded text-blue-800 text-sm print-hide" style={{ maxWidth: "8.5in" }}>
+          <strong>ℹ MICR font not detected in browser.</strong> This is informational only — the MICR E-13B font is embedded directly in the server-generated PDF, so printed checks will be fully bank-scannable regardless of browser font availability.
         </div>
       )}
 

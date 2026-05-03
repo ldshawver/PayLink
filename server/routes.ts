@@ -14252,11 +14252,56 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return doc.save();
   }
 
+  // GET /api/checks/calibration-pdf?remittanceSourceId=:id
+  // Generates a standalone calibration test check for a specific remittance source.
+  // Used by Settings → Check Print Calibration "Print Test Check" button.
+  // Must be registered BEFORE /api/checks/:payrollItemId/pdf to avoid param capture.
+  app.get("/api/checks/calibration-pdf", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const rsId = req.query.remittanceSourceId as string;
+      if (!rsId) return res.status(400).json({ message: "remittanceSourceId is required" });
+
+      const rsRaw = await db.execute(sql`SELECT * FROM remittance_sources WHERE id = ${rsId}`);
+      const rs = ((rsRaw as any).rows || rsRaw as any[])[0] || null;
+      if (!rs) return res.status(404).json({ message: "Remittance source not found" });
+
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && rs.company_id && sessionCompanyId !== rs.company_id) {
+        return res.status(403).json({ message: "Access denied: company mismatch" });
+      }
+
+      let calibrationOffsets: { globalTop?: number; globalLeft?: number } | undefined;
+      if (rs?.calibration_config) {
+        try {
+          const cal = typeof rs.calibration_config === "string" ? JSON.parse(rs.calibration_config) : rs.calibration_config;
+          calibrationOffsets = { globalTop: Number(cal.globalTop || 0), globalLeft: Number(cal.globalLeft || 0) };
+        } catch { /* no offsets */ }
+      }
+
+      const pdfBytes = await renderCheckPdf({
+        item: null,
+        worker: null,
+        run: null,
+        company: null,
+        remittanceSource: { routingNumber: rs.routing_number, accountNumber: rs.account_number },
+        isCalibration: true,
+        calibrationOffsets,
+      });
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="test-check-${rsId.slice(0, 8)}.pdf"`);
+      res.send(Buffer.from(pdfBytes));
+    } catch (err: any) {
+      console.error("[calibrationPDF]", err);
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to generate calibration check PDF") });
+    }
+  });
+
   // GET /api/checks/:payrollItemId/pdf — single-check server PDF
   app.get("/api/checks/:payrollItemId/pdf", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { payrollItemId } = req.params;
-      const isCalibration = req.query.mode === "calibration";
+      const isCalibration = req.query.mode === "calibration" || req.query.mode === "test";
       const isVoid        = req.query.mode === "void";
 
       const [itemRow] = await db.select().from(payrollItems).where(eq(payrollItems.id, payrollItemId));
@@ -14278,21 +14323,33 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRaw = await db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`);
       const worker = ((wRaw as any).rows || wRaw as any[])[0];
 
-      const rsRaw = await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`);
-      const rs = ((rsRaw as any).rows || rsRaw as any[])[0] || null;
+      // Resolve remittance source: prefer the one linked via run's funding account, fall back to first enabled.
+      let rs: any = null;
+      const runFaId = (runRow as any)?.funding_account_id;
+      if (runFaId) {
+        const rsViaFaRaw = await db.execute(sql`
+          SELECT rs.* FROM remittance_sources rs
+          JOIN funding_accounts fa ON fa.remittance_source_id = rs.id
+          WHERE fa.id = ${runFaId}
+          LIMIT 1
+        `);
+        rs = ((rsViaFaRaw as any).rows || rsViaFaRaw as any[])[0] || null;
+      }
+      if (!rs) {
+        const rsFallbackRaw = await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`);
+        rs = ((rsFallbackRaw as any).rows || rsFallbackRaw as any[])[0] || null;
+      }
 
       if (!isCalibration) {
         if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source. Add one in Payroll → Bank Accounts." });
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured for this company's remittance source." });
       }
 
-      // Load active check template for show/hide flags; 422 if company has templates but none active
+      // Load active check template for show/hide flags; 422 if no default template configured
       const tplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow = ((tplRaw as any).rows || tplRaw as any[])[0] || null;
       if (!tplRow && !isCalibration) {
-        const anyTplRaw = await db.execute(sql`SELECT id FROM check_templates WHERE company_id = ${compId} LIMIT 1`);
-        if (((anyTplRaw as any).rows || anyTplRaw as any[]).length > 0)
-          return res.status(422).json({ message: "No default check layout template configured. Set a default template in Payroll → Check Templates." });
+        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
       }
       let layoutConfig: Record<string, boolean> | undefined;
       if (tplRow?.layout_config) {
@@ -14333,7 +14390,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/payroll-runs/:id/checks-pdf", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const runId = req.params.id;
-      const isCalibration = req.query.mode === "calibration";
+      const isCalibration = req.query.mode === "calibration" || req.query.mode === "test";
 
       const runRaw = await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${runId}`);
       const run    = ((runRaw as any).rows || runRaw as any[])[0];
@@ -14349,21 +14406,33 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const coRaw  = await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`);
       const company = ((coRaw as any).rows || coRaw as any[])[0];
 
-      const rsRaw = await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`);
-      const rs    = ((rsRaw as any).rows || rsRaw as any[])[0] || null;
+      // Resolve remittance source: prefer the one linked via run's funding account, fall back to first enabled.
+      let rs: any = null;
+      const batchFaId = (run as any)?.funding_account_id;
+      if (batchFaId) {
+        const rsViaFaRaw2 = await db.execute(sql`
+          SELECT rs.* FROM remittance_sources rs
+          JOIN funding_accounts fa ON fa.remittance_source_id = rs.id
+          WHERE fa.id = ${batchFaId}
+          LIMIT 1
+        `);
+        rs = ((rsViaFaRaw2 as any).rows || rsViaFaRaw2 as any[])[0] || null;
+      }
+      if (!rs) {
+        const rsFallbackRaw2 = await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`);
+        rs = ((rsFallbackRaw2 as any).rows || rsFallbackRaw2 as any[])[0] || null;
+      }
 
       if (!isCalibration) {
         if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured. Add one in Payroll → Bank Accounts." });
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured." });
       }
 
-      // Load active check template; 422 if company has templates but none is default
+      // Load active check template; 422 if no default template configured
       const tplRaw2 = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow2 = ((tplRaw2 as any).rows || tplRaw2 as any[])[0] || null;
       if (!tplRow2 && !isCalibration) {
-        const anyTplRaw2 = await db.execute(sql`SELECT id FROM check_templates WHERE company_id = ${compId} LIMIT 1`);
-        if (((anyTplRaw2 as any).rows || anyTplRaw2 as any[]).length > 0)
-          return res.status(422).json({ message: "No default check layout template configured. Set a default template in Payroll → Check Templates." });
+        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
       }
       let batchLayoutConfig: Record<string, boolean> | undefined;
       if (tplRow2?.layout_config) {
@@ -14551,8 +14620,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRaw = await db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`);
       const worker = ((wRaw as any).rows || wRaw as any[])[0];
 
-      const rsRaw = await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`);
-      const rs = ((rsRaw as any).rows || rsRaw as any[])[0] || null;
+      // Resolve remittance source: prefer the one linked via run's funding account, fall back to first enabled.
+      let rs: any = null;
+      const reprintFaId = (runRow as any)?.funding_account_id;
+      if (reprintFaId) {
+        const rsViaFaRaw3 = await db.execute(sql`
+          SELECT rs.* FROM remittance_sources rs
+          JOIN funding_accounts fa ON fa.remittance_source_id = rs.id
+          WHERE fa.id = ${reprintFaId}
+          LIMIT 1
+        `);
+        rs = ((rsViaFaRaw3 as any).rows || rsViaFaRaw3 as any[])[0] || null;
+      }
+      if (!rs) {
+        const rsFallbackRaw3 = await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`);
+        rs = ((rsFallbackRaw3 as any).rows || rsFallbackRaw3 as any[])[0] || null;
+      }
 
       if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source." });
       if (!rs?.account_number)  return res.status(422).json({ message: "No account number configured for this company's remittance source." });

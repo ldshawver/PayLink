@@ -709,6 +709,14 @@ function CheckPrintCalibrationSection() {
                       >
                         <Save className="h-3.5 w-3.5 mr-1.5" />Save Offset
                       </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => window.open(`/api/checks/calibration-pdf?remittanceSourceId=${src.id}`, "_blank")}
+                        data-testid={`button-test-check-${src.id}`}
+                      >
+                        <Printer className="h-3.5 w-3.5 mr-1.5" />Print Test Check
+                      </Button>
                     </div>
                   </div>
                   <p className="text-xs text-muted-foreground/70 mt-3 leading-relaxed">
