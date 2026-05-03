@@ -2478,6 +2478,8 @@ export async function registerRoutes(
 
       const items: any[] = [];
       const workerTaxLines: Record<string, ReturnType<typeof calcAllTaxes>["lines"]> = {};
+      // Captures full tax engine inputs per worker for audit snapshot reproducibility
+      const workerDeductionBreakdown: Record<string, { preTaxDedAmount: number; customPostTaxDed: number; amendmentDeductions: number; taxEngineInput: TaxEngineInput }> = {};
 
       const allWageGroups = await storage.getSecondaryWageGroups(run.companyId);
       const wageGroupMap: Record<string, { hourlyRate: number; overtimeRate: number }> = {};
@@ -2726,6 +2728,9 @@ export async function registerRoutes(
         // Pre-tax deductions reduce taxable wages AND come out of the employee's paycheck (net pay)
         let totalDeductions = preTaxDedAmount + taxResult.employeeTaxTotal + customPostTaxDed + amendmentDeductions;
 
+        // Save full inputs for audit snapshot and non-tax deduction line storage
+        workerDeductionBreakdown[worker.id] = { preTaxDedAmount, customPostTaxDed, amendmentDeductions, taxEngineInput };
+
         const netPay = grossPay - totalDeductions;
 
         console.log(`[PAYROLL] ${worker.firstName} ${worker.lastName}: regHrs=${regHrs.toFixed(2)} otHrs=${otHrs.toFixed(2)} dtHrs=${dtHrs.toFixed(2)} commHrs=${commissionHrsTotal.toFixed(2)} regPay=${regPay.toFixed(2)} commHrlyPay=${commissionHrlyPay.toFixed(2)} commPay=${commissionPay.toFixed(2)} grossPay=${grossPay.toFixed(2)}`);
@@ -2785,6 +2790,7 @@ export async function registerRoutes(
         const created = await storage.createPayrollItem(item);
         // Persist per-item tax lines from the engine
         const lines = workerTaxLines[item.workerId] || [];
+        const dedBreakdown = workerDeductionBreakdown[item.workerId];
         // Clear any stale tax lines (re-processing scenario)
         await storage.deletePayrollItemTaxesByItem(created.id);
         for (const line of lines) {
@@ -2799,9 +2805,56 @@ export async function registerRoutes(
             stateCode: line.stateCode ?? null,
           });
         }
+        // Store non-statutory deductions as typed lines so that
+        // SUM(payroll_item_taxes.amount WHERE isEmployerPaid=false) == payroll_items.deductions
+        // This makes the tables consistent for downstream reconciliation.
+        if (dedBreakdown) {
+          if (dedBreakdown.preTaxDedAmount > 0) {
+            await storage.createPayrollItemTax({
+              payrollItemId: created.id,
+              taxCode: "PRE_TAX_DED",
+              taxName: "Pre-Tax Deductions",
+              taxableWages: "0", rate: "0",
+              amount: dedBreakdown.preTaxDedAmount.toFixed(2),
+              isEmployerPaid: false, stateCode: null,
+            });
+          }
+          if (dedBreakdown.customPostTaxDed > 0) {
+            await storage.createPayrollItemTax({
+              payrollItemId: created.id,
+              taxCode: "POST_TAX_DED",
+              taxName: "Post-Tax Deductions",
+              taxableWages: "0", rate: "0",
+              amount: dedBreakdown.customPostTaxDed.toFixed(2),
+              isEmployerPaid: false, stateCode: null,
+            });
+          }
+          if (dedBreakdown.amendmentDeductions > 0) {
+            await storage.createPayrollItemTax({
+              payrollItemId: created.id,
+              taxCode: "AMENDMENT_DED",
+              taxName: "Pay Adjustments",
+              taxableWages: "0", rate: "0",
+              amount: dedBreakdown.amendmentDeductions.toFixed(2),
+              isEmployerPaid: false, stateCode: null,
+            });
+          }
+        }
         snapshotWorkerData.push({
           workerId: item.workerId,
           grossPay: item.grossPay,
+          // Full tax engine inputs for reproducible audit comparison
+          taxableWages: dedBreakdown
+            ? (parseFloat(item.grossPay || "0") - dedBreakdown.preTaxDedAmount).toFixed(2)
+            : item.grossPay,
+          filingStatus: dedBreakdown?.taxEngineInput.filingStatus ?? "single",
+          w4Allowances: dedBreakdown?.taxEngineInput.w4Allowances ?? 0,
+          additionalWithholding: dedBreakdown?.taxEngineInput.additionalWithholding ?? 0,
+          preTaxDeductions: dedBreakdown ? dedBreakdown.preTaxDedAmount.toFixed(2) : "0",
+          postTaxDeductions: dedBreakdown ? dedBreakdown.customPostTaxDed.toFixed(2) : "0",
+          amendmentDeductions: dedBreakdown ? dedBreakdown.amendmentDeductions.toFixed(2) : "0",
+          payPeriodType: dedBreakdown?.taxEngineInput.payPeriodType ?? "biweekly",
+          ytdGross: dedBreakdown ? dedBreakdown.taxEngineInput.ytdGross.toFixed(2) : "0",
           taxLines: lines,
         });
       }
@@ -5694,7 +5747,10 @@ export async function registerRoutes(
         const items = await storage.getPayrollItems(run.id);
         for (const item of items) {
           const taxLines = await storage.getPayrollItemTaxes(item.id);
+          const NON_TAX_CODES = ["PRE_TAX_DED", "POST_TAX_DED", "AMENDMENT_DED"];
           for (const line of taxLines) {
+            // Skip non-statutory deduction lines from tax aggregates
+            if (NON_TAX_CODES.includes(line.taxCode)) continue;
             const key = line.taxCode;
             if (!taxTotals[key]) {
               taxTotals[key] = { taxCode: line.taxCode, taxName: line.taxName, isEmployerPaid: !!line.isEmployerPaid, stateCode: line.stateCode ?? null, totalTaxableWages: 0, totalAmount: 0, itemCount: 0 };

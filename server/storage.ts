@@ -4859,11 +4859,14 @@ export class DatabaseStorage implements IStorage {
     const taxes = await db.select().from(payrollItemTaxes)
       .where(inArray(payrollItemTaxes.payrollItemId, itemIds));
 
+    const NON_TAX_CODES = ["PRE_TAX_DED", "POST_TAX_DED", "AMENDMENT_DED"];
     const grouped: Record<string, {
       taxCode: string; taxName: string; isEmployerPaid: boolean; stateCode: string | null;
       totalTaxableWages: number; totalAmount: number; periodCount: number;
     }> = {};
     for (const t of taxes) {
+      // Skip non-statutory deduction lines — they are not tax liabilities
+      if (NON_TAX_CODES.includes(t.taxCode)) continue;
       const key = t.taxCode;
       if (!grouped[key]) {
         grouped[key] = {

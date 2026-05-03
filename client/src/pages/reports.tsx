@@ -2628,53 +2628,59 @@ function TaxLiabilityDialog({ open, onOpenChange }: { open: boolean; onOpenChang
   const startDate = `${year}-01-01`;
   const endDate = `${year}-12-31`;
 
-  const { data: liability = [], isLoading } = useQuery<TaxLiabilityRow[]>({
+  // Per-company data when "all" is selected — never merged across legal entities
+  const { data: perCompanyLiability = [], isLoading: loadingAll } = useQuery<{ company: Company; rows: TaxLiabilityRow[] }[]>({
+    queryKey: ["/api/all-companies", "tax-liability", startDate, endDate],
+    queryFn: async () => {
+      const results = await Promise.all(companies.map(async (c) => {
+        const r = await fetch(`/api/companies/${c.id}/tax-liability?startDate=${startDate}&endDate=${endDate}`, { credentials: "include" });
+        if (!r.ok) return { company: c, rows: [] as TaxLiabilityRow[] };
+        return { company: c, rows: await r.json() as TaxLiabilityRow[] };
+      }));
+      return results;
+    },
+    enabled: open && companyId === "all" && companies.length > 0,
+  });
+
+  // Single-company data
+  const { data: liability = [], isLoading: loadingSingle } = useQuery<TaxLiabilityRow[]>({
     queryKey: ["/api/companies", companyId, "tax-liability", startDate, endDate],
     queryFn: async () => {
-      if (companyId === "all") {
-        const all = await Promise.all(companies.map(async (c) => {
-          const r = await fetch(`/api/companies/${c.id}/tax-liability?startDate=${startDate}&endDate=${endDate}`, { credentials: "include" });
-          if (!r.ok) return [];
-          return r.json() as Promise<TaxLiabilityRow[]>;
-        }));
-        const merged: Record<string, TaxLiabilityRow> = {};
-        for (const rows of all) {
-          for (const row of rows) {
-            if (merged[row.taxCode]) {
-              merged[row.taxCode].totalTaxableWages += row.totalTaxableWages;
-              merged[row.taxCode].totalAmount += row.totalAmount;
-              merged[row.taxCode].periodCount += row.periodCount;
-            } else {
-              merged[row.taxCode] = { ...row };
-            }
-          }
-        }
-        return Object.values(merged).sort((a, b) => a.taxCode.localeCompare(b.taxCode));
-      }
       const r = await fetch(`/api/companies/${companyId}/tax-liability?startDate=${startDate}&endDate=${endDate}`, { credentials: "include" });
       if (!r.ok) return [];
       return r.json();
     },
-    enabled: open && (companyId !== "all" || companies.length > 0),
+    enabled: open && companyId !== "all",
   });
 
-  const employeeTaxes = liability.filter(r => !r.isEmployerPaid);
-  const employerTaxes = liability.filter(r => r.isEmployerPaid);
+  const isLoading = companyId === "all" ? loadingAll : loadingSingle;
   const fmt = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  const flatLiability = companyId === "all"
+    ? perCompanyLiability.flatMap(p => p.rows)
+    : liability;
+
   const handleExportCSV = () => {
-    const headers = ["Tax Code", "Tax Name", "Payer", "State", "Taxable Wages", "Amount", "Line Items"];
-    const rows = liability.map(r => [
-      r.taxCode, r.taxName, r.isEmployerPaid ? "Employer" : "Employee",
-      r.stateCode || "Federal", fmt(r.totalTaxableWages), fmt(r.totalAmount), String(r.periodCount),
-    ]);
+    const headers = ["Company", "Tax Code", "Tax Name", "Payer", "State", "Taxable Wages", "Amount", "Line Items"];
+    const rows = companyId === "all"
+      ? perCompanyLiability.flatMap(p => p.rows.map(r => [
+          p.company.name, r.taxCode, r.taxName, r.isEmployerPaid ? "Employer" : "Employee",
+          r.stateCode || "Federal", fmt(r.totalTaxableWages), fmt(r.totalAmount), String(r.periodCount),
+        ]))
+      : liability.map(r => [
+          companies.find(c => c.id === companyId)?.name || companyId,
+          r.taxCode, r.taxName, r.isEmployerPaid ? "Employer" : "Employee",
+          r.stateCode || "Federal", fmt(r.totalTaxableWages), fmt(r.totalAmount), String(r.periodCount),
+        ]);
     downloadCSV(headers, rows, `tax_liability_${year}.csv`);
   };
 
-  const renderSection = (title: string, rows: TaxLiabilityRow[]) => (
-    <div className="space-y-2">
-      <h3 className="text-sm font-semibold text-muted-foreground">{title}</h3>
-      <div className="overflow-x-auto">
+  const renderTaxTable = (rows: TaxLiabilityRow[]) => {
+    const employeeTaxes = rows.filter(r => !r.isEmployerPaid);
+    const employerTaxes = rows.filter(r => r.isEmployerPaid);
+    const renderSection = (title: string, sectionRows: TaxLiabilityRow[]) => (
+      <div className="space-y-1">
+        <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{title}</h4>
         <Table>
           <TableHeader>
             <TableRow>
@@ -2683,13 +2689,13 @@ function TaxLiabilityDialog({ open, onOpenChange }: { open: boolean; onOpenChang
               <TableHead>Jurisdiction</TableHead>
               <TableHead className="text-right">Taxable Wages</TableHead>
               <TableHead className="text-right">Amount</TableHead>
-              <TableHead className="text-right">Line Items</TableHead>
+              <TableHead className="text-right">Lines</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.length === 0 ? (
-              <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-6">No data for this period.</TableCell></TableRow>
-            ) : rows.map(r => (
+            {sectionRows.length === 0 ? (
+              <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-4">No data.</TableCell></TableRow>
+            ) : sectionRows.map(r => (
               <TableRow key={r.taxCode} data-testid={`row-tax-liability-${r.taxCode}`}>
                 <TableCell className="font-mono text-xs">{r.taxCode}</TableCell>
                 <TableCell>{r.taxName}</TableCell>
@@ -2699,18 +2705,28 @@ function TaxLiabilityDialog({ open, onOpenChange }: { open: boolean; onOpenChang
                 <TableCell className="text-right text-muted-foreground">{r.periodCount}</TableCell>
               </TableRow>
             ))}
-            {rows.length > 0 && (
-              <TableRow className="font-bold border-t-2">
-                <TableCell colSpan={4}>Total</TableCell>
-                <TableCell className="text-right">{fmt(rows.reduce((s, r) => s + r.totalAmount, 0))}</TableCell>
+            {sectionRows.length > 0 && (
+              <TableRow className="font-semibold border-t">
+                <TableCell colSpan={4}>Subtotal</TableCell>
+                <TableCell className="text-right">{fmt(sectionRows.reduce((s, r) => s + r.totalAmount, 0))}</TableCell>
                 <TableCell></TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
       </div>
-    </div>
-  );
+    );
+    return (
+      <div className="space-y-4 overflow-x-auto">
+        {renderSection("Employee-Paid Taxes", employeeTaxes)}
+        {renderSection("Employer-Paid Taxes", employerTaxes)}
+        <div className="flex justify-between text-sm font-bold border-t pt-2">
+          <span>Total</span>
+          <span>{fmt(rows.reduce((s, r) => s + r.totalAmount, 0))}</span>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -2731,31 +2747,42 @@ function TaxLiabilityDialog({ open, onOpenChange }: { open: boolean; onOpenChang
             </Select>
           </div>
           <div className="space-y-1">
-            <Label className="text-xs">Company</Label>
+            <Label className="text-xs">Legal Entity / Company</Label>
             <Select value={companyId} onValueChange={setCompanyId}>
-              <SelectTrigger className="w-[200px]" data-testid="select-liability-company"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-[220px]" data-testid="select-liability-company"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Companies</SelectItem>
+                <SelectItem value="all">All Companies (per-entity view)</SelectItem>
                 {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-liability"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-liability"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
-          <SaveReportButton reportType="tax-liability" category="tax" defaultName={`Tax Liability ${year}`} headers={["Tax Code", "Tax Name", "Payer", "Amount"]} rows={liability.map(r => [r.taxCode, r.taxName, r.isEmployerPaid ? "Employer" : "Employee", fmt(r.totalAmount)])} />
+          <SaveReportButton reportType="tax-liability" category="tax" defaultName={`Tax Liability ${year}`} headers={["Tax Code", "Tax Name", "Payer", "Amount"]} rows={flatLiability.map(r => [r.taxCode, r.taxName, r.isEmployerPaid ? "Employer" : "Employee", fmt(r.totalAmount)])} />
         </div>
         {isLoading ? (
           <div className="space-y-2 mt-4">{[1,2,3,4].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
-        ) : (
-          <div className="space-y-6 mt-4">
-            {renderSection("Employee-Paid Taxes", employeeTaxes)}
-            {renderSection("Employer-Paid Taxes", employerTaxes)}
-            <div className="border-t pt-3">
-              <div className="flex justify-between text-sm font-bold">
-                <span>Total Tax Liability (All)</span>
-                <span>{fmt(liability.reduce((s, r) => s + r.totalAmount, 0))}</span>
+        ) : companyId === "all" ? (
+          <div className="space-y-8 mt-4">
+            {perCompanyLiability.length === 0 ? (
+              <p className="text-muted-foreground text-sm">No companies found.</p>
+            ) : perCompanyLiability.map(({ company, rows }) => (
+              <div key={company.id} className="space-y-3 border rounded-lg p-4" data-testid={`section-company-${company.id}`}>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold text-sm">{company.name}</h3>
+                  <Badge variant="secondary" className="text-xs">
+                    {fmt(rows.reduce((s, r) => s + r.totalAmount, 0))} total liability
+                  </Badge>
+                </div>
+                {rows.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No processed payrolls in {year}.</p>
+                ) : renderTaxTable(rows)}
               </div>
-            </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-4">
+            {renderTaxTable(liability)}
           </div>
         )}
       </DialogContent>
@@ -2815,6 +2842,19 @@ function TaxAuditDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
     enabled: !!runId && open,
   });
 
+  const { data: snapshotRaw } = useQuery<{ snapshotJson: string; engineVersion: string; createdAt: string } | null>({
+    queryKey: ["/api/payroll-runs", runId, "tax-snapshot"],
+    queryFn: async () => {
+      if (!runId) return null;
+      const r = await fetch(`/api/payroll-runs/${runId}/tax-snapshot`, { credentials: "include" });
+      if (!r.ok) return null;
+      return r.json();
+    },
+    enabled: !!runId && open,
+  });
+
+  const snapshot = snapshotRaw?.snapshotJson ? (() => { try { return JSON.parse(snapshotRaw.snapshotJson); } catch { return null; } })() : null;
+
   const run = allRuns.find(r => r.id === runId);
   const isLoading = loadingRuns || loadingOverrides || loadingTaxLines;
   const fmt = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -2827,7 +2867,10 @@ function TaxAuditDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
     return item ? getWorkerName(item.workerId) : "—";
   };
 
-  const groupedTaxLines = taxLines.reduce<Record<string, any[]>>((acc, line) => {
+  const NON_TAX_AUDIT_CODES = ["PRE_TAX_DED", "POST_TAX_DED", "AMENDMENT_DED"];
+  const taxOnlyLines = taxLines.filter((l: any) => !NON_TAX_AUDIT_CODES.includes(l.taxCode));
+
+  const groupedTaxLines = taxOnlyLines.reduce<Record<string, any[]>>((acc, line) => {
     const key = line.taxCode;
     if (!acc[key]) acc[key] = [];
     acc[key].push(line);
@@ -2938,7 +2981,8 @@ function TaxAuditDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
                       <TableRow>
                         <TableHead>Employee</TableHead>
                         <TableHead>Tax Code</TableHead>
-                        <TableHead className="text-right">Overridden Amount</TableHead>
+                        <TableHead className="text-right">Original</TableHead>
+                        <TableHead className="text-right">Overridden</TableHead>
                         <TableHead>Reason</TableHead>
                         <TableHead>Overridden By</TableHead>
                         <TableHead>Date</TableHead>
@@ -2949,7 +2993,8 @@ function TaxAuditDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
                         <TableRow key={o.id} data-testid={`row-override-${o.id}`}>
                           <TableCell>{getWorkerForItem(o.payrollItemId)}</TableCell>
                           <TableCell className="font-mono text-xs">{o.taxCode}</TableCell>
-                          <TableCell className="text-right">{fmt(Number(o.overriddenAmount))}</TableCell>
+                          <TableCell className="text-right text-muted-foreground">{fmt(Number((o as any).originalAmount || 0))}</TableCell>
+                          <TableCell className="text-right font-medium">{fmt(Number(o.overriddenAmount))}</TableCell>
                           <TableCell className="text-muted-foreground text-sm">{o.reason || "—"}</TableCell>
                           <TableCell className="text-sm">{o.overriddenBy || "—"}</TableCell>
                           <TableCell className="text-xs text-muted-foreground">
@@ -2961,6 +3006,260 @@ function TaxAuditDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
                   </Table>
                 </div>
               )}
+            </div>
+
+            {/* Snapshot Inputs — engine state captured at processing time */}
+            {snapshot && snapshot.workers && snapshot.workers.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold">
+                  Snapshot Inputs
+                  {snapshotRaw && <span className="text-xs font-normal text-muted-foreground ml-2">Engine v{snapshotRaw.engineVersion} · Captured {new Date(snapshotRaw.createdAt).toLocaleString()}</span>}
+                </h3>
+                <p className="text-xs text-muted-foreground">Full tax engine inputs recorded at processing time for reproducible audit. Compare against current tax lines to detect overrides or reprocessing drift.</p>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Employee</TableHead>
+                        <TableHead>Filing Status</TableHead>
+                        <TableHead className="text-right">W-4 Allow.</TableHead>
+                        <TableHead className="text-right">Add. Withholding</TableHead>
+                        <TableHead>Pay Period</TableHead>
+                        <TableHead className="text-right">Gross Pay</TableHead>
+                        <TableHead className="text-right">Taxable Wages</TableHead>
+                        <TableHead className="text-right">Pre-Tax Ded.</TableHead>
+                        <TableHead className="text-right">YTD Gross (Prior)</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {snapshot.workers.map((w: any) => (
+                        <TableRow key={w.workerId} data-testid={`row-snapshot-${w.workerId}`}>
+                          <TableCell>{getWorkerName(w.workerId)}</TableCell>
+                          <TableCell className="capitalize">{w.filingStatus ?? "single"}</TableCell>
+                          <TableCell className="text-right">{w.w4Allowances ?? 0}</TableCell>
+                          <TableCell className="text-right">{w.additionalWithholding != null ? fmt(Number(w.additionalWithholding)) : "—"}</TableCell>
+                          <TableCell className="text-xs">{w.payPeriodType ?? "—"}</TableCell>
+                          <TableCell className="text-right">{w.grossPay != null ? fmt(Number(w.grossPay)) : "—"}</TableCell>
+                          <TableCell className="text-right">{w.taxableWages != null ? fmt(Number(w.taxableWages)) : "—"}</TableCell>
+                          <TableCell className="text-right">{w.preTaxDeductions != null ? fmt(Number(w.preTaxDeductions)) : "—"}</TableCell>
+                          <TableCell className="text-right">{w.ytdGross != null ? fmt(Number(w.ytdGross)) : "—"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+
+                {/* Snapshot vs Stored comparison per worker */}
+                <h4 className="text-xs font-semibold text-muted-foreground mt-3">Snapshot Tax Lines vs. Stored (Overrides Highlighted)</h4>
+                {snapshot.workers.map((sw: any) => {
+                  const workerItem = items.find((i: any) => i.workerId === sw.workerId);
+                  const storedLines: Record<string, number> = taxOnlyLines
+                    .filter((l: any) => l.payrollItemId === workerItem?.id)
+                    .reduce((acc: Record<string, number>, l: any) => { acc[l.taxCode] = Number(l.amount || 0); return acc; }, {});
+                  const snapTaxLines: any[] = (sw.taxLines || []).filter((l: any) => !NON_TAX_AUDIT_CODES.includes(l.taxCode));
+                  if (snapTaxLines.length === 0) return null;
+                  return (
+                    <div key={sw.workerId} className="border rounded p-2 space-y-1" data-testid={`snapshot-worker-${sw.workerId}`}>
+                      <p className="text-xs font-medium">{getWorkerName(sw.workerId)}</p>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="text-xs">Tax Code</TableHead>
+                            <TableHead className="text-right text-xs">Snapshot</TableHead>
+                            <TableHead className="text-right text-xs">Stored</TableHead>
+                            <TableHead className="text-right text-xs">Delta</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {snapTaxLines.map((l: any) => {
+                            const stored = storedLines[l.taxCode] ?? null;
+                            const snap = Number(l.amount);
+                            const delta = stored !== null ? stored - snap : null;
+                            const hasOverride = delta !== null && Math.abs(delta) > 0.001;
+                            return (
+                              <TableRow key={l.taxCode} className={hasOverride ? "bg-yellow-50 dark:bg-yellow-950" : ""} data-testid={`snapshot-line-${sw.workerId}-${l.taxCode}`}>
+                                <TableCell className="font-mono text-xs py-1">{l.taxCode}</TableCell>
+                                <TableCell className="text-right text-xs py-1">{fmt(snap)}</TableCell>
+                                <TableCell className="text-right text-xs py-1">{stored !== null ? fmt(stored) : "—"}</TableCell>
+                                <TableCell className={`text-right text-xs py-1 ${hasOverride ? "font-semibold text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`}>
+                                  {delta !== null ? (delta >= 0 ? "+" : "") + fmt(delta) : "—"}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Tax Remittance Report (Task #4) ───────────────────────────────────────────
+function TaxRemittanceDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const currentYear = new Date().getFullYear();
+  const [year, setYear] = useState(String(currentYear));
+  const [quarter, setQuarter] = useState("Q1");
+  const [companyId, setCompanyId] = useState("");
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"], enabled: open });
+
+  const effectiveCompanyId = companyId || companies[0]?.id || "";
+
+  const { data: qData, isLoading } = useQuery<any>({
+    queryKey: ["/api/companies", effectiveCompanyId, "quarterly-taxes", year, quarter],
+    queryFn: async () => {
+      if (!effectiveCompanyId) return null;
+      const r = await fetch(`/api/companies/${effectiveCompanyId}/quarterly-taxes?year=${year}&quarter=${quarter}`, { credentials: "include" });
+      if (!r.ok) return null;
+      return r.json();
+    },
+    enabled: !!effectiveCompanyId && open,
+  });
+
+  const fmt = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const totals: Record<string, { taxCode: string; taxName: string; isEmployerPaid: boolean; totalAmount: number }> = {};
+  if (qData?.totals) {
+    for (const t of qData.totals) {
+      totals[t.taxCode] = { taxCode: t.taxCode, taxName: t.taxName, isEmployerPaid: t.isEmployerPaid, totalAmount: t.totalAmount };
+    }
+  }
+
+  const AGENCY_MAP: Record<string, { label: string; codes: string[] }> = {
+    irs: {
+      label: "IRS (Internal Revenue Service)",
+      codes: ["fed_income_tax", "ss_employee", "ss_employer", "medicare_employee", "medicare_employer", "futa"],
+    },
+    ca_edd: {
+      label: "CA EDD (Employment Development Department)",
+      codes: ["ca_sdi", "ca_pit", "ca_ui", "ca_ett"],
+    },
+  };
+
+  const renderAgency = (agencyKey: string) => {
+    const agency = AGENCY_MAP[agencyKey];
+    const rows = agency.codes.map(code => {
+      const t = totals[code];
+      return { taxCode: code, taxName: t?.taxName || code, isEmployerPaid: t?.isEmployerPaid ?? false, amount: t?.totalAmount ?? 0 };
+    });
+    const agencyTotal = rows.reduce((s, r) => s + r.amount, 0);
+    return (
+      <div key={agencyKey} className="space-y-2 border rounded-lg p-4" data-testid={`section-remittance-${agencyKey}`}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold">{agency.label}</h3>
+          <Badge variant={agencyTotal > 0 ? "default" : "outline"}>{fmt(agencyTotal)}</Badge>
+        </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Tax Code</TableHead>
+              <TableHead>Description</TableHead>
+              <TableHead>Payer</TableHead>
+              <TableHead className="text-right">Amount Due</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map(r => (
+              <TableRow key={r.taxCode} data-testid={`row-remittance-${r.taxCode}`}>
+                <TableCell className="font-mono text-xs">{r.taxCode}</TableCell>
+                <TableCell>{r.taxName}</TableCell>
+                <TableCell>
+                  <Badge variant={r.isEmployerPaid ? "secondary" : "outline"}>
+                    {r.isEmployerPaid ? "Employer" : "Employee"}
+                  </Badge>
+                </TableCell>
+                <TableCell className={`text-right font-medium ${r.amount > 0 ? "" : "text-muted-foreground"}`}>
+                  {fmt(r.amount)}
+                </TableCell>
+              </TableRow>
+            ))}
+            <TableRow className="font-bold border-t">
+              <TableCell colSpan={3}>Agency Total</TableCell>
+              <TableCell className="text-right">{fmt(agencyTotal)}</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </div>
+    );
+  };
+
+  const handleExportCSV = () => {
+    const headers = ["Agency", "Tax Code", "Description", "Payer", "Amount Due"];
+    const rows: string[][] = [];
+    for (const [agencyKey, agency] of Object.entries(AGENCY_MAP)) {
+      for (const code of agency.codes) {
+        const t = totals[code];
+        rows.push([
+          agency.label, code, t?.taxName || code,
+          t?.isEmployerPaid ? "Employer" : "Employee",
+          (t?.totalAmount ?? 0).toFixed(2),
+        ]);
+      }
+    }
+    downloadCSV(headers, rows, `tax_remittance_${year}_${quarter}.csv`);
+  };
+
+  const grandTotal = Object.values(totals).reduce((s, t) => s + t.totalAmount, 0);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto" data-testid="dialog-tax-remittance">
+        <DialogHeader>
+          <DialogTitle data-testid="text-dialog-title-tax-remittance">Tax Remittance Report</DialogTitle>
+        </DialogHeader>
+        <div className="flex items-end gap-3 flex-wrap">
+          <div className="space-y-1">
+            <Label className="text-xs">Company</Label>
+            <Select value={effectiveCompanyId} onValueChange={setCompanyId}>
+              <SelectTrigger className="w-[200px]" data-testid="select-remittance-company"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Year</Label>
+            <Select value={year} onValueChange={setYear}>
+              <SelectTrigger className="w-[100px]" data-testid="select-remittance-year"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {[currentYear, currentYear - 1, currentYear - 2].map(y => (
+                  <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Quarter</Label>
+            <Select value={quarter} onValueChange={setQuarter}>
+              <SelectTrigger className="w-[100px]" data-testid="select-remittance-quarter"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {["Q1", "Q2", "Q3", "Q4"].map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-remittance"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+        </div>
+
+        {isLoading ? (
+          <div className="space-y-2 mt-4">{[1,2,3].map(i => <Skeleton key={i} className="h-24 w-full" />)}</div>
+        ) : !effectiveCompanyId ? (
+          <p className="text-muted-foreground text-sm mt-4">No companies found.</p>
+        ) : (
+          <div className="space-y-4 mt-4">
+            <p className="text-xs text-muted-foreground">
+              Amounts owed to tax agencies for {companies.find(c => c.id === effectiveCompanyId)?.name} — {year} {quarter}.
+              Sourced from stored payroll_item_taxes for all processed/paid runs in this quarter.
+            </p>
+            {Object.keys(AGENCY_MAP).map(k => renderAgency(k))}
+            <div className="flex justify-between items-center border-t pt-3 font-bold">
+              <span>Grand Total Remittance Due</span>
+              <span data-testid="text-remittance-grand-total">{fmt(grandTotal)}</span>
             </div>
           </div>
         )}
@@ -3770,6 +4069,7 @@ export default function ReportsPage() {
   const [taxLiabilityOpen, setTaxLiabilityOpen] = useState(false);
   const [taxAuditOpen, setTaxAuditOpen] = useState(false);
   const [employeeEarningsOpen, setEmployeeEarningsOpen] = useState(false);
+  const [taxRemittanceOpen, setTaxRemittanceOpen] = useState(false);
 
   return (
     <div className="p-4 md:p-6 space-y-6">
@@ -3981,6 +4281,12 @@ export default function ReportsPage() {
               icon={<DollarSign className="h-5 w-5" />}
               onGenerate={() => setEmployeeEarningsOpen(true)}
             />
+            <ReportCard
+              title="Tax Remittance Report"
+              description="Per-agency tax amounts due for IRS and CA EDD by company and quarter — sourced from stored tax engine data. Use for remittance scheduling."
+              icon={<Calculator className="h-5 w-5" />}
+              onGenerate={() => setTaxRemittanceOpen(true)}
+            />
           </div>
         </TabsContent>
 
@@ -4033,6 +4339,7 @@ export default function ReportsPage() {
       <TaxLiabilityDialog open={taxLiabilityOpen} onOpenChange={setTaxLiabilityOpen} />
       <TaxAuditDialog open={taxAuditOpen} onOpenChange={setTaxAuditOpen} />
       <EmployeeEarningsDialog open={employeeEarningsOpen} onOpenChange={setEmployeeEarningsOpen} />
+      <TaxRemittanceDialog open={taxRemittanceOpen} onOpenChange={setTaxRemittanceOpen} />
       <QualificationSummaryDialog open={qualificationSummaryOpen} onOpenChange={setQualificationSummaryOpen} />
       <ReviewSummaryDialog open={reviewSummaryOpen} onOpenChange={setReviewSummaryOpen} />
 
