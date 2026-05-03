@@ -14301,17 +14301,36 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return doc.save();
   }
 
+  // Typed interfaces for raw SQL rows returned by check PDF endpoints.
+  interface CheckRunRow { company_id: string; pay_date: string; period_start: string; period_end: string; funding_account_id: string | null; }
+  interface CheckCompanyRow { name: string; address: string; city: string; state: string; zip: string; }
+  interface CheckWorkerRow { id: string; first_name: string; last_name: string; }
+  interface CheckRsRow { id: string; company_id: string; routing_number: string; account_number: string; calibration_config: unknown; }
+  interface CheckTplRow { layout_config: unknown; }
+  // Normalize pg / drizzle raw execute result to a typed array.
+  function pgRows<T>(result: unknown): T[] {
+    const r = result as { rows?: T[] } | T[];
+    return Array.isArray(r) ? r : ((r as { rows?: T[] }).rows ?? []);
+  }
+  function pgRow<T>(result: unknown): T | undefined { return pgRows<T>(result)[0]; }
+  function parseCalibrationOffsets(calConfig: unknown): { globalTop?: number; globalLeft?: number } | undefined {
+    try {
+      const c = typeof calConfig === "string" ? JSON.parse(calConfig) : calConfig as Record<string, unknown>;
+      return { globalTop: Number(c?.globalTop || 0), globalLeft: Number(c?.globalLeft || 0) };
+    } catch { return undefined; }
+  }
+  function parseLayoutConfig(raw: unknown): Record<string, unknown> | undefined {
+    try { return typeof raw === "string" ? JSON.parse(raw) : raw as Record<string, unknown>; } catch { return undefined; }
+  }
+
   // GET /api/checks/calibration-pdf?remittanceSourceId=:id
-  // Generates a standalone calibration test check for a specific remittance source.
-  // Used by Settings → Check Print Calibration "Print Test Check" button.
-  // Must be registered BEFORE /api/checks/:payrollItemId/pdf to avoid param capture.
+  // Registered BEFORE /api/checks/:payrollItemId/pdf to avoid param capture.
   app.get("/api/checks/calibration-pdf", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const rsId = req.query.remittanceSourceId as string;
       if (!rsId) return res.status(400).json({ message: "remittanceSourceId is required" });
 
-      const rsRaw = await db.execute(sql`SELECT * FROM remittance_sources WHERE id = ${rsId}`);
-      const rs = ((rsRaw as any).rows || rsRaw as any[])[0] || null;
+      const rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT * FROM remittance_sources WHERE id = ${rsId}`));
       if (!rs) return res.status(404).json({ message: "Remittance source not found" });
 
       const sessionCompanyId = await getSessionCompanyId(req);
@@ -14319,35 +14338,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(403).json({ message: "Access denied: company mismatch" });
       }
 
-      // Validate remittance credentials. Calibration uses dummy MICR data when missing (by design —
-      // the purpose is to calibrate print offsets before bank credentials are entered), but we still
-      // require at minimum a found remittance source record. Missing routing/account are allowed in
-      // calibration mode; the PDF will render with placeholder MICR characters for position testing.
-      if (!rs.routing_number || !rs.account_number) {
-        console.warn("[calibrationPDF] Remittance source missing routing/account — calibration uses placeholder MICR.");
-      }
+      // Calibration skips routing/account validation by design (offsets can be set before bank credentials exist).
+      if (!rs.routing_number || !rs.account_number) console.warn("[calibrationPDF] Missing routing/account — placeholder MICR used.");
 
-      // Load default template for layout/position overrides (calibration respects template positions).
       const calCompanyId = rs.company_id || null;
-      const calTplRow = ((await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${calCompanyId} AND is_default = true LIMIT 1`) as any).rows || [])[0] || null;
-      let calLayoutConfig: Record<string, any> | undefined;
-      if (calTplRow?.layout_config) {
-        try { calLayoutConfig = typeof calTplRow.layout_config === "string" ? JSON.parse(calTplRow.layout_config) : calTplRow.layout_config; } catch { /* use defaults */ }
-      }
-
-      let calibrationOffsets: { globalTop?: number; globalLeft?: number } | undefined;
-      if (rs?.calibration_config) {
-        try {
-          const cal = typeof rs.calibration_config === "string" ? JSON.parse(rs.calibration_config) : rs.calibration_config;
-          calibrationOffsets = { globalTop: Number(cal.globalTop || 0), globalLeft: Number(cal.globalLeft || 0) };
-        } catch { /* no offsets */ }
-      }
+      const calTplRow = pgRow<CheckTplRow>(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${calCompanyId} AND is_default = true LIMIT 1`));
+      const calLayoutConfig = calTplRow ? parseLayoutConfig(calTplRow.layout_config) : undefined;
+      const calibrationOffsets = rs.calibration_config ? parseCalibrationOffsets(rs.calibration_config) : undefined;
 
       const pdfBytes = await renderCheckPdf({
-        item: null,
-        worker: null,
-        run: null,
-        company: null,
+        item: null, worker: null, run: null, company: null,
         remittanceSource: { routingNumber: rs.routing_number, accountNumber: rs.account_number },
         isCalibration: true,
         calibrationOffsets,
@@ -14358,8 +14358,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.setHeader("Content-Disposition", `inline; filename="test-check-${rsId.slice(0, 8)}.pdf"`);
       res.send(Buffer.from(pdfBytes));
 
-      // Log calibration_test audit event after successful render.
-      const calUserId = (req.session as any)?.userId;
+      const calUserId = req.session.userId;
       await db.execute(sql`
         INSERT INTO check_print_audit_logs (
           company_id, initiated_by_user_id,
@@ -14389,28 +14388,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const [itemRow] = await db.select().from(payrollItems).where(eq(payrollItems.id, payrollItemId));
       if (!itemRow) return res.status(404).json({ message: "Payroll item not found" });
 
-      const runRaw = await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`);
-      const runRow = ((runRaw as any).rows || runRaw as any[])[0];
-      const compId = (runRow as any)?.company_id || itemRow.companyId;
+      const runRow = pgRow<CheckRunRow>(await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`));
+      const compId = runRow?.company_id || itemRow.companyId;
 
-      // Tenant authorization: session company must match item company (platform admins have null companyId — allowed)
       const sessionCompanyId = await getSessionCompanyId(req);
       if (sessionCompanyId && compId && sessionCompanyId !== compId) {
         return res.status(403).json({ message: "Access denied: company mismatch" });
       }
 
-      const coRaw = await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`);
-      const company = ((coRaw as any).rows || coRaw as any[])[0];
+      const [company, worker] = await Promise.all([
+        db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`).then(r => pgRow<CheckCompanyRow>(r)),
+        db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`).then(r => pgRow<CheckWorkerRow>(r)),
+      ]);
 
-      const wRaw = await db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`);
-      const worker = ((wRaw as any).rows || wRaw as any[])[0];
-
-      // Remittance source via funding account; no fallback to avoid printing against the wrong bank.
-      const runFaId = (runRow as any)?.funding_account_id;
-      let rs: any = null;
-      if (runFaId) {
-        const rsRow = await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${runFaId} LIMIT 1`);
-        rs = ((rsRow as any).rows || rsRow as any[])[0] || null;
+      let rs: CheckRsRow | null = null;
+      if (runRow?.funding_account_id) {
+        rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${runRow.funding_account_id} LIMIT 1`)) ?? null;
       }
       if (!rs && !isCalibration) return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
       if (!isCalibration) {
@@ -14418,26 +14411,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured for this company's remittance source." });
       }
 
-      const tplRow = ((await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`) as any).rows || [])[0] || null;
+      const tplRow = pgRow<CheckTplRow>(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`));
       if (!tplRow && !isCalibration) return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      let layoutConfig: Record<string, any> | undefined;
-      if (tplRow?.layout_config) {
-        try { layoutConfig = typeof tplRow.layout_config === "string" ? JSON.parse(tplRow.layout_config) : tplRow.layout_config; } catch { /* use built-in defaults */ }
-      }
-
-      let calibrationOffsets: { globalTop?: number; globalLeft?: number } | undefined;
-      if (rs?.calibration_config) {
-        try {
-          const cal = typeof rs.calibration_config === "string" ? JSON.parse(rs.calibration_config) : rs.calibration_config;
-          calibrationOffsets = { globalTop: Number(cal.globalTop || 0), globalLeft: Number(cal.globalLeft || 0) };
-        } catch { /* no offsets */ }
-      }
+      const layoutConfig = tplRow ? parseLayoutConfig(tplRow.layout_config) : undefined;
+      const calibrationOffsets = rs?.calibration_config ? parseCalibrationOffsets(rs.calibration_config) : undefined;
 
       const pdfBytes = await renderCheckPdf({
         item: itemRow,
-        worker: worker ? { firstName: (worker as any).first_name, lastName: (worker as any).last_name } : null,
-        run: runRow ? { payDate: (runRow as any).pay_date, periodStart: (runRow as any).period_start, periodEnd: (runRow as any).period_end } : null,
-        company: company ? { name: (company as any).name, address: (company as any).address, city: (company as any).city, state: (company as any).state, zip: (company as any).zip } : null,
+        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name } : null,
+        run: runRow ? { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end } : null,
+        company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip } : null,
         remittanceSource: rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number } : null,
         isCalibration,
         isVoid,
@@ -14445,13 +14428,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         calibrationOffsets,
       });
 
-      // Log audit event after successful render; skip for preview, calibration, and void renders.
       const isPreview = req.query.preview === "1";
       if (!isCalibration && !isVoid && !isPreview) {
-        // Detect prior print to determine correct event type: 'reprint' if this check was already printed.
         const priorRaw = await db.execute(sql`SELECT id FROM check_print_audit_logs WHERE payroll_run_id = ${itemRow.payrollRunId} AND worker_id = ${itemRow.workerId} AND event_type = 'print' LIMIT 1`);
-        const hasPrior = ((priorRaw as any).rows || priorRaw as any[]).length > 0;
-        const printAuditEvent = hasPrior ? "reprint" : "print";
+        const printAuditEvent = pgRows(priorRaw).length > 0 ? "reprint" : "print";
         const printUserId = req.session.userId;
         await db.execute(sql`
           INSERT INTO check_print_audit_logs (payroll_run_id, company_id, initiated_by_user_id, check_count, total_amount, micr_validation, validation_errors, print_blocked, render_engine, event_type, worker_id, check_number)
@@ -14474,66 +14454,50 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const runId = req.params.id;
       const isCalibration = req.query.mode === "calibration" || req.query.mode === "test";
 
-      const runRaw = await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${runId}`);
-      const run    = ((runRaw as any).rows || runRaw as any[])[0];
+      const run = pgRow<CheckRunRow>(await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${runId}`));
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
 
-      const compId = (run as any).company_id;
-
-      // Tenant authorization
+      const compId = run.company_id;
       const sessionCompanyId = await getSessionCompanyId(req);
       if (sessionCompanyId && compId && sessionCompanyId !== compId) {
         return res.status(403).json({ message: "Access denied: company mismatch" });
       }
-      const coRaw  = await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`);
-      const company = ((coRaw as any).rows || coRaw as any[])[0];
 
-      const batchFaId = (run as any)?.funding_account_id;
-      let rs: any = null;
-      if (batchFaId) {
-        const rsRow2 = await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${batchFaId} LIMIT 1`);
-        rs = ((rsRow2 as any).rows || rsRow2 as any[])[0] || null;
+      const [company, tplRow2] = await Promise.all([
+        db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`).then(r => pgRow<CheckCompanyRow>(r)),
+        db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`).then(r => pgRow<CheckTplRow>(r)),
+      ]);
+
+      let rs: CheckRsRow | null = null;
+      if (run.funding_account_id) {
+        rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${run.funding_account_id} LIMIT 1`)) ?? null;
       }
       if (!rs && !isCalibration) return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
-
       if (!isCalibration) {
         if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured. Add one in Payroll → Bank Accounts." });
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured." });
       }
-
-      const tplRow2 = ((await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`) as any).rows || [])[0] || null;
       if (!tplRow2 && !isCalibration) return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      let batchLayoutConfig: Record<string, any> | undefined;
-      if (tplRow2?.layout_config) {
-        try { batchLayoutConfig = typeof tplRow2.layout_config === "string" ? JSON.parse(tplRow2.layout_config) : tplRow2.layout_config; } catch { /* use built-in defaults */ }
-      }
 
-      let batchCalibrationOffsets: { globalTop?: number; globalLeft?: number } | undefined;
-      if (rs?.calibration_config) {
-        try {
-          const cal2 = typeof rs.calibration_config === "string" ? JSON.parse(rs.calibration_config) : rs.calibration_config;
-          batchCalibrationOffsets = { globalTop: Number(cal2.globalTop || 0), globalLeft: Number(cal2.globalLeft || 0) };
-        } catch { /* no offsets */ }
-      }
+      const batchLayoutConfig = tplRow2 ? parseLayoutConfig(tplRow2.layout_config) : undefined;
+      const batchCalibrationOffsets = rs?.calibration_config ? parseCalibrationOffsets(rs.calibration_config) : undefined;
 
-      const itemsRaw = await db.execute(sql`
+      const items = pgRows<Record<string, unknown>>(await db.execute(sql`
         SELECT * FROM payroll_items
         WHERE payroll_run_id = ${runId}
           AND (payment_method IS NULL OR payment_method = 'check')
           AND CAST(net_pay AS numeric) > 0
         ORDER BY check_number
-      `);
-      const items = ((itemsRaw as any).rows || itemsRaw as any[]);
+      `));
 
-      const workerIds = [...new Set(items.map((i: any) => i.worker_id).filter(Boolean))] as string[];
-      let workerMap: Record<string, any> = {};
+      const workerIds = [...new Set(items.map(i => i.worker_id as string).filter(Boolean))];
+      const workerMap: Record<string, CheckWorkerRow> = {};
       if (workerIds.length > 0) {
-        const wRaw = await db.execute(sql`SELECT * FROM workers WHERE id = ANY(${workerIds}::text[])`);
-        for (const w of ((wRaw as any).rows || wRaw as any[])) workerMap[w.id] = w;
+        for (const w of pgRows<CheckWorkerRow>(await db.execute(sql`SELECT * FROM workers WHERE id = ANY(${workerIds}::text[])`))) workerMap[w.id] = w;
       }
 
-      const runNorm = { payDate: (run as any).pay_date, periodStart: (run as any).period_start, periodEnd: (run as any).period_end };
-      const coNorm  = company ? { name: (company as any).name, address: (company as any).address, city: (company as any).city, state: (company as any).state, zip: (company as any).zip } : null;
+      const runNorm = { payDate: run.pay_date, periodStart: run.period_start, periodEnd: run.period_end };
+      const coNorm  = company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip } : null;
       const remSrc  = rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number } : null;
 
       const { PDFDocument } = await import("pdf-lib");
@@ -14586,12 +14550,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       const pdfBytes = await merged.save();
-      const userId   = (req.session as any)?.userId;
-      const totalAmt = items.reduce((s: number, i: any) => s + Number(i.net_pay || 0), 0);
+      const userId   = req.session.userId;
+      const totalAmt = items.reduce((s, i) => s + Number(i.net_pay || 0), 0);
 
-      // Log one audit event per check (with worker_id + check_number) for accurate reprint gating.
-      // Calibration mode logs a single summary event with no worker details.
-      // Batch runs after the initial print are recorded as 'reprint' to preserve strict print/reprint separation.
       if (isCalibration || items.length === 0) {
         await db.execute(sql`
           INSERT INTO check_print_audit_logs (
@@ -14605,9 +14566,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           )
         `);
       } else {
-        // Pre-fetch all prior 'print' worker_ids for this run in one query; classify per item.
+        // Pre-fetch prior-printed workers in one query; classify each item as 'print' or 'reprint'.
         const priorPrintedRaw = await db.execute(sql`SELECT DISTINCT worker_id FROM check_print_audit_logs WHERE payroll_run_id = ${runId} AND event_type = 'print'`);
-        const priorPrintedSet = new Set<string>(((priorPrintedRaw as any).rows || priorPrintedRaw as any[]).map((r: any) => r.worker_id).filter(Boolean));
+        const priorPrintedSet = new Set<string>(pgRows<{ worker_id: string }>(priorPrintedRaw).map(r => r.worker_id).filter(Boolean));
 
         for (const item of items) {
           const itemEventType = priorPrintedSet.has(item.worker_id) ? "reprint" : "print";
@@ -14634,14 +14595,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const { voidReason }    = req.body;
       if (!voidReason || !String(voidReason).trim()) return res.status(400).json({ message: "voidReason is required" });
 
-      const userId = (req.session as any)?.userId;
+      const userId = req.session.userId;
       const [itemRow] = await db.select().from(payrollItems).where(eq(payrollItems.id, payrollItemId));
       if (!itemRow) return res.status(404).json({ message: "Payroll item not found" });
 
-      const runRaw = await db.execute(sql`SELECT company_id FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`);
-      const compId = (((runRaw as any).rows || runRaw as any[])[0] as any)?.company_id;
-
-      // Tenant authorization
+      const compId = pgRow<{ company_id: string }>(await db.execute(sql`SELECT company_id FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`))?.company_id;
       const sessionCompanyId = await getSessionCompanyId(req);
       if (sessionCompanyId && compId && sessionCompanyId !== compId) {
         return res.status(403).json({ message: "Access denied: company mismatch" });
@@ -14679,22 +14637,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/checks/:payrollItemId/reprint", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { payrollItemId } = req.params;
-      const userId = (req.session as any)?.userId;
+      const userId = req.session.userId;
 
       const [itemRow] = await db.select().from(payrollItems).where(eq(payrollItems.id, payrollItemId));
       if (!itemRow) return res.status(404).json({ message: "Payroll item not found" });
 
-      const runRaw = await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`);
-      const runRow = ((runRaw as any).rows || runRaw as any[])[0];
-      const compId = (runRow as any)?.company_id || itemRow.companyId;
+      const runRow = pgRow<CheckRunRow>(await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`));
+      const compId = runRow?.company_id || itemRow.companyId;
 
-      // Tenant authorization
       const sessionCompanyId = await getSessionCompanyId(req);
       if (sessionCompanyId && compId && sessionCompanyId !== compId) {
         return res.status(403).json({ message: "Access denied: company mismatch" });
       }
 
-      // Gate: must have a prior print OR void event scoped to this company + run + worker
+      // Gate: must have a prior print OR void event for this company + run + worker.
       const origRaw = await db.execute(sql`
         SELECT id FROM check_print_audit_logs
         WHERE company_id = ${compId}
@@ -14703,45 +14659,32 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           AND (event_type = 'print' OR event_type = 'void' OR event_type IS NULL)
         ORDER BY created_at DESC LIMIT 1
       `);
-      if (((origRaw as any).rows || origRaw as any[]).length === 0)
+      if (pgRows(origRaw).length === 0)
         return res.status(422).json({ message: "No original print event found for this check. Cannot reprint." });
 
-      const coRaw = await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`);
-      const company = ((coRaw as any).rows || coRaw as any[])[0];
+      const [company, worker] = await Promise.all([
+        db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`).then(r => pgRow<CheckCompanyRow>(r)),
+        db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`).then(r => pgRow<CheckWorkerRow>(r)),
+      ]);
 
-      const wRaw = await db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`);
-      const worker = ((wRaw as any).rows || wRaw as any[])[0];
-
-      const reprintFaId = (runRow as any)?.funding_account_id;
-      let rs: any = null;
-      if (reprintFaId) {
-        const rsRow3 = await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${reprintFaId} LIMIT 1`);
-        rs = ((rsRow3 as any).rows || rsRow3 as any[])[0] || null;
+      let rs: CheckRsRow | null = null;
+      if (runRow?.funding_account_id) {
+        rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${runRow.funding_account_id} LIMIT 1`)) ?? null;
       }
       if (!rs) return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
-      if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source." });
-      if (!rs?.account_number)  return res.status(422).json({ message: "No account number configured for this company's remittance source." });
+      if (!rs.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source." });
+      if (!rs.account_number)  return res.status(422).json({ message: "No account number configured for this company's remittance source." });
 
-      const reprintTplRow = ((await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`) as any).rows || [])[0] || null;
+      const reprintTplRow = pgRow<CheckTplRow>(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`));
       if (!reprintTplRow) return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      let reprintLayoutConfig: Record<string, any> | undefined;
-      if (reprintTplRow?.layout_config) {
-        try { reprintLayoutConfig = typeof reprintTplRow.layout_config === "string" ? JSON.parse(reprintTplRow.layout_config) : reprintTplRow.layout_config; } catch { /* use built-in defaults */ }
-      }
-      let reprintCalibrationOffsets: { globalTop?: number; globalLeft?: number } | undefined;
-      if (rs?.calibration_config) {
-        try {
-          const rCal = typeof rs.calibration_config === "string" ? JSON.parse(rs.calibration_config) : rs.calibration_config;
-          reprintCalibrationOffsets = { globalTop: Number(rCal.globalTop || 0), globalLeft: Number(rCal.globalLeft || 0) };
-        } catch { /* no offsets */ }
-      }
+      const reprintLayoutConfig = parseLayoutConfig(reprintTplRow.layout_config);
+      const reprintCalibrationOffsets = rs.calibration_config ? parseCalibrationOffsets(rs.calibration_config) : undefined;
 
-      // Generate and return the PDF marked as REPRINT
       const pdfBytes = await renderCheckPdf({
         item: itemRow,
-        worker: worker ? { firstName: (worker as any).first_name, lastName: (worker as any).last_name } : null,
-        run: runRow ? { payDate: (runRow as any).pay_date, periodStart: (runRow as any).period_start, periodEnd: (runRow as any).period_end } : null,
-        company: company ? { name: (company as any).name, address: (company as any).address, city: (company as any).city, state: (company as any).state, zip: (company as any).zip } : null,
+        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name } : null,
+        run: runRow ? { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end } : null,
+        company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip } : null,
         remittanceSource: { routingNumber: rs.routing_number, accountNumber: rs.account_number },
         isCalibration: false,
         isVoid: false,
@@ -14750,7 +14693,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         calibrationOffsets: reprintCalibrationOffsets,
       });
 
-      // Log the reprint audit event only after PDF renders successfully (no phantom events on failure).
+      // Audit insert after successful render (no phantom events on render failure).
       await db.execute(sql`
         INSERT INTO check_print_audit_logs (
           payroll_run_id, company_id, initiated_by_user_id,
