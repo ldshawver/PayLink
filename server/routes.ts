@@ -14044,7 +14044,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const lm        = baseLm + gOL;           // calibration-adjusted left margin
     const rm        = W - baseLm + gOL;       // calibration-adjusted right boundary
     const checkBot  = H - checkH + gOT;       // calibration-adjusted check bottom
-    const micrBase  = checkBot + Math.round(0.15 * 72);
+    const micrBase  = checkBot + Math.round(0.625 * 72); // 0.625" from check-area bottom per ANSI X9.7
 
     const netPay   = isCalibration ? 1234.56 : Number(item?.netPay   || 0);
     const grossPay = isCalibration ? 1380.23 : Number(item?.grossPay || 0);
@@ -14354,12 +14354,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured for this company's remittance source." });
       }
 
-      // Load active check template for show/hide flags; 422 if no default template configured
+      // Load active check template for show/hide flags; fall back to default top-check layout if none configured.
       const tplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow = ((tplRaw as any).rows || tplRaw as any[])[0] || null;
-      if (!tplRow && !isCalibration) {
-        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      }
       let layoutConfig: Record<string, boolean> | undefined;
       if (tplRow?.layout_config) {
         try { layoutConfig = typeof tplRow.layout_config === "string" ? JSON.parse(tplRow.layout_config) : tplRow.layout_config; } catch { /* use defaults */ }
@@ -14437,12 +14434,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured." });
       }
 
-      // Load active check template; 422 if no default template configured
+      // Load active check template; fall back to default top-check layout if none configured.
       const tplRaw2 = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow2 = ((tplRaw2 as any).rows || tplRaw2 as any[])[0] || null;
-      if (!tplRow2 && !isCalibration) {
-        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      }
       let batchLayoutConfig: Record<string, boolean> | undefined;
       if (tplRow2?.layout_config) {
         try { batchLayoutConfig = typeof tplRow2.layout_config === "string" ? JSON.parse(tplRow2.layout_config) : tplRow2.layout_config; } catch { /* use defaults */ }
@@ -14487,8 +14481,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       } else {
         for (const item of items) {
           const w = workerMap[item.worker_id] || null;
+          // Normalize raw SQL snake_case row to camelCase before passing to renderCheckPdf.
+          const normalizedItem = {
+            netPay:          item.net_pay,
+            grossPay:        item.gross_pay,
+            deductions:      item.deductions,
+            checkNumber:     item.check_number,
+            workerId:        item.worker_id,
+            regularHours:    item.regular_hours,
+            overtimeHours:   item.overtime_hours,
+            doubleTimeHours: item.double_time_hours,
+          };
           const bytes = await renderCheckPdf({
-            item,
+            item: normalizedItem,
             worker: w ? { firstName: w.first_name, lastName: w.last_name } : null,
             run: runNorm, company: coNorm, remittanceSource: remSrc,
             layoutConfig: batchLayoutConfig,
@@ -14674,12 +14679,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         )
       `);
 
-      // Load active check template for show/hide flags (same template used on original print)
+      // Load active check template; fall back to default top-check layout if none configured.
       const reprintTplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const reprintTplRow = ((reprintTplRaw as any).rows || reprintTplRaw as any[])[0] || null;
-      if (!reprintTplRow) {
-        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      }
       let reprintLayoutConfig: Record<string, boolean> | undefined;
       if (reprintTplRow?.layout_config) {
         try { reprintLayoutConfig = typeof reprintTplRow.layout_config === "string" ? JSON.parse(reprintTplRow.layout_config) : reprintTplRow.layout_config; } catch { /* use defaults */ }
