@@ -13993,7 +13993,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   async function renderCheckPdf(params: {
     item: any; worker: any; run: any; company: any; remittanceSource: any;
     isCalibration?: boolean; isVoid?: boolean; isReprint?: boolean;
-    layoutConfig?: Record<string, boolean>;
+    layoutConfig?: Record<string, any>;
     calibrationOffsets?: { globalTop?: number; globalLeft?: number };
   }): Promise<Uint8Array> {
     const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
@@ -14021,7 +14021,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       micrFont = cour; // calibration-only fallback
     }
 
-    // Show/hide flags from check_templates.layoutConfig; default all to true
+    // Show/hide flags from check_templates.layoutConfig; default all to true when not set.
+    // This implements the standard top-check layout fallback: when no template is assigned,
+    // params.layoutConfig is undefined and all flags remain true (everything shown, default positions).
     const cfg = params.layoutConfig || {};
     const showCompanyName    = cfg.showCompanyName    !== false;
     const showCompanyAddr    = cfg.showCompanyAddress !== false;
@@ -14031,10 +14033,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const showDeductions     = cfg.showDeductionsDetail !== false;
     const showYtdTotals      = cfg.showYtdTotals      !== false;
 
+    // Position overrides from check_templates.layoutConfig.positions.
+    // Each key maps to an optional {x?, y?} specifying the field's base PDF coordinates
+    // (pts from page bottom-left, before calibration). Calibration offsets are applied on top.
+    // Supported keys: companyBlock, checkNumber, date, payeeRow, amountBox, amountWords, memo, signature.
+    const positions: Record<string, { x?: number; y?: number }> = cfg.positions || {};
+
     // Global calibration offsets from remittance_sources.calibration_config (points).
     // globalTop > 0 shifts elements down (CSS top semantics); in PDF Y-up coords = subtract.
     const gOT = -(params.calibrationOffsets?.globalTop  || 0);
     const gOL =   params.calibrationOffsets?.globalLeft || 0;
+
+    // Position helpers: return template-specified position (+ calibration) or the computed default.
+    // defaultVal is already calibration-adjusted (derived from lm/rm/checkBot/curY which include gOL/gOT).
+    // Template override is a base coordinate; we add gOL/gOT to match the calibration level of defaults.
+    const px = (defaultVal: number, key: string): number =>
+      positions[key]?.x !== undefined ? Math.round(positions[key].x! + gOL) : defaultVal;
+    const py = (defaultVal: number, key: string): number =>
+      positions[key]?.y !== undefined ? Math.round(positions[key].y! + gOT) : defaultVal;
 
     const page = doc.addPage([612, 792]);
     const W = 612, H = 792;
@@ -14083,63 +14099,70 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       page.drawText("VOID", { x: 140, y: checkBot + 120, size: 80, font: hvB, color: rgb(0.85, 0.1, 0.1), opacity: 0.25, rotate: { type: "degrees" as const, angle: 30 } });
     }
 
-    // Company header
+    // Company header — position may be overridden by check_templates.layoutConfig.positions.companyBlock
     let curY = H - 16 + gOT;  // apply global vertical calibration offset
-    drawGuide(lm, curY - 42, 220, 42, "COMPANY BLOCK");
+    const coBlockX = px(lm, "companyBlock");
+    const coBlockY = py(curY, "companyBlock");
+    drawGuide(coBlockX, coBlockY - 42, 220, 42, "COMPANY BLOCK");
     if (showCompanyName)
-      page.drawText(coName, { x: lm, y: curY - 12, size: 11, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(coName, { x: coBlockX, y: coBlockY - 12, size: 11, font: hvB, color: rgb(0, 0, 0) });
     if (showCompanyAddr)
-      page.drawText(coAddr, { x: lm, y: curY - 24, size:  8, font: hv,  color: rgb(0.2, 0.2, 0.2) });
+      page.drawText(coAddr, { x: coBlockX, y: coBlockY - 24, size:  8, font: hv,  color: rgb(0.2, 0.2, 0.2) });
 
-    // Check number box (top-right)
-    const cnBoxX = rm - 102, cnBoxY = curY - 32;
+    // Check number box (top-right) — position may be overridden by layoutConfig.positions.checkNumber
+    const cnBoxX = px(rm - 102, "checkNumber");
+    const cnBoxY = py(curY - 32, "checkNumber");
     if (showCheckNumber) {
       drawGuide(cnBoxX, cnBoxY, 102, 24, "CHECK #");
       page.drawRectangle({ x: cnBoxX, y: cnBoxY, width: 102, height: 24, borderColor: rgb(0, 0, 0), borderWidth: 1 });
       page.drawText(`No. ${checkNum}`, { x: cnBoxX + 6, y: cnBoxY + 8, size: 10, font: hvB, color: rgb(0, 0, 0) });
     }
 
-    // Date (below check number)
-    const dtY = cnBoxY - 22;
-    drawGuide(cnBoxX, dtY, 102, 18, "DATE");
-    page.drawText("DATE", { x: cnBoxX, y: dtY + 9, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
-    page.drawLine({ start: { x: cnBoxX, y: dtY }, end: { x: rm, y: dtY }, color: rgb(0, 0, 0), thickness: 0.8 });
-    page.drawText(payDate, { x: cnBoxX + 2, y: dtY + 2, size: 9, font: hv, color: rgb(0, 0, 0) });
-    page.drawText("VOID AFTER 90 DAYS", { x: cnBoxX, y: dtY - 9, size: 6, font: hv, color: rgb(0.5, 0.5, 0.5) });
+    // Date (below check number) — position may be overridden by layoutConfig.positions.date
+    const dtY = py(cnBoxY - 22, "date");
+    const dtX = px(cnBoxX, "date");
+    drawGuide(dtX, dtY, 102, 18, "DATE");
+    page.drawText("DATE", { x: dtX, y: dtY + 9, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
+    page.drawLine({ start: { x: dtX, y: dtY }, end: { x: dtX + 102, y: dtY }, color: rgb(0, 0, 0), thickness: 0.8 });
+    page.drawText(payDate, { x: dtX + 2, y: dtY + 2, size: 9, font: hv, color: rgb(0, 0, 0) });
+    page.drawText("VOID AFTER 90 DAYS", { x: dtX, y: dtY - 9, size: 6, font: hv, color: rgb(0.5, 0.5, 0.5) });
 
-    // Pay to order row
-    const payRowY = curY - 58;
-    const amtBoxW = 102, amtBoxX = rm - amtBoxW;
+    // Pay to order row — y may be overridden by layoutConfig.positions.payeeRow
+    const payRowY = py(curY - 58, "payeeRow");
+    const amtBoxW = 102;
+    const amtBoxX = px(rm - amtBoxW, "amountBox");
+    const amtBoxY = py(payRowY - 4, "amountBox");
     const payeeEnd = amtBoxX - 8;
-    page.drawText("PAY TO THE ORDER OF", { x: lm, y: payRowY + 4, size: 7, font: hvB, color: rgb(0, 0, 0) });
-    drawGuide(lm + 138, payRowY - 4, payeeEnd - (lm + 138), 20, "PAYEE NAME");
-    page.drawText(wName, { x: lm + 140, y: payRowY + 3, size: 12, font: hvB, color: rgb(0, 0, 0) });
-    page.drawLine({ start: { x: lm + 138, y: payRowY }, end: { x: payeeEnd, y: payRowY }, color: rgb(0, 0, 0), thickness: 1 });
-    drawGuide(amtBoxX, payRowY - 4, amtBoxW, 22, "AMOUNT BOX");
-    page.drawRectangle({ x: amtBoxX, y: payRowY - 4, width: amtBoxW, height: 22, borderColor: rgb(0, 0, 0), borderWidth: 1 });
-    page.drawLine({ start: { x: amtBoxX + 4, y: payRowY - 4 }, end: { x: amtBoxX + 4, y: payRowY + 18 }, color: rgb(0, 0, 0), thickness: 2 });
-    page.drawText(`$${fmtMoney(netPay)}`, { x: amtBoxX + 8, y: payRowY + 2, size: 11, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("PAY TO THE ORDER OF", { x: coBlockX, y: payRowY + 4, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    drawGuide(coBlockX + 138, payRowY - 4, payeeEnd - (coBlockX + 138), 20, "PAYEE NAME");
+    page.drawText(wName, { x: coBlockX + 140, y: payRowY + 3, size: 12, font: hvB, color: rgb(0, 0, 0) });
+    page.drawLine({ start: { x: coBlockX + 138, y: payRowY }, end: { x: payeeEnd, y: payRowY }, color: rgb(0, 0, 0), thickness: 1 });
+    drawGuide(amtBoxX, amtBoxY, amtBoxW, 22, "AMOUNT BOX");
+    page.drawRectangle({ x: amtBoxX, y: amtBoxY, width: amtBoxW, height: 22, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+    page.drawLine({ start: { x: amtBoxX + 4, y: amtBoxY }, end: { x: amtBoxX + 4, y: amtBoxY + 22 }, color: rgb(0, 0, 0), thickness: 2 });
+    page.drawText(`$${fmtMoney(netPay)}`, { x: amtBoxX + 8, y: amtBoxY + 6, size: 11, font: hvB, color: rgb(0, 0, 0) });
 
-    // Amount in words
-    const wordsY = payRowY - 18;
-    drawGuide(lm, wordsY - 2, rm - lm, 14, "AMOUNT WORDS");
+    // Amount in words — y may be overridden by layoutConfig.positions.amountWords
+    const wordsY = py(payRowY - 18, "amountWords");
+    drawGuide(coBlockX, wordsY - 2, rm - coBlockX, 14, "AMOUNT WORDS");
     const wordsStr = (amtWords.length > 80 ? amtWords.slice(0, 77) + "..." : amtWords) + " ————————";
-    page.drawText(wordsStr, { x: lm, y: wordsY, size: 9, font: hv, color: rgb(0, 0, 0) });
-    page.drawLine({ start: { x: lm, y: wordsY - 3 }, end: { x: rm, y: wordsY - 3 }, color: rgb(0, 0, 0), thickness: 0.5 });
+    page.drawText(wordsStr, { x: coBlockX, y: wordsY, size: 9, font: hv, color: rgb(0, 0, 0) });
+    page.drawLine({ start: { x: coBlockX, y: wordsY - 3 }, end: { x: rm, y: wordsY - 3 }, color: rgb(0, 0, 0), thickness: 0.5 });
 
-    // Memo
-    const memoY = wordsY - 22;
+    // Memo — y may be overridden by layoutConfig.positions.memo
+    const memoY = py(wordsY - 22, "memo");
     const memoText = pStart !== "—" && pEnd !== "—" ? `Pay period ${pStart} – ${pEnd}` : "";
-    drawGuide(lm, memoY - 2, 200, 14, "MEMO");
-    page.drawText("MEMO:", { x: lm, y: memoY, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
-    page.drawText(memoText, { x: lm + 32, y: memoY, size: 8, font: hv, color: rgb(0, 0, 0) });
-    page.drawLine({ start: { x: lm, y: memoY - 3 }, end: { x: lm + 240, y: memoY - 3 }, color: rgb(0, 0, 0), thickness: 0.5 });
+    drawGuide(coBlockX, memoY - 2, 200, 14, "MEMO");
+    page.drawText("MEMO:", { x: coBlockX, y: memoY, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
+    page.drawText(memoText, { x: coBlockX + 32, y: memoY, size: 8, font: hv, color: rgb(0, 0, 0) });
+    page.drawLine({ start: { x: coBlockX, y: memoY - 3 }, end: { x: coBlockX + 240, y: memoY - 3 }, color: rgb(0, 0, 0), thickness: 0.5 });
 
-    // Signature line
-    const sigY = memoY - 22;
-    drawGuide(rm - 162, sigY - 2, 162, 14, "SIGNATURE");
-    page.drawLine({ start: { x: rm - 162, y: sigY }, end: { x: rm, y: sigY }, color: rgb(0, 0, 0), thickness: 0.5 });
-    page.drawText("AUTHORIZED SIGNATURE", { x: rm - 157, y: sigY - 9, size: 6, font: hv, color: rgb(0.4, 0.4, 0.4) });
+    // Signature line — position may be overridden by layoutConfig.positions.signature
+    const sigY = py(memoY - 22, "signature");
+    const sigX = px(rm - 162, "signature");
+    drawGuide(sigX, sigY - 2, 162, 14, "SIGNATURE");
+    page.drawLine({ start: { x: sigX, y: sigY }, end: { x: sigX + 162, y: sigY }, color: rgb(0, 0, 0), thickness: 0.5 });
+    page.drawText("AUTHORIZED SIGNATURE", { x: sigX + 5, y: sigY - 9, size: 6, font: hv, color: rgb(0.4, 0.4, 0.4) });
 
     // MICR line (conditionally rendered per layoutConfig)
     if (showMicrLine)
@@ -14354,13 +14377,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured for this company's remittance source." });
       }
 
-      // Load active check template for show/hide flags; 422 if no default template configured.
+      // Load active check template for show/hide flags and positional overrides.
+      // When no default template is configured, renderCheckPdf falls back to standard top-check layout
+      // (all show flags true, all positions at their hardcoded defaults).
       const tplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow = ((tplRaw as any).rows || tplRaw as any[])[0] || null;
-      if (!tplRow && !isCalibration) {
-        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      }
-      let layoutConfig: Record<string, boolean> | undefined;
+      let layoutConfig: Record<string, any> | undefined;
       if (tplRow?.layout_config) {
         try { layoutConfig = typeof tplRow.layout_config === "string" ? JSON.parse(tplRow.layout_config) : tplRow.layout_config; } catch { /* use defaults */ }
       }
@@ -14437,13 +14459,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured." });
       }
 
-      // Load active check template; 422 if no default template configured.
+      // Load active check template for show/hide flags and positional overrides.
+      // Falls back to standard top-check layout when no default template configured.
       const tplRaw2 = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow2 = ((tplRaw2 as any).rows || tplRaw2 as any[])[0] || null;
-      if (!tplRow2 && !isCalibration) {
-        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      }
-      let batchLayoutConfig: Record<string, boolean> | undefined;
+      let batchLayoutConfig: Record<string, any> | undefined;
       if (tplRow2?.layout_config) {
         try { batchLayoutConfig = typeof tplRow2.layout_config === "string" ? JSON.parse(tplRow2.layout_config) : tplRow2.layout_config; } catch { /* use defaults */ }
       }
@@ -14701,13 +14721,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         )
       `);
 
-      // Load active check template; 422 if no default template configured.
+      // Load active check template for show/hide flags and positional overrides.
+      // Falls back to standard top-check layout when no default template configured.
       const reprintTplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const reprintTplRow = ((reprintTplRaw as any).rows || reprintTplRaw as any[])[0] || null;
-      if (!reprintTplRow) {
-        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      }
-      let reprintLayoutConfig: Record<string, boolean> | undefined;
+      let reprintLayoutConfig: Record<string, any> | undefined;
       if (reprintTplRow?.layout_config) {
         try { reprintLayoutConfig = typeof reprintTplRow.layout_config === "string" ? JSON.parse(reprintTplRow.layout_config) : reprintTplRow.layout_config; } catch { /* use defaults */ }
       }
