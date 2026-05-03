@@ -1881,11 +1881,8 @@ export default function PrintCheckPage() {
     // Legacy client-side audit posting removed to avoid duplicate events.
     if (hasBlocking) return;
 
-    // Packet mode: print the HTML packet pages via browser (summary + per-worker stub sections).
-    if (isPacketMode) {
-      window.print();
-      return;
-    }
+    // All print modes (packet, single-worker, batch) use the server-generated PDF endpoint.
+    // window.print() is never called — server PDF is the sole authoritative print artifact.
     // Single-worker filtered mode: use per-item PDF endpoint to avoid printing the full run.
     const singleItemId = checkItemsWithValidation.length === 1 ? checkItemsWithValidation[0]?.item?.id : undefined;
     const pdfUrl = (workerFilter && singleItemId)
