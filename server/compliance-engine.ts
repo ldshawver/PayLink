@@ -144,9 +144,14 @@ function isoToDate(s: string): Date {
 function workweekSunday(dateStr: string): string {
   const d = isoToDate(dateStr);
   const dayOfWeek = d.getDay(); // 0=Sun
-  const sun = new Date(d);
-  sun.setDate(d.getDate() - dayOfWeek);
-  return sun.toISOString().split("T")[0];
+  // Use timestamp arithmetic to safely copy and adjust — avoids mutating d
+  const sunTs = d.getTime() - dayOfWeek * 86400000;
+  const sun = new Date(sunTs);
+  // Format as YYYY-MM-DD using local date parts to avoid UTC/local skew
+  const yr  = sun.getFullYear();
+  const mo  = String(sun.getMonth() + 1).padStart(2, "0");
+  const dy  = String(sun.getDate()).padStart(2, "0");
+  return `${yr}-${mo}-${dy}`;
 }
 
 /**
@@ -306,7 +311,15 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
     });
   }
 
-  let weeklyRegularHours = 0; // tracks regular (non-OT) hours for weekly OT test
+  // ── Group entries by CA workweek (Sun–Sat) for per-week OT accumulation ──
+  // Weekly OT must be computed within each workweek independently to avoid
+  // cross-week accumulation (false positives on multi-week payroll periods).
+  const entriesByWeek: Record<string, ComplianceTimeEntry[]> = {};
+  for (const entry of entries) {
+    const sun = workweekSunday(entry.date);
+    if (!entriesByWeek[sun]) entriesByWeek[sun] = [];
+    entriesByWeek[sun].push(entry);
+  }
 
   for (const entry of entries) {
     const h = entry.totalHours;
@@ -335,8 +348,6 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
           });
         }
       }
-      // Track regular hours (capped at dailyOt1) for weekly OT accumulation
-      weeklyRegularHours += Math.min(h, dailyOt1);
     } else {
       // 7th consecutive day in CA workweek — all hours at 1.5×; >threshold at 2×
       if (isEnforced(ef, "enforceSeventhDay")) {
@@ -358,7 +369,6 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
           });
         }
       }
-      // 7th-day hours don't accumulate toward weekly threshold (already OT-rated)
     }
 
     // ── Meal break check ──────────────────────────────────────────────────
@@ -383,24 +393,24 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
       }
     }
 
-    // ── Rest break check ──────────────────────────────────────────────────
+    // ── Rest break violation check ────────────────────────────────────────
+    // CA requires one 10-min paid rest break per restPeriod hours (default 4h).
+    // Since we have no explicit rest-break punch records, we flag as a violation
+    // when the shift length entitles the worker to breaks we cannot confirm occurred.
     if (isEnforced(ef, "enforceRestBreaks")) {
       const restEntitlements = Math.floor(h / restPeriod);
       if (restEntitlements > 0) {
         results.push({
           ruleType: R.REST_BREAK_PERIOD,
           ruleId: ruleId(rules, R.REST_BREAK_PERIOD),
-          severity: "info",
-          message: `${restEntitlements} × 10-min paid rest break(s) required on ${entry.date} (${h.toFixed(2)}h shift, 1 per ${restPeriod}h).`,
-          detail: { date: entry.date, hoursWorked: h, entitlements: restEntitlements },
+          severity: "warn",
+          message: `Rest break violation risk on ${entry.date}: ${restEntitlements} × 10-min paid rest break(s) required for ${h.toFixed(2)}h shift — cannot confirm breaks were provided.`,
+          detail: { date: entry.date, hoursWorked: h, entitlements: restEntitlements, breakPeriodHours: restPeriod },
         });
       }
     }
 
     // ── Split-shift premium check ─────────────────────────────────────────
-    // CA split-shift premium: if a worker works two non-continuous shifts in one day
-    // with a non-meal break >1h between them, they are entitled to an extra hour at
-    // minimum wage. We detect this from breakMinutes > 60 (beyond meal break allowance).
     if (splitFlag >= 1 && isSplitShift(entry)) {
       const extraHourPremium = minWage;
       results.push({
@@ -425,16 +435,34 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
     }
   }
 
-  // ── Weekly OT check ───────────────────────────────────────────────────────
-  if (isEnforced(ef, "enforceWeeklyOt") && weeklyRegularHours > weeklyOt) {
-    const excess = weeklyRegularHours - weeklyOt;
-    results.push({
-      ruleType: R.WEEKLY_OT,
-      ruleId: ruleId(rules, R.WEEKLY_OT),
-      severity: "info",
-      message: `Weekly OT: ${weeklyRegularHours.toFixed(2)} regular hours this period exceeds ${weeklyOt}h threshold — ${excess.toFixed(2)}h at 1.5× (after CA daily-first OT adjustments).`,
-      detail: { weeklyHours: weeklyRegularHours, threshold: weeklyOt, excessHours: excess },
-    });
+  // ── Weekly OT check — computed per CA workweek (Sun–Sat) ─────────────────
+  // For each workweek in the period, sum regular hours (after daily OT removal)
+  // for non-7th-day entries, then flag if the weekly total exceeds weeklyOt.
+  if (isEnforced(ef, "enforceWeeklyOt")) {
+    for (const [weekSun, weekEntries] of Object.entries(entriesByWeek)) {
+      let weeklyRegularHours = 0;
+      for (const we of weekEntries) {
+        if (we.totalHours <= 0) continue;
+        if (seventhDayDates.has(we.date)) continue; // 7th-day hours excluded (already OT)
+        // Regular hours per day are capped at dailyOt1 (hours above that are daily OT)
+        weeklyRegularHours += Math.min(we.totalHours, dailyOt1);
+      }
+      if (weeklyRegularHours > weeklyOt) {
+        const excess = weeklyRegularHours - weeklyOt;
+        const weekEnd = (() => {
+          const d = isoToDate(weekSun);
+          d.setDate(d.getDate() + 6);
+          return d.toISOString().split("T")[0];
+        })();
+        results.push({
+          ruleType: R.WEEKLY_OT,
+          ruleId: ruleId(rules, R.WEEKLY_OT),
+          severity: "info",
+          message: `Weekly OT (week of ${weekSun}–${weekEnd}): ${weeklyRegularHours.toFixed(2)} regular hours exceeds ${weeklyOt}h — ${excess.toFixed(2)}h at 1.5× applies.`,
+          detail: { weekStart: weekSun, weekEnd, weeklyHours: weeklyRegularHours, threshold: weeklyOt, excessHours: excess },
+        });
+      }
+    }
   }
 
   return results;
