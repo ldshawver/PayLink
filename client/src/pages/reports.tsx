@@ -1939,7 +1939,7 @@ function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
         `${w.firstName} ${w.lastName}`, w.ssn || "N/A",
         t.grossPay.toFixed(2), t.fedTax.toFixed(2), t.ssTax.toFixed(2),
         t.medicareTax.toFixed(2), t.stateTax.toFixed(2), t.ssWages.toFixed(2), t.medicareWages.toFixed(2),
-        t.deductions.toFixed(2), t.netPay.toFixed(2),
+        t.netPay.toFixed(2),
       ];
     });
     downloadCSV(headers, rows, `w2_report_${year}.csv`);
@@ -1958,7 +1958,7 @@ function W2ReportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={handlePrint} data-testid="button-print-w2"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-w2"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
-          <SaveReportButton reportType="w2-annual" category="tax" defaultName="W-2 Annual Report" headers={["Employee", "SSN", "Gross Pay", "Fed Withheld", "SS Tax", "Medicare Tax", "State Withheld", "Deductions", "Net Pay"]} rows={companyEmployees.map(w => { const t = getWorkerTotals(w); return [w.firstName + " " + w.lastName, w.ssn || "", "$" + t.grossPay.toFixed(2), "$" + t.fedTax.toFixed(2), "$" + t.ssTax.toFixed(2), "$" + t.medicareTax.toFixed(2), "$" + t.stateTax.toFixed(2), "$" + t.deductions.toFixed(2), "$" + t.netPay.toFixed(2)]; })} />
+          <SaveReportButton reportType="w2-annual" category="tax" defaultName="W-2 Annual Report" headers={["Employee", "SSN", "Gross Pay", "Fed Withheld", "SS Tax", "Medicare Tax", "State Withheld", "Net Pay"]} rows={companyEmployees.map(w => { const t = getWorkerTotals(w); return [w.firstName + " " + w.lastName, w.ssn || "", "$" + t.grossPay.toFixed(2), "$" + t.fedTax.toFixed(2), "$" + t.ssTax.toFixed(2), "$" + t.medicareTax.toFixed(2), "$" + t.stateTax.toFixed(2), "$" + t.netPay.toFixed(2)]; })} />
         </div>
         {companyEmployees.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-w2">No W-2 eligible employees found for {year}.</p>
@@ -2252,18 +2252,22 @@ function DE9Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: bo
   const [quarter, setQuarter] = useState("Q1");
   const [companyId, setCompanyId] = useState("all");
   const { workers, companies } = usePayrollData(open);
-  const summary = usePayrollSummary(open, year, quarter, companyId);
+  const { data: qTaxes, isLoading: loadingDE9 } = useQuarterlyTaxes(open, year, quarter, companyId, companies);
 
   const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
   const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
 
-  const gde9 = summary.grandTotal;
-  const totalWages = gde9.grossPay;
-  const pitWithheld = gde9.stateWithholding;
-  const sdiWithheld = gde9.sdiWithheld;
-  const suiWages = gde9.suiTaxableWages;
-  const suiContrib = gde9.suiTax;
-  const ettContrib = gde9.ettTax;
+  const totals = qTaxes?.totals || [];
+  const getAmt = (code: string) => totals.find(t => t.taxCode === code)?.totalAmount || 0;
+  const getTaxableWages = (code: string) => totals.find(t => t.taxCode === code)?.totalTaxableWages || 0;
+
+  const totalWages = Object.values(qTaxes?.byWorker || {}).reduce((s, lines) => s + (lines["__grossPay"]?.amount || 0), 0);
+  const pitWithheld = getAmt("ca_pit");
+  const sdiWithheld = getAmt("ca_sdi");
+  const suiWages = getTaxableWages("ca_ui");
+  const suiContrib = getAmt("ca_ui");
+  const ettContrib = getAmt("ca_ett");
+  const de9DataSource = (qTaxes?.runCount || 0) > 0 ? `Based on ${qTaxes?.runCount} processed payroll runs` : "No processed payroll runs found for this period";
 
   const handleExportCSV = () => {
     const headers = ["Line Item", "Amount"];
@@ -2297,6 +2301,8 @@ function DE9Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: bo
         </div>
         <div className="border rounded-lg p-4 space-y-3 mt-2">
           <h3 className="font-semibold text-sm">California DE 9 — {quarter} {year}</h3>
+          <p className="text-xs text-muted-foreground italic">{de9DataSource}</p>
+          {loadingDE9 && <div className="py-4 text-center text-muted-foreground text-sm">Loading stored tax data…</div>}
           <div className="overflow-x-auto">
           <Table>
             <TableBody>
@@ -2324,15 +2330,26 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
   const [quarter, setQuarter] = useState("Q1");
   const [companyId, setCompanyId] = useState("all");
   const { workers, companies } = usePayrollData(open);
-  const summary = usePayrollSummary(open, year, quarter, companyId);
+  const { data: qTaxes, isLoading: loadingDE9C } = useQuarterlyTaxes(open, year, quarter, companyId, companies);
 
   const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
   const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
+  const byWorker = qTaxes?.byWorker || {};
 
   const getWorkerData = (w: typeof employees[0]) => {
-    const wt = summary.workerTotals.find(t => t.workerId === w.id);
-    return { wages: wt?.grossPay ?? 0, pitWithheld: wt?.stateWithholding ?? 0, sdiWithheld: wt?.sdiWithheld ?? 0 };
+    const lines = byWorker[w.id] || {};
+    const pitWages = lines["ca_pit"]?.taxableWages ?? 0;
+    const pitWithheld = lines["ca_pit"]?.amount ?? 0;
+    const sdiWages = lines["ca_sdi"]?.taxableWages ?? 0;
+    const sdiWithheld = lines["ca_sdi"]?.amount ?? 0;
+    const grossPay = lines["__grossPay"]?.amount ?? 0;
+    return { wages: grossPay || pitWages, pitWithheld, sdiWages: grossPay || sdiWages, sdiWithheld };
   };
+
+  const de9cTotals = filtered.reduce((acc, w) => {
+    const d = getWorkerData(w);
+    return { wages: acc.wages + d.wages, pitWithheld: acc.pitWithheld + d.pitWithheld, sdiWages: acc.sdiWages + d.sdiWages, sdiWithheld: acc.sdiWithheld + d.sdiWithheld };
+  }, { wages: 0, pitWithheld: 0, sdiWages: 0, sdiWithheld: 0 });
 
   const handleExportCSV = () => {
     const headers = ["SSN", "Last Name", "First Name", "PIT Wages", "PIT Withheld", "SDI Wages", "SDI Withheld"];
@@ -2341,7 +2358,7 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
       return [
         w.ssn || "N/A", w.lastName, w.firstName,
         d.wages.toFixed(2), d.pitWithheld.toFixed(2),
-        d.wages.toFixed(2), d.sdiWithheld.toFixed(2),
+        d.sdiWages.toFixed(2), d.sdiWithheld.toFixed(2),
       ];
     });
     downloadCSV(headers, rows, `de9c_${year}_${quarter}.csv`);
@@ -2360,8 +2377,9 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
         <div className="flex items-center gap-2 mt-2">
           <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-de9c"><Printer className="mr-2 h-4 w-4" />Print</Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-de9c"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
-          <SaveReportButton reportType="de9c" category="tax" defaultName="DE 9C" headers={["Employee", "SSN", "PIT Wages", "PIT Withheld", "SDI Wages", "SDI Withheld"]} rows={filtered.map(e => { const d = getWorkerData(e); return [e.firstName + " " + e.lastName, e.ssn || "", "$" + d.wages.toFixed(2), "$" + d.pitWithheld.toFixed(2), "$" + d.wages.toFixed(2), "$" + d.sdiWithheld.toFixed(2)]; })} />
+          <SaveReportButton reportType="de9c" category="tax" defaultName="DE 9C" headers={["Employee", "SSN", "PIT Wages", "PIT Withheld", "SDI Wages", "SDI Withheld"]} rows={filtered.map(e => { const d = getWorkerData(e); return [e.firstName + " " + e.lastName, e.ssn || "", "$" + d.wages.toFixed(2), "$" + d.pitWithheld.toFixed(2), "$" + d.sdiWages.toFixed(2), "$" + d.sdiWithheld.toFixed(2)]; })} />
         </div>
+        {loadingDE9C && <div className="py-4 text-center text-muted-foreground text-sm">Loading stored tax data…</div>}
         {filtered.length === 0 ? (
           <p className="text-muted-foreground py-4" data-testid="text-no-de9c">No employees found for the selected period.</p>
         ) : (
@@ -2384,23 +2402,147 @@ function DE9CDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: b
                     <TableCell>{w.firstName}</TableCell>
                     <TableCell className="text-right">${d.wages.toFixed(2)}</TableCell>
                     <TableCell className="text-right">${d.pitWithheld.toFixed(2)}</TableCell>
-                    <TableCell className="text-right">${d.wages.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${d.sdiWages.toFixed(2)}</TableCell>
                     <TableCell className="text-right">${d.sdiWithheld.toFixed(2)}</TableCell>
                   </TableRow>
                 );
               })}
               <TableRow className="font-bold border-t-2">
                 <TableCell colSpan={3}>Totals</TableCell>
-                <TableCell className="text-right">${summary.grandTotal.grossPay.toFixed(2)}</TableCell>
-                <TableCell className="text-right">${summary.grandTotal.stateWithholding.toFixed(2)}</TableCell>
-                <TableCell className="text-right">${summary.grandTotal.grossPay.toFixed(2)}</TableCell>
-                <TableCell className="text-right">${summary.grandTotal.sdiWithheld.toFixed(2)}</TableCell>
+                <TableCell className="text-right">${de9cTotals.wages.toFixed(2)}</TableCell>
+                <TableCell className="text-right">${de9cTotals.pitWithheld.toFixed(2)}</TableCell>
+                <TableCell className="text-right">${de9cTotals.sdiWages.toFixed(2)}</TableCell>
+                <TableCell className="text-right">${de9cTotals.sdiWithheld.toFixed(2)}</TableCell>
               </TableRow>
             </TableBody>
           </Table>
           </div>
         )}
         <p className="text-xs text-muted-foreground mt-2">File with: California Employment Development Department (EDD) — accompanies DE 9</p>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EmployeeEarningsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [companyId, setCompanyId] = useState("all");
+  const { workers, companies } = usePayrollData(open);
+  const { data: ytdRows = [], isLoading: loadingYtd } = useCompanyYTDTaxes(open, year, companyId, companies);
+
+  const employees = workers.filter(w => w.workerType === "employee" && w.isActive);
+  const filtered = companyId === "all" ? employees : employees.filter(w => w.companyId === companyId);
+
+  const getYtd = (workerId: string) => ytdRows.find(r => r.workerId === workerId);
+
+  const totals = filtered.reduce((acc, w) => {
+    const y = getYtd(w.id);
+    if (!y) return acc;
+    return {
+      grossPay: acc.grossPay + y.grossPay,
+      federalWithheld: acc.federalWithheld + y.federalWithheld,
+      ssTaxEmployee: acc.ssTaxEmployee + y.ssTaxEmployee,
+      medicareTaxEmployee: acc.medicareTaxEmployee + y.medicareTaxEmployee,
+      caPitWithheld: acc.caPitWithheld + y.caPitWithheld,
+      caSdiWithheld: acc.caSdiWithheld + y.caSdiWithheld,
+      netPay: acc.netPay + y.netPay,
+    };
+  }, { grossPay: 0, federalWithheld: 0, ssTaxEmployee: 0, medicareTaxEmployee: 0, caPitWithheld: 0, caSdiWithheld: 0, netPay: 0 });
+
+  const handleExportCSV = () => {
+    const headers = ["Employee", "Gross Pay", "Fed Withheld", "SS Tax (Emp)", "Medicare (Emp)", "CA PIT", "CA SDI", "Total Deductions", "Net Pay"];
+    const rows = filtered.map(w => {
+      const y = getYtd(w.id);
+      const totalDed = (y?.federalWithheld || 0) + (y?.ssTaxEmployee || 0) + (y?.medicareTaxEmployee || 0) + (y?.caPitWithheld || 0) + (y?.caSdiWithheld || 0);
+      return [
+        `${w.firstName} ${w.lastName}`,
+        (y?.grossPay || 0).toFixed(2),
+        (y?.federalWithheld || 0).toFixed(2),
+        (y?.ssTaxEmployee || 0).toFixed(2),
+        (y?.medicareTaxEmployee || 0).toFixed(2),
+        (y?.caPitWithheld || 0).toFixed(2),
+        (y?.caSdiWithheld || 0).toFixed(2),
+        totalDed.toFixed(2),
+        (y?.netPay || 0).toFixed(2),
+      ];
+    });
+    downloadCSV(headers, rows, `employee_earnings_${year}.csv`);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-6xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle data-testid="text-dialog-title-earnings">Employee Earnings Report — YTD {year}</DialogTitle>
+          <p className="text-xs text-muted-foreground mt-1">Year-to-date gross pay, tax withholdings, and net pay per employee — sourced from stored payroll item tax records.</p>
+        </DialogHeader>
+        <TaxReportFilters year={year} setYear={setYear} quarter="" setQuarter={() => {}} companyId={companyId} setCompanyId={setCompanyId} companies={companies} showQuarter={false} />
+        <div className="flex items-center gap-2 mt-2">
+          <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-earnings"><Printer className="mr-2 h-4 w-4" />Print</Button>
+          <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-earnings"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+          <SaveReportButton
+            reportType="employee-earnings"
+            category="tax"
+            defaultName="Employee Earnings"
+            headers={["Employee", "Gross Pay", "Fed Withheld", "SS Tax", "Medicare", "CA PIT", "CA SDI", "Net Pay"]}
+            rows={filtered.map(w => {
+              const y = getYtd(w.id);
+              return [`${w.firstName} ${w.lastName}`, "$" + (y?.grossPay || 0).toFixed(2), "$" + (y?.federalWithheld || 0).toFixed(2), "$" + (y?.ssTaxEmployee || 0).toFixed(2), "$" + (y?.medicareTaxEmployee || 0).toFixed(2), "$" + (y?.caPitWithheld || 0).toFixed(2), "$" + (y?.caSdiWithheld || 0).toFixed(2), "$" + (y?.netPay || 0).toFixed(2)];
+            })}
+          />
+        </div>
+        {loadingYtd && <div className="py-4 text-center text-muted-foreground text-sm">Loading stored tax data…</div>}
+        {filtered.length === 0 ? (
+          <p className="text-muted-foreground py-4" data-testid="text-no-earnings">No employees found.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Employee</TableHead>
+                  <TableHead className="text-right">Gross Pay</TableHead>
+                  <TableHead className="text-right">Fed Withheld</TableHead>
+                  <TableHead className="text-right">SS Tax (Emp)</TableHead>
+                  <TableHead className="text-right">Medicare (Emp)</TableHead>
+                  <TableHead className="text-right">CA PIT</TableHead>
+                  <TableHead className="text-right">CA SDI</TableHead>
+                  <TableHead className="text-right">Total Deducted</TableHead>
+                  <TableHead className="text-right">Net Pay</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.map(w => {
+                  const y = getYtd(w.id);
+                  const totalDed = (y?.federalWithheld || 0) + (y?.ssTaxEmployee || 0) + (y?.medicareTaxEmployee || 0) + (y?.caPitWithheld || 0) + (y?.caSdiWithheld || 0);
+                  return (
+                    <TableRow key={w.id} data-testid={`row-earnings-${w.id}`}>
+                      <TableCell className="font-medium">{w.firstName} {w.lastName}</TableCell>
+                      <TableCell className="text-right">${(y?.grossPay || 0).toFixed(2)}</TableCell>
+                      <TableCell className="text-right">${(y?.federalWithheld || 0).toFixed(2)}</TableCell>
+                      <TableCell className="text-right">${(y?.ssTaxEmployee || 0).toFixed(2)}</TableCell>
+                      <TableCell className="text-right">${(y?.medicareTaxEmployee || 0).toFixed(2)}</TableCell>
+                      <TableCell className="text-right">${(y?.caPitWithheld || 0).toFixed(2)}</TableCell>
+                      <TableCell className="text-right">${(y?.caSdiWithheld || 0).toFixed(2)}</TableCell>
+                      <TableCell className="text-right">${totalDed.toFixed(2)}</TableCell>
+                      <TableCell className="text-right font-medium">${(y?.netPay || 0).toFixed(2)}</TableCell>
+                    </TableRow>
+                  );
+                })}
+                <TableRow className="font-bold border-t-2">
+                  <TableCell>Totals ({filtered.length} employees)</TableCell>
+                  <TableCell className="text-right">${totals.grossPay.toFixed(2)}</TableCell>
+                  <TableCell className="text-right">${totals.federalWithheld.toFixed(2)}</TableCell>
+                  <TableCell className="text-right">${totals.ssTaxEmployee.toFixed(2)}</TableCell>
+                  <TableCell className="text-right">${totals.medicareTaxEmployee.toFixed(2)}</TableCell>
+                  <TableCell className="text-right">${totals.caPitWithheld.toFixed(2)}</TableCell>
+                  <TableCell className="text-right">${totals.caSdiWithheld.toFixed(2)}</TableCell>
+                  <TableCell className="text-right">${(totals.federalWithheld + totals.ssTaxEmployee + totals.medicareTaxEmployee + totals.caPitWithheld + totals.caSdiWithheld).toFixed(2)}</TableCell>
+                  <TableCell className="text-right">${totals.netPay.toFixed(2)}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -3627,6 +3769,7 @@ export default function ReportsPage() {
   const [de9cOpen, setDE9COpen] = useState(false);
   const [taxLiabilityOpen, setTaxLiabilityOpen] = useState(false);
   const [taxAuditOpen, setTaxAuditOpen] = useState(false);
+  const [employeeEarningsOpen, setEmployeeEarningsOpen] = useState(false);
 
   return (
     <div className="p-4 md:p-6 space-y-6">
@@ -3832,6 +3975,12 @@ export default function ReportsPage() {
               icon={<Shield className="h-5 w-5" />}
               onGenerate={() => setTaxAuditOpen(true)}
             />
+            <ReportCard
+              title="Employee Earnings Report"
+              description="YTD gross pay, federal/CA tax withholdings, SS, Medicare, and net pay per employee — sourced from stored tax engine records."
+              icon={<DollarSign className="h-5 w-5" />}
+              onGenerate={() => setEmployeeEarningsOpen(true)}
+            />
           </div>
         </TabsContent>
 
@@ -3883,6 +4032,7 @@ export default function ReportsPage() {
       <DE9CDialog open={de9cOpen} onOpenChange={setDE9COpen} />
       <TaxLiabilityDialog open={taxLiabilityOpen} onOpenChange={setTaxLiabilityOpen} />
       <TaxAuditDialog open={taxAuditOpen} onOpenChange={setTaxAuditOpen} />
+      <EmployeeEarningsDialog open={employeeEarningsOpen} onOpenChange={setEmployeeEarningsOpen} />
       <QualificationSummaryDialog open={qualificationSummaryOpen} onOpenChange={setQualificationSummaryOpen} />
       <ReviewSummaryDialog open={reviewSummaryOpen} onOpenChange={setReviewSummaryOpen} />
 

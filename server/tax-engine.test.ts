@@ -62,8 +62,9 @@ function group(name: string, fn: () => void) {
 group("Federal Income Tax — biweekly single, $2,000 gross, 0 allowances", () => {
   const line = calcFederalIncomeTax(2000, 0, "single", 0, 0, "biweekly");
   // Annualized: 2000 * 26 = 52,000
-  // 22% bracket: base=5135, rate=22% on (52000-44725)=7275 → tax=1605.50 / 26 = 61.75
-  assertClose("amount", line.amount, 61.75);
+  // Progressive brackets: 10% on $11,600=$1,160; 12% on $33,125=$3,975; 22% on $7,275=$1,600.50
+  // Annual total = $6,735.50 / 26 = $259.06
+  assertClose("amount", line.amount, 259.06, 1.00);
   assertEqual("taxCode", line.taxCode, "fed_income_tax");
   assertEqual("isEmployerPaid", line.isEmployerPaid, false);
   assertClose("taxableWages", line.taxableWages, 2000);
