@@ -2323,18 +2323,21 @@ export default function PrintCheckPage() {
         )}
       </div>
 
+      {/* @media print rules are scoped to packet mode only.
+          Single checks render via server-generated PDF (iframe); no browser print CSS needed for that path. */}
       <style>{`
+        ${isPacketMode ? `
         @media print {
           @page { size: 8.5in 11in; margin: 0; }
           .print-hide { display: none !important; }
           [data-sidebar], [data-sidebar="sidebar"], aside, nav,
           .trial-banner, [role="banner"], header { display: none !important; }
-          .check-page { page-break-after: always; }
           .packet-page { page-break-after: always; }
           .print-content { display: block; }
           .flex.h-screen { display: block !important; }
           main { overflow: visible !important; }
         }
+        ` : ""}
         @media screen {
           body { background: #e5e7eb; margin: 0; }
           .print-content {

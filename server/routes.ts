@@ -2434,12 +2434,23 @@ export async function registerRoutes(
       let totalGross = 0, totalNet = 0, totalHours = 0, totalOT = 0;
       // Atomically reserve a block of check numbers using a transaction-level advisory lock.
       // pg_advisory_xact_lock releases automatically on commit/rollback, preventing leaks on pooled connections.
+      // Compute the highest check number already used by manual-override items so the
+      // advisory-lock reservation covers the full range before any concurrent run reads it.
+      const maxManualCheck = manualOverrideItems.reduce((max, mi) => {
+        const n = parseInt((mi as any).checkNumber || "0", 10);
+        return Math.max(max, n);
+      }, 0);
+      const nonOverrideCount = activeWorkers.filter(w => !manualOverrideWorkerIds.has(w.id)).length;
+
       const _checkNumStart = await db.transaction(async (tx) => {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(abs(hashtext(${run.companyId}))::bigint)`);
         const _r = await tx.execute(sql`SELECT next_check_number FROM companies WHERE id = ${run.companyId} FOR UPDATE`);
         const _s = Number(((_r as any).rows || (_r as any)[0])?.next_check_number || 1);
-        await tx.execute(sql`UPDATE companies SET next_check_number = ${_s + activeWorkers.length + 2} WHERE id = ${run.companyId}`);
-        return _s;
+        // startFrom skips past all manual-override check numbers so auto-assignment never overlaps them.
+        const startFrom = Math.max(_s, maxManualCheck + 1);
+        // Reserve exactly enough numbers for non-override workers (plus 1 as buffer).
+        await tx.execute(sql`UPDATE companies SET next_check_number = ${startFrom + nonOverrideCount + 1} WHERE id = ${run.companyId}`);
+        return startFrom;
       });
       let checkNum = _checkNumStart;
       for (const mi of manualOverrideItems) {
@@ -2447,9 +2458,7 @@ export async function registerRoutes(
         totalNet   += parseFloat((mi as any).netPay   || "0");
         totalHours += parseFloat((mi as any).regularHours  || "0") + parseFloat((mi as any).overtimeHours || "0") + parseFloat((mi as any).doubleTimeHours || "0");
         totalOT    += parseFloat((mi as any).overtimeHours || "0");
-        // Reserve the check number used by this manual item so auto items don't collide
-        const miCheck = parseInt((mi as any).checkNumber || "0", 10);
-        if (miCheck >= checkNum) checkNum = miCheck + 1;
+        // Tally the manual item's totals; check number reservation was already handled above.
       }
 
       const existingYtdByWorker: Record<string, { gross: number; deductions: number; net: number }> = {};
@@ -14668,6 +14677,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Load active check template for show/hide flags (same template used on original print)
       const reprintTplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const reprintTplRow = ((reprintTplRaw as any).rows || reprintTplRaw as any[])[0] || null;
+      if (!reprintTplRow) {
+        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
+      }
       let reprintLayoutConfig: Record<string, boolean> | undefined;
       if (reprintTplRow?.layout_config) {
         try { reprintLayoutConfig = typeof reprintTplRow.layout_config === "string" ? JSON.parse(reprintTplRow.layout_config) : reprintTplRow.layout_config; } catch { /* use defaults */ }
