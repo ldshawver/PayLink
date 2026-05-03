@@ -2448,8 +2448,8 @@ export async function registerRoutes(
         const _s = Number((((_r as any).rows || (_r as any))[0])?.next_check_number || 1);
         // startFrom skips past all manual-override check numbers so auto-assignment never overlaps them.
         const startFrom = Math.max(_s, maxManualCheck + 1);
-        // Reserve exactly enough numbers for non-override workers (plus 1 as buffer).
-        await tx.execute(sql`UPDATE companies SET next_check_number = ${startFrom + nonOverrideCount + 1} WHERE id = ${run.companyId}`);
+        // Reserve exactly enough numbers for non-override workers (no extra buffer to prevent numbering gaps).
+        await tx.execute(sql`UPDATE companies SET next_check_number = ${startFrom + nonOverrideCount} WHERE id = ${run.companyId}`);
         return startFrom;
       });
       let checkNum = _checkNumStart;
@@ -14323,6 +14323,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="test-check-${rsId.slice(0, 8)}.pdf"`);
       res.send(Buffer.from(pdfBytes));
+
+      // Log calibration_test audit event after successful render.
+      const calUserId = (req.session as any)?.userId;
+      const calCompanyId = rs.company_id || null;
+      await db.execute(sql`
+        INSERT INTO check_print_audit_logs (
+          company_id, initiated_by_user_id,
+          check_count, total_amount, micr_validation,
+          validation_errors, print_blocked, render_engine,
+          event_type
+        ) VALUES (
+          ${calCompanyId}, ${calUserId || null},
+          0, 0, 'calibration_test',
+          '[]', false, 'server-pdf',
+          'calibration_test'
+        )
+      `);
     } catch (err: any) {
       console.error("[calibrationPDF]", err);
       res.status(500).json({ message: safeErrorMessage(err, "Failed to generate calibration check PDF") });
@@ -14711,21 +14728,6 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source." });
       if (!rs?.account_number)  return res.status(422).json({ message: "No account number configured for this company's remittance source." });
 
-      // Log the reprint audit event
-      await db.execute(sql`
-        INSERT INTO check_print_audit_logs (
-          payroll_run_id, company_id, initiated_by_user_id,
-          check_count, total_amount, micr_validation,
-          validation_errors, print_blocked, render_engine,
-          event_type, worker_id, check_number
-        ) VALUES (
-          ${itemRow.payrollRunId || null}, ${compId || null}, ${userId || null},
-          1, ${itemRow.netPay || 0}, 'ok',
-          '[]', false, 'server-pdf',
-          'reprint', ${itemRow.workerId || null}, ${itemRow.checkNumber || null}
-        )
-      `);
-
       // Load active check template; 422 when no default template configured.
       const reprintTplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const reprintTplRow = ((reprintTplRaw as any).rows || reprintTplRaw as any[])[0] || null;
@@ -14757,6 +14759,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         layoutConfig: reprintLayoutConfig,
         calibrationOffsets: reprintCalibrationOffsets,
       });
+
+      // Log the reprint audit event only after PDF renders successfully (no phantom events on failure).
+      await db.execute(sql`
+        INSERT INTO check_print_audit_logs (
+          payroll_run_id, company_id, initiated_by_user_id,
+          check_count, total_amount, micr_validation,
+          validation_errors, print_blocked, render_engine,
+          event_type, worker_id, check_number
+        ) VALUES (
+          ${itemRow.payrollRunId || null}, ${compId || null}, ${userId || null},
+          1, ${itemRow.netPay || 0}, 'ok',
+          '[]', false, 'server-pdf',
+          'reprint', ${itemRow.workerId || null}, ${itemRow.checkNumber || null}
+        )
+      `);
 
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="reprint-${String(itemRow.checkNumber || payrollItemId.slice(0,8))}.pdf"`);
