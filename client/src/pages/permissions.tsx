@@ -16,7 +16,12 @@ import { useToast } from "@/hooks/use-toast";
 type Role = { id: string; name: string; description?: string; level: number };
 type RolePermission = {
   id: string; roleId: string; resource: string;
-  canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean; canExport: boolean; canApprove: boolean;
+  canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean;
+  canExport: boolean; canApprove: boolean; canConfigure: boolean;
+  canViewOwn: boolean; canEditOwn: boolean;
+  canViewSubordinates: boolean; canEditSubordinates: boolean; canApproveSubordinates: boolean;
+  canViewDepartment: boolean; canEditDepartment: boolean; canApproveDepartment: boolean;
+  canViewCompany: boolean; canEditCompany: boolean; canApproveCompany: boolean;
 };
 type UserRecord = { id: string; username: string; role: string; companyId?: string };
 type UserRole = { id: string; userId: string; roleId: string; scopeType?: string };
@@ -29,31 +34,53 @@ type EffectivePerm = {
   scope?: string;
 };
 
-const PERMISSION_ICONS: Record<string, string> = {
-  view: "V",
-  create: "C",
-  edit: "E",
-  delete: "D",
-  export: "X",
-  approve: "A",
-};
+const FLAT_PERMS: { key: keyof RolePermission; label: string; abbr: string; color: string }[] = [
+  { key: "canView",    label: "View",      abbr: "V",  color: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" },
+  { key: "canCreate",  label: "Create",    abbr: "C",  color: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" },
+  { key: "canEdit",    label: "Edit",      abbr: "E",  color: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" },
+  { key: "canDelete",  label: "Delete",    abbr: "D",  color: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" },
+  { key: "canExport",  label: "Export",    abbr: "X",  color: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200" },
+  { key: "canApprove", label: "Approve",   abbr: "A",  color: "bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200" },
+  { key: "canConfigure", label: "Configure", abbr: "K", color: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200" },
+];
 
-const PERMISSION_COLORS: Record<string, string> = {
-  view: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-  create: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
-  edit: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
-  delete: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
-  export: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
-  approve: "bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200",
-};
+const SCOPE_PERMS: { key: keyof RolePermission; label: string; abbr: string; color: string; scope: string }[] = [
+  { key: "canViewOwn",             label: "View Own",             abbr: "Vo", scope: "own",   color: "border border-blue-400 text-blue-700 dark:text-blue-300 bg-transparent" },
+  { key: "canEditOwn",             label: "Edit Own",             abbr: "Eo", scope: "own",   color: "border border-yellow-400 text-yellow-700 dark:text-yellow-300 bg-transparent" },
+  { key: "canViewSubordinates",    label: "View Subordinates",    abbr: "Vs", scope: "subs",  color: "border border-cyan-500 text-cyan-700 dark:text-cyan-300 bg-transparent" },
+  { key: "canEditSubordinates",    label: "Edit Subordinates",    abbr: "Es", scope: "subs",  color: "border border-orange-400 text-orange-700 dark:text-orange-300 bg-transparent" },
+  { key: "canApproveSubordinates", label: "Approve Subordinates", abbr: "As", scope: "subs",  color: "border border-teal-500 text-teal-700 dark:text-teal-300 bg-transparent" },
+  { key: "canViewDepartment",      label: "View Dept",            abbr: "Vd", scope: "dept",  color: "border border-indigo-500 text-indigo-700 dark:text-indigo-300 bg-transparent" },
+  { key: "canEditDepartment",      label: "Edit Dept",            abbr: "Ed", scope: "dept",  color: "border border-amber-500 text-amber-700 dark:text-amber-300 bg-transparent" },
+  { key: "canApproveDepartment",   label: "Approve Dept",         abbr: "Ad", scope: "dept",  color: "border border-emerald-500 text-emerald-700 dark:text-emerald-300 bg-transparent" },
+  { key: "canViewCompany",         label: "View Company",         abbr: "Vc", scope: "co",    color: "border border-violet-500 text-violet-700 dark:text-violet-300 bg-transparent" },
+  { key: "canEditCompany",         label: "Edit Company",         abbr: "Ec", scope: "co",    color: "border border-rose-500 text-rose-700 dark:text-rose-300 bg-transparent" },
+  { key: "canApproveCompany",      label: "Approve Company",      abbr: "Ac", scope: "co",    color: "border border-green-600 text-green-700 dark:text-green-300 bg-transparent" },
+];
 
-function PermBadge({ type }: { type: string }) {
+const ALL_PERM_META = [
+  ...FLAT_PERMS.map(p => ({ ...p, isScope: false })),
+  ...SCOPE_PERMS.map(p => ({ ...p, isScope: true })),
+];
+
+const PERM_META_BY_TYPE: Record<string, { abbr: string; color: string }> = Object.fromEntries(
+  ALL_PERM_META.map(p => [p.label.toLowerCase().replace(/ /g, "_"), { abbr: p.abbr, color: p.color }])
+);
+
+const PERMISSION_ICONS: Record<string, string> = Object.fromEntries(
+  ALL_PERM_META.map(p => [p.key.replace(/^can/, "").replace(/([A-Z])/g, "_$1").toLowerCase().replace(/^_/, ""), p.abbr])
+);
+
+function PermBadge({ type, abbr, color }: { type: string; abbr?: string; color?: string }) {
+  const meta = PERM_META_BY_TYPE[type] || { abbr: (abbr || type[0].toUpperCase()), color: "bg-gray-100 text-gray-600" };
+  const displayAbbr = abbr ?? meta.abbr;
+  const displayColor = color ?? meta.color;
   return (
     <span
       title={type}
-      className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-bold ${PERMISSION_COLORS[type] || "bg-gray-100 text-gray-600"}`}
+      className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-bold ${displayColor}`}
     >
-      {PERMISSION_ICONS[type] || type[0].toUpperCase()}
+      {displayAbbr}
     </span>
   );
 }
@@ -62,19 +89,42 @@ function CellPermissions({ perm }: { perm: RolePermission | undefined }) {
   if (!perm) {
     return <span className="text-muted-foreground text-xs">—</span>;
   }
-  const granted: string[] = [];
-  if (perm.canView) granted.push("view");
-  if (perm.canCreate) granted.push("create");
-  if (perm.canEdit) granted.push("edit");
-  if (perm.canDelete) granted.push("delete");
-  if (perm.canExport) granted.push("export");
-  if (perm.canApprove) granted.push("approve");
 
-  if (granted.length === 0) return <span className="text-muted-foreground text-xs">—</span>;
+  const flatGranted = FLAT_PERMS.filter(p => perm[p.key]);
+  const scopeGranted = SCOPE_PERMS.filter(p => perm[p.key]);
+
+  if (flatGranted.length === 0 && scopeGranted.length === 0) {
+    return <span className="text-muted-foreground text-xs">—</span>;
+  }
 
   return (
-    <div className="flex flex-wrap gap-0.5 justify-center">
-      {granted.map(p => <PermBadge key={p} type={p} />)}
+    <div className="flex flex-col gap-0.5 items-center">
+      {flatGranted.length > 0 && (
+        <div className="flex flex-wrap gap-0.5 justify-center">
+          {flatGranted.map(p => (
+            <span
+              key={p.key}
+              title={p.label}
+              className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-bold ${p.color}`}
+            >
+              {p.abbr}
+            </span>
+          ))}
+        </div>
+      )}
+      {scopeGranted.length > 0 && (
+        <div className="flex flex-wrap gap-0.5 justify-center">
+          {scopeGranted.map(p => (
+            <span
+              key={p.key}
+              title={`${p.label} (scope: ${p.scope})`}
+              className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-semibold ${p.color}`}
+            >
+              {p.abbr}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -151,7 +201,18 @@ function EffectivePermissionsPanel({ users }: { users: UserRecord[] }) {
                       {ep.scope && <Badge variant="outline" className="text-xs">{ep.scope}</Badge>}
                     </div>
                     <div className="flex flex-wrap gap-1">
-                      {ep.permissions.map(p => <PermBadge key={p} type={p} />)}
+                      {ep.permissions.map(p => {
+                        const meta = ALL_PERM_META.find(m => m.key === `can${p.split("_").map((s: string) => s.charAt(0).toUpperCase() + s.slice(1)).join("")}`);
+                        return (
+                          <span
+                            key={p}
+                            title={p}
+                            className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-bold ${meta?.color || "bg-gray-100 text-gray-600"}`}
+                          >
+                            {meta?.abbr || p[0].toUpperCase()}
+                          </span>
+                        );
+                      })}
                     </div>
                     <p className="text-xs text-muted-foreground">via {ep.source}</p>
                   </div>
@@ -248,15 +309,31 @@ export default function PermissionsPage() {
 
       {/* Legend */}
       <Card>
-        <CardContent className="pt-4 pb-3">
+        <CardContent className="pt-4 pb-3 space-y-3">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Legend:</span>
-            {Object.entries(PERMISSION_ICONS).map(([type, icon]) => (
-              <div key={type} className="flex items-center gap-1.5">
-                <PermBadge type={type} />
-                <span className="text-xs capitalize">{type}</span>
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider w-20">Flat:</span>
+            {FLAT_PERMS.map(p => (
+              <div key={p.key} className="flex items-center gap-1.5">
+                <span className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-bold ${p.color}`}>{p.abbr}</span>
+                <span className="text-xs">{p.label}</span>
               </div>
             ))}
+          </div>
+          <Separator />
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider w-20">Scope:</span>
+            {SCOPE_PERMS.map(p => (
+              <div key={p.key} className="flex items-center gap-1.5">
+                <span className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-semibold ${p.color}`}>{p.abbr}</span>
+                <span className="text-xs">{p.label}</span>
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
+            <span className="text-xs text-muted-foreground"><strong>own</strong> = self only</span>
+            <span className="text-xs text-muted-foreground"><strong>subs</strong> = direct reports</span>
+            <span className="text-xs text-muted-foreground"><strong>dept</strong> = department-wide</span>
+            <span className="text-xs text-muted-foreground"><strong>co</strong> = entire company</span>
           </div>
         </CardContent>
       </Card>

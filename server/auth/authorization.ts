@@ -6,8 +6,8 @@ export type Permission =
   | "view" | "create" | "edit" | "delete" | "export" | "approve" | "configure"
   | "view_own" | "edit_own"
   | "view_subordinates" | "edit_subordinates" | "approve_subordinates"
-  | "view_department" | "edit_department"
-  | "view_company" | "edit_company";
+  | "view_department" | "edit_department" | "approve_department"
+  | "view_company" | "edit_company" | "approve_company";
 
 export type AuthorizationResult = {
   granted: boolean;
@@ -16,33 +16,54 @@ export type AuthorizationResult = {
   scope?: string;
 };
 
-const PERMISSION_COLUMN: Record<Permission, keyof typeof rolePermissions.$inferSelect> = {
-  view: "canView",
-  create: "canCreate",
-  edit: "canEdit",
-  delete: "canDelete",
-  export: "canExport",
-  approve: "canApprove",
+export const PERMISSION_COLUMN: Record<Permission, keyof typeof rolePermissions.$inferSelect> = {
+  view:                 "canView",
+  create:               "canCreate",
+  edit:                 "canEdit",
+  delete:               "canDelete",
+  export:               "canExport",
+  approve:              "canApprove",
+  configure:            "canConfigure",
+  view_own:             "canViewOwn",
+  edit_own:             "canEditOwn",
+  view_subordinates:    "canViewSubordinates",
+  edit_subordinates:    "canEditSubordinates",
+  approve_subordinates: "canApproveSubordinates",
+  view_department:      "canViewDepartment",
+  edit_department:      "canEditDepartment",
+  approve_department:   "canApproveDepartment",
+  view_company:         "canViewCompany",
+  edit_company:         "canEditCompany",
+  approve_company:      "canApproveCompany",
 };
 
-const SYSTEM_ROLE_PERMISSIONS: Record<string, Record<string, Permission[]>> = {
-  admin: {
-    "*": ["view", "create", "edit", "delete", "export", "approve"],
-  },
-  manager: {
-    payroll: ["view"],
-    hr: ["view", "edit"],
-    employee: ["view", "create", "edit"],
-    attendance: ["view", "edit", "approve"],
-    schedule: ["view", "create", "edit", "delete"],
-    reports: ["view", "export"],
-  },
-  employee: {
-    attendance: ["view"],
-    schedule: ["view"],
-    "my-profile": ["view", "edit"],
-  },
-};
+type RolePermRow = typeof rolePermissions.$inferSelect;
+
+function permSatisfiedByRow(row: RolePermRow, permission: Permission): boolean {
+  const directCol = PERMISSION_COLUMN[permission];
+  if (row[directCol as keyof RolePermRow]) return true;
+
+  switch (permission) {
+    case "view_own":
+      return !!(row.canViewSubordinates || row.canViewDepartment || row.canViewCompany);
+    case "edit_own":
+      return !!(row.canEditSubordinates || row.canEditDepartment || row.canEditCompany);
+    case "view_subordinates":
+      return !!(row.canViewDepartment || row.canViewCompany);
+    case "edit_subordinates":
+      return !!(row.canEditDepartment || row.canEditCompany);
+    case "approve_subordinates":
+      return !!(row.canApproveDepartment || row.canApproveCompany);
+    case "view_department":
+      return !!(row.canViewCompany);
+    case "edit_department":
+      return !!(row.canEditCompany);
+    case "approve_department":
+      return !!(row.canApproveCompany);
+    default:
+      return false;
+  }
+}
 
 export async function checkPermission(
   userId: string,
@@ -63,25 +84,10 @@ export async function checkPermission(
   const user = userRows[0];
   const systemRole = user.role || "employee";
 
-  // Platform super admin always has access
   if (systemRole === "platform_super_admin") {
     return { granted: true, reason: "Platform super admin", role: systemRole };
   }
 
-  // Check system role shortcut permissions
-  const systemRolePerms = SYSTEM_ROLE_PERMISSIONS[systemRole];
-  if (systemRolePerms) {
-    const allResources = systemRolePerms["*"];
-    if (allResources && allResources.includes(permission)) {
-      return { granted: true, reason: `System role '${systemRole}' has wildcard access`, role: systemRole };
-    }
-    const resourcePerms = systemRolePerms[resource];
-    if (resourcePerms && resourcePerms.includes(permission)) {
-      return { granted: true, reason: `System role '${systemRole}' has '${permission}' on '${resource}'`, role: systemRole };
-    }
-  }
-
-  // Check database role assignments
   const userRoleRows = await db
     .select({ roleId: userRoles.roleId, scopeType: userRoles.scopeType, scopeId: userRoles.scopeId })
     .from(userRoles)
@@ -89,7 +95,6 @@ export async function checkPermission(
 
   if (userRoleRows.length > 0) {
     for (const ur of userRoleRows) {
-      const permColumn = PERMISSION_COLUMN[permission];
       const rolePerms = await db
         .select()
         .from(rolePermissions)
@@ -102,8 +107,8 @@ export async function checkPermission(
         .limit(1);
 
       if (rolePerms.length > 0) {
-        const perm = rolePerms[0];
-        if (perm[permColumn as keyof typeof perm]) {
+        const row = rolePerms[0];
+        if (permSatisfiedByRow(row, permission)) {
           const roleRows = await db.select().from(roles).where(eq(roles.id, ur.roleId)).limit(1);
           const roleName = roleRows[0]?.name || ur.roleId;
           return {
@@ -157,23 +162,20 @@ export async function getEffectivePermissions(
     }
   };
 
-  if (systemRole === "platform_super_admin" || systemRole === "admin") {
-    const allPerms: Permission[] = ["view", "create", "edit", "delete", "export", "approve"];
-    const allResources = ["payroll", "hr", "employee", "attendance", "schedule", "reports", "billing", "permissions", "users", "company"];
+  if (systemRole === "platform_super_admin") {
+    const allPerms: Permission[] = [
+      "view", "create", "edit", "delete", "export", "approve", "configure",
+      "view_own", "edit_own",
+      "view_subordinates", "edit_subordinates", "approve_subordinates",
+      "view_department", "edit_department", "approve_department",
+      "view_company", "edit_company", "approve_company",
+    ];
+    const allResources = [
+      "payroll", "hr", "workers", "timesheets", "schedules", "reports",
+      "billing", "permissions", "users", "company", "settings", "system_admin",
+    ];
     for (const r of allResources) {
       addPerms(r, allPerms, `system role: ${systemRole}`);
-    }
-  } else {
-    const systemRolePerms = SYSTEM_ROLE_PERMISSIONS[systemRole];
-    if (systemRolePerms) {
-      for (const [res, perms] of Object.entries(systemRolePerms)) {
-        if (res === "*") {
-          const allPerms: Permission[] = ["view", "create", "edit", "delete", "export", "approve"];
-          addPerms("*", allPerms, `system role: ${systemRole}`);
-        } else {
-          addPerms(res, perms as Permission[], `system role: ${systemRole}`);
-        }
-      }
     }
   }
 
@@ -196,7 +198,6 @@ export async function getEffectivePermissions(
       if (perm.canExport) granted.push("export");
       if (perm.canApprove) granted.push("approve");
       if (perm.canConfigure) granted.push("configure");
-      // Scope-based permissions
       if (perm.canViewOwn) granted.push("view_own");
       if (perm.canEditOwn) granted.push("edit_own");
       if (perm.canViewSubordinates) granted.push("view_subordinates");
@@ -204,8 +205,10 @@ export async function getEffectivePermissions(
       if (perm.canApproveSubordinates) granted.push("approve_subordinates");
       if (perm.canViewDepartment) granted.push("view_department");
       if (perm.canEditDepartment) granted.push("edit_department");
+      if (perm.canApproveDepartment) granted.push("approve_department");
       if (perm.canViewCompany) granted.push("view_company");
       if (perm.canEditCompany) granted.push("edit_company");
+      if (perm.canApproveCompany) granted.push("approve_company");
       if (granted.length > 0) {
         addPerms(perm.resource, granted, `role: ${roleName}`, ur.scopeType);
       }

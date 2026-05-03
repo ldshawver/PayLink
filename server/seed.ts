@@ -314,6 +314,113 @@ async function seedRolesAndPermissions() {
   }
 }
 
+async function seedDefaultRoleTemplates() {
+  try {
+    const existing = await db.select().from(rolePermissions).where(eq(rolePermissions.canViewDepartment, true)).limit(1);
+    if (existing.length > 0) {
+      console.log("Scope-aware role templates already seeded, skipping");
+      return;
+    }
+
+    const allRoles = await db.select().from(roles);
+    if (allRoles.length === 0) {
+      console.log("No roles found, skipping scope template seed");
+      return;
+    }
+    const roleMap: Record<string, string> = {};
+    for (const r of allRoles) roleMap[r.name] = r.id;
+
+    type ScopeFlags = {
+      canViewOwn?: boolean; canEditOwn?: boolean;
+      canViewSubordinates?: boolean; canEditSubordinates?: boolean; canApproveSubordinates?: boolean;
+      canViewDepartment?: boolean; canEditDepartment?: boolean; canApproveDepartment?: boolean;
+      canViewCompany?: boolean; canEditCompany?: boolean; canApproveCompany?: boolean;
+    };
+
+    const fullCompany: ScopeFlags = {
+      canViewOwn: true, canEditOwn: true,
+      canViewSubordinates: true, canEditSubordinates: true, canApproveSubordinates: true,
+      canViewDepartment: true, canEditDepartment: true, canApproveDepartment: true,
+      canViewCompany: true, canEditCompany: true, canApproveCompany: true,
+    };
+    const companyReadWrite: ScopeFlags = { canViewOwn: true, canEditOwn: true, canViewCompany: true, canEditCompany: true, canApproveCompany: true };
+    const companyRead: ScopeFlags = { canViewOwn: true, canViewCompany: true };
+    const deptReadWrite: ScopeFlags = { canViewOwn: true, canEditOwn: true, canViewDepartment: true, canEditDepartment: true, canApproveSubordinates: true };
+    const deptRead: ScopeFlags = { canViewOwn: true, canViewDepartment: true };
+    const subsReadWrite: ScopeFlags = { canViewOwn: true, canEditOwn: true, canViewSubordinates: true, canApproveSubordinates: true };
+    const subsRead: ScopeFlags = { canViewOwn: true, canViewSubordinates: true };
+    const ownReadWrite: ScopeFlags = { canViewOwn: true, canEditOwn: true };
+    const ownRead: ScopeFlags = { canViewOwn: true };
+
+    const ROLE_SCOPE_MATRIX: Record<string, Record<string, ScopeFlags>> = {
+      "System Administrator": Object.fromEntries(PERMISSION_RESOURCES.map(r => [r, fullCompany])),
+      "Owner": Object.fromEntries(PERMISSION_RESOURCES.map(r => [r, r === "system_admin" ? {} : companyReadWrite])),
+      "HR Manager": {
+        dashboard: ownRead, companies: ownRead,
+        workers: companyReadWrite, hr: companyReadWrite,
+        payroll: companyRead, timesheets: companyRead, reports: companyRead,
+        schedules: companyRead,
+        departments: companyRead, branches: companyRead, divisions: companyRead,
+        positions: companyRead, policies: companyRead, timeclock: companyRead,
+        settings: {}, permissions: {}, system_admin: {},
+      },
+      "Payroll Manager": {
+        dashboard: ownRead,
+        payroll: companyReadWrite,
+        timesheets: { canViewOwn: true, canViewCompany: true, canApproveSubordinates: true },
+        reports: { canViewOwn: true, canViewCompany: true },
+        workers: companyRead,
+        companies: ownRead, schedules: ownRead, departments: ownRead, branches: ownRead,
+        divisions: ownRead, positions: ownRead, policies: ownRead, hr: ownRead, timeclock: ownRead,
+        settings: {}, permissions: {}, system_admin: {},
+      },
+      "Department Manager": {
+        dashboard: ownRead,
+        workers: deptReadWrite, timesheets: deptReadWrite, schedules: deptReadWrite,
+        hr: deptRead, reports: deptRead,
+        payroll: ownRead, companies: ownRead, departments: ownRead, branches: ownRead,
+        divisions: ownRead, positions: ownRead, policies: ownRead, timeclock: ownReadWrite,
+        settings: {}, permissions: {}, system_admin: {},
+      },
+      "Supervisor": {
+        dashboard: ownRead,
+        workers: subsRead, timesheets: subsReadWrite, schedules: subsReadWrite,
+        payroll: ownRead, companies: ownRead, departments: ownRead, branches: ownRead,
+        divisions: ownRead, positions: ownRead, policies: ownRead, hr: ownRead,
+        reports: ownRead, timeclock: ownReadWrite,
+        settings: {}, permissions: {}, system_admin: {},
+      },
+      "Employee": {
+        dashboard: ownRead, timesheets: ownReadWrite, schedules: ownRead,
+        payroll: ownRead, timeclock: ownReadWrite, policies: ownRead,
+        companies: {}, workers: {}, departments: {}, branches: {}, divisions: {},
+        positions: {}, hr: {}, reports: {}, settings: {}, permissions: {}, system_admin: {},
+      },
+      "Contractor": {
+        dashboard: ownRead, timesheets: ownRead, schedules: ownRead,
+        payroll: ownRead, timeclock: ownReadWrite,
+        companies: {}, workers: {}, departments: {}, branches: {}, divisions: {},
+        positions: {}, policies: {}, hr: {}, reports: {}, settings: {}, permissions: {}, system_admin: {},
+      },
+    };
+
+    for (const [roleName, resourceScopes] of Object.entries(ROLE_SCOPE_MATRIX)) {
+      const roleId = roleMap[roleName];
+      if (!roleId) continue;
+      for (const [resource, scopeFlags] of Object.entries(resourceScopes)) {
+        if (Object.keys(scopeFlags).length === 0) continue;
+        await db.update(rolePermissions)
+          .set(scopeFlags)
+          .where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.resource, resource)));
+      }
+    }
+
+    console.log("Scope-aware role templates seeded for all 8 system roles");
+  } catch (e: any) {
+    console.log("Could not seed scope role templates:", e?.message || e);
+  }
+}
+
 async function seedExpenseCategories() {
   try {
     const existing = await db.execute(sql`SELECT COUNT(*) as cnt FROM expense_categories`);
@@ -759,6 +866,7 @@ async function seedDemoHierarchy() {
 export async function seedDatabase() {
   await ensureAdminUser();
   await seedRolesAndPermissions();
+  await seedDefaultRoleTemplates();
   await seedExpenseCategories();
   await seedPlatformModules();
   await seedEnterprisePermissions();
