@@ -26065,21 +26065,8 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         const results = evaluateCompliance(ctx);
         for (const r of results) {
           allResults.push({ ...r, workerId: worker.id, workerName: `${worker.firstName} ${worker.lastName}` });
-          // Persist compliance audit event
-          try {
-            await storage.createComplianceAuditEvent({
-              companyId: run.companyId,
-              payrollRunId: run.id,
-              workerId: worker.id,
-              ruleId: r.ruleId ?? null,
-              ruleType: r.ruleType,
-              entityType: "worker",
-              entityId: worker.id,
-              severity: r.severity,
-              message: r.message,
-              detail: r.detail,
-            });
-          } catch (_) { /* non-fatal */ }
+          // Preflight is a read-only check — audit events are NOT persisted here.
+          // They are written once on the authoritative approval path to avoid duplicates.
         }
       }
 

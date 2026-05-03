@@ -514,18 +514,20 @@ export function evaluateCompliance(ctx: ComplianceContext): ComplianceResult[] {
       }
     }
 
-    // ── Rest break violation check ────────────────────────────────────────
+    // ── Rest break entitlement check ──────────────────────────────────────
     // CA requires one 10-min paid rest break per restPeriod hours (default 4h).
-    // Since we have no explicit rest-break punch records, we flag as a violation
-    // when the shift length entitles the worker to breaks we cannot confirm occurred.
+    // We have no explicit rest-break punch records, so we cannot confirm whether
+    // breaks were provided or missed. This is surfaced as INFO only — not a warn —
+    // to avoid generating false-positive violations on every qualifying shift.
+    // Upgrade to warn/block when rest-break punch data is available.
     if (isEnforced(ef, "enforceRestBreaks")) {
       const restEntitlements = Math.floor(h / restPeriod);
       if (restEntitlements > 0) {
         results.push({
           ruleType: R.REST_BREAK_PERIOD,
           ruleId: ruleId(rules, R.REST_BREAK_PERIOD),
-          severity: "warn",
-          message: `Rest break violation risk on ${entry.date}: ${restEntitlements} × 10-min paid rest break(s) required for ${h.toFixed(2)}h shift — cannot confirm breaks were provided.`,
+          severity: "info",
+          message: `Rest break entitlement on ${entry.date}: ${restEntitlements} × 10-min paid rest break(s) required for ${h.toFixed(2)}h shift. Verify breaks were provided.`,
           detail: { date: entry.date, hoursWorked: h, entitlements: restEntitlements, breakPeriodHours: restPeriod },
         });
       }
