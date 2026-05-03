@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, sql, and } from "drizzle-orm";
+import { eq, sql, and, inArray } from "drizzle-orm";
 import { companies, workers, timeEntries, schedules, taxesDeductions, users, roles, rolePermissions, userRoles, employeeGroupConfigs, tradeTransactions, permissionGroups, permissions, enterpriseRolePermissions, locations, departments, legalEntities, platformModules } from "@shared/schema";
 import bcrypt from "bcrypt";
 
@@ -316,28 +316,27 @@ async function seedRolesAndPermissions() {
 
 async function seedDefaultRoleTemplates() {
   try {
-    // Idempotency guard: company_admin profile row means full seed completed
-    const caRoleChk = await db
-      .select({ id: roles.id })
+    // Idempotency guard: all 8 required isSystem role templates already present?
+    const REQUIRED_ROLE_NAMES = [
+      "employee", "contractor", "supervisor", "department_manager",
+      "hr_manager", "payroll_manager", "company_admin", "platform_super_admin",
+    ];
+    const existing = await db
+      .select({ name: roles.name })
       .from(roles)
-      .where(eq(roles.name, "company_admin"))
-      .limit(1);
-    if (caRoleChk.length > 0) {
-      const profileChk = await db
-        .select({ id: rolePermissions.id })
-        .from(rolePermissions)
-        .where(and(
-          eq(rolePermissions.roleId, caRoleChk[0].id),
-          eq(rolePermissions.resource, "profile")
-        ))
-        .limit(1);
-      if (profileChk.length > 0) {
-        console.log("Scope-aware role templates already seeded, skipping");
-        return;
-      }
+      .where(and(
+        eq(roles.isSystem, true),
+        inArray(roles.name, REQUIRED_ROLE_NAMES)
+      ));
+    const existingNames = new Set(existing.map(r => r.name));
+    if (REQUIRED_ROLE_NAMES.every(n => existingNames.has(n))) {
+      console.log("Scope-aware role templates already seeded, skipping");
+      return;
     }
 
-    // Combined flat + scope flags type
+    // ----------------------------------------------------------------
+    // Types and presets — scope-aware flags only for scope-limited roles
+    // ----------------------------------------------------------------
     type AllFlags = {
       canView?: boolean; canCreate?: boolean; canEdit?: boolean;
       canDelete?: boolean; canExport?: boolean; canApprove?: boolean; canConfigure?: boolean;
@@ -347,7 +346,39 @@ async function seedDefaultRoleTemplates() {
       canViewCompany?: boolean; canEditCompany?: boolean; canApproveCompany?: boolean;
     };
 
-    // Presets
+    // Reset mask — clears all columns (used in upsert merges)
+    const RESET_ALL: AllFlags = {
+      canView: false, canCreate: false, canEdit: false, canDelete: false,
+      canExport: false, canApprove: false, canConfigure: false,
+      canViewOwn: false, canEditOwn: false,
+      canViewSubordinates: false, canEditSubordinates: false, canApproveSubordinates: false,
+      canViewDepartment: false, canEditDepartment: false, canApproveDepartment: false,
+      canViewCompany: false, canEditCompany: false, canApproveCompany: false,
+    };
+
+    const none: AllFlags = {};
+
+    // Pure scope-aware presets (no flat canView/canEdit for scope-limited roles)
+    const oR:  AllFlags = { canViewOwn: true };
+    const oRW: AllFlags = { canViewOwn: true, canEditOwn: true };
+
+    const sR:  AllFlags = { canViewOwn: true, canViewSubordinates: true };
+    const sRW: AllFlags = { canViewOwn: true, canEditOwn: true, canViewSubordinates: true, canEditSubordinates: true, canApproveSubordinates: true };
+
+    const dR:  AllFlags = { canViewOwn: true, canViewDepartment: true };
+    const dRW: AllFlags = { canViewOwn: true, canEditOwn: true, canViewDepartment: true, canEditDepartment: true, canApproveDepartment: true, canApproveSubordinates: true };
+
+    const coR: AllFlags = { canViewOwn: true, canViewCompany: true };
+
+    // Company-wide read/write (admin roles — flat flags appropriate here)
+    const coRW: AllFlags = {
+      canView: true, canCreate: true, canEdit: true, canDelete: true,
+      canExport: true, canApprove: true, canConfigure: true,
+      canViewOwn: true, canEditOwn: true,
+      canViewCompany: true, canEditCompany: true, canApproveCompany: true,
+    };
+
+    // Full system access
     const S_FULL: AllFlags = {
       canView: true, canCreate: true, canEdit: true, canDelete: true,
       canExport: true, canApprove: true, canConfigure: true,
@@ -356,109 +387,165 @@ async function seedDefaultRoleTemplates() {
       canViewDepartment: true, canEditDepartment: true, canApproveDepartment: true,
       canViewCompany: true, canEditCompany: true, canApproveCompany: true,
     };
-    const coRW: AllFlags = { canView: true, canCreate: true, canEdit: true, canDelete: true, canExport: true, canApprove: true, canConfigure: true, canViewOwn: true, canEditOwn: true, canViewCompany: true, canEditCompany: true, canApproveCompany: true };
-    const coR:  AllFlags = { canView: true, canViewOwn: true, canViewCompany: true };
-    const dRW:  AllFlags = { canView: true, canCreate: true, canEdit: true, canApprove: true, canViewOwn: true, canEditOwn: true, canViewDepartment: true, canEditDepartment: true, canApproveSubordinates: true };
-    const dR:   AllFlags = { canView: true, canViewOwn: true, canViewDepartment: true };
-    const sRW:  AllFlags = { canView: true, canCreate: true, canEdit: true, canApprove: true, canViewOwn: true, canEditOwn: true, canViewSubordinates: true, canApproveSubordinates: true };
-    const sR:   AllFlags = { canView: true, canViewOwn: true, canViewSubordinates: true };
-    const oRW:  AllFlags = { canView: true, canCreate: true, canEdit: true, canViewOwn: true, canEditOwn: true };
-    const oR:   AllFlags = { canView: true, canViewOwn: true };
-    const none: AllFlags = {};
 
-    // All 22 resources
+    // All 22 resources: original 17 + 5 scope-extension resources
     const ALL_RESOURCES = [
       ...PERMISSION_RESOURCES,
       "profile", "paystubs", "preferences", "contractor_hub", "documents",
     ];
 
-    // Role definitions for upsert
+    // ----------------------------------------------------------------
+    // Role definitions for insert-if-missing
+    // ----------------------------------------------------------------
     const ROLE_DEFS: Record<string, { description: string; level: number }> = {
-      "System Administrator":  { description: "Full system access", level: 1 },
-      "platform_super_admin":  { description: "Platform-level super administrator", level: 0 },
-      "company_admin":         { description: "Full company-level administrator", level: 1 },
-      "Owner":                 { description: "Company owner with full operational access", level: 1 },
-      "HR Manager":            { description: "Handles employee records and HR compliance", level: 2 },
-      "Payroll Manager":       { description: "Handles payroll processing and tax configuration", level: 2 },
-      "Department Manager":    { description: "Manages employees within their department", level: 3 },
-      "Supervisor":            { description: "Team lead with limited management access", level: 4 },
-      "Employee":              { description: "Self-service access to own data", level: 5 },
-      "Contractor":            { description: "External contractor with limited access", level: 6 },
+      "employee":             { description: "Standard employee — self-service access to own data", level: 5 },
+      "contractor":           { description: "External contractor — limited own + contractor hub access", level: 6 },
+      "supervisor":           { description: "Team lead — view/approve direct reports", level: 4 },
+      "department_manager":   { description: "Department manager — full access within their department", level: 3 },
+      "hr_manager":           { description: "HR manager — company-wide HR data; payroll view own only", level: 2 },
+      "payroll_manager":      { description: "Payroll manager — full payroll access; no settings", level: 2 },
+      "company_admin":        { description: "Company administrator — full company scope, no platform system admin", level: 1 },
+      "platform_super_admin": { description: "Platform super administrator — full unrestricted access", level: 0 },
     };
 
-    // Combined permission matrix: 10 roles × 22 resources
+    // ----------------------------------------------------------------
+    // Permission matrix: 8 roles × 22 resources
+    // ----------------------------------------------------------------
     const MATRIX: Record<string, Record<string, AllFlags>> = {
-      "System Administrator": Object.fromEntries(ALL_RESOURCES.map(r => [r, S_FULL])),
-      "platform_super_admin": Object.fromEntries(ALL_RESOURCES.map(r => [r, S_FULL])),
-      "company_admin":        Object.fromEntries(ALL_RESOURCES.map(r => [r, r === "system_admin" ? none : coRW])),
-      "Owner":                Object.fromEntries(ALL_RESOURCES.map(r => [r, r === "system_admin" ? none : coRW])),
 
-      "HR Manager": {
-        dashboard: oR, companies: oR,
-        workers: coRW, hr: coRW, documents: coRW, contractor_hub: coRW,
-        payroll: coR, timesheets: coR, reports: coR, schedules: coR,
-        departments: coR, branches: coR, divisions: coR,
-        positions: coR, policies: coR, timeclock: coR,
-        profile: coR, paystubs: coR, preferences: oR,
-        settings: none, permissions: none, system_admin: none,
-      },
-
-      "Payroll Manager": {
-        dashboard: oR, payroll: coRW, paystubs: coR, reports: coR, workers: coR,
-        timesheets: { canView: true, canEdit: true, canApprove: true, canExport: true, canViewOwn: true, canViewCompany: true, canApproveSubordinates: true },
-        companies: oR, schedules: oR, departments: oR, branches: oR,
-        divisions: oR, positions: oR, policies: oR, hr: oR, timeclock: oR,
-        profile: oR, preferences: oRW, documents: oR, contractor_hub: oR,
-        // Payroll Manager must NOT have settings or system_admin access
-        settings: none, permissions: none, system_admin: none,
-      },
-
-      "Department Manager": {
-        dashboard: oR,
-        workers: dRW, timesheets: dRW, schedules: dRW,
-        hr: dR, reports: dR, documents: dR,
-        payroll: oR, companies: oR, departments: oR, branches: oR,
-        divisions: oR, positions: oR, policies: oR,
-        timeclock: { canView: true, canCreate: true, canEdit: true, canViewOwn: true, canEditOwn: true },
-        profile: sR, paystubs: oR, preferences: oRW, contractor_hub: oR,
-        settings: none, permissions: none, system_admin: none,
-      },
-
-      "Supervisor": {
-        dashboard: oR,
-        workers: sR, timesheets: sRW, schedules: sRW,
-        payroll: oR, companies: oR, departments: oR, branches: oR,
-        divisions: oR, positions: oR, policies: oR, hr: oR,
-        reports: oR, documents: oR,
-        timeclock: { canView: true, canCreate: true, canViewOwn: true, canEditOwn: true },
-        profile: sR, paystubs: oR, preferences: oRW, contractor_hub: oR,
-        settings: none, permissions: none, system_admin: none,
-      },
-
-      "Employee": {
-        dashboard: oR, timesheets: oRW, schedules: oR,
-        payroll: oR, policies: oR,
-        timeclock: { canView: true, canCreate: true, canViewOwn: true, canEditOwn: true },
-        profile: oRW, paystubs: oR, preferences: oRW, documents: oR,
+      // ── employee: own-only across operational resources ──────────
+      "employee": {
+        dashboard:   oR,
+        timesheets:  oRW,
+        schedules:   oR,
+        timeclock:   oRW,
+        profile:     oRW,
+        paystubs:    oR,
+        preferences: oRW,
+        payroll:     oR,
+        policies:    oR,
+        documents:   oR,
+        // No access to admin/management resources
         companies: none, workers: none, departments: none, branches: none,
         divisions: none, positions: none, hr: none, reports: none,
         contractor_hub: none, settings: none, permissions: none, system_admin: none,
       },
 
-      "Contractor": {
-        dashboard: oR, timesheets: oR, schedules: oR, payroll: oR,
-        timeclock: { canView: true, canCreate: true, canViewOwn: true, canEditOwn: true },
-        profile: oRW, paystubs: oR, preferences: oRW,
-        contractor_hub: oRW, documents: oR,
+      // ── contractor: own + contractor hub ────────────────────────
+      "contractor": {
+        dashboard:      oR,
+        timesheets:     oRW,
+        schedules:      oR,
+        timeclock:      oRW,
+        profile:        oRW,
+        paystubs:       oR,
+        preferences:    oRW,
+        contractor_hub: oRW,
+        documents:      oR,
+        payroll:        oR,
+        // No access to internal management resources
         companies: none, workers: none, departments: none, branches: none,
         divisions: none, positions: none, policies: none, hr: none,
         reports: none, settings: none, permissions: none, system_admin: none,
       },
+
+      // ── supervisor: own + direct-report subordinates ─────────────
+      "supervisor": {
+        dashboard:   sR,
+        workers:     sR,
+        timesheets:  sRW,
+        schedules:   sRW,
+        timeclock:   sRW,
+        profile:     sR,
+        paystubs:    oR,
+        preferences: oRW,
+        documents:   sR,
+        payroll:     oR,
+        hr:          oR,
+        reports:     oR,
+        // Read-only reference data
+        companies:  oR, departments: oR, branches: oR, divisions: oR, positions: oR, policies: oR,
+        contractor_hub: none, settings: none, permissions: none, system_admin: none,
+      },
+
+      // ── department_manager: own + full department ────────────────
+      "department_manager": {
+        dashboard:   dR,
+        workers:     dRW,
+        timesheets:  dRW,
+        schedules:   dRW,
+        timeclock:   dRW,
+        hr:          dR,
+        reports:     dR,
+        documents:   dR,
+        profile:     dR,
+        paystubs:    oR,
+        preferences: oRW,
+        payroll:     oR,
+        // Read-only reference data
+        companies:  oR, departments: oR, branches: oR, divisions: oR, positions: oR, policies: oR,
+        contractor_hub: oR,
+        settings: none, permissions: none, system_admin: none,
+      },
+
+      // ── hr_manager: company-wide HR; payroll = view_own only ────
+      "hr_manager": {
+        dashboard:      coR,
+        workers:        coR,
+        hr:             { canView: true, canCreate: true, canEdit: true, canViewOwn: true, canEditOwn: true, canViewCompany: true, canEditCompany: true },
+        documents:      coR,
+        contractor_hub: coR,
+        reports:        coR,
+        timesheets:     coR,
+        schedules:      coR,
+        profile:        coR,
+        preferences:    oRW,
+        paystubs:       oR,
+        // Payroll: view own only — HR managers do not process payroll
+        payroll:        oR,
+        // Read-only reference data
+        companies: oR, departments: coR, branches: coR, divisions: coR, positions: coR, policies: coR,
+        timeclock: coR,
+        settings: none, permissions: none, system_admin: none,
+      },
+
+      // ── payroll_manager: full payroll; no settings ───────────────
+      "payroll_manager": {
+        dashboard: coR,
+        payroll:   { canView: true, canCreate: true, canEdit: true, canDelete: true, canExport: true, canApprove: true, canConfigure: true, canViewOwn: true, canViewCompany: true, canEditCompany: true, canApproveCompany: true },
+        paystubs:  coR,
+        reports:   coR,
+        workers:   coR,
+        timesheets: { canViewOwn: true, canViewCompany: true, canEditCompany: true, canApproveCompany: true, canApproveSubordinates: true },
+        profile:   coR,
+        preferences: oRW,
+        documents: coR,
+        // Read-only reference data
+        companies: oR, schedules: oR, departments: oR, branches: oR,
+        divisions: oR, positions: oR, policies: oR, hr: oR, timeclock: oR,
+        contractor_hub: oR,
+        settings: none, permissions: none, system_admin: none,
+      },
+
+      // ── company_admin: full company scope; no platform system_admin ──
+      "company_admin": Object.fromEntries(
+        ALL_RESOURCES.map(r => [r, r === "system_admin" ? none : coRW])
+      ),
+
+      // ── platform_super_admin: unrestricted full access ───────────
+      "platform_super_admin": Object.fromEntries(
+        ALL_RESOURCES.map(r => [r, S_FULL])
+      ),
     };
 
-    // Upsert each role and all 22 resource rows
-    for (const [roleName, permsMatrix] of Object.entries(MATRIX)) {
-      // Ensure the role exists
+    // ----------------------------------------------------------------
+    // Upsert: roles first, then all 22 resource rows per role
+    // ----------------------------------------------------------------
+    for (const roleName of REQUIRED_ROLE_NAMES) {
+      const def = ROLE_DEFS[roleName];
+      const permsMatrix = MATRIX[roleName] ?? {};
+
+      // Insert role if missing
       const existingRole = await db
         .select({ id: roles.id })
         .from(roles)
@@ -468,8 +555,9 @@ async function seedDefaultRoleTemplates() {
       let roleId: string;
       if (existingRole.length > 0) {
         roleId = existingRole[0].id;
+        // Ensure isSystem is marked
+        await db.update(roles).set({ isSystem: true }).where(eq(roles.id, roleId));
       } else {
-        const def = ROLE_DEFS[roleName] ?? { description: roleName, level: 5 };
         const [newRole] = await db
           .insert(roles)
           .values({ name: roleName, description: def.description, level: def.level, isSystem: true })
@@ -477,9 +565,10 @@ async function seedDefaultRoleTemplates() {
         roleId = newRole.id;
       }
 
-      // Upsert every resource row with combined flat + scope flags
+      // Upsert every resource row, always merging against RESET_ALL to clear stale flags
       for (const resource of ALL_RESOURCES) {
         const flags: AllFlags = permsMatrix[resource] ?? none;
+        const merged = { ...RESET_ALL, ...flags };
 
         const existingRow = await db
           .select({ id: rolePermissions.id })
@@ -487,19 +576,9 @@ async function seedDefaultRoleTemplates() {
           .where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.resource, resource)))
           .limit(1);
 
-        // Full reset object ensures `none` flags clear previously set columns
-        const resetAll: AllFlags = {
-          canView: false, canCreate: false, canEdit: false, canDelete: false,
-          canExport: false, canApprove: false, canConfigure: false,
-          canViewOwn: false, canEditOwn: false,
-          canViewSubordinates: false, canEditSubordinates: false, canApproveSubordinates: false,
-          canViewDepartment: false, canEditDepartment: false, canApproveDepartment: false,
-          canViewCompany: false, canEditCompany: false, canApproveCompany: false,
-        };
-        const merged = { ...resetAll, ...flags };
-
         if (existingRow.length > 0) {
-          await db.update(rolePermissions)
+          await db
+            .update(rolePermissions)
             .set(merged)
             .where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.resource, resource)));
         } else {
@@ -508,7 +587,7 @@ async function seedDefaultRoleTemplates() {
       }
     }
 
-    console.log("Scope-aware role templates seeded for 10 system roles (22 resources each)");
+    console.log(`Scope-aware role templates seeded for ${REQUIRED_ROLE_NAMES.length} system roles (${PERMISSION_RESOURCES.length + 5} resources each)`);
   } catch (e: any) {
     console.log("Could not seed scope role templates:", e?.message || e);
   }
