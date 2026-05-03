@@ -1938,6 +1938,25 @@ export default function PrintCheckPage() {
   const { data: amendments = [] } = useQuery<PayStubAmendment[]>({ queryKey: ["/api/pay-stub-amendments"] });
   const { data: remittanceSources = [] } = useQuery<RemittanceSource[]>({ queryKey: ["/api/remittance-sources"] });
 
+  // Fetch print audit events for this run to gate the per-item reprint button.
+  // A check can only be reprinted when a prior "print" event exists in the audit log for that worker.
+  const { data: runPrintAudit = [] } = useQuery<any[]>({
+    queryKey: ["/api/check-print-audit", "run", runId],
+    queryFn: async () => {
+      const res = await fetch(`/api/check-print-audit?runId=${runId}&limit=200`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!runId,
+  });
+  // Set of workerIds that have at least one "print" audit event for this run
+  const printedWorkerIds = new Set<string>(
+    runPrintAudit
+      .filter((l: any) => !l.event_type || l.event_type === "print")
+      .map((l: any) => l.worker_id)
+      .filter(Boolean)
+  );
+
   const company = run ? companies.find(c => c.id === run.companyId) : undefined;
 
   // Active remittance source for calibration
@@ -2267,8 +2286,9 @@ export default function PrintCheckPage() {
             }
             return (
               <div key={item.id}>
-                {item.checkNumber && (
-                  <div className="print-hide flex justify-end mb-1 px-1" style={{ maxWidth: "8.5in", margin: "0 auto 4px auto" }}>
+                {/* Server PDF is the authoritative preview — identical to what 'Print Checks' outputs */}
+                <div className="print-hide flex justify-end gap-2 mb-1 px-1" style={{ maxWidth: "8.5in", margin: "0 auto 4px auto" }}>
+                  {printedWorkerIds.has(item.workerId) && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -2278,24 +2298,17 @@ export default function PrintCheckPage() {
                       title="Generate a reprint copy of this check PDF; logs a reprint event in the audit trail"
                     >
                       <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                      {reprintingIds.has(item.id) ? "Generating…" : `Reprint PDF #${item.checkNumber}`}
+                      {reprintingIds.has(item.id) ? "Generating…" : `Reprint PDF${item.checkNumber ? ` #${item.checkNumber}` : ""}`}
                     </Button>
-                  </div>
-                )}
-                <CheckComponent
-                  item={item}
-                  worker={worker}
-                  company={company}
-                  run={run}
-                  deductions={companyDeductions}
-                  config={config}
-                  payStubAccounts={companyPSAccounts}
-                  accrualAccounts={companyAccrualAccounts}
-                  accrualBalances={accrualBalancesList}
-                  amendments={amendments}
-                  remittanceSources={remittanceSources}
-                  calibration={calibration}
-                  showGuides={calibrationTestMode}
+                  )}
+                </div>
+                {/* Server PDF iframe — this is exactly what the Print Checks button produces */}
+                <iframe
+                  src={`/api/checks/${item.id}/pdf`}
+                  title={`Check PDF — ${worker.firstName} ${worker.lastName}`}
+                  data-testid={`iframe-check-pdf-${item.id}`}
+                  className="check-page"
+                  style={{ width: "816px", height: "1056px", border: "1px solid #ddd", display: "block", background: "white" }}
                 />
               </div>
             );

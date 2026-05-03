@@ -13984,6 +13984,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   async function renderCheckPdf(params: {
     item: any; worker: any; run: any; company: any; remittanceSource: any;
     isCalibration?: boolean; isVoid?: boolean; isReprint?: boolean;
+    layoutConfig?: Record<string, boolean>;
+    calibrationOffsets?: { globalTop?: number; globalLeft?: number };
   }): Promise<Uint8Array> {
     const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
     const { item, worker, run, company, remittanceSource, isCalibration, isVoid, isReprint } = params;
@@ -13991,21 +13993,47 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const hv  = await doc.embedFont(StandardFonts.Helvetica);
     const hvB = await doc.embedFont(StandardFonts.HelveticaBold);
     const cour = await doc.embedFont(StandardFonts.Courier);
-    let micrFont: any = cour;
+
+    // MICR font — hard failure for production checks; calibration mode falls back to Courier
+    let micrFont: any = null;
     try {
       const micrPath = path.join(process.cwd(), "client", "public", "fonts", "micrenc.ttf");
       const micrBytes = fs.readFileSync(micrPath);
       micrFont = await doc.embedFont(micrBytes as any);
-    } catch { /* courier fallback */ }
+    } catch {
+      if (!isCalibration) {
+        throw new Error(
+          "MICR font (micrenc.ttf) failed to load. Printing requires the MICR E-13B font " +
+          "for machine-readable routing/account numbers. Contact support or run in calibration mode."
+        );
+      }
+      micrFont = cour; // calibration-only fallback
+    }
+
+    // Show/hide flags from check_templates.layoutConfig; default all to true
+    const cfg = params.layoutConfig || {};
+    const showCompanyName    = cfg.showCompanyName    !== false;
+    const showCompanyAddr    = cfg.showCompanyAddress !== false;
+    const showCheckNumber    = cfg.showCheckNumber    !== false;
+    const showMicrLine       = cfg.showMicrLine       !== false;
+    const showEarningsDetail = cfg.showEarningsDetail !== false;
+    const showDeductions     = cfg.showDeductionsDetail !== false;
+    const showYtdTotals      = cfg.showYtdTotals      !== false;
+
+    // Global calibration offsets from remittance_sources.calibration_config (points).
+    // globalTop > 0 shifts elements down (CSS top semantics); in PDF Y-up coords = subtract.
+    const gOT = -(params.calibrationOffsets?.globalTop  || 0);
+    const gOL =   params.calibrationOffsets?.globalLeft || 0;
 
     const page = doc.addPage([612, 792]);
     const W = 612, H = 792;
     const checkH    = Math.round(3.667 * 72); // 264pt
     const micrBandH = Math.round(0.625 * 72); // 45pt
-    const lm        = Math.round(0.55  * 72); // 40pt left margin
-    const rm        = W - lm;
-    const checkBot  = H - checkH;             // 528
-    const micrBase  = checkBot + Math.round(0.15 * 72); // ~539
+    const baseLm    = Math.round(0.55  * 72); // 40pt base left margin
+    const lm        = baseLm + gOL;           // calibration-adjusted left margin
+    const rm        = W - baseLm + gOL;       // calibration-adjusted right boundary
+    const checkBot  = H - checkH + gOT;       // calibration-adjusted check bottom
+    const micrBase  = checkBot + Math.round(0.15 * 72);
 
     const netPay   = isCalibration ? 1234.56 : Number(item?.netPay   || 0);
     const grossPay = isCalibration ? 1380.23 : Number(item?.grossPay || 0);
@@ -14045,16 +14073,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
 
     // Company header
-    let curY = H - 16;
+    let curY = H - 16 + gOT;  // apply global vertical calibration offset
     drawGuide(lm, curY - 42, 220, 42, "COMPANY BLOCK");
-    page.drawText(coName, { x: lm, y: curY - 12, size: 11, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText(coAddr, { x: lm, y: curY - 24, size:  8, font: hv,  color: rgb(0.2, 0.2, 0.2) });
+    if (showCompanyName)
+      page.drawText(coName, { x: lm, y: curY - 12, size: 11, font: hvB, color: rgb(0, 0, 0) });
+    if (showCompanyAddr)
+      page.drawText(coAddr, { x: lm, y: curY - 24, size:  8, font: hv,  color: rgb(0.2, 0.2, 0.2) });
 
     // Check number box (top-right)
     const cnBoxX = rm - 102, cnBoxY = curY - 32;
-    drawGuide(cnBoxX, cnBoxY, 102, 24, "CHECK #");
-    page.drawRectangle({ x: cnBoxX, y: cnBoxY, width: 102, height: 24, borderColor: rgb(0, 0, 0), borderWidth: 1 });
-    page.drawText(`No. ${checkNum}`, { x: cnBoxX + 6, y: cnBoxY + 8, size: 10, font: hvB, color: rgb(0, 0, 0) });
+    if (showCheckNumber) {
+      drawGuide(cnBoxX, cnBoxY, 102, 24, "CHECK #");
+      page.drawRectangle({ x: cnBoxX, y: cnBoxY, width: 102, height: 24, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+      page.drawText(`No. ${checkNum}`, { x: cnBoxX + 6, y: cnBoxY + 8, size: 10, font: hvB, color: rgb(0, 0, 0) });
+    }
 
     // Date (below check number)
     const dtY = cnBoxY - 22;
@@ -14098,8 +14130,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     page.drawLine({ start: { x: rm - 162, y: sigY }, end: { x: rm, y: sigY }, color: rgb(0, 0, 0), thickness: 0.5 });
     page.drawText("AUTHORIZED SIGNATURE", { x: rm - 157, y: sigY - 9, size: 6, font: hv, color: rgb(0.4, 0.4, 0.4) });
 
-    // MICR line
-    page.drawText(buildMicrStr(routing, account, checkNum), { x: lm, y: micrBase, size: 12, font: micrFont, color: rgb(0, 0, 0) });
+    // MICR line (conditionally rendered per layoutConfig)
+    if (showMicrLine)
+      page.drawText(buildMicrStr(routing, account, checkNum), { x: lm, y: micrBase, size: 12, font: micrFont, color: rgb(0, 0, 0) });
 
     // Stub separator
     page.drawLine({ start: { x: 0, y: checkBot - 2 }, end: { x: W, y: checkBot - 2 }, color: rgb(0.6, 0.6, 0.6), thickness: 0.5, dashArray: [4, 4] });
@@ -14120,8 +14153,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     page.drawText(`Check No: ${checkNum}`, { x: lm, y: sY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
     sY -= 16;
 
-    // Earnings table
+    // Earnings table (conditionally rendered per layoutConfig)
     const c1 = lm, c2 = lm + 185, c3 = lm + 280, c4 = rm - 75;
+    if (showEarningsDetail) {
     page.drawRectangle({ x: c1 - 2, y: sY - 4, width: rm - c1 + 2, height: 14, color: rgb(0.88, 0.88, 0.88) });
     page.drawText("DESCRIPTION", { x: c1, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("HOURS",       { x: c2, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
@@ -14154,9 +14188,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       page.drawText(amt,  { x: c4, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
       sY -= 11;
     }
+    } // end if (showEarningsDetail)
 
     sY -= 4;
-    // Deductions header
+    // Deductions section (conditionally rendered per layoutConfig)
+    if (showDeductions) {
     page.drawRectangle({ x: c1 - 2, y: sY - 4, width: rm - c1 + 2, height: 14, color: rgb(0.88, 0.88, 0.88) });
     page.drawText("DEDUCTIONS", { x: c1, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("CURRENT",    { x: c4, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
@@ -14170,6 +14206,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       page.drawText("Taxes & Deductions",             { x: c1, y: sY, size: 7.5, font: hv,   color: rgb(0, 0, 0) });
       page.drawText(`-$${fmtMoney(totalDed)}`,        { x: c4, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) }); sY -= 11;
     }
+    } // end if (showDeductions)
 
     sY -= 4;
     page.drawLine({ start: { x: c1 - 2, y: sY + 8 }, end: { x: rm + 2, y: sY + 8 }, color: rgb(0.5, 0.5, 0.5), thickness: 0.5 });
@@ -14181,7 +14218,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     page.drawText("NET PAY",               { x: c1, y: sY, size: 9, font: hvB, color: rgb(0, 0, 0.55) });
     page.drawText(`$${fmtMoney(netPay)}`,  { x: c4, y: sY, size: 9, font: hvB, color: rgb(0, 0, 0.55) });
 
-    if (!isCalibration && item) {
+    // YTD totals (conditionally rendered per layoutConfig)
+    if (!isCalibration && item && showYtdTotals) {
       sY -= 14;
       page.drawText(`YTD Gross: $${fmtMoney(Number(item.ytdGross || 0))}`,      { x: c1,       y: sY, size: 7.5, font: hv, color: rgb(0.35, 0.35, 0.35) });
       page.drawText(`YTD Deductions: $${fmtMoney(Number(item.ytdDeductions||0))}`, { x: c1+160, y: sY, size: 7.5, font: hv, color: rgb(0.35, 0.35, 0.35) });
@@ -14246,6 +14284,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured for this company's remittance source." });
       }
 
+      // Load active check template for show/hide flags
+      const tplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
+      const tplRow = ((tplRaw as any).rows || tplRaw as any[])[0] || null;
+      let layoutConfig: Record<string, boolean> | undefined;
+      if (tplRow?.layout_config) {
+        try { layoutConfig = typeof tplRow.layout_config === "string" ? JSON.parse(tplRow.layout_config) : tplRow.layout_config; } catch { /* use defaults */ }
+      }
+
+      // Load calibration offsets from remittance source
+      let calibrationOffsets: { globalTop?: number; globalLeft?: number } | undefined;
+      if (rs?.calibration_config) {
+        try {
+          const cal = typeof rs.calibration_config === "string" ? JSON.parse(rs.calibration_config) : rs.calibration_config;
+          calibrationOffsets = { globalTop: Number(cal.globalTop || 0), globalLeft: Number(cal.globalLeft || 0) };
+        } catch { /* no offsets */ }
+      }
+
       const pdfBytes = await renderCheckPdf({
         item: itemRow,
         worker: worker ? { firstName: (worker as any).first_name, lastName: (worker as any).last_name } : null,
@@ -14254,6 +14309,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         remittanceSource: rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number } : null,
         isCalibration,
         isVoid,
+        layoutConfig,
+        calibrationOffsets,
       });
 
       res.setHeader("Content-Type", "application/pdf");
@@ -14293,6 +14350,23 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured." });
       }
 
+      // Load active check template for show/hide flags
+      const tplRaw2 = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
+      const tplRow2 = ((tplRaw2 as any).rows || tplRaw2 as any[])[0] || null;
+      let batchLayoutConfig: Record<string, boolean> | undefined;
+      if (tplRow2?.layout_config) {
+        try { batchLayoutConfig = typeof tplRow2.layout_config === "string" ? JSON.parse(tplRow2.layout_config) : tplRow2.layout_config; } catch { /* use defaults */ }
+      }
+
+      // Load calibration offsets from remittance source
+      let batchCalibrationOffsets: { globalTop?: number; globalLeft?: number } | undefined;
+      if (rs?.calibration_config) {
+        try {
+          const cal2 = typeof rs.calibration_config === "string" ? JSON.parse(rs.calibration_config) : rs.calibration_config;
+          batchCalibrationOffsets = { globalTop: Number(cal2.globalTop || 0), globalLeft: Number(cal2.globalLeft || 0) };
+        } catch { /* no offsets */ }
+      }
+
       const itemsRaw = await db.execute(sql`
         SELECT * FROM payroll_items
         WHERE payroll_run_id = ${runId}
@@ -14317,7 +14391,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const merged = await PDFDocument.create();
 
       if (isCalibration || items.length === 0) {
-        const bytes = await renderCheckPdf({ item: null, worker: null, run: runNorm, company: coNorm, remittanceSource: remSrc, isCalibration: true });
+        const bytes = await renderCheckPdf({ item: null, worker: null, run: runNorm, company: coNorm, remittanceSource: remSrc, isCalibration: true, layoutConfig: batchLayoutConfig, calibrationOffsets: batchCalibrationOffsets });
         const [pg]  = await merged.copyPages(await PDFDocument.load(bytes), [0]);
         merged.addPage(pg);
       } else {
@@ -14327,6 +14401,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             item,
             worker: w ? { firstName: w.first_name, lastName: w.last_name } : null,
             run: runNorm, company: coNorm, remittanceSource: remSrc,
+            layoutConfig: batchLayoutConfig,
+            calibrationOffsets: batchCalibrationOffsets,
           });
           const [pg] = await merged.copyPages(await PDFDocument.load(bytes), [0]);
           merged.addPage(pg);
@@ -14466,6 +14542,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         )
       `);
 
+      // Load active check template for show/hide flags (same template used on original print)
+      const reprintTplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
+      const reprintTplRow = ((reprintTplRaw as any).rows || reprintTplRaw as any[])[0] || null;
+      let reprintLayoutConfig: Record<string, boolean> | undefined;
+      if (reprintTplRow?.layout_config) {
+        try { reprintLayoutConfig = typeof reprintTplRow.layout_config === "string" ? JSON.parse(reprintTplRow.layout_config) : reprintTplRow.layout_config; } catch { /* use defaults */ }
+      }
+      let reprintCalibrationOffsets: { globalTop?: number; globalLeft?: number } | undefined;
+      if (rs?.calibration_config) {
+        try {
+          const rCal = typeof rs.calibration_config === "string" ? JSON.parse(rs.calibration_config) : rs.calibration_config;
+          reprintCalibrationOffsets = { globalTop: Number(rCal.globalTop || 0), globalLeft: Number(rCal.globalLeft || 0) };
+        } catch { /* no offsets */ }
+      }
+
       // Generate and return the PDF marked as REPRINT
       const pdfBytes = await renderCheckPdf({
         item: itemRow,
@@ -14476,6 +14567,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         isCalibration: false,
         isVoid: false,
         isReprint: true,
+        layoutConfig: reprintLayoutConfig,
+        calibrationOffsets: reprintCalibrationOffsets,
       });
 
       res.setHeader("Content-Type", "application/pdf");
