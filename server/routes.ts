@@ -13922,16 +13922,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/check-print-audit", requireAuth, requireRole("admin", "manager", "platform_super_admin", "platform_admin", "platform_support"), async (req, res) => {
     try {
       const { companyId, runId, limit = "100" } = req.query as Record<string, string>;
-      const sessionRole = (req.session as any)?.role as string | undefined;
+      // Derive role and companyId from the user record — session only stores userId.
+      const sessionUser = await storage.getUser(req.session.userId!);
+      if (!sessionUser) return res.status(401).json({ message: "Not authenticated" });
       const platformRoles = ["platform_super_admin", "platform_admin", "platform_support"];
-      const isPlatform = platformRoles.includes(sessionRole || "");
+      const isPlatform = platformRoles.includes(sessionUser.role || "");
 
       // Tenant roles (admin/manager) are always scoped to their own company — no cross-tenant data.
       let effectiveCompanyId: string | undefined = companyId;
       if (!isPlatform) {
-        const sessionCompanyId = (req.session as any)?.companyId as string | undefined;
-        if (!sessionCompanyId) return res.status(403).json({ message: "No company context for current session." });
-        effectiveCompanyId = sessionCompanyId;
+        if (!sessionUser.companyId) return res.status(403).json({ message: "No company context for current user." });
+        effectiveCompanyId = sessionUser.companyId;
       }
 
       // Build parameterized query via Drizzle sql`` template to avoid SQL injection and bind errors.
