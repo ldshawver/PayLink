@@ -1944,11 +1944,10 @@ export default function PrintCheckPage() {
     },
     enabled: !!runId,
   });
-  // Set of workerIds that have at least one "print" audit event for this run.
-  // Reprint UI is only available when an original print event exists.
+  // Workers eligible for reprint: those with a prior 'print' or 'void' audit event (matches backend policy).
   const printedWorkerIds = new Set<string>(
     runPrintAudit
-      .filter((l: any) => !l.event_type || l.event_type === "print")
+      .filter((l: any) => !l.event_type || l.event_type === "print" || l.event_type === "void")
       .map((l: any) => l.worker_id)
       .filter(Boolean)
   );
@@ -2053,8 +2052,8 @@ export default function PrintCheckPage() {
   });
 
   const activeTemplate = templates.find(t => t.isDefault) || templates[0];
-  const noDefaultTemplate = !isPacketMode && !!company?.id && !templatesLoading && templates.length > 0 && !templates.find(t => t.isDefault);
-  const noAnyTemplate     = !isPacketMode && !!company?.id && !templatesLoading && templates.length === 0;
+  const noDefaultTemplate = !!company?.id && !templatesLoading && templates.length > 0 && !templates.find(t => t.isDefault);
+  const noAnyTemplate     = !!company?.id && !templatesLoading && templates.length === 0;
   let templateType = activeTemplate?.templateType || "standard";
   let config: Record<string, boolean>;
   try {

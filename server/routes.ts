@@ -14319,6 +14319,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(403).json({ message: "Access denied: company mismatch" });
       }
 
+      // Validate remittance credentials. Calibration uses dummy MICR data when missing (by design —
+      // the purpose is to calibrate print offsets before bank credentials are entered), but we still
+      // require at minimum a found remittance source record. Missing routing/account are allowed in
+      // calibration mode; the PDF will render with placeholder MICR characters for position testing.
+      if (!rs.routing_number || !rs.account_number) {
+        console.warn("[calibrationPDF] Remittance source missing routing/account — calibration uses placeholder MICR.");
+      }
+
+      // Load default template for layout/position overrides (calibration respects template positions).
+      const calCompanyId = rs.company_id || null;
+      const calTplRow = ((await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${calCompanyId} AND is_default = true LIMIT 1`) as any).rows || [])[0] || null;
+      let calLayoutConfig: Record<string, any> | undefined;
+      if (calTplRow?.layout_config) {
+        try { calLayoutConfig = typeof calTplRow.layout_config === "string" ? JSON.parse(calTplRow.layout_config) : calTplRow.layout_config; } catch { /* use defaults */ }
+      }
+
       let calibrationOffsets: { globalTop?: number; globalLeft?: number } | undefined;
       if (rs?.calibration_config) {
         try {
@@ -14335,6 +14351,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         remittanceSource: { routingNumber: rs.routing_number, accountNumber: rs.account_number },
         isCalibration: true,
         calibrationOffsets,
+        layoutConfig: calLayoutConfig,
       });
 
       res.setHeader("Content-Type", "application/pdf");
