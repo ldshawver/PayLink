@@ -2843,7 +2843,7 @@ export async function registerRoutes(
         snapshotWorkerData.push({
           workerId: item.workerId,
           grossPay: item.grossPay,
-          // Full tax engine inputs for reproducible audit comparison
+          // Full tax engine inputs for deterministic audit replay
           taxableWages: dedBreakdown
             ? (parseFloat(item.grossPay || "0") - dedBreakdown.preTaxDedAmount).toFixed(2)
             : item.grossPay,
@@ -2855,6 +2855,14 @@ export async function registerRoutes(
           amendmentDeductions: dedBreakdown ? dedBreakdown.amendmentDeductions.toFixed(2) : "0",
           payPeriodType: dedBreakdown?.taxEngineInput.payPeriodType ?? "biweekly",
           ytdGross: dedBreakdown ? dedBreakdown.taxEngineInput.ytdGross.toFixed(2) : "0",
+          // Full TaxEngineInput modifiers for complete reproducibility
+          reimbursements: dedBreakdown ? dedBreakdown.taxEngineInput.reimbursements.toFixed(2) : "0",
+          taxableBenefits: dedBreakdown ? dedBreakdown.taxEngineInput.taxableBenefits.toFixed(2) : "0",
+          ytdFedTaxableWages: dedBreakdown ? dedBreakdown.taxEngineInput.ytdFedTaxableWages.toFixed(2) : "0",
+          employerCaUiRate: dedBreakdown?.taxEngineInput.employerCaUiRate ?? null,
+          caFilingStatus: dedBreakdown?.taxEngineInput.caFilingStatus ?? "single",
+          caAllowances: dedBreakdown?.taxEngineInput.caAllowances ?? 0,
+          isContractor: dedBreakdown?.taxEngineInput.isContractor ?? false,
           taxLines: lines,
         });
       }
@@ -5797,7 +5805,8 @@ export async function registerRoutes(
   app.get("/api/workers/:id/ytd-taxes", requireAuth, requireRole("admin", "manager", "employee"), async (req, res) => {
     try {
       const year = parseInt((req.query.year as string) || String(new Date().getFullYear()), 10);
-      const ytd = await storage.getEmployeeYTD(req.params.id, year);
+      const worker = await storage.getWorker(req.params.id);
+      const ytd = await storage.getEmployeeYTD(req.params.id, year, worker?.companyId ?? undefined);
       res.json(ytd);
     } catch (error) {
       console.error(error);
@@ -5816,7 +5825,7 @@ export async function registerRoutes(
       const workers = await storage.getWorkers(req.params.id);
       const results = await Promise.all(
         workers.map(async (w) => {
-          const ytd = await storage.getEmployeeYTD(w.id, year);
+          const ytd = await storage.getEmployeeYTD(w.id, year, req.params.id);
           return { workerId: w.id, ...ytd };
         })
       );

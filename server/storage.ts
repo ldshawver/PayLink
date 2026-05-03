@@ -1077,7 +1077,7 @@ export interface IStorage {
     totalTaxableWages: number; totalAmount: number; periodCount: number;
   }>>;
 
-  getEmployeeYTD(workerId: string, year: number): Promise<{
+  getEmployeeYTD(workerId: string, year: number, companyId?: string): Promise<{
     grossPay: number; federalTaxableWages: number; federalWithheld: number;
     ssWages: number; ssTaxEmployee: number; medicareWages: number; medicareTaxEmployee: number;
     caPitWages: number; caPitWithheld: number; caSdiWithheld: number;
@@ -4886,7 +4886,7 @@ export class DatabaseStorage implements IStorage {
     return Object.values(grouped).sort((a, b) => a.taxCode.localeCompare(b.taxCode));
   }
 
-  async getEmployeeYTD(workerId: string, year: number): Promise<{
+  async getEmployeeYTD(workerId: string, year: number, companyId?: string): Promise<{
     grossPay: number; federalTaxableWages: number; federalWithheld: number;
     ssWages: number; ssTaxEmployee: number; medicareWages: number; medicareTaxEmployee: number;
     caPitWages: number; caPitWithheld: number; caSdiWithheld: number;
@@ -4895,12 +4895,19 @@ export class DatabaseStorage implements IStorage {
   }> {
     const yearStart = `${year}-01-01`;
     const yearEnd = `${year}-12-31`;
-    const runs = await db.select().from(payrollRuns)
-      .where(and(
-        gte(payrollRuns.payDate, yearStart),
-        lte(payrollRuns.payDate, yearEnd),
-        or(eq(payrollRuns.status, "processed"), eq(payrollRuns.status, "paid")),
-      ));
+    const runsWhere = companyId
+      ? and(
+          gte(payrollRuns.payDate, yearStart),
+          lte(payrollRuns.payDate, yearEnd),
+          or(eq(payrollRuns.status, "processed"), eq(payrollRuns.status, "paid")),
+          eq(payrollRuns.companyId, companyId),
+        )
+      : and(
+          gte(payrollRuns.payDate, yearStart),
+          lte(payrollRuns.payDate, yearEnd),
+          or(eq(payrollRuns.status, "processed"), eq(payrollRuns.status, "paid")),
+        );
+    const runs = await db.select().from(payrollRuns).where(runsWhere);
     if (runs.length === 0) {
       return { grossPay: 0, federalTaxableWages: 0, federalWithheld: 0, ssWages: 0, ssTaxEmployee: 0, medicareWages: 0, medicareTaxEmployee: 0, caPitWages: 0, caPitWithheld: 0, caSdiWithheld: 0, employerSsTax: 0, employerMedicareTax: 0, futaTax: 0, caUiTax: 0, caEttTax: 0, netPay: 0 };
     }
