@@ -159,6 +159,38 @@ PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL 
 - RBAC scope columns (`can_view_own`, `can_edit_own`, `can_view_subordinates`, `can_edit_subordinates`, `can_approve_subordinates`, `can_view_department`, `can_edit_department`, `can_view_company`, `can_edit_company`) added to `role_permissions` table; surfaced in RBAC readiness area evidence and in role-management.tsx permissions matrix.
 - Debug endpoint: `GET /api/debug/permissions/me` — returns the authenticated user's full effective permission set.
 
+## Tax Engine (Task #4)
+
+### Architecture
+- `server/tax-engine.ts` — pure, deterministic tax calculation module (no DB calls). Exports `calcAllTaxes(input: TaxEngineInput)`.
+- Taxes computed: Federal Income Tax (IRS Pub. 15-T annualized percentage method, single/married/hoh brackets), Social Security (6.2%), Medicare (1.45% + 0.9% additional), FUTA (6.0% w/credit), CA PIT (DE 44 Method B), CA SDI (1.1%), CA UI (3.4%), CA ETT (0.1%).
+- W-4 aware: reads `w4FilingStatus`, `w4Allowances`, `additionalWithholding` from worker record.
+- Pre-tax deductions (health, 401k, FSA, HSA, etc.) reduce federal/CA taxable wages before bracket calculation.
+- Post-tax deductions (Roth 401k, wage garnishments) applied after taxes.
+- Engine version stamped in every snapshot (`TAX_ENGINE_VERSION`).
+
+### New DB Tables
+- `payroll_item_taxes` — one row per tax line per payroll item (taxCode, taxName, taxableWages, rate, amount, isEmployerPaid, stateCode).
+- `payroll_tax_snapshots` — one row per payroll run capturing the full JSON snapshot of all tax lines + version.
+- `payroll_overrides` — admin-created manual adjustments to individual tax lines.
+
+### New Columns
+- `workers`: `w4FilingStatus`, `w4Allowances`, `additionalWithholding`
+- `taxes_deductions`: `taxCode`, `stateCode`, `deductionTiming` (pre_tax/post_tax/employer_only), `isTaxableBenefit`, `isReimbursement`
+
+### New API Endpoints
+- `GET /api/payroll-runs/:id/taxes` — all tax lines for a run
+- `GET /api/payroll-runs/:id/tax-snapshot` — the stored JSON snapshot
+- `GET /api/payroll-runs/:id/tax-overrides` — all overrides for a run
+- `PATCH /api/payroll-items/:id/tax-override` — create/update an override
+- `GET /api/payroll-items/:id/taxes` — per-item tax lines
+- `GET /api/companies/:id/tax-liability` — aggregated liability by taxCode for a date range
+
+### Reports
+- **Payroll Register** (`payroll-register-report.tsx`): adds a "Tax Engine Breakdown" section with per-code summary badges and per-employee tax detail table.
+- **Tax Liability Report** (`reports.tsx` → `TaxLiabilityDialog`): fetches `/api/companies/:id/tax-liability`, shows table grouped by taxCode.
+- **Tax Audit Report** (`reports.tsx` → `TaxAuditDialog`): shows stored tax lines for a specific run + any overrides applied.
+
 ## External Dependencies
 -   **PostgreSQL:** Primary application database.
 -   **NGINX:** Reverse proxy for production deployments.

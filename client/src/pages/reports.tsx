@@ -2394,6 +2394,362 @@ function Form1096Dialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
   );
 }
 
+// ── Tax Liability Dialog (Task #4) ────────────────────────────────────────
+
+type TaxLiabilityRow = {
+  taxCode: string; taxName: string; isEmployerPaid: boolean; stateCode: string | null;
+  totalTaxableWages: number; totalAmount: number; periodCount: number;
+};
+
+function TaxLiabilityDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const currentYear = new Date().getFullYear();
+  const [year, setYear] = useState(String(currentYear));
+  const [companyId, setCompanyId] = useState("all");
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"], enabled: open });
+  const startDate = `${year}-01-01`;
+  const endDate = `${year}-12-31`;
+
+  const { data: liability = [], isLoading } = useQuery<TaxLiabilityRow[]>({
+    queryKey: ["/api/companies", companyId, "tax-liability", startDate, endDate],
+    queryFn: async () => {
+      if (companyId === "all") {
+        const all = await Promise.all(companies.map(async (c) => {
+          const r = await fetch(`/api/companies/${c.id}/tax-liability?startDate=${startDate}&endDate=${endDate}`, { credentials: "include" });
+          if (!r.ok) return [];
+          return r.json() as Promise<TaxLiabilityRow[]>;
+        }));
+        const merged: Record<string, TaxLiabilityRow> = {};
+        for (const rows of all) {
+          for (const row of rows) {
+            if (merged[row.taxCode]) {
+              merged[row.taxCode].totalTaxableWages += row.totalTaxableWages;
+              merged[row.taxCode].totalAmount += row.totalAmount;
+              merged[row.taxCode].periodCount += row.periodCount;
+            } else {
+              merged[row.taxCode] = { ...row };
+            }
+          }
+        }
+        return Object.values(merged).sort((a, b) => a.taxCode.localeCompare(b.taxCode));
+      }
+      const r = await fetch(`/api/companies/${companyId}/tax-liability?startDate=${startDate}&endDate=${endDate}`, { credentials: "include" });
+      if (!r.ok) return [];
+      return r.json();
+    },
+    enabled: open && (companyId !== "all" || companies.length > 0),
+  });
+
+  const employeeTaxes = liability.filter(r => !r.isEmployerPaid);
+  const employerTaxes = liability.filter(r => r.isEmployerPaid);
+  const fmt = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const handleExportCSV = () => {
+    const headers = ["Tax Code", "Tax Name", "Payer", "State", "Taxable Wages", "Amount", "Line Items"];
+    const rows = liability.map(r => [
+      r.taxCode, r.taxName, r.isEmployerPaid ? "Employer" : "Employee",
+      r.stateCode || "Federal", fmt(r.totalTaxableWages), fmt(r.totalAmount), String(r.periodCount),
+    ]);
+    downloadCSV(headers, rows, `tax_liability_${year}.csv`);
+  };
+
+  const renderSection = (title: string, rows: TaxLiabilityRow[]) => (
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold text-muted-foreground">{title}</h3>
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Tax Code</TableHead>
+              <TableHead>Tax Name</TableHead>
+              <TableHead>Jurisdiction</TableHead>
+              <TableHead className="text-right">Taxable Wages</TableHead>
+              <TableHead className="text-right">Amount</TableHead>
+              <TableHead className="text-right">Line Items</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.length === 0 ? (
+              <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-6">No data for this period.</TableCell></TableRow>
+            ) : rows.map(r => (
+              <TableRow key={r.taxCode} data-testid={`row-tax-liability-${r.taxCode}`}>
+                <TableCell className="font-mono text-xs">{r.taxCode}</TableCell>
+                <TableCell>{r.taxName}</TableCell>
+                <TableCell><Badge variant="outline">{r.stateCode || "Federal"}</Badge></TableCell>
+                <TableCell className="text-right">{fmt(r.totalTaxableWages)}</TableCell>
+                <TableCell className="text-right font-medium">{fmt(r.totalAmount)}</TableCell>
+                <TableCell className="text-right text-muted-foreground">{r.periodCount}</TableCell>
+              </TableRow>
+            ))}
+            {rows.length > 0 && (
+              <TableRow className="font-bold border-t-2">
+                <TableCell colSpan={4}>Total</TableCell>
+                <TableCell className="text-right">{fmt(rows.reduce((s, r) => s + r.totalAmount, 0))}</TableCell>
+                <TableCell></TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-5xl max-h-[85vh] overflow-y-auto" data-testid="dialog-tax-liability">
+        <DialogHeader>
+          <DialogTitle data-testid="text-dialog-title-tax-liability">Tax Liability Report — {year}</DialogTitle>
+        </DialogHeader>
+        <div className="flex items-end gap-3 flex-wrap">
+          <div className="space-y-1">
+            <Label className="text-xs">Year</Label>
+            <Select value={year} onValueChange={setYear}>
+              <SelectTrigger className="w-[100px]" data-testid="select-liability-year"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {[currentYear, currentYear - 1, currentYear - 2].map(y => (
+                  <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Company</Label>
+            <Select value={companyId} onValueChange={setCompanyId}>
+              <SelectTrigger className="w-[200px]" data-testid="select-liability-company"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Companies</SelectItem>
+                {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-liability"><Printer className="mr-2 h-4 w-4" />Print</Button>
+          <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-liability"><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+          <SaveReportButton reportType="tax-liability" category="tax" defaultName={`Tax Liability ${year}`} headers={["Tax Code", "Tax Name", "Payer", "Amount"]} rows={liability.map(r => [r.taxCode, r.taxName, r.isEmployerPaid ? "Employer" : "Employee", fmt(r.totalAmount)])} />
+        </div>
+        {isLoading ? (
+          <div className="space-y-2 mt-4">{[1,2,3,4].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
+        ) : (
+          <div className="space-y-6 mt-4">
+            {renderSection("Employee-Paid Taxes", employeeTaxes)}
+            {renderSection("Employer-Paid Taxes", employerTaxes)}
+            <div className="border-t pt-3">
+              <div className="flex justify-between text-sm font-bold">
+                <span>Total Tax Liability (All)</span>
+                <span>{fmt(liability.reduce((s, r) => s + r.totalAmount, 0))}</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Tax Audit Dialog (Task #4) ─────────────────────────────────────────────
+
+type PayrollOverrideRow = {
+  id: string; payrollItemId: string; taxCode: string;
+  overriddenAmount: string; reason: string | null;
+  overriddenBy: string | null; overriddenAt: string;
+};
+
+function TaxAuditDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const [selectedRunId, setSelectedRunId] = useState("");
+  const [selectedCompanyId, setSelectedCompanyId] = useState("all");
+
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"], enabled: open });
+  const { data: allRuns = [], isLoading: loadingRuns } = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"], enabled: open });
+
+  const filteredRuns = selectedCompanyId === "all" ? allRuns : allRuns.filter(r => r.companyId === selectedCompanyId);
+  const runId = selectedRunId || filteredRuns[0]?.id || "";
+
+  const { data: overrides = [], isLoading: loadingOverrides } = useQuery<PayrollOverrideRow[]>({
+    queryKey: ["/api/payroll-runs", runId, "tax-overrides"],
+    queryFn: async () => {
+      if (!runId) return [];
+      const r = await fetch(`/api/payroll-runs/${runId}/tax-overrides`, { credentials: "include" });
+      if (!r.ok) return [];
+      return r.json();
+    },
+    enabled: !!runId && open,
+  });
+
+  const { data: taxLines = [], isLoading: loadingTaxLines } = useQuery<any[]>({
+    queryKey: ["/api/payroll-runs", runId, "taxes"],
+    queryFn: async () => {
+      if (!runId) return [];
+      const r = await fetch(`/api/payroll-runs/${runId}/taxes`, { credentials: "include" });
+      if (!r.ok) return [];
+      return r.json();
+    },
+    enabled: !!runId && open,
+  });
+
+  const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"], enabled: open });
+  const { data: items = [] } = useQuery<any[]>({
+    queryKey: ["/api/payroll-runs", runId, "items"],
+    queryFn: async () => {
+      if (!runId) return [];
+      const r = await fetch(`/api/payroll-runs/${runId}/items`, { credentials: "include" });
+      if (!r.ok) return [];
+      return r.json();
+    },
+    enabled: !!runId && open,
+  });
+
+  const run = allRuns.find(r => r.id === runId);
+  const isLoading = loadingRuns || loadingOverrides || loadingTaxLines;
+  const fmt = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const getWorkerName = (workerId: string) => {
+    const w = workers.find(w => w.id === workerId);
+    return w ? `${w.firstName} ${w.lastName}` : workerId;
+  };
+  const getWorkerForItem = (itemId: string) => {
+    const item = items.find((i: any) => i.id === itemId);
+    return item ? getWorkerName(item.workerId) : "—";
+  };
+
+  const groupedTaxLines = taxLines.reduce<Record<string, any[]>>((acc, line) => {
+    const key = line.taxCode;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(line);
+    return acc;
+  }, {});
+
+  const summaryRows = Object.entries(groupedTaxLines).map(([code, lines]) => ({
+    taxCode: code,
+    taxName: lines[0]?.taxName || code,
+    isEmployerPaid: lines[0]?.isEmployerPaid || false,
+    total: lines.reduce((s: number, l: any) => s + Number(l.amount || 0), 0),
+    count: lines.length,
+  }));
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-6xl max-h-[85vh] overflow-y-auto" data-testid="dialog-tax-audit">
+        <DialogHeader>
+          <DialogTitle data-testid="text-dialog-title-tax-audit">Tax Audit — Per-Run Breakdown</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-wrap gap-3">
+          <div className="space-y-1">
+            <Label className="text-xs">Company</Label>
+            <Select value={selectedCompanyId} onValueChange={v => { setSelectedCompanyId(v); setSelectedRunId(""); }}>
+              <SelectTrigger className="w-[180px]" data-testid="select-audit-company"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Companies</SelectItem>
+                {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Payroll Run</Label>
+            <Select value={runId} onValueChange={setSelectedRunId}>
+              <SelectTrigger className="w-[280px]" data-testid="select-audit-run"><SelectValue placeholder="Select a run" /></SelectTrigger>
+              <SelectContent>
+                {filteredRuns.map(r => (
+                  <SelectItem key={r.id} value={r.id}>
+                    {r.periodStart} – {r.periodEnd}{r.payDate ? ` (Pay: ${r.payDate})` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => window.print()} data-testid="button-print-audit"><Printer className="mr-2 h-4 w-4" />Print</Button>
+        </div>
+
+        {!runId ? (
+          <p className="text-muted-foreground py-8 text-center text-sm">Select a payroll run to view the tax audit.</p>
+        ) : isLoading ? (
+          <div className="space-y-2 mt-4">{[1,2,3,4].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
+        ) : (
+          <div className="space-y-6 mt-4">
+            {/* Run Tax Summary */}
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold">Tax Summary — {run?.periodStart} to {run?.periodEnd}</h3>
+              {summaryRows.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4">No stored tax lines for this run. Re-process the payroll to generate tax engine data.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Tax Code</TableHead>
+                        <TableHead>Tax Name</TableHead>
+                        <TableHead>Payer</TableHead>
+                        <TableHead className="text-right">Total Amount</TableHead>
+                        <TableHead className="text-right">Employee Lines</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {summaryRows.map(r => (
+                        <TableRow key={r.taxCode} data-testid={`row-audit-tax-${r.taxCode}`}>
+                          <TableCell className="font-mono text-xs">{r.taxCode}</TableCell>
+                          <TableCell>{r.taxName}</TableCell>
+                          <TableCell>
+                            <Badge variant={r.isEmployerPaid ? "secondary" : "outline"}>
+                              {r.isEmployerPaid ? "Employer" : "Employee"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right font-medium">{fmt(r.total)}</TableCell>
+                          <TableCell className="text-right text-muted-foreground">{r.count}</TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow className="font-bold border-t-2">
+                        <TableCell colSpan={3}>Total</TableCell>
+                        <TableCell className="text-right">{fmt(summaryRows.reduce((s, r) => s + r.total, 0))}</TableCell>
+                        <TableCell></TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+
+            {/* Overrides */}
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                Tax Overrides
+                {overrides.length > 0 && <Badge variant="destructive">{overrides.length} override{overrides.length !== 1 ? "s" : ""}</Badge>}
+              </h3>
+              {overrides.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No tax overrides recorded for this run.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Employee</TableHead>
+                        <TableHead>Tax Code</TableHead>
+                        <TableHead className="text-right">Overridden Amount</TableHead>
+                        <TableHead>Reason</TableHead>
+                        <TableHead>Overridden By</TableHead>
+                        <TableHead>Date</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {overrides.map(o => (
+                        <TableRow key={o.id} data-testid={`row-override-${o.id}`}>
+                          <TableCell>{getWorkerForItem(o.payrollItemId)}</TableCell>
+                          <TableCell className="font-mono text-xs">{o.taxCode}</TableCell>
+                          <TableCell className="text-right">{fmt(Number(o.overriddenAmount))}</TableCell>
+                          <TableCell className="text-muted-foreground text-sm">{o.reason || "—"}</TableCell>
+                          <TableCell className="text-sm">{o.overriddenBy || "—"}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {o.overriddenAt ? new Date(o.overriddenAt).toLocaleDateString() : "—"}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function parseShiftHours(start: string, end: string): number {
   if (!start || !end) return 0;
   const [sh, sm] = start.split(":").map(Number);
@@ -3192,6 +3548,8 @@ export default function ReportsPage() {
   const [form940Open, setForm940Open] = useState(false);
   const [de9Open, setDE9Open] = useState(false);
   const [de9cOpen, setDE9COpen] = useState(false);
+  const [taxLiabilityOpen, setTaxLiabilityOpen] = useState(false);
+  const [taxAuditOpen, setTaxAuditOpen] = useState(false);
 
   return (
     <div className="p-4 md:p-6 space-y-6">
@@ -3385,6 +3743,18 @@ export default function ReportsPage() {
               icon={<FileText className="h-5 w-5" />}
               onGenerate={() => setDE9COpen(true)}
             />
+            <ReportCard
+              title="Tax Liability Report"
+              description="Itemized employer and employee tax liability by tax code, sourced from stored tax engine data."
+              icon={<Calculator className="h-5 w-5" />}
+              onGenerate={() => setTaxLiabilityOpen(true)}
+            />
+            <ReportCard
+              title="Tax Audit"
+              description="Per-run tax breakdown and override audit trail from the deterministic tax engine."
+              icon={<Shield className="h-5 w-5" />}
+              onGenerate={() => setTaxAuditOpen(true)}
+            />
           </div>
         </TabsContent>
 
@@ -3434,6 +3804,8 @@ export default function ReportsPage() {
       <Form1096Dialog open={form1096Open} onOpenChange={setForm1096Open} />
       <DE9Dialog open={de9Open} onOpenChange={setDE9Open} />
       <DE9CDialog open={de9cOpen} onOpenChange={setDE9COpen} />
+      <TaxLiabilityDialog open={taxLiabilityOpen} onOpenChange={setTaxLiabilityOpen} />
+      <TaxAuditDialog open={taxAuditOpen} onOpenChange={setTaxAuditOpen} />
       <QualificationSummaryDialog open={qualificationSummaryOpen} onOpenChange={setQualificationSummaryOpen} />
       <ReviewSummaryDialog open={reviewSummaryOpen} onOpenChange={setReviewSummaryOpen} />
 

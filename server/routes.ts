@@ -2,6 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { calculateWorkerPay } from "./payroll-calculator";
+import { calcAllTaxes, payPeriodTypeFromSchedule, TAX_ENGINE_VERSION, type TaxEngineInput, type FilingStatus } from "./tax-engine.js";
 import bcrypt from "bcrypt";
 import multer from "multer";
 import { sendScheduleEmailNotification, sendScheduleSmsNotification, normalizePhone } from "./notifications";
@@ -2476,6 +2477,7 @@ export async function registerRoutes(
       }
 
       const items: any[] = [];
+      const workerTaxLines: Record<string, ReturnType<typeof calcAllTaxes>["lines"]> = {};
 
       const allWageGroups = await storage.getSecondaryWageGroups(run.companyId);
       const wageGroupMap: Record<string, { hourlyRate: number; overtimeRate: number }> = {};
@@ -2650,35 +2652,64 @@ export async function registerRoutes(
           continue;
         }
 
-        const workerDeductions = (isContractor || isContractorGroup) ? [] : companyDeductions.filter(d => {
-          if (!d.isActive || d.isEmployerPaid) return false;
-          if (d.isReferenceOnly) return false;
-          const appliesTo = d.appliesTo || "all";
-          if (appliesTo === "contractor") return false;
+        const ytd = existingYtdByWorker[worker.id] || { gross: 0, deductions: 0, net: 0 };
+
+        // ── Tax Engine integration ──────────────────────────────────────────────
+        // Step 1: Pre-tax deductions reduce federal/state taxable wages before bracket calc
+        const preTaxDedRecords = (isContractor || isContractorGroup) ? [] : companyDeductions.filter(d =>
+          d.isActive && !d.isEmployerPaid && !d.isReferenceOnly &&
+          (d as any).deductionTiming === "pre_tax" &&
+          (d.appliesTo || "all") !== "contractor"
+        );
+        const preTaxDedAmount = preTaxDedRecords.reduce((s, d) => {
+          if (d.calculationType === "percentage") return s + grossPay * (parseFloat(d.rate || "0") / 100);
+          return s + parseFloat(d.rate || "0");
+        }, 0);
+
+        // Step 2: Run the tax engine (federal + CA)
+        const taxEngineInput: TaxEngineInput = {
+          grossWages: grossPay,
+          preTaxDeductions: preTaxDedAmount,
+          reimbursements: processCalcResult.reimburseAmount || 0,
+          taxableBenefits: 0,
+          ytdGross: ytd.gross,
+          ytdFedTaxableWages: ytd.gross,
+          filingStatus: ((worker as any).w4FilingStatus || "single") as FilingStatus,
+          w4Allowances: parseInt(String((worker as any).w4Allowances || 0), 10),
+          additionalWithholding: parseFloat(String((worker as any).additionalWithholding || "0")),
+          caFilingStatus: ((worker as any).w4FilingStatus || "single") as FilingStatus,
+          caAllowances: parseInt(String((worker as any).w4Allowances || 0), 10),
+          payPeriodType: payPeriodTypeFromSchedule(activeSchedule?.type),
+          isContractor: isContractor || isContractorGroup,
+        };
+        const taxResult = calcAllTaxes(taxEngineInput, true);
+        workerTaxLines[worker.id] = taxResult.lines;
+
+        // Step 3: Custom post-tax non-statutory deductions (benefits, garnishments, etc.)
+        const customPostTaxDedRecords = (isContractor || isContractorGroup) ? [] : companyDeductions.filter(d => {
+          if (!d.isActive || d.isEmployerPaid || d.isReferenceOnly) return false;
+          if ((d.appliesTo || "all") === "contractor") return false;
+          if ((d as any).taxCode) return false; // engine already handles statutory taxes
+          if ((d as any).deductionTiming === "pre_tax") return false; // already counted above
           const nameLower = d.name.toLowerCase();
           if (nameLower.includes("se tax") || nameLower.includes("self-employment") || nameLower.includes("self employment")) return false;
           return true;
         });
-
-        const ytd = existingYtdByWorker[worker.id] || { gross: 0, deductions: 0, net: 0 };
-        let totalDeductions = 0;
-        for (const ded of workerDeductions) {
-          if (ded.calculationType === "percentage") {
-            if (ded.maxAmount) {
-              // Wage-base cap (e.g. Social Security $168,600): compare against YTD accumulated gross
-              const wageCap = parseFloat(ded.maxAmount);
+        const customPostTaxDed = customPostTaxDedRecords.reduce((s, d) => {
+          if (d.calculationType === "percentage") {
+            if (d.maxAmount) {
+              const wageCap = parseFloat(d.maxAmount);
               const remainingCap = Math.max(0, wageCap - ytd.gross);
               const base = Math.min(grossPay, remainingCap);
-              totalDeductions += base * (parseFloat(ded.rate || "0") / 100);
-            } else {
-              totalDeductions += grossPay * (parseFloat(ded.rate || "0") / 100);
+              return s + base * (parseFloat(d.rate || "0") / 100);
             }
-          } else {
-            totalDeductions += parseFloat(ded.rate || "0");
+            return s + grossPay * (parseFloat(d.rate || "0") / 100);
           }
-        }
-        // Add amendment-based deductions (e.g. loan repayments, advances)
-        totalDeductions += amendmentDeductions;
+          return s + parseFloat(d.rate || "0");
+        }, 0);
+
+        // totalDeductions = engine employee taxes + custom post-tax deductions + amendment deductions
+        let totalDeductions = taxResult.employeeTaxTotal + customPostTaxDed + amendmentDeductions;
 
         const netPay = grossPay - totalDeductions;
 
@@ -2734,8 +2765,42 @@ export async function registerRoutes(
         });
       }
 
+      const snapshotWorkerData: any[] = [];
       for (const item of items) {
-        await storage.createPayrollItem(item);
+        const created = await storage.createPayrollItem(item);
+        // Persist per-item tax lines from the engine
+        const lines = workerTaxLines[item.workerId] || [];
+        // Clear any stale tax lines (re-processing scenario)
+        await storage.deletePayrollItemTaxesByItem(created.id);
+        for (const line of lines) {
+          await storage.createPayrollItemTax({
+            payrollItemId: created.id,
+            taxCode: line.taxCode,
+            taxName: line.taxName,
+            taxableWages: String(line.taxableWages),
+            rate: String(line.rate),
+            amount: String(line.amount),
+            isEmployerPaid: line.isEmployerPaid,
+            stateCode: line.stateCode ?? null,
+          });
+        }
+        snapshotWorkerData.push({
+          workerId: item.workerId,
+          grossPay: item.grossPay,
+          taxLines: lines,
+        });
+      }
+
+      // ── Write tax snapshot for this run ───────────────────────────────────
+      try {
+        await storage.upsertPayrollTaxSnapshot(
+          run.id,
+          run.companyId,
+          JSON.stringify({ runId: run.id, engineVersion: TAX_ENGINE_VERSION, processedAt: new Date().toISOString(), workers: snapshotWorkerData }),
+          TAX_ENGINE_VERSION,
+        );
+      } catch (snapErr) {
+        console.warn("[TAX] Failed to write tax snapshot:", snapErr);
       }
 
       // ── Mark paid commissions ────────────────────────────────────────────
@@ -5451,6 +5516,85 @@ export async function registerRoutes(
       res.status(500).json({ message: "Failed to fetch payroll items" });
     }
   });
+
+  // ── Tax Engine endpoints (Task #4) ─────────────────────────────────────────
+
+  app.get("/api/payroll-runs/:id/tax-snapshot", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const snapshot = await storage.getPayrollTaxSnapshot(req.params.id);
+      res.json(snapshot ?? null);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch tax snapshot" });
+    }
+  });
+
+  app.get("/api/payroll-runs/:id/tax-overrides", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const overrides = await storage.getPayrollOverrides(req.params.id);
+      res.json(overrides);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch tax overrides" });
+    }
+  });
+
+  app.get("/api/payroll-runs/:id/taxes", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const taxes = await storage.getPayrollItemTaxesByRun(req.params.id);
+      res.json(taxes);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch run tax lines" });
+    }
+  });
+
+  app.get("/api/payroll-items/:id/taxes", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const taxes = await storage.getPayrollItemTaxes(req.params.id);
+      res.json(taxes);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch payroll item taxes" });
+    }
+  });
+
+  app.patch("/api/payroll-items/:id/tax-override", requireAuth, requireRole("admin", "platform_super_admin"), async (req, res) => {
+    try {
+      const { taxCode, overriddenAmount, reason } = req.body;
+      if (!taxCode || overriddenAmount === undefined) {
+        return res.status(400).json({ message: "taxCode and overriddenAmount are required" });
+      }
+      const user = (req as any).user;
+      const override = await storage.createPayrollOverride({
+        payrollItemId: req.params.id,
+        taxCode,
+        overriddenAmount: String(overriddenAmount),
+        reason: reason ?? null,
+        overriddenBy: user?.id ?? null,
+      });
+      res.json(override);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to create tax override" });
+    }
+  });
+
+  app.get("/api/companies/:id/tax-liability", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query as { startDate?: string; endDate?: string };
+      const year = new Date().getFullYear();
+      const start = startDate || `${year}-01-01`;
+      const end = endDate || `${year}-12-31`;
+      const liability = await storage.getCompanyTaxLiability(req.params.id, start, end);
+      res.json(liability);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Failed to fetch tax liability" });
+    }
+  });
+
+  // ── End Tax Engine endpoints ───────────────────────────────────────────────
 
   app.post("/api/funding-accounts/:id/set-default", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {

@@ -170,6 +170,12 @@ export const workers = pgTable("workers", {
   contractorType: text("contractor_type").default("hourly"),
   workerGroup: text("worker_group").default("hourly_employee"),
   compensationType: text("compensation_type").default("hourly"), // hourly | salary | commission | hybrid
+  /** W-4 filing status: single | married | head_of_household */
+  w4FilingStatus: text("w4_filing_status").default("single"),
+  /** Number of withholding allowances claimed (pre-2020 W-4 style) */
+  w4Allowances: integer("w4_allowances").default(0),
+  /** Additional withholding per period requested by employee ($) */
+  additionalWithholding: numeric("additional_withholding").default("0"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -496,6 +502,16 @@ export const taxesDeductions = pgTable("taxes_deductions", {
   remittanceAgencyId: varchar("remittance_agency_id"),
   effectiveDate: date("effective_date"),
   expiryDate: date("expiry_date"),
+  /** Tax code linking this record to the engine (e.g. fed_income_tax, ss_employee, ca_sdi) */
+  taxCode: text("tax_code"),
+  /** State code for state-specific taxes (e.g. CA) */
+  stateCode: text("state_code"),
+  /** pre_tax = reduces federal/state taxable wages; post_tax = only reduces net pay */
+  deductionTiming: text("deduction_timing").default("post_tax"),
+  /** True if this is a taxable fringe benefit (adds to taxable wages) */
+  isTaxableBenefit: boolean("is_taxable_benefit").default(false),
+  /** True if this is a non-taxable reimbursement (excluded from tax bases) */
+  isReimbursement: boolean("is_reimbursement").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -4545,3 +4561,64 @@ export const complianceAuditEvents = pgTable("compliance_audit_events", {
 export const insertComplianceAuditEventSchema = createInsertSchema(complianceAuditEvents).omit({ id: true, createdAt: true });
 export type ComplianceAuditEvent = typeof complianceAuditEvents.$inferSelect;
 export type InsertComplianceAuditEvent = z.infer<typeof insertComplianceAuditEventSchema>;
+
+// ── Tax Engine Tables (Task #4) ───────────────────────────────────────────────
+
+/**
+ * payroll_item_taxes — one row per tax line per payroll item.
+ * Populated by the tax engine at processing time; never computed on-the-fly.
+ */
+export const payrollItemTaxes = pgTable("payroll_item_taxes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  payrollItemId: varchar("payroll_item_id").notNull().references(() => payrollItems.id),
+  taxCode: text("tax_code").notNull(),
+  taxName: text("tax_name").notNull(),
+  taxableWages: numeric("taxable_wages").default("0"),
+  rate: numeric("rate").default("0"),
+  amount: numeric("amount").default("0"),
+  isEmployerPaid: boolean("is_employer_paid").default(false),
+  stateCode: text("state_code"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertPayrollItemTaxSchema = createInsertSchema(payrollItemTaxes).omit({ id: true, createdAt: true });
+export type PayrollItemTax = typeof payrollItemTaxes.$inferSelect;
+export type InsertPayrollItemTax = z.infer<typeof insertPayrollItemTaxSchema>;
+
+/**
+ * payroll_tax_snapshots — one row per payroll run capturing engine inputs/outputs.
+ * Immutable once written; used for audit comparison and report data sourcing.
+ */
+export const payrollTaxSnapshots = pgTable("payroll_tax_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  payrollRunId: varchar("payroll_run_id").notNull().references(() => payrollRuns.id),
+  companyId: varchar("company_id").notNull().references(() => companies.id),
+  /** Full JSON of all per-worker inputs and outputs for this run */
+  snapshotJson: text("snapshot_json").notNull(),
+  engineVersion: text("engine_version").default("1.0.0"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertPayrollTaxSnapshotSchema = createInsertSchema(payrollTaxSnapshots).omit({ id: true, createdAt: true });
+export type PayrollTaxSnapshot = typeof payrollTaxSnapshots.$inferSelect;
+export type InsertPayrollTaxSnapshot = z.infer<typeof insertPayrollTaxSnapshotSchema>;
+
+/**
+ * payroll_overrides — audit log for manual overrides to calculated tax amounts.
+ * Every override MUST include a reason. Immutable once written.
+ */
+export const payrollOverrides = pgTable("payroll_overrides", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  payrollItemId: varchar("payroll_item_id").notNull().references(() => payrollItems.id),
+  taxCode: text("tax_code").notNull(),
+  originalAmount: numeric("original_amount").notNull(),
+  overrideAmount: numeric("override_amount").notNull(),
+  reason: text("reason").notNull(),
+  overriddenBy: varchar("overridden_by").notNull(),
+  overriddenAt: timestamp("overridden_at").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertPayrollOverrideSchema = createInsertSchema(payrollOverrides).omit({ id: true, createdAt: true, overriddenAt: true });
+export type PayrollOverride = typeof payrollOverrides.$inferSelect;
+export type InsertPayrollOverride = z.infer<typeof insertPayrollOverrideSchema>;

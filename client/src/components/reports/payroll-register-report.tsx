@@ -4,20 +4,34 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import type { PayrollRun, PayrollItem, Company, Worker } from "@shared/schema";
 import {
   ReportShell, ReportHeader, ReportSection, ReportTable, ReportTotalsGrid, ReportFooter,
   exportReportCSV, useReportUser,
 } from "@/components/report-template";
 
+interface PayrollItemTax {
+  id: string;
+  payrollItemId: string;
+  taxCode: string;
+  taxName: string;
+  taxableWages: string;
+  rate: string;
+  amount: string;
+  isEmployerPaid: boolean;
+  stateCode: string | null;
+}
+
 interface PayrollRegisterReportProps {
   run: PayrollRun;
   items: PayrollItem[];
   company: Company | undefined;
   workers: Worker[];
+  taxLines?: PayrollItemTax[];
 }
 
-export function PayrollRegisterReport({ run, items, company, workers }: PayrollRegisterReportProps) {
+export function PayrollRegisterReport({ run, items, company, workers, taxLines = [] }: PayrollRegisterReportProps) {
   const generatedBy = useReportUser();
   const fmt = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtH = (n: number) => n > 0 ? n.toFixed(2) : "—";
@@ -45,7 +59,7 @@ export function PayrollRegisterReport({ run, items, company, workers }: PayrollR
     const method = (item.paymentMethod || "—").replace(/_/g, " ");
     const rate = w?.payType === "salary"
       ? `Salary`
-      : w?.hourlyRate ? `$${Number(w.hourlyRate).toFixed(2)}/hr` : "—";
+      : (w as any)?.hourlyRate ? `$${Number((w as any).hourlyRate).toFixed(2)}/hr` : "—";
 
     return [
       name,
@@ -87,6 +101,44 @@ export function PayrollRegisterReport({ run, items, company, workers }: PayrollR
     { label: "Total Funding Required", value: fmt(totNet + Number(run.totalEmployerTaxes || 0)), emphasis: true },
   ];
 
+  // ── Tax Engine breakdown ─────────────────────────────────────────────────
+  const hasTaxLines = taxLines.length > 0;
+
+  // Group tax lines by employee item
+  const taxByItem = taxLines.reduce<Record<string, PayrollItemTax[]>>((acc, t) => {
+    if (!acc[t.payrollItemId]) acc[t.payrollItemId] = [];
+    acc[t.payrollItemId].push(t);
+    return acc;
+  }, {});
+
+  // Build tax summary by code across all employees
+  const taxSummary = taxLines.reduce<Record<string, { name: string; isEmployerPaid: boolean; total: number }>>((acc, t) => {
+    if (!acc[t.taxCode]) acc[t.taxCode] = { name: t.taxName, isEmployerPaid: t.isEmployerPaid, total: 0 };
+    acc[t.taxCode].total += Number(t.amount || 0);
+    return acc;
+  }, {});
+
+  // Per-employee tax detail rows: employee name + each tax code amount
+  const allTaxCodes = Array.from(new Set(taxLines.map(t => t.taxCode))).sort();
+  const taxDetailRows = sorted.map(item => {
+    const w = getWorker(item.workerId);
+    const name = w ? `${w.lastName}, ${w.firstName}` : item.workerId;
+    const itemTaxes = taxByItem[item.id] || [];
+    const byCode: Record<string, number> = {};
+    for (const t of itemTaxes) byCode[t.taxCode] = Number(t.amount || 0);
+    const empTotal = itemTaxes.filter(t => !t.isEmployerPaid).reduce((s, t) => s + Number(t.amount || 0), 0);
+    const erTotal = itemTaxes.filter(t => t.isEmployerPaid).reduce((s, t) => s + Number(t.amount || 0), 0);
+    return [name, ...allTaxCodes.map(code => byCode[code] ? fmt(byCode[code]) : "—"), fmt(empTotal), fmt(erTotal)];
+  });
+
+  const taxDetailHeaders = ["Employee", ...allTaxCodes, "Emp. Total", "Er. Total"];
+  const taxDetailFooter = [
+    "TOTALS",
+    ...allTaxCodes.map(code => fmt(taxSummary[code]?.total || 0)),
+    fmt(taxLines.filter(t => !t.isEmployerPaid).reduce((s, t) => s + Number(t.amount || 0), 0)),
+    fmt(taxLines.filter(t => t.isEmployerPaid).reduce((s, t) => s + Number(t.amount || 0), 0)),
+  ];
+
   const handleCSV = () => {
     const headers = ["Employee", "Rate", "Reg Hrs", "OT Hrs", "DT Hrs", "Total Hrs", "Gross Pay", "Deductions", "Net Pay", "Method", "Check #"];
     const csvRows = sorted.map(item => {
@@ -95,7 +147,7 @@ export function PayrollRegisterReport({ run, items, company, workers }: PayrollR
       const reg = Number(item.regularHours || 0);
       const ot = Number(item.overtimeHours || 0);
       const dt = Number(item.doubleTimeHours || 0);
-      const rate = w?.payType === "salary" ? "Salary" : w?.hourlyRate ? Number(w.hourlyRate).toFixed(2) : "";
+      const rate = w?.payType === "salary" ? "Salary" : (w as any)?.hourlyRate ? Number((w as any).hourlyRate).toFixed(2) : "";
       return [
         name, rate, reg.toFixed(2), ot.toFixed(2), dt.toFixed(2), (reg + ot + dt).toFixed(2),
         Number(item.grossPay || 0).toFixed(2), Number(item.deductions || 0).toFixed(2), Number(item.netPay || 0).toFixed(2),
@@ -142,6 +194,35 @@ export function PayrollRegisterReport({ run, items, company, workers }: PayrollR
         <ReportTotalsGrid items={totalsItems} columns={2} />
       </ReportSection>
 
+      {hasTaxLines && (
+        <ReportSection title="Tax Engine Breakdown">
+          {/* Summary by tax code */}
+          <div className="mb-4">
+            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Tax Code Summary</p>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(taxSummary).sort(([a], [b]) => a.localeCompare(b)).map(([code, info]) => (
+                <div key={code} className="flex items-center gap-1.5 border rounded px-2 py-1 text-xs">
+                  <span className="font-mono font-medium">{code}</span>
+                  <Badge variant={info.isEmployerPaid ? "secondary" : "outline"} className="text-[10px] px-1 py-0">
+                    {info.isEmployerPaid ? "Er" : "Ee"}
+                  </Badge>
+                  <span className="font-medium">{fmt(info.total)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* Per-employee detail */}
+          {taxDetailRows.length > 0 && (
+            <ReportTable
+              headers={taxDetailHeaders}
+              rows={taxDetailRows}
+              footerRows={[taxDetailFooter]}
+              alignRight={taxDetailHeaders.map((_, i) => i > 0 ? i : -1).filter(i => i >= 0)}
+            />
+          )}
+        </ReportSection>
+      )}
+
       <ReportFooter generatedBy={generatedBy} note={`Payroll Register · Run ${run.id.slice(0, 8)}`} />
     </ReportShell>
   );
@@ -178,8 +259,19 @@ export function PayrollRegisterReportDialog({ open, onOpenChange, defaultRunId }
     enabled: !!runId,
   });
 
+  const { data: taxLines = [], isLoading: loadingTaxLines } = useQuery<PayrollItemTax[]>({
+    queryKey: ["/api/payroll-runs", runId, "taxes"],
+    queryFn: async () => {
+      if (!runId) return [];
+      const res = await fetch(`/api/payroll-runs/${runId}/taxes`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!runId,
+  });
+
   const company = run ? companies.find(c => c.id === run.companyId) : undefined;
-  const isLoading = loadingRuns || loadingItems;
+  const isLoading = loadingRuns || loadingItems || loadingTaxLines;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -216,6 +308,13 @@ export function PayrollRegisterReportDialog({ open, onOpenChange, defaultRunId }
               </SelectContent>
             </Select>
           </div>
+          {taxLines.length > 0 && (
+            <div className="flex items-end">
+              <Badge variant="outline" className="text-xs h-8 flex items-center gap-1">
+                <span className="text-green-600">✓</span> Tax engine data available
+              </Badge>
+            </div>
+          )}
         </div>
 
         {isLoading ? (
@@ -228,7 +327,7 @@ export function PayrollRegisterReportDialog({ open, onOpenChange, defaultRunId }
             Select a payroll run to generate the register.
           </div>
         ) : (
-          <PayrollRegisterReport run={run} items={items} company={company} workers={workers} />
+          <PayrollRegisterReport run={run} items={items} company={company} workers={workers} taxLines={taxLines} />
         )}
       </DialogContent>
     </Dialog>

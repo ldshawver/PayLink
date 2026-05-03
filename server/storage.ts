@@ -225,6 +225,10 @@ import {
   type CompanyComplianceProfile, type InsertCompanyComplianceProfile,
   type WorkerComplianceProfile, type InsertWorkerComplianceProfile,
   type ComplianceAuditEvent, type InsertComplianceAuditEvent,
+  payrollItemTaxes, payrollTaxSnapshots, payrollOverrides,
+  type PayrollItemTax, type InsertPayrollItemTax,
+  type PayrollTaxSnapshot, type InsertPayrollTaxSnapshot,
+  type PayrollOverride, type InsertPayrollOverride,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -1054,6 +1058,32 @@ export interface IStorage {
   upsertWorkerComplianceProfile(workerId: string, companyId: string, data: Partial<InsertWorkerComplianceProfile>): Promise<WorkerComplianceProfile>;
   getComplianceAuditEvents(filters: { companyId?: string; payrollRunId?: string; workerId?: string }): Promise<ComplianceAuditEvent[]>;
   createComplianceAuditEvent(data: InsertComplianceAuditEvent): Promise<ComplianceAuditEvent>;
+
+  // ── Tax Engine (Task #4) ────────────────────────────────────────────────────
+  getPayrollItemTaxes(payrollItemId: string): Promise<PayrollItemTax[]>;
+  getPayrollItemTaxesByRun(payrollRunId: string): Promise<PayrollItemTax[]>;
+  createPayrollItemTax(data: InsertPayrollItemTax): Promise<PayrollItemTax>;
+  deletePayrollItemTaxesByItem(payrollItemId: string): Promise<void>;
+
+  getPayrollTaxSnapshot(payrollRunId: string): Promise<PayrollTaxSnapshot | undefined>;
+  upsertPayrollTaxSnapshot(payrollRunId: string, companyId: string, snapshotJson: string, engineVersion?: string): Promise<PayrollTaxSnapshot>;
+
+  getPayrollOverrides(payrollRunId: string): Promise<PayrollOverride[]>;
+  getPayrollOverridesByItem(payrollItemId: string): Promise<PayrollOverride[]>;
+  createPayrollOverride(data: InsertPayrollOverride): Promise<PayrollOverride>;
+
+  getCompanyTaxLiability(companyId: string, startDate: string, endDate: string): Promise<Array<{
+    taxCode: string; taxName: string; isEmployerPaid: boolean; stateCode: string | null;
+    totalTaxableWages: number; totalAmount: number; periodCount: number;
+  }>>;
+
+  getEmployeeYTD(workerId: string, year: number): Promise<{
+    grossPay: number; federalTaxableWages: number; federalWithheld: number;
+    ssWages: number; ssTaxEmployee: number; medicareWages: number; medicareTaxEmployee: number;
+    caPitWages: number; caPitWithheld: number; caSdiWithheld: number;
+    employerSsTax: number; employerMedicareTax: number; futaTax: number;
+    caUiTax: number; caEttTax: number; netPay: number;
+  }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -4729,6 +4759,182 @@ export class DatabaseStorage implements IStorage {
   async createComplianceAuditEvent(data: InsertComplianceAuditEvent): Promise<ComplianceAuditEvent> {
     const [r] = await db.insert(complianceAuditEvents).values(data).returning();
     return r;
+  }
+
+  // ── Tax Engine (Task #4) ────────────────────────────────────────────────────
+
+  async getPayrollItemTaxes(payrollItemId: string): Promise<PayrollItemTax[]> {
+    return db.select().from(payrollItemTaxes)
+      .where(eq(payrollItemTaxes.payrollItemId, payrollItemId))
+      .orderBy(payrollItemTaxes.taxCode);
+  }
+
+  async getPayrollItemTaxesByRun(payrollRunId: string): Promise<PayrollItemTax[]> {
+    const items = await db.select().from(payrollItems)
+      .where(eq(payrollItems.payrollRunId, payrollRunId));
+    if (items.length === 0) return [];
+    const itemIds = items.map(i => i.id);
+    return db.select().from(payrollItemTaxes)
+      .where(inArray(payrollItemTaxes.payrollItemId, itemIds))
+      .orderBy(payrollItemTaxes.taxCode);
+  }
+
+  async createPayrollItemTax(data: InsertPayrollItemTax): Promise<PayrollItemTax> {
+    const [r] = await db.insert(payrollItemTaxes).values(data).returning();
+    return r;
+  }
+
+  async deletePayrollItemTaxesByItem(payrollItemId: string): Promise<void> {
+    await db.delete(payrollItemTaxes).where(eq(payrollItemTaxes.payrollItemId, payrollItemId));
+  }
+
+  async getPayrollTaxSnapshot(payrollRunId: string): Promise<PayrollTaxSnapshot | undefined> {
+    const [r] = await db.select().from(payrollTaxSnapshots)
+      .where(eq(payrollTaxSnapshots.payrollRunId, payrollRunId));
+    return r;
+  }
+
+  async upsertPayrollTaxSnapshot(
+    payrollRunId: string,
+    companyId: string,
+    snapshotJson: string,
+    engineVersion = "1.0.0",
+  ): Promise<PayrollTaxSnapshot> {
+    const existing = await this.getPayrollTaxSnapshot(payrollRunId);
+    if (existing) {
+      const [r] = await db.update(payrollTaxSnapshots)
+        .set({ snapshotJson, engineVersion })
+        .where(eq(payrollTaxSnapshots.payrollRunId, payrollRunId))
+        .returning();
+      return r;
+    }
+    const [r] = await db.insert(payrollTaxSnapshots)
+      .values({ payrollRunId, companyId, snapshotJson, engineVersion })
+      .returning();
+    return r;
+  }
+
+  async getPayrollOverrides(payrollRunId: string): Promise<PayrollOverride[]> {
+    const items = await db.select().from(payrollItems)
+      .where(eq(payrollItems.payrollRunId, payrollRunId));
+    if (items.length === 0) return [];
+    const itemIds = items.map(i => i.id);
+    return db.select().from(payrollOverrides)
+      .where(inArray(payrollOverrides.payrollItemId, itemIds))
+      .orderBy(desc(payrollOverrides.overriddenAt));
+  }
+
+  async getPayrollOverridesByItem(payrollItemId: string): Promise<PayrollOverride[]> {
+    return db.select().from(payrollOverrides)
+      .where(eq(payrollOverrides.payrollItemId, payrollItemId))
+      .orderBy(desc(payrollOverrides.overriddenAt));
+  }
+
+  async createPayrollOverride(data: InsertPayrollOverride): Promise<PayrollOverride> {
+    const [r] = await db.insert(payrollOverrides).values(data).returning();
+    return r;
+  }
+
+  async getCompanyTaxLiability(
+    companyId: string,
+    startDate: string,
+    endDate: string,
+  ): Promise<Array<{
+    taxCode: string; taxName: string; isEmployerPaid: boolean; stateCode: string | null;
+    totalTaxableWages: number; totalAmount: number; periodCount: number;
+  }>> {
+    const runs = await db.select().from(payrollRuns)
+      .where(and(
+        eq(payrollRuns.companyId, companyId),
+        gte(payrollRuns.payDate, startDate),
+        lte(payrollRuns.payDate, endDate),
+        or(eq(payrollRuns.status, "processed"), eq(payrollRuns.status, "paid")),
+      ));
+    if (runs.length === 0) return [];
+    const runIds = runs.map(r => r.id);
+    const items = await db.select().from(payrollItems)
+      .where(inArray(payrollItems.payrollRunId, runIds));
+    if (items.length === 0) return [];
+    const itemIds = items.map(i => i.id);
+    const taxes = await db.select().from(payrollItemTaxes)
+      .where(inArray(payrollItemTaxes.payrollItemId, itemIds));
+
+    const grouped: Record<string, {
+      taxCode: string; taxName: string; isEmployerPaid: boolean; stateCode: string | null;
+      totalTaxableWages: number; totalAmount: number; periodCount: number;
+    }> = {};
+    for (const t of taxes) {
+      const key = t.taxCode;
+      if (!grouped[key]) {
+        grouped[key] = {
+          taxCode: t.taxCode,
+          taxName: t.taxName,
+          isEmployerPaid: t.isEmployerPaid ?? false,
+          stateCode: t.stateCode ?? null,
+          totalTaxableWages: 0,
+          totalAmount: 0,
+          periodCount: 0,
+        };
+      }
+      grouped[key].totalTaxableWages += Number(t.taxableWages || 0);
+      grouped[key].totalAmount += Number(t.amount || 0);
+      grouped[key].periodCount++;
+    }
+    return Object.values(grouped).sort((a, b) => a.taxCode.localeCompare(b.taxCode));
+  }
+
+  async getEmployeeYTD(workerId: string, year: number): Promise<{
+    grossPay: number; federalTaxableWages: number; federalWithheld: number;
+    ssWages: number; ssTaxEmployee: number; medicareWages: number; medicareTaxEmployee: number;
+    caPitWages: number; caPitWithheld: number; caSdiWithheld: number;
+    employerSsTax: number; employerMedicareTax: number; futaTax: number;
+    caUiTax: number; caEttTax: number; netPay: number;
+  }> {
+    const yearStart = `${year}-01-01`;
+    const yearEnd = `${year}-12-31`;
+    const runs = await db.select().from(payrollRuns)
+      .where(and(
+        gte(payrollRuns.payDate, yearStart),
+        lte(payrollRuns.payDate, yearEnd),
+        or(eq(payrollRuns.status, "processed"), eq(payrollRuns.status, "paid")),
+      ));
+    if (runs.length === 0) {
+      return { grossPay: 0, federalTaxableWages: 0, federalWithheld: 0, ssWages: 0, ssTaxEmployee: 0, medicareWages: 0, medicareTaxEmployee: 0, caPitWages: 0, caPitWithheld: 0, caSdiWithheld: 0, employerSsTax: 0, employerMedicareTax: 0, futaTax: 0, caUiTax: 0, caEttTax: 0, netPay: 0 };
+    }
+    const runIds = runs.map(r => r.id);
+    const items = await db.select().from(payrollItems)
+      .where(and(
+        eq(payrollItems.workerId, workerId),
+        inArray(payrollItems.payrollRunId, runIds),
+      ));
+    if (items.length === 0) {
+      return { grossPay: 0, federalTaxableWages: 0, federalWithheld: 0, ssWages: 0, ssTaxEmployee: 0, medicareWages: 0, medicareTaxEmployee: 0, caPitWages: 0, caPitWithheld: 0, caSdiWithheld: 0, employerSsTax: 0, employerMedicareTax: 0, futaTax: 0, caUiTax: 0, caEttTax: 0, netPay: 0 };
+    }
+    const itemIds = items.map(i => i.id);
+    const taxes = await db.select().from(payrollItemTaxes)
+      .where(inArray(payrollItemTaxes.payrollItemId, itemIds));
+
+    const sum = (code: string) => taxes.filter(t => t.taxCode === code).reduce((s, t) => s + Number(t.amount || 0), 0);
+    const sumWages = (code: string) => taxes.filter(t => t.taxCode === code).reduce((s, t) => s + Number(t.taxableWages || 0), 0);
+
+    return {
+      grossPay: items.reduce((s, i) => s + Number(i.grossPay || 0), 0),
+      netPay: items.reduce((s, i) => s + Number(i.netPay || 0), 0),
+      federalTaxableWages: sumWages("fed_income_tax"),
+      federalWithheld: sum("fed_income_tax"),
+      ssWages: sumWages("ss_employee"),
+      ssTaxEmployee: sum("ss_employee"),
+      medicareWages: sumWages("medicare_employee"),
+      medicareTaxEmployee: sum("medicare_employee"),
+      caPitWages: sumWages("ca_pit"),
+      caPitWithheld: sum("ca_pit"),
+      caSdiWithheld: sum("ca_sdi"),
+      employerSsTax: sum("ss_employer"),
+      employerMedicareTax: sum("medicare_employer"),
+      futaTax: sum("futa"),
+      caUiTax: sum("ca_ui"),
+      caEttTax: sum("ca_ett"),
+    };
   }
 }
 
