@@ -14496,6 +14496,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Log one audit event per check (with worker_id + check_number) for accurate reprint gating.
       // Calibration mode logs a single summary event with no worker details.
+      // Batch runs after the initial print are recorded as 'reprint' to preserve strict print/reprint separation.
       if (isCalibration || items.length === 0) {
         await db.execute(sql`
           INSERT INTO check_print_audit_logs (
@@ -14509,6 +14510,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           )
         `);
       } else {
+        // Determine whether this batch is an initial print or a reprint run.
+        const priorPrintRaw = await db.execute(sql`
+          SELECT id FROM check_print_audit_logs
+          WHERE payroll_run_id = ${runId} AND event_type = 'print'
+          LIMIT 1
+        `);
+        const hasBeenPrinted = ((priorPrintRaw as any).rows || priorPrintRaw as any[]).length > 0;
+        const batchEventType = hasBeenPrinted ? "reprint" : "print";
+
         for (const item of items) {
           await db.execute(sql`
             INSERT INTO check_print_audit_logs (
@@ -14520,7 +14530,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               ${runId}, ${compId}, ${userId || null},
               1, ${item.net_pay || 0}, 'ok',
               '[]', false, 'server-pdf',
-              'print', ${item.worker_id || null}, ${item.check_number || null}
+              ${batchEventType}, ${item.worker_id || null}, ${item.check_number || null}
             )
           `);
         }
