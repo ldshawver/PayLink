@@ -6015,8 +6015,8 @@ export async function registerRoutes(
       const _checkNumStart2 = await db.transaction(async (tx) => {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(abs(hashtext(${companyId}))::bigint)`);
         const _r2 = await tx.execute(sql`SELECT next_check_number FROM companies WHERE id = ${companyId} FOR UPDATE`);
-        const _s2 = Number(((_r2 as any).rows || (_r2 as any)[0])?.next_check_number || 1);
-        await tx.execute(sql`UPDATE companies SET next_check_number = ${_s2 + activeWorkers.length + 2} WHERE id = ${companyId}`);
+        const _s2 = Number((((_r2 as any).rows || (_r2 as any))[0])?.next_check_number || 1);
+        await tx.execute(sql`UPDATE companies SET next_check_number = ${_s2 + activeWorkers.length} WHERE id = ${companyId}`);
         return _s2;
       });
       let checkNum = _checkNumStart2;

@@ -1881,7 +1881,12 @@ export default function PrintCheckPage() {
     // Legacy client-side audit posting removed to avoid duplicate events.
     if (hasBlocking) return;
 
-    // All modes (check and packet) use the server-generated PDF endpoint.
+    // Packet mode: print the HTML packet pages via browser (summary + per-worker stub sections).
+    // Non-packet mode: fetch server-generated check PDFs.
+    if (isPacketMode) {
+      window.print();
+      return;
+    }
     try {
       const pdfRes = await fetch(`/api/payroll-runs/${runId}/checks-pdf`, { credentials: "include" });
       if (!pdfRes.ok) {
