@@ -14389,39 +14389,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRaw = await db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`);
       const worker = ((wRaw as any).rows || wRaw as any[])[0];
 
-      // Resolve remittance source via the run's funding account. No silent fallback — wrong bank account is a compliance defect.
-      let rs: any = null;
+      // Remittance source via funding account; no fallback to avoid printing against the wrong bank.
       const runFaId = (runRow as any)?.funding_account_id;
+      let rs: any = null;
       if (runFaId) {
-        const rsViaFaRaw = await db.execute(sql`
-          SELECT rs.* FROM remittance_sources rs
-          JOIN funding_accounts fa ON fa.remittance_source_id = rs.id
-          WHERE fa.id = ${runFaId}
-          LIMIT 1
-        `);
-        rs = ((rsViaFaRaw as any).rows || rsViaFaRaw as any[])[0] || null;
+        const rsRow = await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${runFaId} LIMIT 1`);
+        rs = ((rsRow as any).rows || rsRow as any[])[0] || null;
       }
-      if (!rs && !isCalibration) {
-        return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
-      }
-
+      if (!rs && !isCalibration) return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
       if (!isCalibration) {
         if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source. Add one in Payroll → Bank Accounts." });
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured for this company's remittance source." });
       }
 
-      // Load default check template — required for production prints to ensure correct layout.
-      const tplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
-      const tplRow = ((tplRaw as any).rows || tplRaw as any[])[0] || null;
-      if (!tplRow && !isCalibration) {
-        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      }
+      const tplRow = ((await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`) as any).rows || [])[0] || null;
+      if (!tplRow && !isCalibration) return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
       let layoutConfig: Record<string, any> | undefined;
       if (tplRow?.layout_config) {
         try { layoutConfig = typeof tplRow.layout_config === "string" ? JSON.parse(tplRow.layout_config) : tplRow.layout_config; } catch { /* use built-in defaults */ }
       }
 
-      // Load calibration offsets from remittance source
       let calibrationOffsets: { globalTop?: number; globalLeft?: number } | undefined;
       if (rs?.calibration_config) {
         try {
@@ -14442,23 +14429,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         calibrationOffsets,
       });
 
-      // Write print audit event only after successful render, and only for explicit print actions.
-      // ?preview=1 requests (iframe preview) skip audit so previewing does not generate phantom print events.
+      // Log audit event after successful render; skip for preview, calibration, and void renders.
       const isPreview = req.query.preview === "1";
-      const printUserId = (req.session as any)?.userId;
       if (!isCalibration && !isVoid && !isPreview) {
+        // Detect prior print to determine correct event type: 'reprint' if this check was already printed.
+        const priorRaw = await db.execute(sql`SELECT id FROM check_print_audit_logs WHERE payroll_run_id = ${itemRow.payrollRunId} AND worker_id = ${itemRow.workerId} AND event_type = 'print' LIMIT 1`);
+        const hasPrior = ((priorRaw as any).rows || priorRaw as any[]).length > 0;
+        const printAuditEvent = hasPrior ? "reprint" : "print";
+        const printUserId = req.session.userId;
         await db.execute(sql`
-          INSERT INTO check_print_audit_logs (
-            payroll_run_id, company_id, initiated_by_user_id,
-            check_count, total_amount, micr_validation,
-            validation_errors, print_blocked, render_engine,
-            event_type, worker_id, check_number
-          ) VALUES (
-            ${itemRow.payrollRunId || null}, ${compId || null}, ${printUserId || null},
-            1, ${itemRow.netPay || 0}, 'ok',
-            '[]', false, 'server-pdf',
-            'print', ${itemRow.workerId || null}, ${itemRow.checkNumber || null}
-          )
+          INSERT INTO check_print_audit_logs (payroll_run_id, company_id, initiated_by_user_id, check_count, total_amount, micr_validation, validation_errors, print_blocked, render_engine, event_type, worker_id, check_number)
+          VALUES (${itemRow.payrollRunId || null}, ${compId || null}, ${printUserId || null}, 1, ${itemRow.netPay || 0}, 'ok', '[]', false, 'server-pdf', ${printAuditEvent}, ${itemRow.workerId || null}, ${itemRow.checkNumber || null})
         `);
       }
 
@@ -14491,39 +14472,26 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const coRaw  = await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`);
       const company = ((coRaw as any).rows || coRaw as any[])[0];
 
-      // Resolve remittance source via the run's funding account. No silent fallback — wrong bank account is a compliance defect.
-      let rs: any = null;
       const batchFaId = (run as any)?.funding_account_id;
+      let rs: any = null;
       if (batchFaId) {
-        const rsViaFaRaw2 = await db.execute(sql`
-          SELECT rs.* FROM remittance_sources rs
-          JOIN funding_accounts fa ON fa.remittance_source_id = rs.id
-          WHERE fa.id = ${batchFaId}
-          LIMIT 1
-        `);
-        rs = ((rsViaFaRaw2 as any).rows || rsViaFaRaw2 as any[])[0] || null;
+        const rsRow2 = await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${batchFaId} LIMIT 1`);
+        rs = ((rsRow2 as any).rows || rsRow2 as any[])[0] || null;
       }
-      if (!rs && !isCalibration) {
-        return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
-      }
+      if (!rs && !isCalibration) return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
 
       if (!isCalibration) {
         if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured. Add one in Payroll → Bank Accounts." });
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured." });
       }
 
-      // Load default check template — required for production prints to ensure correct layout.
-      const tplRaw2 = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
-      const tplRow2 = ((tplRaw2 as any).rows || tplRaw2 as any[])[0] || null;
-      if (!tplRow2 && !isCalibration) {
-        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      }
+      const tplRow2 = ((await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`) as any).rows || [])[0] || null;
+      if (!tplRow2 && !isCalibration) return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
       let batchLayoutConfig: Record<string, any> | undefined;
       if (tplRow2?.layout_config) {
         try { batchLayoutConfig = typeof tplRow2.layout_config === "string" ? JSON.parse(tplRow2.layout_config) : tplRow2.layout_config; } catch { /* use built-in defaults */ }
       }
 
-      // Load calibration offsets from remittance source
       let batchCalibrationOffsets: { globalTop?: number; globalLeft?: number } | undefined;
       if (rs?.calibration_config) {
         try {
@@ -14741,31 +14709,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const wRaw = await db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`);
       const worker = ((wRaw as any).rows || wRaw as any[])[0];
 
-      // Resolve remittance source via the run's funding account. No silent fallback — wrong bank account is a compliance defect.
-      let rs: any = null;
       const reprintFaId = (runRow as any)?.funding_account_id;
+      let rs: any = null;
       if (reprintFaId) {
-        const rsViaFaRaw3 = await db.execute(sql`
-          SELECT rs.* FROM remittance_sources rs
-          JOIN funding_accounts fa ON fa.remittance_source_id = rs.id
-          WHERE fa.id = ${reprintFaId}
-          LIMIT 1
-        `);
-        rs = ((rsViaFaRaw3 as any).rows || rsViaFaRaw3 as any[])[0] || null;
+        const rsRow3 = await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${reprintFaId} LIMIT 1`);
+        rs = ((rsRow3 as any).rows || rsRow3 as any[])[0] || null;
       }
-      if (!rs) {
-        return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
-      }
-
+      if (!rs) return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
       if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source." });
       if (!rs?.account_number)  return res.status(422).json({ message: "No account number configured for this company's remittance source." });
 
-      // Load default check template — required for production prints to ensure correct layout.
-      const reprintTplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
-      const reprintTplRow = ((reprintTplRaw as any).rows || reprintTplRaw as any[])[0] || null;
-      if (!reprintTplRow) {
-        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      }
+      const reprintTplRow = ((await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`) as any).rows || [])[0] || null;
+      if (!reprintTplRow) return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
       let reprintLayoutConfig: Record<string, any> | undefined;
       if (reprintTplRow?.layout_config) {
         try { reprintLayoutConfig = typeof reprintTplRow.layout_config === "string" ? JSON.parse(reprintTplRow.layout_config) : reprintTplRow.layout_config; } catch { /* use built-in defaults */ }
