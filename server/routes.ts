@@ -2432,8 +2432,16 @@ export async function registerRoutes(
       // Pre-seed run totals with the values from preserved manual-override items
       // so the final run totals include both auto and manually-set pay.
       let totalGross = 0, totalNet = 0, totalHours = 0, totalOT = 0;
-      await db.execute(sql`SELECT pg_advisory_lock(abs(hashtext(${run.companyId}))::bigint)`);
-      let checkNum = company.nextCheckNumber || 1;
+      // Atomically reserve a block of check numbers using a transaction-level advisory lock.
+      // pg_advisory_xact_lock releases automatically on commit/rollback, preventing leaks on pooled connections.
+      const _checkNumStart = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(abs(hashtext(${run.companyId}))::bigint)`);
+        const _r = await tx.execute(sql`SELECT next_check_number FROM companies WHERE id = ${run.companyId} FOR UPDATE`);
+        const _s = Number(((_r as any).rows || (_r as any)[0])?.next_check_number || 1);
+        await tx.execute(sql`UPDATE companies SET next_check_number = ${_s + activeWorkers.length + 2} WHERE id = ${run.companyId}`);
+        return _s;
+      });
+      let checkNum = _checkNumStart;
       for (const mi of manualOverrideItems) {
         totalGross += parseFloat((mi as any).grossPay || "0");
         totalNet   += parseFloat((mi as any).netPay   || "0");
@@ -2906,8 +2914,8 @@ export async function registerRoutes(
         }
       }
 
+      // Write back the actual last check number used (trims unused pre-allocated range).
       await storage.updateCompany(run.companyId, { nextCheckNumber: checkNum });
-      await db.execute(sql`SELECT pg_advisory_unlock(abs(hashtext(${run.companyId}))::bigint)`);
 
       await storage.updatePayrollRun(run.id, {
         status: "processed",
@@ -5994,8 +6002,14 @@ export async function registerRoutes(
 
       const items: any[] = [];
       let totalGross = 0, totalNet = 0, totalHoursSum = 0, totalOT = 0;
-      await db.execute(sql`SELECT pg_advisory_lock(abs(hashtext(${companyId}))::bigint)`);
-      let checkNum = company.nextCheckNumber || 1;
+      const _checkNumStart2 = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(abs(hashtext(${companyId}))::bigint)`);
+        const _r2 = await tx.execute(sql`SELECT next_check_number FROM companies WHERE id = ${companyId} FOR UPDATE`);
+        const _s2 = Number(((_r2 as any).rows || (_r2 as any)[0])?.next_check_number || 1);
+        await tx.execute(sql`UPDATE companies SET next_check_number = ${_s2 + activeWorkers.length + 2} WHERE id = ${companyId}`);
+        return _s2;
+      });
+      let checkNum = _checkNumStart2;
 
       for (const worker of activeWorkers) {
         const workerEntries = entries.filter(e => e.workerId === worker.id);
@@ -6174,7 +6188,6 @@ export async function registerRoutes(
       }
 
       await storage.updateCompany(companyId, { nextCheckNumber: checkNum });
-      await db.execute(sql`SELECT pg_advisory_unlock(abs(hashtext(${companyId}))::bigint)`);
 
       res.status(201).json(payrollRun);
     } catch (error: any) {
@@ -13969,10 +13982,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
   async function renderCheckPdf(params: {
     item: any; worker: any; run: any; company: any; remittanceSource: any;
-    isCalibration?: boolean; isVoid?: boolean;
+    isCalibration?: boolean; isVoid?: boolean; isReprint?: boolean;
   }): Promise<Uint8Array> {
     const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
-    const { item, worker, run, company, remittanceSource, isCalibration, isVoid } = params;
+    const { item, worker, run, company, remittanceSource, isCalibration, isVoid, isReprint } = params;
     const doc = await PDFDocument.create();
     const hv  = await doc.embedFont(StandardFonts.Helvetica);
     const hvB = await doc.embedFont(StandardFonts.HelveticaBold);
@@ -14187,11 +14200,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       });
     }
 
+    // Reprint watermark — rendered diagonally across the check face
+    if (isReprint) {
+      page.drawText("REPRINT", {
+        x: 130, y: H / 2 - 10, size: 48, font: hvB, color: rgb(0.8, 0.15, 0.15), opacity: 0.18,
+        rotate: { type: "degrees" as const, angle: 40 },
+      });
+    }
+
     return doc.save();
   }
 
   // GET /api/checks/:payrollItemId/pdf — single-check server PDF
-  app.get("/api/checks/:payrollItemId/pdf", requireAuth, async (req, res) => {
+  app.get("/api/checks/:payrollItemId/pdf", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { payrollItemId } = req.params;
       const isCalibration = req.query.mode === "calibration";
@@ -14204,6 +14225,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const runRow = ((runRaw as any).rows || runRaw as any[])[0];
       const compId = (runRow as any)?.company_id || itemRow.companyId;
 
+      // Tenant authorization: session company must match item company (platform admins have null companyId — allowed)
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && compId && sessionCompanyId !== compId) {
+        return res.status(403).json({ message: "Access denied: company mismatch" });
+      }
+
       const coRaw = await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`);
       const company = ((coRaw as any).rows || coRaw as any[])[0];
 
@@ -14214,8 +14241,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const rs = ((rsRaw as any).rows || rsRaw as any[])[0] || null;
 
       if (!isCalibration) {
-        if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source." });
-        if (!rs?.account_number) return res.status(422).json({ message: "No account number configured." });
+        if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source. Add one in Payroll → Bank Accounts." });
+        if (!rs?.account_number) return res.status(422).json({ message: "No account number configured for this company's remittance source." });
       }
 
       const pdfBytes = await renderCheckPdf({
@@ -14248,6 +14275,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
 
       const compId = (run as any).company_id;
+
+      // Tenant authorization
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && compId && sessionCompanyId !== compId) {
+        return res.status(403).json({ message: "Access denied: company mismatch" });
+      }
       const coRaw  = await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`);
       const company = ((coRaw as any).rows || coRaw as any[])[0];
 
@@ -14340,6 +14373,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const runRaw = await db.execute(sql`SELECT company_id FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`);
       const compId = (((runRaw as any).rows || runRaw as any[])[0] as any)?.company_id;
 
+      // Tenant authorization
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && compId && sessionCompanyId !== compId) {
+        return res.status(403).json({ message: "Access denied: company mismatch" });
+      }
+
       await db.execute(sql`
         UPDATE payroll_payment_records
         SET status = 'voided', voided_at = NOW(), updated_at = NOW()
@@ -14368,7 +14407,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  // POST /api/checks/:payrollItemId/reprint — log a reprint event
+  // POST /api/checks/:payrollItemId/reprint — log reprint event AND return PDF bytes
   app.post("/api/checks/:payrollItemId/reprint", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { payrollItemId } = req.params;
@@ -14377,6 +14416,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const [itemRow] = await db.select().from(payrollItems).where(eq(payrollItems.id, payrollItemId));
       if (!itemRow) return res.status(404).json({ message: "Payroll item not found" });
 
+      const runRaw = await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`);
+      const runRow = ((runRaw as any).rows || runRaw as any[])[0];
+      const compId = (runRow as any)?.company_id || itemRow.companyId;
+
+      // Tenant authorization
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && compId && sessionCompanyId !== compId) {
+        return res.status(403).json({ message: "Access denied: company mismatch" });
+      }
+
+      // Gate: must have a prior print event
       const origRaw = await db.execute(sql`
         SELECT id FROM check_print_audit_logs
         WHERE (worker_id = ${itemRow.workerId} OR check_number = ${itemRow.checkNumber || null})
@@ -14384,11 +14434,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         ORDER BY created_at DESC LIMIT 1
       `);
       if (((origRaw as any).rows || origRaw as any[]).length === 0)
-        return res.status(422).json({ message: "No original print event found. Cannot mark as reprint." });
+        return res.status(422).json({ message: "No original print event found. Cannot reprint." });
 
-      const runRaw = await db.execute(sql`SELECT company_id FROM payroll_runs WHERE id = ${itemRow.payrollRunId}`);
-      const compId = (((runRaw as any).rows || runRaw as any[])[0] as any)?.company_id;
+      const coRaw = await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`);
+      const company = ((coRaw as any).rows || coRaw as any[])[0];
 
+      const wRaw = await db.execute(sql`SELECT * FROM workers WHERE id = ${itemRow.workerId}`);
+      const worker = ((wRaw as any).rows || wRaw as any[])[0];
+
+      const rsRaw = await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' LIMIT 1`);
+      const rs = ((rsRaw as any).rows || rsRaw as any[])[0] || null;
+
+      if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source." });
+      if (!rs?.account_number)  return res.status(422).json({ message: "No account number configured for this company's remittance source." });
+
+      // Log the reprint audit event
       await db.execute(sql`
         INSERT INTO check_print_audit_logs (
           payroll_run_id, company_id, initiated_by_user_id,
@@ -14403,10 +14463,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         )
       `);
 
-      res.json({ success: true, payrollItemId });
+      // Generate and return the PDF marked as REPRINT
+      const pdfBytes = await renderCheckPdf({
+        item: itemRow,
+        worker: worker ? { firstName: (worker as any).first_name, lastName: (worker as any).last_name } : null,
+        run: runRow ? { payDate: (runRow as any).pay_date, periodStart: (runRow as any).period_start, periodEnd: (runRow as any).period_end } : null,
+        company: company ? { name: (company as any).name, address: (company as any).address, city: (company as any).city, state: (company as any).state, zip: (company as any).zip } : null,
+        remittanceSource: { routingNumber: rs.routing_number, accountNumber: rs.account_number },
+        isCalibration: false,
+        isVoid: false,
+        isReprint: true,
+      });
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="reprint-${String(itemRow.checkNumber || payrollItemId.slice(0,8))}.pdf"`);
+      res.send(Buffer.from(pdfBytes));
     } catch (err: any) {
       console.error("[reprintCheck]", err);
-      res.status(500).json({ message: safeErrorMessage(err, "Failed to log reprint") });
+      res.status(500).json({ message: safeErrorMessage(err, "Failed to generate reprint PDF") });
     }
   });
 

@@ -4010,6 +4010,7 @@ function VoidedChecksDialog({ open, onOpenChange }: { open: boolean; onOpenChang
                   <TableHead>Run ID</TableHead>
                   <TableHead>Event</TableHead>
                   <TableHead>Check #</TableHead>
+                  <TableHead>By</TableHead>
                   <TableHead>Notes</TableHead>
                 </TableRow>
               </TableHeader>
@@ -4028,6 +4029,9 @@ function VoidedChecksDialog({ open, onOpenChange }: { open: boolean; onOpenChang
                       </Badge>
                     </TableCell>
                     <TableCell className="text-xs font-mono">{l.check_number || "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground" data-testid={`text-audit-by-${l.id}`}>
+                      {l.initiated_by_user_id ? l.initiated_by_user_id.slice(0, 8) + "…" : "—"}
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{l.notes || "—"}</TableCell>
                   </TableRow>
                 ))}
