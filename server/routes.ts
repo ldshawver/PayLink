@@ -13988,8 +13988,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     calibrationOffsets?: { globalTop?: number; globalLeft?: number };
   }): Promise<Uint8Array> {
     const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
+    const fontkit = (await import("@pdf-lib/fontkit")).default;
     const { item, worker, run, company, remittanceSource, isCalibration, isVoid, isReprint } = params;
     const doc = await PDFDocument.create();
+    doc.registerFontkit(fontkit);
     const hv  = await doc.embedFont(StandardFonts.Helvetica);
     const hvB = await doc.embedFont(StandardFonts.HelveticaBold);
     const cour = await doc.embedFont(StandardFonts.Courier);
@@ -13999,7 +14001,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const micrPath = path.join(process.cwd(), "client", "public", "fonts", "micrenc.ttf");
       const micrBytes = fs.readFileSync(micrPath);
-      micrFont = await doc.embedFont(micrBytes as any);
+      micrFont = await doc.embedFont(micrBytes);
     } catch {
       if (!isCalibration) {
         throw new Error(
@@ -14284,9 +14286,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured for this company's remittance source." });
       }
 
-      // Load active check template for show/hide flags
+      // Load active check template for show/hide flags; 422 if company has templates but none active
       const tplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow = ((tplRaw as any).rows || tplRaw as any[])[0] || null;
+      if (!tplRow && !isCalibration) {
+        const anyTplRaw = await db.execute(sql`SELECT id FROM check_templates WHERE company_id = ${compId} LIMIT 1`);
+        if (((anyTplRaw as any).rows || anyTplRaw as any[]).length > 0)
+          return res.status(422).json({ message: "No default check layout template configured. Set a default template in Payroll → Check Templates." });
+      }
       let layoutConfig: Record<string, boolean> | undefined;
       if (tplRow?.layout_config) {
         try { layoutConfig = typeof tplRow.layout_config === "string" ? JSON.parse(tplRow.layout_config) : tplRow.layout_config; } catch { /* use defaults */ }
@@ -14350,9 +14357,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured." });
       }
 
-      // Load active check template for show/hide flags
+      // Load active check template; 422 if company has templates but none is default
       const tplRaw2 = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow2 = ((tplRaw2 as any).rows || tplRaw2 as any[])[0] || null;
+      if (!tplRow2 && !isCalibration) {
+        const anyTplRaw2 = await db.execute(sql`SELECT id FROM check_templates WHERE company_id = ${compId} LIMIT 1`);
+        if (((anyTplRaw2 as any).rows || anyTplRaw2 as any[]).length > 0)
+          return res.status(422).json({ message: "No default check layout template configured. Set a default template in Payroll → Check Templates." });
+      }
       let batchLayoutConfig: Record<string, boolean> | undefined;
       if (tplRow2?.layout_config) {
         try { batchLayoutConfig = typeof tplRow2.layout_config === "string" ? JSON.parse(tplRow2.layout_config) : tplRow2.layout_config; } catch { /* use defaults */ }
@@ -14413,19 +14425,37 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const userId   = (req.session as any)?.userId;
       const totalAmt = items.reduce((s: number, i: any) => s + Number(i.net_pay || 0), 0);
 
-      await db.execute(sql`
-        INSERT INTO check_print_audit_logs (
-          payroll_run_id, company_id, initiated_by_user_id,
-          check_count, total_amount, micr_validation,
-          validation_errors, print_blocked, render_engine, event_type
-        ) VALUES (
-          ${runId}, ${compId}, ${userId || null},
-          ${items.length}, ${totalAmt},
-          ${isCalibration ? "calibration_test" : "ok"},
-          '[]', false, 'server-pdf',
-          ${isCalibration ? "calibration_test" : "print"}
-        )
-      `);
+      // Log one audit event per check (with worker_id + check_number) for accurate reprint gating.
+      // Calibration mode logs a single summary event with no worker details.
+      if (isCalibration || items.length === 0) {
+        await db.execute(sql`
+          INSERT INTO check_print_audit_logs (
+            payroll_run_id, company_id, initiated_by_user_id,
+            check_count, total_amount, micr_validation,
+            validation_errors, print_blocked, render_engine, event_type
+          ) VALUES (
+            ${runId}, ${compId}, ${userId || null},
+            0, 0, 'calibration_test',
+            '[]', false, 'server-pdf', 'calibration_test'
+          )
+        `);
+      } else {
+        for (const item of items) {
+          await db.execute(sql`
+            INSERT INTO check_print_audit_logs (
+              payroll_run_id, company_id, initiated_by_user_id,
+              check_count, total_amount, micr_validation,
+              validation_errors, print_blocked, render_engine,
+              event_type, worker_id, check_number
+            ) VALUES (
+              ${runId}, ${compId}, ${userId || null},
+              1, ${item.net_pay || 0}, 'ok',
+              '[]', false, 'server-pdf',
+              'print', ${item.worker_id || null}, ${item.check_number || null}
+            )
+          `);
+        }
+      }
 
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="checks-${runId.slice(0, 8)}.pdf"`);
@@ -14503,17 +14533,17 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(403).json({ message: "Access denied: company mismatch" });
       }
 
-      // Gate: must have a prior print event scoped to this company + run
+      // Gate: must have a prior print OR void event scoped to this company + run + worker
       const origRaw = await db.execute(sql`
         SELECT id FROM check_print_audit_logs
         WHERE company_id = ${compId}
           AND payroll_run_id = ${itemRow.payrollRunId}
           AND worker_id = ${itemRow.workerId}
-          AND (event_type = 'print' OR event_type IS NULL)
+          AND (event_type = 'print' OR event_type = 'void' OR event_type IS NULL)
         ORDER BY created_at DESC LIMIT 1
       `);
       if (((origRaw as any).rows || origRaw as any[]).length === 0)
-        return res.status(422).json({ message: "No original print event found. Cannot reprint." });
+        return res.status(422).json({ message: "No original print event found for this check. Cannot reprint." });
 
       const coRaw = await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`);
       const company = ((coRaw as any).rows || coRaw as any[])[0];

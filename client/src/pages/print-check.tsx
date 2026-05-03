@@ -1778,7 +1778,7 @@ function CheckDiagnosticsPanel({
       {open && (
         <div className="p-3 border-t border-slate-200 dark:border-slate-700 space-y-2 text-xs">
           <div className="grid grid-cols-2 gap-2 text-slate-600 dark:text-slate-400 mb-3">
-            <div><span className="font-medium">Render engine:</span> browser-print (CSS @media print)</div>
+            <div><span className="font-medium">Render engine:</span> server-pdf (pdf-lib + MICR E-13B font)</div>
             <div><span className="font-medium">Template:</span> {templateName}</div>
             <div><span className="font-medium">MICR band:</span> <span className={micrFontLoaded === true ? "text-green-600" : micrFontLoaded === false ? "text-red-600 font-semibold" : "text-yellow-600"}>{micrFontLoaded === true ? "✓ MICRNumeric font loaded — E-13B active" : micrFontLoaded === false ? "⚠ Font not loaded — MICR will not render" : "Loading font…"}</span></div>
             <div><span className="font-medium">Funding account:</span> {fundingAccountId || "(none linked)"}</div>
@@ -1877,22 +1877,8 @@ export default function PrintCheckPage() {
         workerName: c.worker ? `${c.worker.firstName} ${c.worker.lastName}` : c.item.workerId,
         errors: c.issues.map(i => i.message),
       }));
-    // Fire-and-forget audit log
-    fetch("/api/check-print-audit", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        payrollRunId: runId,
-        companyId: companyId || null,
-        checkCount: checkItemsWithValidation.filter(c => c.issues.length === 0).length,
-        totalAmount,
-        micrValidation: micrOverall,
-        validationErrors,
-        printBlocked: hasBlocking,
-        templateId: activeTemplateId || null,
-      }),
-    }).catch(() => {});
+    // NOTE: Audit log is now written server-side per check by /api/payroll-runs/:id/checks-pdf.
+    // Legacy client-side audit posting removed to avoid duplicate events.
     if (hasBlocking) return;
     try {
       const pdfRes = await fetch(`/api/payroll-runs/${runId}/checks-pdf`, { credentials: "include" });
@@ -1949,10 +1935,11 @@ export default function PrintCheckPage() {
     },
     enabled: !!runId,
   });
-  // Set of workerIds that have at least one "print" audit event for this run
+  // Set of workerIds that have at least one "print" or "void" audit event for this run
+  // (voided checks can also be reprinted — the reviewer requires this)
   const printedWorkerIds = new Set<string>(
     runPrintAudit
-      .filter((l: any) => !l.event_type || l.event_type === "print")
+      .filter((l: any) => !l.event_type || l.event_type === "print" || l.event_type === "void")
       .map((l: any) => l.worker_id)
       .filter(Boolean)
   );
