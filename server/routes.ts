@@ -14354,9 +14354,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured for this company's remittance source." });
       }
 
-      // Load active check template for show/hide flags; fall back to default top-check layout if none configured.
+      // Load active check template for show/hide flags; 422 if no default template configured.
       const tplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow = ((tplRaw as any).rows || tplRaw as any[])[0] || null;
+      if (!tplRow && !isCalibration) {
+        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
+      }
       let layoutConfig: Record<string, boolean> | undefined;
       if (tplRow?.layout_config) {
         try { layoutConfig = typeof tplRow.layout_config === "string" ? JSON.parse(tplRow.layout_config) : tplRow.layout_config; } catch { /* use defaults */ }
@@ -14434,9 +14437,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         if (!rs?.account_number) return res.status(422).json({ message: "No account number configured." });
       }
 
-      // Load active check template; fall back to default top-check layout if none configured.
+      // Load active check template; 422 if no default template configured.
       const tplRaw2 = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const tplRow2 = ((tplRaw2 as any).rows || tplRaw2 as any[])[0] || null;
+      if (!tplRow2 && !isCalibration) {
+        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
+      }
       let batchLayoutConfig: Record<string, boolean> | undefined;
       if (tplRow2?.layout_config) {
         try { batchLayoutConfig = typeof tplRow2.layout_config === "string" ? JSON.parse(tplRow2.layout_config) : tplRow2.layout_config; } catch { /* use defaults */ }
@@ -14488,9 +14494,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             deductions:      item.deductions,
             checkNumber:     item.check_number,
             workerId:        item.worker_id,
+            payRate:         item.pay_rate,
             regularHours:    item.regular_hours,
+            regularPay:      item.regular_pay,
             overtimeHours:   item.overtime_hours,
+            overtimePay:     item.overtime_pay,
             doubleTimeHours: item.double_time_hours,
+            doubleTimePay:   item.double_time_pay,
+            salaryPay:       item.salary_pay,
+            bonusPay:        item.bonus_pay,
+            tipsPay:         item.tips_pay,
+            ptoPay:          item.pto_pay,
+            ptoHours:        item.pto_hours,
+            sickPay:         item.sick_pay,
+            sickHours:       item.sick_hours,
+            holidayPay:      item.holiday_pay,
+            holidayHours:    item.holiday_hours,
+            ytdGross:        item.ytd_gross,
+            ytdDeductions:   item.ytd_deductions,
+            ytdNet:          item.ytd_net,
           };
           const bytes = await renderCheckPdf({
             item: normalizedItem,
@@ -14679,9 +14701,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         )
       `);
 
-      // Load active check template; fall back to default top-check layout if none configured.
+      // Load active check template; 422 if no default template configured.
       const reprintTplRaw = await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`);
       const reprintTplRow = ((reprintTplRaw as any).rows || reprintTplRaw as any[])[0] || null;
+      if (!reprintTplRow) {
+        return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
+      }
       let reprintLayoutConfig: Record<string, boolean> | undefined;
       if (reprintTplRow?.layout_config) {
         try { reprintLayoutConfig = typeof reprintTplRow.layout_config === "string" ? JSON.parse(reprintTplRow.layout_config) : reprintTplRow.layout_config; } catch { /* use defaults */ }
