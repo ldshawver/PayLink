@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and } from "drizzle-orm";
 import { companies, workers, timeEntries, schedules, taxesDeductions, users, roles, rolePermissions, userRoles, employeeGroupConfigs, tradeTransactions, permissionGroups, permissions, enterpriseRolePermissions, locations, departments, legalEntities, platformModules } from "@shared/schema";
 import bcrypt from "bcrypt";
 
@@ -316,10 +316,16 @@ async function seedRolesAndPermissions() {
 
 async function seedDefaultRoleTemplates() {
   try {
-    const existing = await db.select().from(rolePermissions).where(eq(rolePermissions.canViewDepartment, true)).limit(1);
-    if (existing.length > 0) {
-      console.log("Scope-aware role templates already seeded, skipping");
-      return;
+    const sysAdminRole = await db.select({ id: roles.id }).from(roles)
+      .where(and(eq(roles.name, "System Administrator"), eq(roles.isSystem, true))).limit(1);
+    if (sysAdminRole.length > 0) {
+      const scopeCheck = await db.select().from(rolePermissions)
+        .where(and(eq(rolePermissions.roleId, sysAdminRole[0].id), eq(rolePermissions.canViewCompany, true)))
+        .limit(1);
+      if (scopeCheck.length > 0) {
+        console.log("Scope-aware role templates already seeded, skipping");
+        return;
+      }
     }
 
     const allRoles = await db.select().from(roles);
