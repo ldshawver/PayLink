@@ -3839,6 +3839,7 @@ function CheckRegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                 <SelectItem value="all">All events</SelectItem>
                 <SelectItem value="print">Print</SelectItem>
                 <SelectItem value="calibration_test">Calibration test</SelectItem>
+                <SelectItem value="reprint">Reprint</SelectItem>
                 <SelectItem value="void">Void</SelectItem>
                 <SelectItem value="reissue">Reissue</SelectItem>
               </SelectContent>
@@ -3891,6 +3892,7 @@ function CheckRegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                   <TableHead className="text-right">Total</TableHead>
                   <TableHead>MICR</TableHead>
                   <TableHead>Check #</TableHead>
+                  <TableHead>By</TableHead>
                   <TableHead>Notes</TableHead>
                 </TableRow>
               </TableHeader>
@@ -3903,6 +3905,7 @@ function CheckRegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                     <TableCell>
                       <Badge variant={
                         (l.event_type || "print") === "print" ? "default" :
+                        l.event_type === "reprint" ? "secondary" :
                         l.event_type === "calibration_test" ? "secondary" :
                         l.event_type === "void" ? "destructive" : "outline"
                       } className="text-xs capitalize">
@@ -3917,6 +3920,9 @@ function CheckRegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                       </Badge>
                     </TableCell>
                     <TableCell className="text-xs font-mono">{l.check_number || "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground" data-testid={`text-reg-by-${l.id}`}>
+                      {l.initiated_by_user_id ? l.initiated_by_user_id.slice(0, 8) + "…" : "—"}
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{l.notes || "—"}</TableCell>
                   </TableRow>
                 ))}

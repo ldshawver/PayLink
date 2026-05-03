@@ -2914,8 +2914,9 @@ export async function registerRoutes(
         }
       }
 
-      // Write back the actual last check number used (trims unused pre-allocated range).
-      await storage.updateCompany(run.companyId, { nextCheckNumber: checkNum });
+      // Use GREATEST to advance the counter to the last number used without ever rewinding.
+      // The pre-allocation transaction may have set it higher (concurrent run); GREATEST is safe.
+      await db.execute(sql`UPDATE companies SET next_check_number = GREATEST(next_check_number, ${checkNum}) WHERE id = ${run.companyId}`);
 
       await storage.updatePayrollRun(run.id, {
         status: "processed",
@@ -6187,7 +6188,7 @@ export async function registerRoutes(
           .where(inArray(createCommissionsTable.id, createCommIdsToMark));
       }
 
-      await storage.updateCompany(companyId, { nextCheckNumber: checkNum });
+      await db.execute(sql`UPDATE companies SET next_check_number = GREATEST(next_check_number, ${checkNum}) WHERE id = ${companyId}`);
 
       res.status(201).json(payrollRun);
     } catch (error: any) {
@@ -14426,10 +14427,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(403).json({ message: "Access denied: company mismatch" });
       }
 
-      // Gate: must have a prior print event
+      // Gate: must have a prior print event scoped to this company + run
       const origRaw = await db.execute(sql`
         SELECT id FROM check_print_audit_logs
-        WHERE (worker_id = ${itemRow.workerId} OR check_number = ${itemRow.checkNumber || null})
+        WHERE company_id = ${compId}
+          AND payroll_run_id = ${itemRow.payrollRunId}
+          AND worker_id = ${itemRow.workerId}
           AND (event_type = 'print' OR event_type IS NULL)
         ORDER BY created_at DESC LIMIT 1
       `);

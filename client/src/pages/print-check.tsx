@@ -2267,19 +2267,21 @@ export default function PrintCheckPage() {
             }
             return (
               <div key={item.id}>
-                <div className="print-hide flex justify-end mb-1 px-1" style={{ maxWidth: "8.5in", margin: "0 auto 4px auto" }}>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleReprintSingle(item.id)}
-                    disabled={reprintingIds.has(item.id)}
-                    data-testid={`button-reprint-${item.id}`}
-                    title="Generate a reprint copy of this check PDF; logs a reprint event in the audit trail"
-                  >
-                    <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                    {reprintingIds.has(item.id) ? "Generating…" : `Reprint PDF${item.checkNumber ? ` #${item.checkNumber}` : ""}`}
-                  </Button>
-                </div>
+                {item.checkNumber && (
+                  <div className="print-hide flex justify-end mb-1 px-1" style={{ maxWidth: "8.5in", margin: "0 auto 4px auto" }}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleReprintSingle(item.id)}
+                      disabled={reprintingIds.has(item.id)}
+                      data-testid={`button-reprint-${item.id}`}
+                      title="Generate a reprint copy of this check PDF; logs a reprint event in the audit trail"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                      {reprintingIds.has(item.id) ? "Generating…" : `Reprint PDF #${item.checkNumber}`}
+                    </Button>
+                  </div>
+                )}
                 <CheckComponent
                   item={item}
                   worker={worker}
