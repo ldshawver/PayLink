@@ -329,9 +329,22 @@ async function seedDefaultRoleTemplates() {
         inArray(roles.name, REQUIRED_ROLE_NAMES)
       ));
     const existingNames = new Set(existing.map(r => r.name));
-    if (REQUIRED_ROLE_NAMES.every(n => existingNames.has(n))) {
-      console.log("Scope-aware role templates already seeded, skipping");
-      return;
+    const allRolesExist = REQUIRED_ROLE_NAMES.every(n => existingNames.has(n));
+
+    // Also verify permission row completeness: each role must have 22 rows
+    if (allRolesExist) {
+      const counts = await db
+        .select({ name: roles.name, cnt: sql<number>`count(${rolePermissions.id})::int` })
+        .from(roles)
+        .leftJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
+        .where(inArray(roles.name, REQUIRED_ROLE_NAMES))
+        .groupBy(roles.name);
+      const EXPECTED_RESOURCE_COUNT = PERMISSION_RESOURCES.length + 5; // 17 + 5 = 22
+      const allComplete = counts.every(r => (r.cnt ?? 0) >= EXPECTED_RESOURCE_COUNT);
+      if (allComplete) {
+        console.log("Scope-aware role templates already seeded, skipping");
+        return;
+      }
     }
 
     // ----------------------------------------------------------------

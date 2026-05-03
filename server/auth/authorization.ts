@@ -47,28 +47,37 @@ export const PERMISSION_COLUMN: Record<Permission, keyof typeof rolePermissions.
 };
 
 /**
- * Maps users.role field values (lowercase/underscore) to canonical role names
- * stored in the roles table. Used when a user has no explicit user_roles rows.
+ * Maps users.role field values to the canonical scope-aware template names
+ * seeded by seedDefaultRoleTemplates(). Primary path for users without
+ * explicit user_roles rows. Template names use lowercase_underscore to match
+ * exactly the names inserted during seeding.
+ *
+ * Legacy aliases (title-cased: "Employee", "HR Manager", etc.) are kept as
+ * secondary fallbacks so existing user_roles assignments keep working during
+ * any transition period.
  */
 const ROLE_NAME_MAP: Record<string, string> = {
-  "system_administrator":   "System Administrator",
-  "admin":                  "System Administrator",
-  "tenant_admin":           "System Administrator",
+  // ── Primary scope-aware template mappings ──────────────────────────
   "platform_super_admin":   "platform_super_admin",
   "company_admin":          "company_admin",
-  "owner":                  "Owner",
-  "tenant_owner":           "Owner",
-  "hr_manager":             "HR Manager",
-  "tenant_hr_admin":        "HR Manager",
-  "payroll_manager":        "Payroll Manager",
-  "tenant_payroll_admin":   "Payroll Manager",
-  "tenant_finance_admin":   "Payroll Manager",
-  "department_manager":     "Department Manager",
-  "tenant_manager":         "Department Manager",
-  "supervisor":             "Supervisor",
-  "tenant_supervisor":      "Supervisor",
-  "employee":               "Employee",
-  "contractor":             "Contractor",
+  "hr_manager":             "hr_manager",
+  "payroll_manager":        "payroll_manager",
+  "department_manager":     "department_manager",
+  "supervisor":             "supervisor",
+  "employee":               "employee",
+  "contractor":             "contractor",
+
+  // ── Alias mappings → scope-aware templates ─────────────────────────
+  "system_administrator":   "platform_super_admin",
+  "admin":                  "platform_super_admin",
+  "tenant_admin":           "platform_super_admin",
+  "owner":                  "company_admin",
+  "tenant_owner":           "company_admin",
+  "tenant_hr_admin":        "hr_manager",
+  "tenant_payroll_admin":   "payroll_manager",
+  "tenant_finance_admin":   "payroll_manager",
+  "tenant_manager":         "department_manager",
+  "tenant_supervisor":      "supervisor",
 };
 
 const FLAT_PERMISSIONS = new Set<Permission>([
