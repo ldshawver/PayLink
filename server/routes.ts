@@ -485,6 +485,7 @@ interface InvoiceRow {
   status?: string | null;
   amount?: string | null;
   line_items?: string | Record<string, unknown>[] | null;
+  notes?: string | null;
 }
 interface LineItemRow {
   name?: string | null;
