@@ -1,6 +1,6 @@
 import { getStripeSync } from './stripeClient.js';
 import { storage } from './storage.js';
-import type { PayrollPaymentRecord } from '../shared/schema.js';
+import type { PayrollPaymentRecord, PayrollRun, TreasuryOutboundPayment } from '../shared/schema.js';
 
 export class WebhookHandlers {
   static async processWebhook(payload: Buffer, signature: string): Promise<void> {
@@ -56,11 +56,12 @@ export class WebhookHandlers {
       // Update treasury outbound payment record
       const existing = await storage.getTreasuryOutboundPaymentByStripeId(stripeId);
       if (existing) {
-        await storage.updateTreasuryOutboundPayment(existing.id, {
+        const tpUpdate: Partial<TreasuryOutboundPayment> = {
           status: internalStatus,
           stripeRawStatus: stripeStatus,
           errorMessage: obj.returned_details?.reason || obj.failure_balance_transaction || null,
-        } as any);
+        };
+        await storage.updateTreasuryOutboundPayment(existing.id, tpUpdate);
         console.log(`[TREASURY] Updated outbound payment ${stripeId} → ${internalStatus}`);
       }
 
@@ -71,7 +72,7 @@ export class WebhookHandlers {
         if (paymentRecord) {
           const prevStatus = paymentRecord.status;
           let newStatus = paymentRecord.status;
-          const updateData: Record<string, any> = {};
+          const updateData: Partial<PayrollPaymentRecord> = {};
 
           if (stripeStatus === "posted") {
             newStatus = "paid";
@@ -99,7 +100,52 @@ export class WebhookHandlers {
           }
 
           if (Object.keys(updateData).length > 0) {
-            await storage.updatePayrollPaymentRecord(paymentRecord.id, updateData as any);
+            await storage.updatePayrollPaymentRecord(paymentRecord.id, updateData);
+
+            // ── Worker-level notifications on paid/failed ─────────────────────
+            try {
+              if (newStatus === "paid" || newStatus === "failed") {
+                const worker = await storage.getWorker(paymentRecord.workerId);
+                if (worker) {
+                  const periodLabel = paymentRecord.payDate || "your last pay period";
+                  const amount = `$${Number(paymentRecord.netPayAmount || 0).toFixed(2)}`;
+                  await storage.createNotification({
+                    companyId: paymentRecord.companyId,
+                    userId: null,
+                    workerId: worker.id,
+                    customerId: null,
+                    type: newStatus === "paid" ? "payment_paid" : "payment_failed",
+                    title: newStatus === "paid"
+                      ? `Payment of ${amount} confirmed`
+                      : `⚠ Payment of ${amount} failed`,
+                    message: newStatus === "paid"
+                      ? `Your direct deposit of ${amount} for pay date ${periodLabel} has been confirmed.`
+                      : `Your direct deposit of ${amount} for pay date ${periodLabel} could not be processed${updateData.failureReason ? `: ${updateData.failureReason}` : ""}. Please contact your employer.`,
+                    actionUrl: `/portal/paystubs`,
+                    isRead: false,
+                    readAt: null,
+                  });
+                  // Email if worker has one
+                  if (worker.email) {
+                    try {
+                      const { sendGenericNotificationEmail } = await import("./notifications.js");
+                      await sendGenericNotificationEmail({
+                        recipientName: `${worker.firstName || ""} ${worker.lastName || ""}`.trim() || "Worker",
+                        email: worker.email,
+                        title: newStatus === "paid" ? `Direct deposit confirmed` : `Direct deposit failed`,
+                        body: newStatus === "paid"
+                          ? `Your direct deposit of ${amount} for pay date ${periodLabel} has been confirmed and should appear in your account shortly.`
+                          : `Your direct deposit of ${amount} for pay date ${periodLabel} could not be processed${updateData.failureReason ? ` (${updateData.failureReason})` : ""}. Please contact your employer.`,
+                      });
+                    } catch (emailErr) {
+                      console.error("[TREASURY] Worker email error:", emailErr);
+                    }
+                  }
+                }
+              }
+            } catch (workerNotifErr) {
+              console.error("[TREASURY] Worker notification error:", workerNotifErr);
+            }
 
             // Write audit log entry for this record
             try {
@@ -134,7 +180,7 @@ export class WebhookHandlers {
                 else if (anyProcessing) newRunStatus = "processing";
 
                 if (newRunStatus !== run.status) {
-                  const runUpdate: Record<string, any> = { status: newRunStatus };
+                  const runUpdate: Partial<PayrollRun> = { status: newRunStatus };
                   if (newRunStatus === "paid") {
                     runUpdate.achStatus = "settled";
                     runUpdate.achSettledAt = new Date();

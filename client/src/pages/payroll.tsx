@@ -1598,7 +1598,7 @@ function PayrollRunCard({
                                 <p className="text-xs text-red-600 mt-0.5">{pr.failureReason}</p>
                               )}
                             </TableCell>
-                            <TableCell className="text-xs font-mono text-muted-foreground">{(pr as any).achBatchId ? String((pr as any).achBatchId).slice(-8) : "—"}</TableCell>
+                            <TableCell className="text-xs font-mono text-muted-foreground">{pr.achBatchId ? String(pr.achBatchId).slice(-8) : "—"}</TableCell>
                             <TableCell className="text-xs text-muted-foreground">
                               {pr.paidAt ? new Date(pr.paidAt).toLocaleDateString() : "—"}
                             </TableCell>
@@ -1613,7 +1613,7 @@ function PayrollRunCard({
                                     <Check className="h-3 w-3 mr-1" />Mark Paid
                                   </Button>
                                 )}
-                                {(pr.status === "paid" || pr.status === "cleared") && !(pr as any).reconciledAt && (
+                                {(pr.status === "paid" || pr.status === "cleared") && !pr.reconciledAt && (
                                   <Button size="sm" variant="outline" className="h-6 px-2 text-xs"
                                     disabled={reconcileMutation.isPending}
                                     onClick={() => reconcileMutation.mutate(pr.id)}
@@ -1622,7 +1622,7 @@ function PayrollRunCard({
                                     <CheckCircle2 className="h-3 w-3 mr-1" />Reconcile
                                   </Button>
                                 )}
-                                {(pr as any).reconciledAt && (
+                                {pr.reconciledAt && (
                                   <span className="text-xs text-emerald-600 flex items-center gap-1">
                                     <CheckCircle2 className="h-3 w-3" />Reconciled
                                   </span>

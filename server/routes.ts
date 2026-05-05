@@ -3373,7 +3373,14 @@ export async function registerRoutes(
           return res.status(400).json({ message: "Funding account is not enabled for payroll. Please select a different account." });
         }
       }
-      // Warn if any worker has no pay method — still allow submission (pay method defaults to check)
+      // Hard fail if any worker is missing a payment method (required for ACH submission)
+      const missingPayMethod = items.filter(i => !i.paymentMethod);
+      if (missingPayMethod.length > 0) {
+        return res.status(400).json({
+          message: `Cannot submit ACH: ${missingPayMethod.length} worker(s) are missing a payment method. Please assign a payment method to every worker before submitting.`,
+          missingWorkerIds: missingPayMethod.map(i => i.workerId),
+        });
+      }
       const prevStatus = run.status;
       const batchId = run.achBatchId || `ACH-${run.id.substring(0, 8).toUpperCase()}-${Date.now()}`;
 
@@ -3696,13 +3703,47 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Forbidden" });
       }
       const records = await storage.getPayrollPaymentRecords(run.companyId, run.id);
-      const total = records.length;
-      const reconciled = records.filter(r => r.reconciledAt).length;
-      const pending = records.filter(r => !r.reconciledAt && r.status !== "voided" && r.status !== "reversed").length;
-      const failed = records.filter(r => r.status === "failed").length;
-      const totalAmount = records.reduce((s, r) => s + parseFloat(r.netPayAmount || "0"), 0);
-      const reconciledAmount = records.filter(r => r.reconciledAt).reduce((s, r) => s + parseFloat(r.netPayAmount || "0"), 0);
-      res.json({ total, reconciled, pending, failed, totalAmount, reconciledAmount });
+      const items = await storage.getPayrollItems(run.id);
+      const sumOf = (rs: typeof records) => rs.reduce((s, r) => s + parseFloat(r.netPayAmount || "0"), 0);
+      const byStatus = (status: string) => records.filter(r => r.status === status);
+
+      const expectedCount = items.length;
+      const expectedAmount = items.reduce((s, i) => s + parseFloat(i.netPay || "0"), 0);
+
+      const submitted = byStatus("submitted");
+      const processing = byStatus("processing");
+      const paid = records.filter(r => r.status === "paid" || r.status === "cleared");
+      const failed = byStatus("failed");
+      const voided = byStatus("voided");
+      const reversed = byStatus("reversed");
+      const reconciled = records.filter(r => !!r.reconciledAt);
+      const pending = records.filter(r => !r.reconciledAt && r.status !== "voided" && r.status !== "reversed" && r.status !== "failed");
+
+      const paidAmount = sumOf(paid);
+      const reconciledAmount = sumOf(reconciled);
+      const failedAmount = sumOf(failed);
+
+      // Discrepancies: expected vs paid (count and amount)
+      const discrepancies = {
+        countDelta: expectedCount - paid.length,
+        amountDelta: Number((expectedAmount - paidAmount).toFixed(2)),
+        unmatchedRecordIds: records.filter(r => r.status === "failed" || (r.status === "paid" && !r.reconciledAt)).map(r => r.id),
+      };
+
+      res.json({
+        runId: run.id,
+        runStatus: run.status,
+        expected: { count: expectedCount, amount: Number(expectedAmount.toFixed(2)) },
+        submitted: { count: submitted.length, amount: Number(sumOf(submitted).toFixed(2)) },
+        processing: { count: processing.length, amount: Number(sumOf(processing).toFixed(2)) },
+        paid: { count: paid.length, amount: Number(paidAmount.toFixed(2)) },
+        failed: { count: failed.length, amount: Number(failedAmount.toFixed(2)) },
+        voided: { count: voided.length, amount: Number(sumOf(voided).toFixed(2)) },
+        reversed: { count: reversed.length, amount: Number(sumOf(reversed).toFixed(2)) },
+        reconciled: { count: reconciled.length, amount: Number(reconciledAmount.toFixed(2)) },
+        pending: { count: pending.length, amount: Number(sumOf(pending).toFixed(2)) },
+        discrepancies,
+      });
     } catch (error) {
       res.status(500).json({ message: "Failed to get reconciliation summary" });
     }
@@ -3731,7 +3772,7 @@ export async function registerRoutes(
   });
 
   // ── Get audit logs for a payroll run ───────────────────────────────────────
-  app.get("/api/payroll-runs/:id/audit-logs", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+  app.get(["/api/payroll-runs/:id/audit-logs", "/api/payroll-runs/:id/audit-log"], requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
