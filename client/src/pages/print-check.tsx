@@ -544,40 +544,52 @@ function StubSummarySection({
               </tr>
             </thead>
             <tbody>
-              {regularHours > 0 && (
+              {totalHours === 0 && grossPay > 0 ? (
                 <tr>
-                  <td style={{ padding: "1px 3px", textAlign: "left" }}>Regular</td>
-                  <td style={{ padding: "1px 3px", textAlign: "right" }}>{fmt(regularHours)}</td>
+                  <td style={{ padding: "1px 3px", textAlign: "left" }}>{isContractor ? "Contract Pay" : "Pay"}</td>
                   <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
                   <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
-                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>${fmt(grossPay)}</td>
+                  <td style={{ padding: "1px 3px", textAlign: "right" }}>${fmt(item.ytdGross)}</td>
                 </tr>
+              ) : (
+                <>
+                  {regularHours > 0 && (
+                    <tr>
+                      <td style={{ padding: "1px 3px", textAlign: "left" }}>Regular</td>
+                      <td style={{ padding: "1px 3px", textAlign: "right" }}>{fmt(regularHours)}</td>
+                      <td style={{ padding: "1px 3px", textAlign: "right" }}>${fmt(item.payRate)}</td>
+                      <td style={{ padding: "1px 3px", textAlign: "right" }}>${fmt(item.regularPay)}</td>
+                      <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
+                    </tr>
+                  )}
+                  {overtimeHours > 0 && (
+                    <tr>
+                      <td style={{ padding: "1px 3px", textAlign: "left" }}>Overtime</td>
+                      <td style={{ padding: "1px 3px", textAlign: "right" }}>{fmt(overtimeHours)}</td>
+                      <td style={{ padding: "1px 3px", textAlign: "right" }}>${fmt(Number(item.payRate || 0) * 1.5)}</td>
+                      <td style={{ padding: "1px 3px", textAlign: "right" }}>${fmt(item.overtimePay)}</td>
+                      <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
+                    </tr>
+                  )}
+                  {doubleTimeHours > 0 && (
+                    <tr>
+                      <td style={{ padding: "1px 3px", textAlign: "left" }}>Double Time</td>
+                      <td style={{ padding: "1px 3px", textAlign: "right" }}>{fmt(doubleTimeHours)}</td>
+                      <td style={{ padding: "1px 3px", textAlign: "right" }}>${fmt(Number(item.payRate || 0) * 2)}</td>
+                      <td style={{ padding: "1px 3px", textAlign: "right" }}>${fmt(item.doubleTimePay)}</td>
+                      <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
+                    </tr>
+                  )}
+                  <tr style={{ fontWeight: "bold", borderTop: "1px solid #999" }}>
+                    <td style={{ padding: "1px 3px", textAlign: "left" }}>TOTAL HOURS</td>
+                    <td style={{ padding: "1px 2px", textAlign: "right" }}>{fmt(totalHours)}</td>
+                    <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                    <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                    <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
+                  </tr>
+                </>
               )}
-              {overtimeHours > 0 && (
-                <tr>
-                  <td style={{ padding: "1px 3px", textAlign: "left" }}>Overtime</td>
-                  <td style={{ padding: "1px 3px", textAlign: "right" }}>{fmt(overtimeHours)}</td>
-                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
-                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
-                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
-                </tr>
-              )}
-              {doubleTimeHours > 0 && (
-                <tr>
-                  <td style={{ padding: "1px 3px", textAlign: "left" }}>Double Time</td>
-                  <td style={{ padding: "1px 3px", textAlign: "right" }}>{fmt(doubleTimeHours)}</td>
-                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
-                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
-                  <td style={{ padding: "1px 3px", textAlign: "right" }}>—</td>
-                </tr>
-              )}
-              <tr style={{ fontWeight: "bold", borderTop: "1px solid #999" }}>
-                <td style={{ padding: "1px 3px", textAlign: "left" }}>TOTAL HOURS</td>
-                <td style={{ padding: "1px 2px", textAlign: "right" }}>{fmt(totalHours)}</td>
-                <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
-                <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
-                <td style={{ padding: "1px 2px", textAlign: "right" }}>—</td>
-              </tr>
             </tbody>
           </table>
 
@@ -601,10 +613,10 @@ function StubSummarySection({
 
           {/* Total Deductions row */}
           <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0", borderBottom: "1px solid #999", marginBottom: "2px" }}>
-            <span style={{ fontSize: "8px" }}>TOTAL DEDUCTIONS</span>
+            <span style={{ fontSize: "8px" }}>{isContractor ? "TOTAL DEDUCTIONS (none — contractor)" : "TOTAL DEDUCTIONS"}</span>
             <div style={{ display: "flex", gap: "8px" }}>
-              <span style={{ width: "35px", textAlign: "right", fontWeight: "bold", fontSize: "8px" }}>${fmt(totalDeductions)}</span>
-              <span style={{ width: "35px", textAlign: "right", fontWeight: "bold", fontSize: "8px" }}>${fmt(item.ytdNet - item.ytdGross + totalDeductions)}</span>
+              <span style={{ width: "35px", textAlign: "right", fontWeight: "bold", fontSize: "8px" }}>${fmt(isContractor ? 0 : totalDeductions)}</span>
+              <span style={{ width: "35px", textAlign: "right", fontWeight: "bold", fontSize: "8px" }}>${fmt(isContractor ? 0 : Math.max(0, (Number(item.ytdDeductions) || (item.ytdGross - item.ytdNet))))}</span>
             </div>
           </div>
 
@@ -751,36 +763,48 @@ function StubDetailSection({
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td style={{ padding: "2px" }}>Regular</td>
-                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.regularHours)}</td>
-                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.payRate)}</td>
-                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.regularPay)}</td>
-                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdGross)}</td>}
-                </tr>
-                {overtimeHours > 0 && (
+                {totalHours === 0 && Number(item.grossPay || 0) > 0 ? (
                   <tr>
-                    <td style={{ padding: "2px" }}>Overtime (1.5×)</td>
-                    <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.overtimeHours)}</td>
-                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(Number(item.payRate || 0) * 1.5)}</td>
-                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.overtimePay)}</td>
-                    {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
+                    <td style={{ padding: "2px" }}>{isContractor ? "Contract Pay" : "Pay"}</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>—</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>—</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.grossPay)}</td>
+                    {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdGross)}</td>}
                   </tr>
+                ) : (
+                  <>
+                    <tr>
+                      <td style={{ padding: "2px" }}>Regular</td>
+                      <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.regularHours)}</td>
+                      <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.payRate)}</td>
+                      <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.regularPay)}</td>
+                      {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdGross)}</td>}
+                    </tr>
+                    {overtimeHours > 0 && (
+                      <tr>
+                        <td style={{ padding: "2px" }}>Overtime (1.5×)</td>
+                        <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.overtimeHours)}</td>
+                        <td style={{ textAlign: "right", padding: "2px" }}>${fmt(Number(item.payRate || 0) * 1.5)}</td>
+                        <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.overtimePay)}</td>
+                        {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
+                      </tr>
+                    )}
+                    {doubleTimeHours > 0 && (
+                      <tr>
+                        <td style={{ padding: "2px" }}>Double Time (2×)</td>
+                        <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.doubleTimeHours)}</td>
+                        <td style={{ textAlign: "right", padding: "2px" }}>${fmt(Number(item.payRate || 0) * 2)}</td>
+                        <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.doubleTimePay)}</td>
+                        {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
+                      </tr>
+                    )}
+                    <tr style={{ borderTop: "1px solid #666" }}>
+                      <td style={{ padding: "2px", fontWeight: "bold" }}>TOTAL HOURS</td>
+                      <td style={{ textAlign: "right", padding: "2px", fontWeight: "bold" }}>{fmt(totalHours)}</td>
+                      <td colSpan={config.showYtdTotals ? 3 : 2}></td>
+                    </tr>
+                  </>
                 )}
-                {doubleTimeHours > 0 && (
-                  <tr>
-                    <td style={{ padding: "2px" }}>Double Time (2×)</td>
-                    <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.doubleTimeHours)}</td>
-                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(Number(item.payRate || 0) * 2)}</td>
-                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.doubleTimePay)}</td>
-                    {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
-                  </tr>
-                )}
-                <tr style={{ borderTop: "1px solid #666" }}>
-                  <td style={{ padding: "2px", fontWeight: "bold" }}>TOTAL HOURS</td>
-                  <td style={{ textAlign: "right", padding: "2px", fontWeight: "bold" }}>{fmt(totalHours)}</td>
-                  <td colSpan={config.showYtdTotals ? 3 : 2}></td>
-                </tr>
                 <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
                   <td style={{ padding: "2px" }}>GROSS PAY</td>
                   <td style={{ padding: "2px" }}></td>
@@ -818,12 +842,12 @@ function StubDetailSection({
                 <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
                   <td style={{ padding: "2px" }}>TOTAL DEDUCTIONS</td>
                   <td style={{ textAlign: "right", padding: "2px" }}>${fmt(computedTotalDeductions)}</td>
-                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdDeductions)}</td>}
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(isContractor ? 0 : Math.max(0, Number(item.ytdDeductions) || (item.ytdGross - item.ytdNet)))}</td>}
                 </tr>
                 <tr style={{ borderTop: "2px solid #000", fontWeight: "bold" }}>
                   <td style={{ padding: "2px" }}>NET PAY</td>
                   <td style={{ textAlign: "right", padding: "2px" }}>${fmt(computedNetPay)}</td>
-                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdNet)}</td>}
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(isContractor ? item.ytdGross : item.ytdNet)}</td>}
                 </tr>
               </tbody>
             </table>
@@ -1001,41 +1025,53 @@ function StubPortion({
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td style={{ padding: "2px" }}>Regular</td>
-                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.regularHours)}</td>
-                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.payRate)}</td>
-                  <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.regularPay)}</td>
-                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdGross)}</td>}
-                </tr>
-                {overtimeHours > 0 && (
+                {totalHours === 0 && Number(item.grossPay || 0) > 0 ? (
                   <tr>
-                    <td style={{ padding: "2px" }}>Overtime</td>
-                    <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.overtimeHours)}</td>
-                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(Number(item.payRate || 0) * 1.5)}</td>
-                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.overtimePay)}</td>
-                    {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
+                    <td style={{ padding: "2px" }}>{isContractor ? "Contract Pay" : "Pay"}</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>—</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>—</td>
+                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.grossPay)}</td>
+                    {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdGross)}</td>}
                   </tr>
+                ) : (
+                  <>
+                    <tr>
+                      <td style={{ padding: "2px" }}>Regular</td>
+                      <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.regularHours)}</td>
+                      <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.payRate)}</td>
+                      <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.regularPay)}</td>
+                      {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdGross)}</td>}
+                    </tr>
+                    {overtimeHours > 0 && (
+                      <tr>
+                        <td style={{ padding: "2px" }}>Overtime</td>
+                        <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.overtimeHours)}</td>
+                        <td style={{ textAlign: "right", padding: "2px" }}>${fmt(Number(item.payRate || 0) * 1.5)}</td>
+                        <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.overtimePay)}</td>
+                        {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
+                      </tr>
+                    )}
+                    {doubleTimeHours > 0 && (
+                      <tr>
+                        <td style={{ padding: "2px" }}>Double Time</td>
+                        <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.doubleTimeHours)}</td>
+                        <td style={{ textAlign: "right", padding: "2px" }}>${fmt(Number(item.payRate || 0) * 2)}</td>
+                        <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.doubleTimePay)}</td>
+                        {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
+                      </tr>
+                    )}
+                    <tr style={{ borderTop: "1px solid #666" }}>
+                      <td style={{ padding: "2px", fontWeight: "bold" }}>TOTAL HOURS</td>
+                      <td style={{ textAlign: "right", padding: "2px", fontWeight: "bold" }}>{fmt(totalHours)}</td>
+                      <td style={{ padding: "2px" }}></td>
+                      <td style={{ padding: "2px" }}></td>
+                      {config.showYtdTotals && <td style={{ padding: "2px" }}></td>}
+                    </tr>
+                  </>
                 )}
-                {doubleTimeHours > 0 && (
-                  <tr>
-                    <td style={{ padding: "2px" }}>Double Time</td>
-                    <td style={{ textAlign: "right", padding: "2px" }}>{fmt(item.doubleTimeHours)}</td>
-                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(Number(item.payRate || 0) * 2)}</td>
-                    <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.doubleTimePay)}</td>
-                    {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>—</td>}
-                  </tr>
-                )}
-                <tr style={{ borderTop: "1px solid #666" }}>
-                  <td style={{ padding: "2px", fontWeight: "bold" }}>TOTAL HOURS</td>
-                  <td style={{ textAlign: "right", padding: "2px", fontWeight: "bold" }}>{fmt(totalHours)}</td>
-                  <td style={{ padding: "2px" }}></td>
-                  <td style={{ padding: "2px" }}></td>
-                  {config.showYtdTotals && <td style={{ padding: "2px" }}></td>}
-                </tr>
                 <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
                   <td style={{ padding: "2px" }}>GROSS PAY</td>
-                  <td style={{ textAlign: "right", padding: "2px" }}>{fmt(totalHours)}</td>
+                  <td style={{ padding: "2px" }}></td>
                   <td style={{ padding: "2px" }}></td>
                   <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.grossPay)}</td>
                   {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdGross)}</td>}
@@ -1069,7 +1105,7 @@ function StubPortion({
                 <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
                   <td style={{ padding: "2px" }}>TOTAL DEDUCTIONS</td>
                   <td style={{ textAlign: "right", padding: "2px" }}>${fmt(computedTotalDeductions)}</td>
-                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(item.ytdDeductions)}</td>}
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(isContractor ? 0 : Math.max(0, Number(item.ytdDeductions) || (item.ytdGross - item.ytdNet)))}</td>}
                 </tr>
               </tbody>
             </table>
@@ -1087,7 +1123,7 @@ function StubPortion({
             </div>
             <div style={{ display: "flex", gap: "20px" }}>
               <div><div style={{ fontSize: "8px", color: "#666" }}>YTD GROSS</div><div style={{ fontWeight: "bold" }}>${fmt(item.ytdGross)}</div></div>
-              <div><div style={{ fontSize: "8px", color: "#666" }}>YTD DEDUCTIONS</div><div style={{ fontWeight: "bold" }}>${fmt(item.ytdDeductions)}</div></div>
+              <div><div style={{ fontSize: "8px", color: "#666" }}>YTD DEDUCTIONS</div><div style={{ fontWeight: "bold" }}>${fmt(isContractor ? 0 : Math.max(0, Number(item.ytdDeductions) || (item.ytdGross - item.ytdNet)))}</div></div>
               <div><div style={{ fontSize: "8px", color: "#666" }}>YTD NET</div><div style={{ fontWeight: "bold" }}>${fmt(item.ytdNet)}</div></div>
             </div>
           </div>
