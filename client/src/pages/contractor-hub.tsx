@@ -3904,6 +3904,15 @@ function DocumentsSection() {
   });
   const emailProviderConfigured = !!(smtpCfg?.host);
 
+  const { data: damDocs = [] } = useQuery<any[]>({
+    queryKey: ["/api/dam-documents", "contractor-pdfs"],
+    queryFn: async () => { const r = await fetch("/api/dam-documents", { credentials: "include" }); return r.ok ? r.json() : []; },
+    select: (rows: any[]) => rows.filter(d =>
+      ["contractor_proposal","contractor_invoice","contractor_contract"].includes(d.linked_entity_type || "") &&
+      d.mime_type === "application/pdf"
+    ),
+  });
+
   const [contractorFilter, setContractorFilter] = useState("all");
   const [costCenterFilter, setCostCenterFilter] = useState("all");
   const [jobFilter, setJobFilter] = useState("all");
@@ -4341,6 +4350,52 @@ function DocumentsSection() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Generated PDF Documents (from DMS) */}
+      {damDocs.length > 0 && (
+        <div className="mt-6 space-y-2">
+          <div className="flex items-center gap-2">
+            <FileText className="h-4 w-4 text-muted-foreground" />
+            <h3 className="text-sm font-semibold">Generated PDF Documents</h3>
+            <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{damDocs.length}</span>
+          </div>
+          <div className="space-y-1.5">
+            {damDocs.map((d: any) => (
+              <div key={d.id} className="border rounded-lg p-3 flex items-center gap-3 hover:bg-muted/30 transition-colors group" data-testid={`row-dms-pdf-${d.id}`}>
+                <div className="h-9 w-9 rounded-lg flex items-center justify-center shrink-0 bg-rose-50 dark:bg-rose-950/30">
+                  <FileText className="h-4 w-4 text-rose-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{d.title || d.file_name || "PDF Document"}</p>
+                  <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground flex-wrap">
+                    <span className="capitalize">{(d.linked_entity_type || "").replace("contractor_", "")}</span>
+                    {d.description && <><span>·</span><span className="truncate max-w-[200px]">{d.description}</span></>}
+                    {d.created_at && <><span>·</span><span>{new Date(d.created_at).toLocaleDateString()}</span></>}
+                    {d.file_size && <><span>·</span><span>{(d.file_size / 1024).toFixed(1)} KB</span></>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1"
+                    onClick={() => window.open(d.file_path, "_blank")}
+                    data-testid={`btn-view-pdf-${d.id}`} title="View PDF">
+                    <ExternalLink className="h-3.5 w-3.5" /> View
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1"
+                    onClick={() => {
+                      const a = document.createElement("a");
+                      a.href = d.file_path;
+                      a.download = d.file_name || "document.pdf";
+                      a.click();
+                    }}
+                    data-testid={`btn-download-pdf-${d.id}`} title="Download PDF">
+                    <Download className="h-3.5 w-3.5" /> PDF
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

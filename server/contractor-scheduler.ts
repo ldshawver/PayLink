@@ -169,6 +169,106 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
             created++;
           }
         }
+        // ── Contract renewal warning ──────────────────────────────────────────
+        const renewalWarningDays = (settings.contract_renewal_warning_days as number) ?? 30;
+        const renewalContracts = await db.execute(sql`
+          SELECT id, contract_number, title, contractor_id, end_date FROM contractor_contracts
+          WHERE company_id = ${cid} AND status IN ('active','fully_signed') AND end_date IS NOT NULL
+          AND end_date::date BETWEEN CURRENT_DATE + (${contractExpiryWarningDays} * INTERVAL '1 day')::interval
+                                 AND CURRENT_DATE + (${renewalWarningDays} * INTERVAL '1 day')::interval
+        `);
+        for (const c of renewalContracts.rows as Array<{ id: string; contract_number: string; title: string; contractor_id: string; end_date: string }>) {
+          const existing = await db.execute(sql`
+            SELECT id FROM contractor_reminders
+            WHERE entity_type = 'contract' AND entity_id = ${c.id} AND reminder_type = 'renewal'
+            AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
+          `);
+          if (!existing.rows.length) {
+            await db.execute(sql`
+              INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at)
+              VALUES (${c.contractor_id}, ${cid}, 'contract', ${c.id}, 'renewal',
+                ${"Renewal upcoming: " + (c.title || c.contract_number || c.id)},
+                ${"Contract ends on " + c.end_date + ". Consider renewing or initiating renegotiation."},
+                ${now.toISOString()}, 'in_app', 'pending', NOW())
+            `);
+            await createContractorNotification({
+              companyId: cid,
+              workerId: c.contractor_id,
+              notificationType: "contract_renewal_warning",
+              title: "Contract Renewal: " + (c.title || c.contract_number),
+              body: "Contract ends on " + c.end_date + ". Review renewal or renegotiation options.",
+              entityType: "contract",
+              entityId: c.id,
+              actionUrl: "/app/contractor-hub?section=contracts&id=" + c.id,
+            });
+            created++;
+          }
+        }
+
+        // ── Renegotiation follow-up ───────────────────────────────────────────
+        const renegotiationWarningDays = (settings.contract_renegotiation_warning_days as number) ?? 7;
+        const renegotiationContracts = await db.execute(sql`
+          SELECT id, contract_number, title, contractor_id FROM contractor_contracts
+          WHERE company_id = ${cid} AND status = 'renegotiation'
+          AND updated_at::timestamptz < NOW() - (${renegotiationWarningDays} * INTERVAL '1 day')
+        `);
+        for (const c of renegotiationContracts.rows as Array<{ id: string; contract_number: string; title: string; contractor_id: string }>) {
+          const existing = await db.execute(sql`
+            SELECT id FROM contractor_reminders
+            WHERE entity_type = 'contract' AND entity_id = ${c.id} AND reminder_type = 'renegotiation'
+            AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
+          `);
+          if (!existing.rows.length) {
+            await db.execute(sql`
+              INSERT INTO contractor_reminders (worker_id, company_id, entity_type, entity_id, reminder_type, title, notes, scheduled_at, channel, status, sent_at)
+              VALUES (${c.contractor_id}, ${cid}, 'contract', ${c.id}, 'renegotiation',
+                ${"Renegotiation stalled: " + (c.title || c.contract_number || c.id)},
+                ${"This contract has been in renegotiation for more than " + renegotiationWarningDays + " days without an update."},
+                ${now.toISOString()}, 'in_app', 'pending', NOW())
+            `);
+            await createContractorNotification({
+              companyId: cid,
+              notificationType: "contract_renegotiation_reminder",
+              title: "Renegotiation Follow-up: " + (c.title || c.contract_number),
+              body: "This contract has been in renegotiation for more than " + renegotiationWarningDays + " days. Please take action.",
+              entityType: "contract",
+              entityId: c.id,
+              actionUrl: "/app/contractor-hub?section=contracts&id=" + c.id,
+            });
+            created++;
+          }
+        }
+
+        // ── Mark expired contracts ─────────────────────────────────────────────
+        const expiredContracts = await db.execute(sql`
+          SELECT id, contract_number, title, contractor_id FROM contractor_contracts
+          WHERE company_id = ${cid} AND status IN ('active','fully_signed') AND end_date IS NOT NULL
+          AND end_date::date < CURRENT_DATE
+        `);
+        for (const c of expiredContracts.rows as Array<{ id: string; contract_number: string; title: string; contractor_id: string }>) {
+          await db.execute(sql`
+            UPDATE contractor_contracts SET status = 'expired', updated_at = NOW() WHERE id = ${c.id}
+          `);
+          const existing = await db.execute(sql`
+            SELECT id FROM contractor_reminders
+            WHERE entity_type = 'contract' AND entity_id = ${c.id} AND reminder_type = 'expiry'
+            AND sent_at > NOW() - INTERVAL '24 hours'
+          `);
+          if (!existing.rows.length) {
+            await createContractorNotification({
+              companyId: cid,
+              workerId: c.contractor_id,
+              notificationType: "contract_expired",
+              title: "Contract Expired: " + (c.title || c.contract_number),
+              body: "This contract has expired. Please review and initiate renewal or close out.",
+              entityType: "contract",
+              entityId: c.id,
+              actionUrl: "/app/contractor-hub?section=contracts&id=" + c.id,
+            });
+            created++;
+          }
+        }
+
       } catch (companyErr: unknown) {
         const msg = companyErr instanceof Error ? companyErr.message : String(companyErr);
         errors.push(`Company ${cid}: ${msg}`);

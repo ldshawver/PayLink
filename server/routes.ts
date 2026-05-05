@@ -457,6 +457,263 @@ function periodsPerYearFromSchedule(type: string): number {
   return 26; // biweekly default
 }
 
+// Helper: generate a PDF for an approved contractor proposal and store in DMS
+async function generateProposalPdf(proposalId: string, proposal: any, actorUserId: string): Promise<string | null> {
+  try {
+    const { jsPDF } = await import("jspdf");
+    const autoTable = (await import("jspdf-autotable")).default;
+    const lineItemsRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${proposalId} ORDER BY sort_order ASC`);
+    const lineItems = lineItemsRes.rows as any[];
+
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+
+    // Header gradient blocks
+    doc.setFillColor(13, 148, 136);
+    doc.rect(0, 0, pageWidth, 28, "F");
+    doc.setFillColor(37, 99, 235);
+    doc.rect(pageWidth * 0.6, 0, pageWidth * 0.4, 28, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("PayLink", 14, 12);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text("Contractor Proposal", 14, 20);
+    doc.setFontSize(9);
+    doc.text(new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }), pageWidth - 14, 12, { align: "right" });
+    doc.text(`Proposal #${proposal.proposal_number || proposalId.slice(0, 8)}`, pageWidth - 14, 20, { align: "right" });
+
+    doc.setTextColor(0, 0, 0);
+    let y = 38;
+
+    // Title & metadata
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.text(proposal.title || "Contractor Proposal", 14, y);
+    y += 8;
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(100, 100, 100);
+    const statusLabel = (proposal.status || "").toUpperCase();
+    const versionLabel = `Version: ${proposal.version || 1}`;
+    const submittedLabel = proposal.submitted_at ? `Submitted: ${new Date(proposal.submitted_at).toLocaleDateString()}` : "";
+    doc.text([statusLabel, versionLabel, submittedLabel].filter(Boolean).join("  |  "), 14, y);
+    y += 10;
+    doc.setTextColor(0, 0, 0);
+
+    // Scope of work
+    if (proposal.scope_of_work || proposal.description) {
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "bold");
+      doc.text("Scope of Work", 14, y);
+      y += 6;
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      const lines = doc.splitTextToSize(proposal.scope_of_work || proposal.description || "", pageWidth - 28);
+      doc.text(lines, 14, y);
+      y += (lines.length * 5) + 6;
+    }
+
+    // Assumptions / Exclusions
+    if (proposal.assumptions) {
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.text("Assumptions", 14, y); y += 5;
+      doc.setFontSize(9); doc.setFont("helvetica", "normal");
+      const aLines = doc.splitTextToSize(proposal.assumptions, pageWidth - 28);
+      doc.text(aLines, 14, y); y += (aLines.length * 5) + 5;
+    }
+
+    // Line items table
+    if (lineItems.length > 0) {
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "bold");
+      doc.text("Line Items", 14, y);
+      y += 4;
+      autoTable(doc, {
+        startY: y,
+        head: [["Description", "Qty", "Unit", "Unit Price", "Total"]],
+        body: lineItems.map((li: any) => [
+          li.name || "",
+          String(li.quantity || 1),
+          li.unit || "",
+          `$${parseFloat(li.unit_price || 0).toFixed(2)}`,
+          `$${parseFloat(li.line_total || 0).toFixed(2)}`,
+        ]),
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [13, 148, 136] as any, textColor: [255, 255, 255] as any },
+        margin: { left: 14, right: 14 },
+      });
+      y = (doc as any).lastAutoTable.finalY + 8;
+    }
+
+    // Totals
+    const subtotal = parseFloat(proposal.subtotal || proposal.amount || 0);
+    const taxAmt = parseFloat(proposal.tax_amount || 0);
+    const discount = parseFloat(proposal.discount_amount || 0);
+    const total = parseFloat(proposal.total || proposal.amount || 0);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    if (subtotal > 0) { doc.text(`Subtotal: $${subtotal.toFixed(2)}`, pageWidth - 14, y, { align: "right" }); y += 6; }
+    if (discount > 0) { doc.text(`Discount: -$${discount.toFixed(2)}`, pageWidth - 14, y, { align: "right" }); y += 6; }
+    if (taxAmt > 0) { doc.text(`Tax: $${taxAmt.toFixed(2)}`, pageWidth - 14, y, { align: "right" }); y += 6; }
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "bold");
+    doc.text(`Total: $${total.toFixed(2)}`, pageWidth - 14, y, { align: "right" });
+    y += 10;
+
+    // Approval metadata
+    if (proposal.reviewed_at) {
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(80, 80, 80);
+      doc.text(`Approved on: ${new Date(proposal.reviewed_at).toLocaleDateString()}`, 14, y);
+    }
+
+    // Footer
+    const pageHeight = doc.internal.pageSize.getHeight();
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text("Generated by PayLink HR & Payroll Platform — Confidential", pageWidth / 2, pageHeight - 8, { align: "center" });
+
+    const pdfBuffer = doc.output("arraybuffer");
+    const fileName = `proposal-${(proposal.proposal_number || proposalId).replace(/[^a-z0-9]/gi, "_")}-${Date.now()}.pdf`;
+    const uploadDir = path.join(process.cwd(), "uploads");
+    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+    const filePath = path.join(uploadDir, fileName);
+    fs.writeFileSync(filePath, Buffer.from(pdfBuffer));
+    const fileSize = fs.statSync(filePath).size;
+
+    // Create DMS record
+    await db.execute(sql`
+      INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id)
+      VALUES (${proposal.company_id || null}, ${proposal.contractor_id}, 'worker', 'proposal',
+        ${(proposal.title || proposal.proposal_number || "Proposal") + " — Approved PDF"},
+        ${"Approved proposal PDF for " + (proposal.proposal_number || proposalId.slice(0, 8))},
+        ${"/uploads/" + fileName}, ${fileName}, 'document', ${fileSize}, 'application/pdf',
+        'contractor_proposal', ${proposalId}, ${actorUserId})
+    `);
+
+    return "/uploads/" + fileName;
+  } catch (e: unknown) {
+    console.error("[ProposalPDF] generation error:", e instanceof Error ? e.message : String(e));
+    return null;
+  }
+}
+
+// Helper: generate a PDF for a contractor invoice and store in DMS
+async function generateInvoicePdf(invoiceId: string, invoice: any, actorUserId: string): Promise<string | null> {
+  try {
+    const { jsPDF } = await import("jspdf");
+    const autoTable = (await import("jspdf-autotable")).default;
+
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+
+    // Header
+    doc.setFillColor(13, 148, 136);
+    doc.rect(0, 0, pageWidth, 28, "F");
+    doc.setFillColor(37, 99, 235);
+    doc.rect(pageWidth * 0.6, 0, pageWidth * 0.4, 28, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("PayLink", 14, 12);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text("Contractor Invoice", 14, 20);
+    doc.setFontSize(9);
+    doc.text(new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }), pageWidth - 14, 12, { align: "right" });
+    doc.text(`Invoice #${invoice.invoice_number || invoiceId.slice(0, 8)}`, pageWidth - 14, 20, { align: "right" });
+
+    doc.setTextColor(0, 0, 0);
+    let y = 38;
+
+    // Invoice details
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text(invoice.description || `Invoice #${invoice.invoice_number || invoiceId.slice(0, 8)}`, 14, y);
+    y += 8;
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(100, 100, 100);
+    const details = [
+      invoice.invoice_date ? `Date: ${invoice.invoice_date}` : "",
+      invoice.due_date ? `Due: ${invoice.due_date}` : "",
+      invoice.status ? `Status: ${invoice.status.toUpperCase()}` : "",
+    ].filter(Boolean).join("  |  ");
+    doc.text(details, 14, y);
+    y += 10;
+    doc.setTextColor(0, 0, 0);
+
+    // Line items if present
+    const lineItems = invoice.line_items ? (typeof invoice.line_items === "string" ? JSON.parse(invoice.line_items) : invoice.line_items) : [];
+    if (Array.isArray(lineItems) && lineItems.length > 0) {
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "bold");
+      doc.text("Line Items", 14, y);
+      y += 4;
+      autoTable(doc, {
+        startY: y,
+        head: [["Description", "Qty", "Unit Price", "Total"]],
+        body: lineItems.map((li: any) => [
+          li.name || li.description || "",
+          String(li.quantity || 1),
+          `$${parseFloat(li.unit_price || li.unitPrice || 0).toFixed(2)}`,
+          `$${parseFloat(li.line_total || li.lineTotal || li.amount || 0).toFixed(2)}`,
+        ]),
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [13, 148, 136] as any, textColor: [255, 255, 255] as any },
+        margin: { left: 14, right: 14 },
+      });
+      y = (doc as any).lastAutoTable.finalY + 8;
+    }
+
+    // Amount
+    const amount = parseFloat(invoice.amount || 0);
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "bold");
+    doc.text(`Amount Due: $${amount.toFixed(2)}`, pageWidth - 14, y, { align: "right" });
+    y += 10;
+
+    if (invoice.notes) {
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(80, 80, 80);
+      const noteLines = doc.splitTextToSize("Notes: " + invoice.notes, pageWidth - 28);
+      doc.text(noteLines, 14, y);
+    }
+
+    const pageHeight = doc.internal.pageSize.getHeight();
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text("Generated by PayLink HR & Payroll Platform — Confidential", pageWidth / 2, pageHeight - 8, { align: "center" });
+
+    const pdfBuffer = doc.output("arraybuffer");
+    const fileName = `invoice-${(invoice.invoice_number || invoiceId).replace(/[^a-z0-9]/gi, "_")}-${Date.now()}.pdf`;
+    const uploadDir = path.join(process.cwd(), "uploads");
+    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+    const filePath = path.join(uploadDir, fileName);
+    fs.writeFileSync(filePath, Buffer.from(pdfBuffer));
+    const fileSize = fs.statSync(filePath).size;
+
+    await db.execute(sql`
+      INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id)
+      VALUES (${invoice.company_id || null}, ${invoice.contractor_id}, 'worker', 'invoice',
+        ${`Invoice #${invoice.invoice_number || invoiceId.slice(0, 8)} — PDF`},
+        ${"Invoice PDF for " + (invoice.invoice_number || invoiceId.slice(0, 8))},
+        ${"/uploads/" + fileName}, ${fileName}, 'document', ${fileSize}, 'application/pdf',
+        'contractor_invoice', ${invoiceId}, ${actorUserId})
+    `);
+
+    return "/uploads/" + fileName;
+  } catch (e: unknown) {
+    console.error("[InvoicePDF] generation error:", e instanceof Error ? e.message : String(e));
+    return null;
+  }
+}
+
 // Helper: recalculate contractor proposal subtotal/total from line items
 async function recalcProposalTotals(proposalId: string) {
   const items = await db.execute(sql`SELECT line_total, taxable, selected FROM proposal_line_items WHERE proposal_id = ${proposalId} AND selected = TRUE`);
@@ -9477,6 +9734,28 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       createContractorNotification({ companyId: proposal.company_id, notificationType: "proposal_submitted", title: `Proposal Submitted: ${proposal.title || proposal.proposal_number}`, body: "A contractor has submitted a proposal for your review.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
+      // Email admins/managers about the new submission
+      try {
+        const { sendGenericNotificationEmail } = await import("./notifications.js");
+        const baseUrl = getAppBaseUrl(req);
+        const cwRes = await db.execute(sql`SELECT first_name, last_name FROM workers WHERE id = ${proposal.contractor_id}`);
+        const cw = cwRes.rows[0] as any;
+        const contractorName = cw ? `${cw.first_name} ${cw.last_name}` : "A contractor";
+        const adminsRes = await db.execute(sql`
+          SELECT u.email, COALESCE(w.first_name || ' ' || w.last_name, u.username) AS name
+          FROM users u LEFT JOIN workers w ON w.id = u.worker_id
+          WHERE u.company_id = ${proposal.company_id} AND u.role IN ('admin','manager')
+          AND u.email IS NOT NULL AND u.email != ''`);
+        for (const admin of (adminsRes.rows as Array<{email: string; name: string}>)) {
+          sendGenericNotificationEmail({
+            recipientName: admin.name || "Team",
+            email: admin.email,
+            title: `Proposal Submitted: ${proposal.title || proposal.proposal_number}`,
+            body: `${contractorName} has submitted a proposal for your review. Log in to PayLink to approve, reject, or request changes.`,
+            actionUrl: `${baseUrl}/app/contractor-hub?section=proposals&id=${req.params.id}`,
+          }).catch(() => {});
+        }
+      } catch (emailErr) { console.warn("[Proposal submit] Admin email failed:", emailErr); }
       res.json((updated.rows ?? (updated as any))[0]);
     } catch (e) { res.status(500).json({ message: "Failed to submit proposal" }); }
   });
@@ -9500,6 +9779,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, ip_address) VALUES (${req.params.id}, 'approved', ${oldStatus}, 'approved', ${userId}, ${user?.username || null}, ${req.ip || null})`);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       createContractorNotification({ workerId: proposal.contractor_id, notificationType: "proposal_approved", title: `Proposal Approved: ${proposal.title || proposal.proposal_number}`, body: "Your proposal has been approved.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
+      // Email contractor
+      try {
+        const { sendGenericNotificationEmail } = await import("./notifications.js");
+        const baseUrl = getAppBaseUrl(req);
+        const cwRes = await db.execute(sql`SELECT u.email, w.first_name, w.last_name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${proposal.contractor_id} LIMIT 1`);
+        const cw = cwRes.rows[0] as any;
+        if (cw?.email) {
+          sendGenericNotificationEmail({
+            recipientName: `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "Contractor",
+            email: cw.email,
+            title: `Proposal Approved: ${proposal.title || proposal.proposal_number}`,
+            body: `Great news — your proposal has been approved. Log in to PayLink to view the details and next steps.`,
+            actionUrl: `${baseUrl}/app/contractor-hub?section=proposals&id=${req.params.id}`,
+          }).catch(() => {});
+        }
+      } catch (emailErr) { console.warn("[Proposal accept] Contractor email failed:", emailErr); }
+      // Generate PDF and store in DMS (fire-and-forget; failure does not block the response)
+      generateProposalPdf(req.params.id, (updated.rows ?? (updated as any))[0] || proposal, userId).catch((e: unknown) => console.warn("[Proposal accept] PDF generation failed:", e));
       res.json((updated.rows ?? (updated as any))[0]);
     } catch (e) { res.status(500).json({ message: "Failed to accept proposal" }); }
   });
@@ -9524,6 +9821,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'rejected', ${oldStatus}, 'rejected', ${userId}, ${user?.username || null}, ${rejectionReason || null}, ${req.ip || null})`);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       createContractorNotification({ workerId: proposal.contractor_id, notificationType: "proposal_rejected", title: `Proposal Rejected: ${proposal.title || proposal.proposal_number}`, body: rejectionReason || "Your proposal has been declined.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
+      // Email contractor
+      try {
+        const { sendGenericNotificationEmail } = await import("./notifications.js");
+        const baseUrl = getAppBaseUrl(req);
+        const cwRes = await db.execute(sql`SELECT u.email, w.first_name, w.last_name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${proposal.contractor_id} LIMIT 1`);
+        const cw = cwRes.rows[0] as any;
+        if (cw?.email) {
+          sendGenericNotificationEmail({
+            recipientName: `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "Contractor",
+            email: cw.email,
+            title: `Proposal Rejected: ${proposal.title || proposal.proposal_number}`,
+            body: rejectionReason ? `Your proposal was not approved. Reason: ${rejectionReason}` : "Your proposal has been declined. Please contact the company for more details.",
+            actionUrl: `${baseUrl}/app/contractor-hub?section=proposals&id=${req.params.id}`,
+          }).catch(() => {});
+        }
+      } catch (emailErr) { console.warn("[Proposal reject] Contractor email failed:", emailErr); }
       res.json((updated.rows ?? (updated as any))[0]);
     } catch (e) { res.status(500).json({ message: "Failed to reject proposal" }); }
   });
@@ -9548,6 +9861,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'revision_requested', ${oldStatus}, 'revision_requested', ${userId}, ${user?.username || null}, ${revisionNotes || null}, ${req.ip || null})`);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       createContractorNotification({ workerId: proposal.contractor_id, notificationType: "proposal_revision_requested", title: `Revision Requested: ${proposal.title || proposal.proposal_number}`, body: revisionNotes || "Please revise and resubmit your proposal.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
+      // Email contractor
+      try {
+        const { sendGenericNotificationEmail } = await import("./notifications.js");
+        const baseUrl = getAppBaseUrl(req);
+        const cwRes = await db.execute(sql`SELECT u.email, w.first_name, w.last_name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${proposal.contractor_id} LIMIT 1`);
+        const cw = cwRes.rows[0] as any;
+        if (cw?.email) {
+          sendGenericNotificationEmail({
+            recipientName: `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "Contractor",
+            email: cw.email,
+            title: `Revision Requested: ${proposal.title || proposal.proposal_number}`,
+            body: revisionNotes
+              ? `Changes have been requested for your proposal. Notes: ${revisionNotes}`
+              : "Your proposal requires revisions before it can be approved. Please log in to PayLink to update and resubmit.",
+            actionUrl: `${baseUrl}/app/contractor-hub?section=proposals&id=${req.params.id}`,
+          }).catch(() => {});
+        }
+      } catch (emailErr) { console.warn("[Proposal revision] Contractor email failed:", emailErr); }
       res.json((updated.rows ?? (updated as any))[0]);
     } catch (e) { res.status(500).json({ message: "Failed to request revision" }); }
   });
@@ -9587,6 +9918,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Notify contractor that their proposal has been converted to an invoice
       createContractorNotification({ workerId: proposal.contractor_id, companyId: proposal.company_id, notificationType: "proposal_converted_invoice", title: `Proposal Approved: Invoice ${invoiceNumber} Created`, body: `Your proposal "${proposal.title || proposal.proposal_number}" has been approved and an invoice has been generated.`, entityType: "invoice", entityId: invoice.id, actionUrl: `/app/contractor-hub?section=invoices&id=${invoice.id}` }).catch(() => {});
+      // Email contractor + generate invoice PDF
+      try {
+        const { sendGenericNotificationEmail } = await import("./notifications.js");
+        const baseUrl = getAppBaseUrl(req);
+        const cwRes = await db.execute(sql`SELECT u.email, w.first_name, w.last_name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${proposal.contractor_id} LIMIT 1`);
+        const cw = cwRes.rows[0] as any;
+        if (cw?.email) {
+          sendGenericNotificationEmail({
+            recipientName: `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "Contractor",
+            email: cw.email,
+            title: `Invoice ${invoiceNumber} Created`,
+            body: `Your proposal has been approved and Invoice ${invoiceNumber} has been created. Log in to PayLink to review it.`,
+            actionUrl: `${baseUrl}/app/contractor-hub?section=invoices&id=${invoice.id}`,
+          }).catch(() => {});
+        }
+      } catch (emailErr) { console.warn("[Convert-to-invoice] Contractor email failed:", emailErr); }
+      // Generate invoice PDF and store in DMS
+      generateInvoicePdf(invoice.id, invoice, userId).catch((e: unknown) => console.warn("[Convert-to-invoice] Invoice PDF generation failed:", e));
       res.json({ proposal: { ...proposal, status: "approved", converted_to_invoice_id: invoice.id }, invoice });
     } catch (e) { console.error("[ContractorProposals] convert-to-invoice error:", e); res.status(500).json({ message: "Failed to convert proposal to invoice" }); }
   });
@@ -10665,6 +11014,40 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.setHeader("Content-Type", "application/json");
       res.json(exportData);
     } catch (e: any) { res.status(500).json({ message: "Failed to download proposal: " + e.message }); }
+  });
+
+  // GET /api/contractor-proposals/:id/pdf — on-demand PDF generation (or serve stored DMS copy)
+  app.get("/api/contractor-proposals/:id/pdf", requireAuth, async (req, res) => {
+    try {
+      const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      if (!propRes.rows[0]) return res.status(404).json({ message: "Proposal not found" });
+      const prop = propRes.rows[0] as any;
+      const user = await storage.getUser(req.session.userId!);
+      const isPlatform = (user?.role || "").startsWith("platform_");
+      const isAdmin = isPlatform || (user?.role || "").startsWith("tenant_") || user?.role === "admin" || user?.role === "manager";
+      const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
+      const workerId = (wRes.rows[0] as any)?.worker_id;
+      if (!isAdmin && prop.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
+      if (isAdmin && !isPlatform && user?.companyId && prop.company_id !== user.companyId) return res.status(403).json({ message: "Access denied: proposal belongs to another company" });
+
+      // Check if a stored PDF already exists in DMS
+      const existingPdf = await db.execute(sql`SELECT file_path, file_name FROM dam_documents WHERE linked_entity_type = 'contractor_proposal' AND linked_entity_id = ${req.params.id} AND mime_type = 'application/pdf' ORDER BY created_at DESC LIMIT 1`);
+      let filePath: string | null = null;
+      if (existingPdf.rows[0]) {
+        filePath = (existingPdf.rows[0] as any).file_path;
+      } else {
+        // Generate on demand
+        filePath = await generateProposalPdf(req.params.id, prop, req.session.userId!);
+      }
+
+      if (!filePath) return res.status(500).json({ message: "Failed to generate proposal PDF" });
+      const absolutePath = path.join(process.cwd(), filePath.replace(/^\//, ""));
+      if (!fs.existsSync(absolutePath)) return res.status(404).json({ message: "PDF file not found on disk" });
+      const pdfFileName = path.basename(absolutePath);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${pdfFileName}"`);
+      res.sendFile(absolutePath);
+    } catch (e: any) { res.status(500).json({ message: "Failed to serve proposal PDF: " + e.message }); }
   });
 
   // ── Payment Download ──────────────────────────────────────────────────────
