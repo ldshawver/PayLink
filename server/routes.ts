@@ -9879,9 +9879,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           }).catch(() => {});
         }
       } catch (emailErr) { console.warn("[Proposal accept] Contractor email failed:", emailErr); }
-      // Generate PDF and store in DMS (fire-and-forget; failure does not block the response)
-      generateProposalPdf(req.params.id, (updated.rows ?? (updated as any))[0] || proposal, userId).catch((e: unknown) => console.warn("[Proposal accept] PDF generation failed:", e));
-      res.json((updated.rows ?? (updated as any))[0]);
+      // Generate PDF and store in DMS — awaited so failure is deterministically logged
+      const acceptedProposal = (updated.rows ?? (updated as any))[0] || proposal;
+      const pdfPath = await generateProposalPdf(req.params.id, acceptedProposal, userId).catch((e: unknown) => { console.warn("[Proposal accept] PDF generation failed:", e instanceof Error ? e.message : String(e)); return null; });
+      if (!pdfPath) console.warn("[Proposal accept] DMS record may be missing for proposal", req.params.id);
+      res.json({ ...acceptedProposal, _pdfGenerated: !!pdfPath });
     } catch (e) { res.status(500).json({ message: "Failed to accept proposal" }); }
   });
 
@@ -10018,9 +10020,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           }).catch(() => {});
         }
       } catch (emailErr) { console.warn("[Convert-to-invoice] Contractor email failed:", emailErr); }
-      // Generate invoice PDF and store in DMS
-      generateInvoicePdf(invoice.id, invoice, userId).catch((e: unknown) => console.warn("[Convert-to-invoice] Invoice PDF generation failed:", e));
-      res.json({ proposal: { ...proposal, status: "approved", converted_to_invoice_id: invoice.id }, invoice });
+      // Generate invoice PDF and store in DMS — awaited so failure is deterministically logged
+      const invoicePdfPath = await generateInvoicePdf(invoice.id, invoice, userId).catch((e: unknown) => { console.warn("[Convert-to-invoice] Invoice PDF generation failed:", e instanceof Error ? e.message : String(e)); return null; });
+      if (!invoicePdfPath) console.warn("[Convert-to-invoice] DMS record may be missing for invoice", invoice.id);
+      res.json({ proposal: { ...proposal, status: "approved", converted_to_invoice_id: invoice.id }, invoice, _invoicePdfGenerated: !!invoicePdfPath });
     } catch (e) { console.error("[ContractorProposals] convert-to-invoice error:", e); res.status(500).json({ message: "Failed to convert proposal to invoice" }); }
   });
 

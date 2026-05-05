@@ -2,6 +2,49 @@ import { db } from "./db";
 import { sql } from "drizzle-orm";
 import { createContractorNotification } from "./contractor-notification-helper";
 
+/** Send email to contractor and all admins for a scheduler-driven reminder event. */
+async function sendSchedulerReminderEmails(
+  cid: string,
+  contractorId: string,
+  title: string,
+  body: string,
+  actionUrl: string,
+  entityType: string,
+  entityId: string,
+  templateKey: string
+): Promise<void> {
+  try {
+    const { sendGenericNotificationEmail } = await import("./notifications.js");
+    // Contractor email
+    const contractorRes = await db.execute(sql`
+      SELECT COALESCE(w.email, w.work_email) AS email,
+             w.first_name || ' ' || w.last_name AS name
+      FROM workers w WHERE w.id = ${contractorId} LIMIT 1
+    `);
+    const cw = contractorRes.rows[0] as { email: string | null; name: string } | undefined;
+    if (cw?.email) {
+      sendGenericNotificationEmail({ recipientName: cw.name || "Contractor", email: cw.email, title, body, actionUrl }).catch(() => {});
+      await db.execute(sql`
+        INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status)
+        VALUES (${entityType}, ${entityId}, 'email', ${cw.email}, ${templateKey}, ${title}, ${body}, 'sent')
+      `);
+    }
+    // Admin/manager emails
+    const adminRes = await db.execute(sql`
+      SELECT u.id, COALESCE(w.email, w.work_email) AS email, u.username AS name
+      FROM users u LEFT JOIN workers w ON w.id = u.worker_id
+      WHERE u.company_id = ${cid} AND u.role IN ('admin','manager','tenant_admin','tenant_owner') LIMIT 5
+    `);
+    for (const admin of adminRes.rows as Array<{ id: string; email: string | null; name: string }>) {
+      if (admin.email) {
+        sendGenericNotificationEmail({ recipientName: admin.name || "Admin", email: admin.email, title, body, actionUrl }).catch(() => {});
+      }
+    }
+  } catch (emailErr: unknown) {
+    console.warn(`[ContractorScheduler] Email send failed for ${templateKey} on ${entityId}:`, emailErr instanceof Error ? emailErr.message : String(emailErr));
+  }
+}
+
 /**
  * Runs the contractor reminder scheduler.
  * Creates contractor_reminder rows for overdue/due conditions and fires
@@ -216,6 +259,7 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
               INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status)
               VALUES ('contract', ${c.id}, 'in_app', ${c.contractor_id}, 'renewal', ${renewalTitle}, ${renewalBody}, 'sent')
             `);
+            await sendSchedulerReminderEmails(cid, c.contractor_id, renewalTitle, renewalBody, renewalUrl, 'contract', c.id, 'renewal');
             created++;
           }
         }
@@ -267,6 +311,7 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
               INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status)
               VALUES ('contract', ${c.id}, 'in_app', ${c.contractor_id}, 'renegotiation', ${renegTitle}, ${renegBody}, 'sent')
             `);
+            await sendSchedulerReminderEmails(cid, c.contractor_id, renegTitle, renegBody, renegUrl, 'contract', c.id, 'renegotiation');
             created++;
           }
         }
@@ -313,6 +358,7 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
               INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status)
               VALUES ('contract', ${c.id}, 'in_app', ${c.contractor_id}, 'expired', ${expiredTitle}, ${expiredBody}, 'sent')
             `);
+            await sendSchedulerReminderEmails(cid, c.contractor_id, expiredTitle, expiredBody, expiredUrl, 'contract', c.id, 'expired');
             created++;
           }
         }
