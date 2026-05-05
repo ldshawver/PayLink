@@ -173,9 +173,10 @@ export class WebhookHandlers {
                 const allPaid = allRecords.every(r => r.status === "paid" || r.status === "cleared");
                 const anyProcessing = allRecords.some(r => r.status === "processing" || r.status === "submitted");
 
+                // Precedence: reversed > failed > paid > processing. ANY failed record fails the run.
                 let newRunStatus = run.status;
                 if (anyReversed) newRunStatus = "reversed";
-                else if (anyFailed && !anyProcessing) newRunStatus = "failed";
+                else if (anyFailed) newRunStatus = "failed";
                 else if (allPaid) newRunStatus = "paid";
                 else if (anyProcessing) newRunStatus = "processing";
 

@@ -3276,6 +3276,90 @@ export async function registerRoutes(
     }
   });
 
+  // ── Shared readiness validator (used by /readiness and /submit-ach) ────────
+  async function evaluatePayrollRunReadiness(run: Awaited<ReturnType<typeof storage.getPayrollRun>>) {
+    if (!run) throw new Error("Run required");
+    const items = await storage.getPayrollItems(run.id);
+    const checks: Record<string, { ok: boolean; message: string; detail?: unknown }> = {};
+
+    checks.status = {
+      ok: run.status === "approved",
+      message: run.status === "approved"
+        ? "Run is approved and ready to submit"
+        : `Run must be in 'approved' status (current: '${run.status}')`,
+    };
+
+    if (!run.fundingAccountId) {
+      checks.fundingAccount = { ok: false, message: "No funding account linked to this run" };
+    } else {
+      const fundingAccounts = await storage.getFundingAccounts(run.companyId);
+      const acct = fundingAccounts.find(a => a.id === run.fundingAccountId);
+      const isActive = acct && (acct as Record<string, unknown>).active !== false;
+      const allowsPayroll = acct && (acct as Record<string, unknown>).allowForPayroll !== false;
+      const balance = acct ? Number((acct as Record<string, unknown>).currentBalance ?? (acct as Record<string, unknown>).openingBalance ?? 0) : 0;
+      const totalNet = items.reduce((s, i) => s + parseFloat(i.netPay || "0"), 0);
+      checks.fundingAccount = {
+        ok: !!(acct && isActive && allowsPayroll && balance >= totalNet),
+        message: !acct
+          ? "Funding account not found"
+          : !isActive
+          ? "Funding account is inactive"
+          : !allowsPayroll
+          ? "Funding account is not enabled for payroll"
+          : balance < totalNet
+          ? `Insufficient balance: $${balance.toFixed(2)} available, $${totalNet.toFixed(2)} required`
+          : "Funding account OK",
+        detail: { balance, required: totalNet },
+      };
+    }
+
+    // Per-worker pay-method integrity: every worker must have a paymentMethod set,
+    // and direct-deposit workers must have an active pay method with non-empty routing+account values.
+    const itemsMissing: string[] = [];
+    const ddInvalid: { workerId: string; reason: string }[] = [];
+    for (const item of items) {
+      if (!item.paymentMethod) {
+        itemsMissing.push(item.workerId);
+        continue;
+      }
+      if (item.paymentMethod === "direct_deposit") {
+        const methods = await storage.getPayMethods(item.workerId);
+        const active = methods.find(m => m.isActive !== false && (m.isPrimary || methods.length === 1)) || methods.find(m => m.isActive !== false);
+        if (!active) {
+          ddInvalid.push({ workerId: item.workerId, reason: "no active pay method" });
+          continue;
+        }
+        const routing = (active.routingNumber || "").trim();
+        const account = (active.accountNumber || "").trim();
+        // Reject masked or empty values (commonly stored as "****1234" when masked)
+        if (!routing || routing.includes("*") || routing.length < 9) {
+          ddInvalid.push({ workerId: item.workerId, reason: "missing or masked routing number" });
+          continue;
+        }
+        if (!account || account.includes("*") || account.length < 4) {
+          ddInvalid.push({ workerId: item.workerId, reason: "missing or masked account number" });
+          continue;
+        }
+      }
+    }
+    const payMethodOk = itemsMissing.length === 0 && ddInvalid.length === 0;
+    checks.workerPayMethods = {
+      ok: payMethodOk,
+      message: payMethodOk
+        ? "All workers have a valid payment method"
+        : `${itemsMissing.length} missing payment method, ${ddInvalid.length} direct-deposit account(s) invalid`,
+      detail: { missing: itemsMissing, invalidDirectDeposit: ddInvalid },
+    };
+
+    checks.items = {
+      ok: items.length > 0,
+      message: items.length > 0 ? `${items.length} payroll items ready` : "No payroll items found",
+    };
+
+    const ready = Object.values(checks).every(c => c.ok);
+    return { ready, checks, items };
+  }
+
   // ── Payroll Run Readiness Check ────────────────────────────────────────────
   app.get("/api/payroll-runs/:id/readiness", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
@@ -3285,59 +3369,7 @@ export async function registerRoutes(
       if (!isPlatformUser(user?.role) && user?.companyId && run.companyId !== user.companyId) {
         return res.status(403).json({ message: "Forbidden" });
       }
-      const items = await storage.getPayrollItems(run.id);
-      const checks: Record<string, { ok: boolean; message: string; detail?: unknown }> = {};
-
-      // 1. Status check
-      checks.status = {
-        ok: run.status === "approved",
-        message: run.status === "approved"
-          ? "Run is approved and ready to submit"
-          : `Run must be in 'approved' status (current: '${run.status}')`,
-      };
-
-      // 2. Funding account check
-      if (run.fundingAccountId) {
-        const fundingAccounts = await storage.getFundingAccounts(run.companyId);
-        const acct = fundingAccounts.find(a => a.id === run.fundingAccountId);
-        const isActive = acct && (acct as Record<string, unknown>).active !== false;
-        const allowsPayroll = acct && (acct as Record<string, unknown>).allowForPayroll !== false;
-        const balance = acct ? Number((acct as Record<string, unknown>).currentBalance ?? (acct as Record<string, unknown>).openingBalance ?? 0) : 0;
-        const totalNet = items.reduce((s, i) => s + parseFloat(i.netPay || "0"), 0);
-        checks.fundingAccount = {
-          ok: !!(acct && isActive && allowsPayroll && balance >= totalNet),
-          message: !acct
-            ? "Funding account not found"
-            : !isActive
-            ? "Funding account is inactive"
-            : !allowsPayroll
-            ? "Funding account is not enabled for payroll"
-            : balance < totalNet
-            ? `Insufficient balance: $${balance.toFixed(2)} available, $${totalNet.toFixed(2)} required`
-            : "Funding account OK",
-          detail: { balance, required: totalNet },
-        };
-      } else {
-        checks.fundingAccount = { ok: false, message: "No funding account linked" };
-      }
-
-      // 3. Worker pay methods
-      const missingPayMethod = items.filter(i => !i.paymentMethod);
-      checks.workerPayMethods = {
-        ok: missingPayMethod.length === 0,
-        message: missingPayMethod.length === 0
-          ? "All workers have a payment method"
-          : `${missingPayMethod.length} worker(s) missing payment method`,
-        detail: { missing: missingPayMethod.map(i => i.workerId) },
-      };
-
-      // 4. Items check
-      checks.items = {
-        ok: items.length > 0,
-        message: items.length > 0 ? `${items.length} payroll items ready` : "No payroll items found",
-      };
-
-      const ready = Object.values(checks).every(c => c.ok);
+      const { ready, checks } = await evaluatePayrollRunReadiness(run);
       res.json({ ready, checks });
     } catch (error) {
       console.error("Readiness check error:", error);
@@ -3351,36 +3383,18 @@ export async function registerRoutes(
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
 
-      // State machine: only approved runs can be submitted
-      if (run.status !== "approved") {
-        return res.status(400).json({ message: `Payroll run must be in 'approved' status before submitting ACH. Current status: "${run.status}".` });
-      }
-      if (!run.approvedAt) return res.status(400).json({ message: "Payroll run must be approved before submitting ACH" });
       if (run.lockedAt || run.isLocked) return res.status(400).json({ message: "Payroll run is locked" });
 
-      // ── Readiness gating ──────────────────────────────────────────────────
-      const items = await storage.getPayrollItems(run.id);
-      if (items.length === 0) {
-        return res.status(400).json({ message: "Cannot submit ACH: payroll run has no items" });
-      }
-      if (run.fundingAccountId) {
-        const fundingAccounts = await storage.getFundingAccounts(run.companyId);
-        const fundingAcct = fundingAccounts.find(a => a.id === run.fundingAccountId);
-        if (fundingAcct && (fundingAcct as Record<string, unknown>).active === false) {
-          return res.status(400).json({ message: "Funding account is inactive. Please select an active funding account." });
-        }
-        if (fundingAcct && (fundingAcct as Record<string, unknown>).allowForPayroll === false) {
-          return res.status(400).json({ message: "Funding account is not enabled for payroll. Please select a different account." });
-        }
-      }
-      // Hard fail if any worker is missing a payment method (required for ACH submission)
-      const missingPayMethod = items.filter(i => !i.paymentMethod);
-      if (missingPayMethod.length > 0) {
+      // ── Shared readiness gating: status, funding account, pay methods, items ─
+      const readiness = await evaluatePayrollRunReadiness(run);
+      if (!readiness.ready) {
+        const failed = Object.entries(readiness.checks).filter(([, c]) => !c.ok).map(([k, c]) => ({ check: k, message: c.message, detail: c.detail }));
         return res.status(400).json({
-          message: `Cannot submit ACH: ${missingPayMethod.length} worker(s) are missing a payment method. Please assign a payment method to every worker before submitting.`,
-          missingWorkerIds: missingPayMethod.map(i => i.workerId),
+          message: `Cannot submit ACH: ${failed.map(f => f.message).join("; ")}`,
+          failedChecks: failed,
         });
       }
+      const items = readiness.items;
       const prevStatus = run.status;
       const batchId = run.achBatchId || `ACH-${run.id.substring(0, 8).toUpperCase()}-${Date.now()}`;
 
@@ -3468,6 +3482,47 @@ export async function registerRoutes(
         }
       } catch (notifErr) {
         console.error("[PAYROLL] Notification error on submit-ach:", notifErr);
+      }
+
+      // Per-worker submitted notifications (in-app + best-effort email)
+      try {
+        const { sendGenericNotificationEmail } = await import("./notifications.js");
+        for (const item of items) {
+          const worker = await storage.getWorker(item.workerId);
+          if (!worker) continue;
+          const amount = `$${Number(item.netPay || 0).toFixed(2)}`;
+          const payDate = run.payDate || "your upcoming pay date";
+          try {
+            await storage.createNotification({
+              companyId: run.companyId,
+              userId: null,
+              workerId: worker.id,
+              customerId: null,
+              type: "payment_submitted",
+              title: `Payment of ${amount} submitted`,
+              message: `Your payment of ${amount} for pay date ${payDate} has been submitted and is being processed.`,
+              actionUrl: `/portal/paystubs`,
+              isRead: false,
+              readAt: null,
+            });
+          } catch (nErr) {
+            console.error("[PAYROLL] Worker submitted in-app notification error:", nErr);
+          }
+          if (worker.email) {
+            try {
+              await sendGenericNotificationEmail({
+                recipientName: `${worker.firstName || ""} ${worker.lastName || ""}`.trim() || "Worker",
+                email: worker.email,
+                title: `Payment submitted`,
+                body: `Your payment of ${amount} for pay date ${payDate} has been submitted and is being processed. You'll be notified again once it's confirmed.`,
+              });
+            } catch (eErr) {
+              console.error("[PAYROLL] Worker submitted email error:", eErr);
+            }
+          }
+        }
+      } catch (workerNotifErr) {
+        console.error("[PAYROLL] Worker submitted notification error:", workerNotifErr);
       }
 
       res.json(updated);

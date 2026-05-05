@@ -1875,8 +1875,8 @@ function PayrollRunCard({
                         </div>
                       )
                   )}
-                  {/* Void — for submitted/processing/failed/approved/processed runs */}
-                  {["submitted", "processing", "failed", "approved", "processed"].includes(run.status || "") && !isTerminal && (
+                  {/* Void — backend allows only submitted or failed runs */}
+                  {["submitted", "failed"].includes(run.status || "") && !isTerminal && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -1887,8 +1887,8 @@ function PayrollRunCard({
                       <Ban className="mr-2 h-4 w-4" />Void Run
                     </Button>
                   )}
-                  {/* Reverse — for paid/submitted/processing runs */}
-                  {["paid", "submitted", "processing"].includes(run.status || "") && !isTerminal && (
+                  {/* Reverse — backend allows only paid runs */}
+                  {run.status === "paid" && !isTerminal && (
                     <Button
                       size="sm"
                       variant="outline"
