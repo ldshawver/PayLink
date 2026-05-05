@@ -3383,6 +3383,12 @@ export async function registerRoutes(
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
 
+      // Tenant authorization: non-platform users may only submit runs in their own company
+      const submitUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(submitUser?.role) && submitUser?.companyId && run.companyId !== submitUser.companyId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
       if (run.lockedAt || run.isLocked) return res.status(400).json({ message: "Payroll run is locked" });
 
       // ── Shared readiness gating: status, funding account, pay methods, items ─
@@ -3548,15 +3554,30 @@ export async function registerRoutes(
       const { reason } = req.body || {};
       const prevStatus = run.status;
 
-      // Mark all payment records as voided
+      // Mark all payment records as voided + per-record audit entry
       try {
         const paymentRecords = await storage.getPayrollPaymentRecords(run.companyId, run.id);
         for (const pr of paymentRecords) {
           if (pr.status !== "voided" && pr.status !== "reversed") {
+            const prevPrStatus = pr.status;
             await storage.updatePayrollPaymentRecord(pr.id, {
               status: "voided",
               voidedAt: new Date(),
             });
+            try {
+              await storage.createPayrollPaymentAuditLog({
+                companyId: pr.companyId,
+                payrollRunId: pr.payrollRunId,
+                payrollPaymentRecordId: pr.id,
+                actorId: req.session.userId || null,
+                event: "voided",
+                previousStatus: prevPrStatus,
+                newStatus: "voided",
+                notes: reason || "Voided as part of run void",
+              });
+            } catch (auditErr) {
+              console.error("[PAYROLL] Per-record void audit error:", auditErr);
+            }
           }
         }
       } catch (prErr) {
@@ -3613,15 +3634,30 @@ export async function registerRoutes(
       const { reason } = req.body || {};
       const prevStatus = run.status;
 
-      // Mark payment records as reversed
+      // Mark payment records as reversed + per-record audit entry
       try {
         const paymentRecords = await storage.getPayrollPaymentRecords(run.companyId, run.id);
         for (const pr of paymentRecords) {
           if (pr.status !== "reversed" && pr.status !== "voided") {
+            const prevPrStatus = pr.status;
             await storage.updatePayrollPaymentRecord(pr.id, {
               status: "reversed",
               reversedAt: new Date(),
             });
+            try {
+              await storage.createPayrollPaymentAuditLog({
+                companyId: pr.companyId,
+                payrollRunId: pr.payrollRunId,
+                payrollPaymentRecordId: pr.id,
+                actorId: req.session.userId || null,
+                event: "reversed",
+                previousStatus: prevPrStatus,
+                newStatus: "reversed",
+                notes: reason || "Reversed as part of run reverse",
+              });
+            } catch (auditErr) {
+              console.error("[PAYROLL] Per-record reverse audit error:", auditErr);
+            }
           }
         }
       } catch (prErr) {

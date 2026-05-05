@@ -37,21 +37,20 @@ export class WebhookHandlers {
       console.log(`[TREASURY] FinancialAccount features updated: ${obj.id}`);
     }
 
-    if (
-      type === "treasury.outbound_payment.created" ||
-      type === "treasury.outbound_payment.posted" ||
-      type === "treasury.outbound_payment.failed" ||
-      type === "treasury.outbound_payment.returned" ||
-      type === "treasury.outbound_payment.canceled"
-    ) {
+    // Match ALL treasury.outbound_payment.* events (including update / processing variants).
+    // Stripe may emit progression through update-style events; we drive state from obj.status
+    // rather than the event name to avoid missing transitions.
+    if (type.startsWith("treasury.outbound_payment.")) {
       const stripeId: string = obj.id;
       const stripeStatus: string = obj.status;
+      console.log(`[TREASURY] Outbound payment event ${type} → status=${stripeStatus} id=${stripeId}`);
 
       let internalStatus = "pending";
       if (stripeStatus === "posted") internalStatus = "completed";
       else if (stripeStatus === "failed") internalStatus = "failed";
       else if (stripeStatus === "returned") internalStatus = "returned";
       else if (stripeStatus === "canceled") internalStatus = "canceled";
+      else if (stripeStatus === "processing") internalStatus = "processing";
 
       // Update treasury outbound payment record
       const existing = await storage.getTreasuryOutboundPaymentByStripeId(stripeId);
@@ -97,6 +96,14 @@ export class WebhookHandlers {
           } else if (stripeStatus === "processing") {
             newStatus = "processing";
             updateData.status = "processing";
+          } else if (stripeStatus === "pending") {
+            // Treat pending the same as submitted (no transition needed if already submitted)
+            if (paymentRecord.status === "submitted") {
+              // no-op
+            } else {
+              newStatus = "submitted";
+              updateData.status = "submitted";
+            }
           }
 
           if (Object.keys(updateData).length > 0) {
