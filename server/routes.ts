@@ -2969,6 +2969,7 @@ export async function registerRoutes(
       // The pre-allocation transaction may have set it higher (concurrent run); GREATEST is safe.
       await db.execute(sql`UPDATE companies SET next_check_number = GREATEST(next_check_number, ${checkNum}) WHERE id = ${run.companyId}`);
 
+      const prevProcessStatus = run.status;
       await storage.updatePayrollRun(run.id, {
         status: "processed",
         totalGross: totalGross.toFixed(2),
@@ -2979,6 +2980,21 @@ export async function registerRoutes(
         processedAt: new Date(),
         needsRecalculation: false,
       } as any);
+
+      // Audit log for the process transition (lifecycle requirement)
+      try {
+        await storage.createPayrollPaymentAuditLog({
+          companyId: run.companyId,
+          payrollRunId: run.id,
+          actorId: req.session.userId || null,
+          event: "processed",
+          previousStatus: prevProcessStatus,
+          newStatus: "processed",
+          notes: `Processed ${activeWorkers.length} worker(s); total net $${totalNet.toFixed(2)}`,
+        });
+      } catch (auditErr) {
+        console.error("[PAYROLL] Process transition audit error:", auditErr);
+      }
 
       // ── Auto-generate payroll summary ──────────────────────────────────────
       try {
@@ -15638,7 +15654,37 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         .innerJoin(payrollRuns, eq(payrollItems.payrollRunId, payrollRuns.id))
         .where(eq(payrollItems.workerId, user.workerId))
         .orderBy(payrollRuns.periodEnd);
-      res.json(rows.map(r => ({ ...r.item, run: r.run })));
+
+      // Attach per-item payment record (status, paidAt, failureReason) for worker visibility
+      const itemIds = rows.map(r => r.item.id);
+      let recordsByItem: Record<string, { status: string; paidAt: Date | null; failureReason: string | null; reconciledAt: Date | null }> = {};
+      if (itemIds.length > 0) {
+        try {
+          const allRecords = await Promise.all(rows.map(r => storage.getPayrollPaymentRecords(r.run.companyId, r.run.id)));
+          const flat = allRecords.flat();
+          for (const rec of flat) {
+            if (rec.payrollItemId && rec.workerId === user.workerId) {
+              recordsByItem[rec.payrollItemId] = {
+                status: rec.status,
+                paidAt: rec.paidAt ?? null,
+                failureReason: rec.failureReason ?? null,
+                reconciledAt: rec.reconciledAt ?? null,
+              };
+            }
+          }
+        } catch (recErr) {
+          console.error("[PAYSTUBS] Could not attach payment records:", recErr);
+        }
+      }
+
+      res.json(rows.map(r => ({
+        ...r.item,
+        run: r.run,
+        paymentStatus: recordsByItem[r.item.id]?.status || null,
+        paidAt: recordsByItem[r.item.id]?.paidAt || null,
+        failureReason: recordsByItem[r.item.id]?.failureReason || null,
+        reconciledAt: recordsByItem[r.item.id]?.reconciledAt || null,
+      })));
     } catch (e) { console.error(e); res.status(500).json({ message: "Failed to fetch paystubs" }); }
   });
 

@@ -500,7 +500,29 @@ type MyPaystub = {
   netPay: string | null;
   totalDeductions: string | null;
   run: { id: string; periodStart: string; periodEnd: string; status: string; companyId: string };
+  paymentStatus: string | null;
+  paidAt: string | null;
+  failureReason: string | null;
+  reconciledAt: string | null;
 };
+
+function PaymentStatusBadge({ paymentStatus, runStatus, paidAt, failureReason }: { paymentStatus: string | null; runStatus: string; paidAt: string | null; failureReason: string | null }) {
+  const status = paymentStatus || runStatus;
+  const variant: "default" | "secondary" | "destructive" | "outline" =
+    status === "paid" || status === "cleared" ? "default" :
+    status === "failed" || status === "reversed" ? "destructive" :
+    status === "voided" ? "outline" :
+    "secondary";
+  const label =
+    status === "cleared" ? "Paid & Reconciled" :
+    status === "paid" ? `Paid${paidAt ? ` ${new Date(paidAt).toLocaleDateString()}` : ""}` :
+    status === "failed" ? `Failed${failureReason ? `: ${failureReason}` : ""}` :
+    status === "reversed" ? "Reversed" :
+    status === "voided" ? "Voided" :
+    status === "submitted" || status === "processing" ? "Processing" :
+    status;
+  return <Badge variant={variant} data-testid={`badge-payment-status-${status}`}>{label}</Badge>;
+}
 
 function PaystubsTab() {
   const { data: paystubs, isLoading } = useQuery<MyPaystub[]>({
@@ -540,9 +562,12 @@ function PaystubsTab() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={stub.run.status === "processed" ? "default" : "secondary"}>
-                        {stub.run.status}
-                      </Badge>
+                      <PaymentStatusBadge
+                        paymentStatus={stub.paymentStatus}
+                        runStatus={stub.run.status}
+                        paidAt={stub.paidAt}
+                        failureReason={stub.failureReason}
+                      />
                     </TableCell>
                     <TableCell className="text-right">{parseFloat(stub.regularHours || "0").toFixed(2)}</TableCell>
                     <TableCell className="text-right">{parseFloat(stub.overtimeHours || "0").toFixed(2)}</TableCell>
