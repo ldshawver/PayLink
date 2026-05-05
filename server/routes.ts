@@ -3276,37 +3276,120 @@ export async function registerRoutes(
     }
   });
 
+  // ── Payroll Run Readiness Check ────────────────────────────────────────────
+  app.get("/api/payroll-runs/:id/readiness", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(user?.role) && user?.companyId && run.companyId !== user.companyId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const items = await storage.getPayrollItems(run.id);
+      const checks: Record<string, { ok: boolean; message: string; detail?: unknown }> = {};
+
+      // 1. Status check
+      checks.status = {
+        ok: run.status === "approved",
+        message: run.status === "approved"
+          ? "Run is approved and ready to submit"
+          : `Run must be in 'approved' status (current: '${run.status}')`,
+      };
+
+      // 2. Funding account check
+      if (run.fundingAccountId) {
+        const fundingAccounts = await storage.getFundingAccounts(run.companyId);
+        const acct = fundingAccounts.find(a => a.id === run.fundingAccountId);
+        const isActive = acct && (acct as Record<string, unknown>).active !== false;
+        const allowsPayroll = acct && (acct as Record<string, unknown>).allowForPayroll !== false;
+        const balance = acct ? Number((acct as Record<string, unknown>).currentBalance ?? (acct as Record<string, unknown>).openingBalance ?? 0) : 0;
+        const totalNet = items.reduce((s, i) => s + parseFloat(i.netPay || "0"), 0);
+        checks.fundingAccount = {
+          ok: !!(acct && isActive && allowsPayroll && balance >= totalNet),
+          message: !acct
+            ? "Funding account not found"
+            : !isActive
+            ? "Funding account is inactive"
+            : !allowsPayroll
+            ? "Funding account is not enabled for payroll"
+            : balance < totalNet
+            ? `Insufficient balance: $${balance.toFixed(2)} available, $${totalNet.toFixed(2)} required`
+            : "Funding account OK",
+          detail: { balance, required: totalNet },
+        };
+      } else {
+        checks.fundingAccount = { ok: false, message: "No funding account linked" };
+      }
+
+      // 3. Worker pay methods
+      const missingPayMethod = items.filter(i => !i.paymentMethod);
+      checks.workerPayMethods = {
+        ok: missingPayMethod.length === 0,
+        message: missingPayMethod.length === 0
+          ? "All workers have a payment method"
+          : `${missingPayMethod.length} worker(s) missing payment method`,
+        detail: { missing: missingPayMethod.map(i => i.workerId) },
+      };
+
+      // 4. Items check
+      checks.items = {
+        ok: items.length > 0,
+        message: items.length > 0 ? `${items.length} payroll items ready` : "No payroll items found",
+      };
+
+      const ready = Object.values(checks).every(c => c.ok);
+      res.json({ ready, checks });
+    } catch (error) {
+      console.error("Readiness check error:", error);
+      res.status(500).json({ message: "Failed to check readiness" });
+    }
+  });
+
   // ── Submit ACH Batch ───────────────────────────────────────────────────────
   app.post("/api/payroll-runs/:id/submit-ach", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
 
-      // Accept approved, processed (backward compat), submitted (idempotent re-submit)
-      const allowedStatuses = ["processed", "approved", "submitted", "paid"];
-      if (!allowedStatuses.includes(run.status || "")) {
-        return res.status(400).json({ message: "Payroll run must be approved before submitting ACH" });
+      // State machine: only approved runs can be submitted
+      if (run.status !== "approved") {
+        return res.status(400).json({ message: `Payroll run must be in 'approved' status before submitting ACH. Current status: "${run.status}".` });
       }
       if (!run.approvedAt) return res.status(400).json({ message: "Payroll run must be approved before submitting ACH" });
       if (run.lockedAt || run.isLocked) return res.status(400).json({ message: "Payroll run is locked" });
 
+      // ── Readiness gating ──────────────────────────────────────────────────
+      const items = await storage.getPayrollItems(run.id);
+      if (items.length === 0) {
+        return res.status(400).json({ message: "Cannot submit ACH: payroll run has no items" });
+      }
+      if (run.fundingAccountId) {
+        const fundingAccounts = await storage.getFundingAccounts(run.companyId);
+        const fundingAcct = fundingAccounts.find(a => a.id === run.fundingAccountId);
+        if (fundingAcct && (fundingAcct as Record<string, unknown>).active === false) {
+          return res.status(400).json({ message: "Funding account is inactive. Please select an active funding account." });
+        }
+        if (fundingAcct && (fundingAcct as Record<string, unknown>).allowForPayroll === false) {
+          return res.status(400).json({ message: "Funding account is not enabled for payroll. Please select a different account." });
+        }
+      }
+      // Warn if any worker has no pay method — still allow submission (pay method defaults to check)
       const prevStatus = run.status;
       const batchId = run.achBatchId || `ACH-${run.id.substring(0, 8).toUpperCase()}-${Date.now()}`;
 
       // Create ACH batch record if it doesn't exist
       const existingBatch = await storage.getAchBatch(run.id);
       if (!existingBatch) {
-        const items = await storage.getPayrollItems(run.id);
         const totalAmount = items.reduce((s, i) => s + parseFloat(i.netPay || "0"), 0);
         await storage.createAchBatch({
           payrollRunId: run.id,
           companyId: run.companyId,
           batchId,
           totalAmount: String(totalAmount),
-          transactionCount: items.length,
+          entryCount: items.length,
           status: "submitted",
           submittedAt: new Date(),
-        } as any);
+        });
       }
 
       const updated = await storage.updatePayrollRun(run.id, {
@@ -3318,7 +3401,6 @@ export async function registerRoutes(
 
       // ── Auto-create payment records (idempotent) ───────────────────────────
       try {
-        const items = await storage.getPayrollItems(run.id);
         const existingRecords = await storage.getPayrollPaymentRecords(run.companyId, run.id);
         const existingWorkerIds = new Set(existingRecords.map(r => r.workerId));
         for (const item of items) {
@@ -3338,7 +3420,7 @@ export async function registerRoutes(
             status: "submitted",
             taxYear: run.payDate ? new Date(run.payDate + "T00:00:00").getFullYear() : new Date().getFullYear(),
             initiatedAt: new Date(),
-          } as any);
+          });
         }
       } catch (prErr) {
         console.error("[PAYROLL] Auto-create payment records error:", prErr);
@@ -3397,10 +3479,9 @@ export async function registerRoutes(
       if (!isPlatformUser(voidUser?.role) && voidUser?.companyId && run.companyId !== voidUser.companyId) {
         return res.status(403).json({ message: "Forbidden" });
       }
-      // Can only void submitted or failed runs
-      const voidableStatuses = ["submitted", "processing", "failed", "approved", "processed"];
-      if (!voidableStatuses.includes(run.status || "")) {
-        return res.status(400).json({ message: `Cannot void a payroll run with status "${run.status}". Only submitted, processing, or failed runs can be voided.` });
+      // State machine: only submitted or failed runs can be voided
+      if (run.status !== "submitted" && run.status !== "failed") {
+        return res.status(400).json({ message: `Cannot void a payroll run with status "${run.status}". Only submitted or failed runs can be voided.` });
       }
       const { reason } = req.body || {};
       const prevStatus = run.status;
@@ -3413,7 +3494,7 @@ export async function registerRoutes(
             await storage.updatePayrollPaymentRecord(pr.id, {
               status: "voided",
               voidedAt: new Date(),
-            } as any);
+            });
           }
         }
       } catch (prErr) {
@@ -3463,9 +3544,8 @@ export async function registerRoutes(
       if (!isPlatformUser(revUser?.role) && revUser?.companyId && run.companyId !== revUser.companyId) {
         return res.status(403).json({ message: "Forbidden" });
       }
-      // Can only reverse paid runs
-      const reversibleStatuses = ["paid", "submitted", "processing"];
-      if (!reversibleStatuses.includes(run.status || "")) {
+      // State machine: only paid runs can be reversed
+      if (run.status !== "paid") {
         return res.status(400).json({ message: `Cannot reverse a payroll run with status "${run.status}". Only paid runs can be reversed.` });
       }
       const { reason } = req.body || {};
@@ -3479,7 +3559,7 @@ export async function registerRoutes(
             await storage.updatePayrollPaymentRecord(pr.id, {
               status: "reversed",
               reversedAt: new Date(),
-            } as any);
+            });
           }
         }
       } catch (prErr) {
@@ -3546,7 +3626,7 @@ export async function registerRoutes(
       const updated = await storage.updatePayrollPaymentRecord(record.id, {
         reconciledAt: new Date(),
         status: "cleared",
-      } as any);
+      });
 
       await storage.createPayrollPaymentAuditLog({
         companyId: record.companyId,
@@ -3563,6 +3643,68 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Reconcile error:", error);
       res.status(500).json({ message: "Failed to reconcile payment record" });
+    }
+  });
+
+  // ── Run-level Reconcile ────────────────────────────────────────────────────
+  app.post("/api/payroll-runs/:id/reconcile", requireAuth, requireRole("admin"), requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(user?.role) && user?.companyId && run.companyId !== user.companyId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const { recordIds, notes } = req.body || {};
+      const allRecords = await storage.getPayrollPaymentRecords(run.companyId, run.id);
+      const toReconcile = recordIds
+        ? allRecords.filter(r => recordIds.includes(r.id))
+        : allRecords.filter(r => r.status === "paid" || r.status === "cleared");
+      let reconciledCount = 0;
+      for (const record of toReconcile) {
+        if (record.reconciledAt) continue;
+        await storage.updatePayrollPaymentRecord(record.id, {
+          reconciledAt: new Date(),
+          status: "cleared",
+        });
+        await storage.createPayrollPaymentAuditLog({
+          companyId: record.companyId,
+          payrollRunId: record.payrollRunId,
+          payrollPaymentRecordId: record.id,
+          actorId: req.session.userId || null,
+          event: "reconciled",
+          previousStatus: record.status,
+          newStatus: "cleared",
+          notes: notes || "Bulk reconciled by admin",
+        });
+        reconciledCount++;
+      }
+      res.json({ reconciled: reconciledCount, total: toReconcile.length });
+    } catch (error) {
+      console.error("Run-level reconcile error:", error);
+      res.status(500).json({ message: "Failed to reconcile payroll run" });
+    }
+  });
+
+  // ── Reconciliation Summary ─────────────────────────────────────────────────
+  app.get("/api/payroll-runs/:id/reconciliation-summary", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(user?.role) && user?.companyId && run.companyId !== user.companyId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const records = await storage.getPayrollPaymentRecords(run.companyId, run.id);
+      const total = records.length;
+      const reconciled = records.filter(r => r.reconciledAt).length;
+      const pending = records.filter(r => !r.reconciledAt && r.status !== "voided" && r.status !== "reversed").length;
+      const failed = records.filter(r => r.status === "failed").length;
+      const totalAmount = records.reduce((s, r) => s + parseFloat(r.netPayAmount || "0"), 0);
+      const reconciledAmount = records.filter(r => r.reconciledAt).reduce((s, r) => s + parseFloat(r.netPayAmount || "0"), 0);
+      res.json({ total, reconciled, pending, failed, totalAmount, reconciledAmount });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get reconciliation summary" });
     }
   });
 
@@ -3618,7 +3760,7 @@ export async function registerRoutes(
       const updated = await storage.updatePayrollPaymentRecord(record.id, {
         status: "paid",
         paidAt: new Date(),
-      } as any);
+      });
 
       await storage.createPayrollPaymentAuditLog({
         companyId: record.companyId,
