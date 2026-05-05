@@ -531,7 +531,7 @@ async function generateProposalPdf(proposalId: string, proposal: any, actorUserI
       doc.setFont("helvetica", "bold");
       doc.text("Line Items", 14, y);
       y += 4;
-      autoTable(doc, {
+      (autoTable as any)(doc, {
         startY: y,
         head: [["Description", "Qty", "Unit", "Unit Price", "Total"]],
         body: lineItems.map((li: any) => [
@@ -542,10 +542,10 @@ async function generateProposalPdf(proposalId: string, proposal: any, actorUserI
           `$${parseFloat(li.line_total || 0).toFixed(2)}`,
         ]),
         styles: { fontSize: 9 },
-        headStyles: { fillColor: [13, 148, 136] as any, textColor: [255, 255, 255] as any },
+        headStyles: { fillColor: [13, 148, 136], textColor: [255, 255, 255], fontStyle: "bold" },
         margin: { left: 14, right: 14 },
       });
-      y = (doc as any).lastAutoTable.finalY + 8;
+      y = (doc as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
     }
 
     // Totals
@@ -654,7 +654,7 @@ async function generateInvoicePdf(invoiceId: string, invoice: any, actorUserId: 
       doc.setFont("helvetica", "bold");
       doc.text("Line Items", 14, y);
       y += 4;
-      autoTable(doc, {
+      (autoTable as any)(doc, {
         startY: y,
         head: [["Description", "Qty", "Unit Price", "Total"]],
         body: lineItems.map((li: any) => [
@@ -664,10 +664,10 @@ async function generateInvoicePdf(invoiceId: string, invoice: any, actorUserId: 
           `$${parseFloat(li.line_total || li.lineTotal || li.amount || 0).toFixed(2)}`,
         ]),
         styles: { fontSize: 9 },
-        headStyles: { fillColor: [13, 148, 136] as any, textColor: [255, 255, 255] as any },
+        headStyles: { fillColor: [13, 148, 136], textColor: [255, 255, 255], fontStyle: "bold" },
         margin: { left: 14, right: 14 },
       });
-      y = (doc as any).lastAutoTable.finalY + 8;
+      y = (doc as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
     }
 
     // Amount

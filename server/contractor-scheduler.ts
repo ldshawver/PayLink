@@ -179,9 +179,9 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
         `);
         for (const c of renewalContracts.rows as Array<{ id: string; contract_number: string; title: string; contractor_id: string; end_date: string }>) {
           const existing = await db.execute(sql`
-            SELECT id FROM contractor_reminders
-            WHERE entity_type = 'contract' AND entity_id = ${c.id} AND reminder_type = 'renewal'
-            AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
+            SELECT id FROM contractor_reminder_logs
+            WHERE entity_type = 'contract' AND entity_id = ${c.id} AND template_key = 'renewal'
+            AND sent_at > NOW() - INTERVAL '24 hours'
           `);
           if (!existing.rows.length) {
             await db.execute(sql`
@@ -191,16 +191,32 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
                 ${"Contract ends on " + c.end_date + ". Consider renewing or initiating renegotiation."},
                 ${now.toISOString()}, 'in_app', 'pending', NOW())
             `);
+            const renewalTitle = "Contract Renewal: " + (c.title || c.contract_number);
+            const renewalBody = "Contract ends on " + c.end_date + ". Review renewal or renegotiation options.";
+            const renewalUrl = "/app/contractor-hub?section=contracts&id=" + c.id;
+            // Notify contractor and admins separately
             await createContractorNotification({
-              companyId: cid,
               workerId: c.contractor_id,
               notificationType: "contract_renewal_warning",
-              title: "Contract Renewal: " + (c.title || c.contract_number),
-              body: "Contract ends on " + c.end_date + ". Review renewal or renegotiation options.",
+              title: renewalTitle,
+              body: renewalBody,
               entityType: "contract",
               entityId: c.id,
-              actionUrl: "/app/contractor-hub?section=contracts&id=" + c.id,
+              actionUrl: renewalUrl,
             });
+            await createContractorNotification({
+              companyId: cid,
+              notificationType: "contract_renewal_warning",
+              title: renewalTitle,
+              body: renewalBody,
+              entityType: "contract",
+              entityId: c.id,
+              actionUrl: renewalUrl,
+            });
+            await db.execute(sql`
+              INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status)
+              VALUES ('contract', ${c.id}, 'in_app', ${c.contractor_id}, 'renewal', ${renewalTitle}, ${renewalBody}, 'sent')
+            `);
             created++;
           }
         }
@@ -214,9 +230,9 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
         `);
         for (const c of renegotiationContracts.rows as Array<{ id: string; contract_number: string; title: string; contractor_id: string }>) {
           const existing = await db.execute(sql`
-            SELECT id FROM contractor_reminders
-            WHERE entity_type = 'contract' AND entity_id = ${c.id} AND reminder_type = 'renegotiation'
-            AND (status = 'pending' OR (sent_at IS NOT NULL AND sent_at > NOW() - INTERVAL '24 hours'))
+            SELECT id FROM contractor_reminder_logs
+            WHERE entity_type = 'contract' AND entity_id = ${c.id} AND template_key = 'renegotiation'
+            AND sent_at > NOW() - INTERVAL '24 hours'
           `);
           if (!existing.rows.length) {
             await db.execute(sql`
@@ -226,15 +242,32 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
                 ${"This contract has been in renegotiation for more than " + renegotiationWarningDays + " days without an update."},
                 ${now.toISOString()}, 'in_app', 'pending', NOW())
             `);
+            const renegTitle = "Renegotiation Follow-up: " + (c.title || c.contract_number);
+            const renegBody = "This contract has been in renegotiation for more than " + renegotiationWarningDays + " days. Please take action.";
+            const renegUrl = "/app/contractor-hub?section=contracts&id=" + c.id;
+            // Notify contractor and admins separately
+            await createContractorNotification({
+              workerId: c.contractor_id,
+              notificationType: "contract_renegotiation_reminder",
+              title: renegTitle,
+              body: renegBody,
+              entityType: "contract",
+              entityId: c.id,
+              actionUrl: renegUrl,
+            });
             await createContractorNotification({
               companyId: cid,
               notificationType: "contract_renegotiation_reminder",
-              title: "Renegotiation Follow-up: " + (c.title || c.contract_number),
-              body: "This contract has been in renegotiation for more than " + renegotiationWarningDays + " days. Please take action.",
+              title: renegTitle,
+              body: renegBody,
               entityType: "contract",
               entityId: c.id,
-              actionUrl: "/app/contractor-hub?section=contracts&id=" + c.id,
+              actionUrl: renegUrl,
             });
+            await db.execute(sql`
+              INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status)
+              VALUES ('contract', ${c.id}, 'in_app', ${c.contractor_id}, 'renegotiation', ${renegTitle}, ${renegBody}, 'sent')
+            `);
             created++;
           }
         }
@@ -250,21 +283,37 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
             UPDATE contractor_contracts SET status = 'expired', updated_at = NOW() WHERE id = ${c.id}
           `);
           const existing = await db.execute(sql`
-            SELECT id FROM contractor_reminders
-            WHERE entity_type = 'contract' AND entity_id = ${c.id} AND reminder_type = 'expiry'
+            SELECT id FROM contractor_reminder_logs
+            WHERE entity_type = 'contract' AND entity_id = ${c.id} AND template_key = 'expired'
             AND sent_at > NOW() - INTERVAL '24 hours'
           `);
           if (!existing.rows.length) {
+            const expiredTitle = "Contract Expired: " + (c.title || c.contract_number);
+            const expiredBody = "This contract has expired. Please review and initiate renewal or close out.";
+            const expiredUrl = "/app/contractor-hub?section=contracts&id=" + c.id;
+            // Notify contractor and admins separately
             await createContractorNotification({
-              companyId: cid,
               workerId: c.contractor_id,
               notificationType: "contract_expired",
-              title: "Contract Expired: " + (c.title || c.contract_number),
-              body: "This contract has expired. Please review and initiate renewal or close out.",
+              title: expiredTitle,
+              body: expiredBody,
               entityType: "contract",
               entityId: c.id,
-              actionUrl: "/app/contractor-hub?section=contracts&id=" + c.id,
+              actionUrl: expiredUrl,
             });
+            await createContractorNotification({
+              companyId: cid,
+              notificationType: "contract_expired",
+              title: expiredTitle,
+              body: expiredBody,
+              entityType: "contract",
+              entityId: c.id,
+              actionUrl: expiredUrl,
+            });
+            await db.execute(sql`
+              INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status)
+              VALUES ('contract', ${c.id}, 'in_app', ${c.contractor_id}, 'expired', ${expiredTitle}, ${expiredBody}, 'sent')
+            `);
             created++;
           }
         }
