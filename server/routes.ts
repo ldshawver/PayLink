@@ -465,6 +465,7 @@ interface ProposalRow {
   status?: string | null;
   version?: number | null;
   submitted_at?: string | null;
+  reviewed_at?: string | null;
   scope_of_work?: string | null;
   description?: string | null;
   assumptions?: string | null;
@@ -473,7 +474,10 @@ interface ProposalRow {
   tax_amount?: string | null;
   discount_amount?: string | null;
   total?: string | null;
-  reviewed_at?: string | null;
+  // Contractor and company identity — populated by generateProposalPdf from DB joins
+  contractor_name?: string | null;
+  contractor_email?: string | null;
+  company_name?: string | null;
 }
 interface InvoiceRow {
   company_id?: string | null;
@@ -506,10 +510,33 @@ async function generateProposalPdf(proposalId: string, proposal: ProposalRow, ac
     const lineItemsRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${proposalId} ORDER BY sort_order ASC`);
     const lineItems = lineItemsRes.rows as LineItemRow[];
 
+    // Enrich with contractor and company identity from DB
+    let contractorName = proposal.contractor_name || null;
+    let contractorEmail = proposal.contractor_email || null;
+    let companyName = proposal.company_name || null;
+    if (proposal.contractor_id) {
+      const workerRes = await db.execute(sql`
+        SELECT first_name || ' ' || last_name AS full_name,
+               COALESCE(email, work_email) AS email
+        FROM workers WHERE id = ${proposal.contractor_id} LIMIT 1
+      `);
+      if (workerRes.rows[0]) {
+        const wr = workerRes.rows[0] as { full_name: string; email: string | null };
+        contractorName = contractorName || wr.full_name || null;
+        contractorEmail = contractorEmail || wr.email || null;
+      }
+    }
+    if (proposal.company_id) {
+      const coRes = await db.execute(sql`SELECT name FROM companies WHERE id = ${proposal.company_id} LIMIT 1`);
+      if (coRes.rows[0]) {
+        companyName = companyName || (coRes.rows[0] as { name: string }).name || null;
+      }
+    }
+
     const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const pageWidth = doc.internal.pageSize.getWidth();
 
-    // Header gradient blocks
+    // Header gradient blocks with company branding
     doc.setFillColor(13, 148, 136);
     doc.rect(0, 0, pageWidth, 28, "F");
     doc.setFillColor(37, 99, 235);
@@ -517,7 +544,7 @@ async function generateProposalPdf(proposalId: string, proposal: ProposalRow, ac
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(18);
     doc.setFont("helvetica", "bold");
-    doc.text("PayLink", 14, 12);
+    doc.text(companyName || "PayLink", 14, 12);
     doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
     doc.text("Contractor Proposal", 14, 20);
@@ -527,6 +554,17 @@ async function generateProposalPdf(proposalId: string, proposal: ProposalRow, ac
 
     doc.setTextColor(0, 0, 0);
     let y = 38;
+
+    // Contractor identity block
+    if (contractorName || contractorEmail) {
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.text("Submitted by:", 14, y);
+      doc.setFont("helvetica", "normal");
+      const identity = [contractorName, contractorEmail].filter(Boolean).join(" — ");
+      doc.text(identity, 14 + doc.getTextWidth("Submitted by: "), y);
+      y += 7;
+    }
 
     // Title & metadata
     doc.setFontSize(14);

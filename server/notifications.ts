@@ -142,6 +142,13 @@ async function getTwilioCredentials(): Promise<{
 }
 
 async function sendViaTwilio(to: string, body: string): Promise<void> {
+  // Central SMS safety enforcement: no SMS may carry direct document download URLs.
+  // This guard covers every SMS send path (contract events, invoice reminders,
+  // shift marketplace, generic notifications) since all route through this function.
+  if (body.includes("/uploads/") || /\.(pdf|docx?|xlsx?)(\?|$)/i.test(body)) {
+    console.error("[SMS][BLOCKED] Message body contains a direct document URL. Only in-app URLs are permitted.", body.slice(0, 120));
+    throw new Error("SMS blocked: message body contains a direct document download URL");
+  }
   const creds = await getTwilioCredentials();
   if (!creds) throw new Error("Twilio not configured");
   const twilio = (await import("twilio")).default;
