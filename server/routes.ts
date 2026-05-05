@@ -457,13 +457,53 @@ function periodsPerYearFromSchedule(type: string): number {
   return 26; // biweekly default
 }
 
+interface ProposalRow {
+  company_id?: string | null;
+  contractor_id?: string | null;
+  proposal_number?: string | null;
+  title?: string | null;
+  status?: string | null;
+  version?: number | null;
+  submitted_at?: string | null;
+  scope_of_work?: string | null;
+  description?: string | null;
+  assumptions?: string | null;
+  subtotal?: string | null;
+  amount?: string | null;
+  tax_amount?: string | null;
+  discount_amount?: string | null;
+  total?: string | null;
+  reviewed_at?: string | null;
+}
+interface InvoiceRow {
+  company_id?: string | null;
+  contractor_id?: string | null;
+  invoice_number?: string | null;
+  description?: string | null;
+  invoice_date?: string | null;
+  due_date?: string | null;
+  status?: string | null;
+  amount?: string | null;
+  line_items?: string | Record<string, unknown>[] | null;
+}
+interface LineItemRow {
+  name?: string | null;
+  quantity?: number | null;
+  unit?: string | null;
+  unit_price?: string | null;
+  line_total?: string | null;
+  description?: string | null;
+  unitPrice?: string | null;
+  lineTotal?: string | null;
+}
+
 // Helper: generate a PDF for an approved contractor proposal and store in DMS
-async function generateProposalPdf(proposalId: string, proposal: any, actorUserId: string): Promise<string | null> {
+async function generateProposalPdf(proposalId: string, proposal: ProposalRow, actorUserId: string): Promise<string | null> {
   try {
     const { jsPDF } = await import("jspdf");
-    const autoTable = (await import("jspdf-autotable")).default;
+    const { default: autoTable } = await import("jspdf-autotable");
     const lineItemsRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${proposalId} ORDER BY sort_order ASC`);
-    const lineItems = lineItemsRes.rows as any[];
+    const lineItems = lineItemsRes.rows as LineItemRow[];
 
     const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -531,28 +571,30 @@ async function generateProposalPdf(proposalId: string, proposal: any, actorUserI
       doc.setFont("helvetica", "bold");
       doc.text("Line Items", 14, y);
       y += 4;
-      (autoTable as any)(doc, {
+      const teal: [number, number, number] = [13, 148, 136];
+      const white: [number, number, number] = [255, 255, 255];
+      autoTable(doc, {
         startY: y,
         head: [["Description", "Qty", "Unit", "Unit Price", "Total"]],
-        body: lineItems.map((li: any) => [
+        body: lineItems.map((li) => [
           li.name || "",
           String(li.quantity || 1),
           li.unit || "",
-          `$${parseFloat(li.unit_price || 0).toFixed(2)}`,
-          `$${parseFloat(li.line_total || 0).toFixed(2)}`,
+          `$${parseFloat(li.unit_price || "0").toFixed(2)}`,
+          `$${parseFloat(li.line_total || "0").toFixed(2)}`,
         ]),
         styles: { fontSize: 9 },
-        headStyles: { fillColor: [13, 148, 136], textColor: [255, 255, 255], fontStyle: "bold" },
+        headStyles: { fillColor: teal, textColor: white, fontStyle: "bold" },
         margin: { left: 14, right: 14 },
       });
-      y = (doc as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
+      y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
     }
 
     // Totals
-    const subtotal = parseFloat(proposal.subtotal || proposal.amount || 0);
-    const taxAmt = parseFloat(proposal.tax_amount || 0);
-    const discount = parseFloat(proposal.discount_amount || 0);
-    const total = parseFloat(proposal.total || proposal.amount || 0);
+    const subtotal = parseFloat(proposal.subtotal || proposal.amount || "0");
+    const taxAmt = parseFloat(proposal.tax_amount || "0");
+    const discount = parseFloat(proposal.discount_amount || "0");
+    const total = parseFloat(proposal.total || proposal.amount || "0");
     doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
     if (subtotal > 0) { doc.text(`Subtotal: $${subtotal.toFixed(2)}`, pageWidth - 14, y, { align: "right" }); y += 6; }
@@ -592,7 +634,7 @@ async function generateProposalPdf(proposalId: string, proposal: any, actorUserI
         ${(proposal.title || proposal.proposal_number || "Proposal") + " — Approved PDF"},
         ${"Approved proposal PDF for " + (proposal.proposal_number || proposalId.slice(0, 8))},
         ${"/uploads/" + fileName}, ${fileName}, 'document', ${fileSize}, 'application/pdf',
-        'contractor_proposal', ${proposalId}, ${actorUserId})
+        'proposal', ${proposalId}, ${actorUserId})
     `);
 
     return "/uploads/" + fileName;
@@ -603,10 +645,10 @@ async function generateProposalPdf(proposalId: string, proposal: any, actorUserI
 }
 
 // Helper: generate a PDF for a contractor invoice and store in DMS
-async function generateInvoicePdf(invoiceId: string, invoice: any, actorUserId: string): Promise<string | null> {
+async function generateInvoicePdf(invoiceId: string, invoice: InvoiceRow, actorUserId: string): Promise<string | null> {
   try {
     const { jsPDF } = await import("jspdf");
-    const autoTable = (await import("jspdf-autotable")).default;
+    const { default: autoTable } = await import("jspdf-autotable");
 
     const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -654,24 +696,27 @@ async function generateInvoicePdf(invoiceId: string, invoice: any, actorUserId: 
       doc.setFont("helvetica", "bold");
       doc.text("Line Items", 14, y);
       y += 4;
-      (autoTable as any)(doc, {
+      const invTeal: [number, number, number] = [13, 148, 136];
+      const invWhite: [number, number, number] = [255, 255, 255];
+      const invItems = lineItems as LineItemRow[];
+      autoTable(doc, {
         startY: y,
         head: [["Description", "Qty", "Unit Price", "Total"]],
-        body: lineItems.map((li: any) => [
+        body: invItems.map((li) => [
           li.name || li.description || "",
           String(li.quantity || 1),
-          `$${parseFloat(li.unit_price || li.unitPrice || 0).toFixed(2)}`,
-          `$${parseFloat(li.line_total || li.lineTotal || li.amount || 0).toFixed(2)}`,
+          `$${parseFloat(li.unit_price || li.unitPrice || "0").toFixed(2)}`,
+          `$${parseFloat(li.line_total || li.lineTotal || "0").toFixed(2)}`,
         ]),
         styles: { fontSize: 9 },
-        headStyles: { fillColor: [13, 148, 136], textColor: [255, 255, 255], fontStyle: "bold" },
+        headStyles: { fillColor: invTeal, textColor: invWhite, fontStyle: "bold" },
         margin: { left: 14, right: 14 },
       });
-      y = (doc as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
+      y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
     }
 
     // Amount
-    const amount = parseFloat(invoice.amount || 0);
+    const amount = parseFloat(invoice.amount || "0");
     doc.setFontSize(12);
     doc.setFont("helvetica", "bold");
     doc.text(`Amount Due: $${amount.toFixed(2)}`, pageWidth - 14, y, { align: "right" });
@@ -704,7 +749,7 @@ async function generateInvoicePdf(invoiceId: string, invoice: any, actorUserId: 
         ${`Invoice #${invoice.invoice_number || invoiceId.slice(0, 8)} — PDF`},
         ${"Invoice PDF for " + (invoice.invoice_number || invoiceId.slice(0, 8))},
         ${"/uploads/" + fileName}, ${fileName}, 'document', ${fileSize}, 'application/pdf',
-        'contractor_invoice', ${invoiceId}, ${actorUserId})
+        'invoice', ${invoiceId}, ${actorUserId})
     `);
 
     return "/uploads/" + fileName;
@@ -11031,7 +11076,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (isAdmin && !isPlatform && user?.companyId && prop.company_id !== user.companyId) return res.status(403).json({ message: "Access denied: proposal belongs to another company" });
 
       // Check if a stored PDF already exists in DMS
-      const existingPdf = await db.execute(sql`SELECT file_path, file_name FROM dam_documents WHERE linked_entity_type = 'contractor_proposal' AND linked_entity_id = ${req.params.id} AND mime_type = 'application/pdf' ORDER BY created_at DESC LIMIT 1`);
+      const existingPdf = await db.execute(sql`SELECT file_path, file_name FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${req.params.id} AND mime_type = 'application/pdf' ORDER BY created_at DESC LIMIT 1`);
       let filePath: string | null = null;
       if (existingPdf.rows[0]) {
         filePath = (existingPdf.rows[0] as any).file_path;

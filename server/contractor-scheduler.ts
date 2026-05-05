@@ -174,8 +174,7 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
         const renewalContracts = await db.execute(sql`
           SELECT id, contract_number, title, contractor_id, end_date FROM contractor_contracts
           WHERE company_id = ${cid} AND status IN ('active','fully_signed') AND end_date IS NOT NULL
-          AND end_date::date BETWEEN CURRENT_DATE + (${contractExpiryWarningDays} * INTERVAL '1 day')::interval
-                                 AND CURRENT_DATE + (${renewalWarningDays} * INTERVAL '1 day')::interval
+          AND end_date::date BETWEEN CURRENT_DATE AND CURRENT_DATE + (${renewalWarningDays} * INTERVAL '1 day')::interval
         `);
         for (const c of renewalContracts.rows as Array<{ id: string; contract_number: string; title: string; contractor_id: string; end_date: string }>) {
           const existing = await db.execute(sql`

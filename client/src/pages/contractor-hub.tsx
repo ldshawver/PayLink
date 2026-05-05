@@ -3908,7 +3908,7 @@ function DocumentsSection() {
     queryKey: ["/api/dam-documents", "contractor-pdfs"],
     queryFn: async () => { const r = await fetch("/api/dam-documents", { credentials: "include" }); return r.ok ? r.json() : []; },
     select: (rows: any[]) => rows.filter(d =>
-      ["contractor_proposal","contractor_invoice","contractor_contract"].includes(d.linked_entity_type || "") &&
+      ["proposal","invoice","contract","contractor_contract"].includes(d.linked_entity_type || "") &&
       d.mime_type === "application/pdf"
     ),
   });

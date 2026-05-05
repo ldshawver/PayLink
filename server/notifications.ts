@@ -424,6 +424,11 @@ export async function sendContractEventEmail(payload: ContractEventPayload): Pro
 
 export async function sendContractEventSms(payload: ContractEventPayload): Promise<{ sent: boolean; error?: string }> {
   if (!payload.phone) return { sent: false, error: "No phone number" };
+  // Safety: SMS must never contain direct document download paths — only in-app URLs are permitted
+  if (payload.actionUrl && (payload.actionUrl.includes("/uploads/") || payload.actionUrl.match(/\.(pdf|docx?|xlsx?)(\?|$)/i))) {
+    console.error("[SMS] Blocked: actionUrl contains a direct document download path. Only in-app review links may be sent via SMS.", payload.actionUrl);
+    return { sent: false, error: "SMS blocked: direct document URLs are not permitted in SMS" };
+  }
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const fromNumber = process.env.TWILIO_PHONE_NUMBER;
