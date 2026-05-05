@@ -229,6 +229,8 @@ import {
   type PayrollItemTax, type InsertPayrollItemTax,
   type PayrollTaxSnapshot, type InsertPayrollTaxSnapshot,
   type PayrollOverride, type InsertPayrollOverride,
+  payrollPaymentAuditLogs,
+  type PayrollPaymentAuditLog, type InsertPayrollPaymentAuditLog,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -917,6 +919,10 @@ export interface IStorage {
   getAchBatchById(id: string): Promise<AchBatch | undefined>;
   createAchBatch(data: InsertAchBatch): Promise<AchBatch>;
   updateAchBatch(id: string, data: Partial<AchBatch>): Promise<AchBatch | undefined>;
+
+  getPayrollPaymentRecordByExternalTransactionId(externalId: string): Promise<PayrollPaymentRecord | undefined>;
+  createPayrollPaymentAuditLog(data: InsertPayrollPaymentAuditLog): Promise<PayrollPaymentAuditLog>;
+  listPayrollPaymentAuditLogs(payrollRunId: string): Promise<PayrollPaymentAuditLog[]>;
 
   getPayrollTransactionRuns(payrollRunId: string): Promise<PayrollTransactionRun[]>;
   createPayrollTransactionRun(data: InsertPayrollTransactionRun): Promise<PayrollTransactionRun>;
@@ -4194,6 +4200,22 @@ export class DatabaseStorage implements IStorage {
 
   async deletePayrollTransactionRunsByRun(payrollRunId: string): Promise<void> {
     await db.delete(payrollTransactionRuns).where(eq(payrollTransactionRuns.payrollRunId, payrollRunId));
+  }
+
+  async getPayrollPaymentRecordByExternalTransactionId(externalId: string): Promise<PayrollPaymentRecord | undefined> {
+    const [r] = await db.select().from(payrollPaymentRecords).where(eq(payrollPaymentRecords.externalTransactionId, externalId));
+    return r;
+  }
+
+  async createPayrollPaymentAuditLog(data: InsertPayrollPaymentAuditLog): Promise<PayrollPaymentAuditLog> {
+    const [r] = await db.insert(payrollPaymentAuditLogs).values(data).returning();
+    return r;
+  }
+
+  async listPayrollPaymentAuditLogs(payrollRunId: string): Promise<PayrollPaymentAuditLog[]> {
+    return db.select().from(payrollPaymentAuditLogs)
+      .where(eq(payrollPaymentAuditLogs.payrollRunId, payrollRunId))
+      .orderBy(desc(payrollPaymentAuditLogs.createdAt));
   }
 
   async getTenantCommercialGates(): Promise<(TenantCommercialGate & { company: Company })[]> {

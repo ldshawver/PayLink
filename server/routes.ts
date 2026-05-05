@@ -513,6 +513,48 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // ── Payroll lifecycle schema migration (idempotent) ─────────────────────────
+  try {
+    await db.execute(sql`ALTER TYPE payroll_status ADD VALUE IF NOT EXISTS 'approved'`);
+    await db.execute(sql`ALTER TYPE payroll_status ADD VALUE IF NOT EXISTS 'submitted'`);
+    await db.execute(sql`ALTER TYPE payroll_status ADD VALUE IF NOT EXISTS 'processing'`);
+    await db.execute(sql`ALTER TYPE payroll_status ADD VALUE IF NOT EXISTS 'failed'`);
+    await db.execute(sql`ALTER TYPE payroll_status ADD VALUE IF NOT EXISTS 'voided'`);
+    await db.execute(sql`ALTER TYPE payroll_status ADD VALUE IF NOT EXISTS 'reversed'`);
+
+    await db.execute(sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS failure_code TEXT`);
+    await db.execute(sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS failure_reason TEXT`);
+    await db.execute(sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ`);
+    await db.execute(sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS voided_by VARCHAR`);
+    await db.execute(sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ`);
+    await db.execute(sql`ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS reversed_by VARCHAR`);
+
+    await db.execute(sql`ALTER TABLE payroll_payment_records ADD COLUMN IF NOT EXISTS stripe_outbound_payment_id TEXT`);
+    await db.execute(sql`ALTER TABLE payroll_payment_records ADD COLUMN IF NOT EXISTS ach_batch_id VARCHAR`);
+    await db.execute(sql`ALTER TABLE payroll_payment_records ADD COLUMN IF NOT EXISTS failure_code TEXT`);
+    await db.execute(sql`ALTER TABLE payroll_payment_records ADD COLUMN IF NOT EXISTS failure_reason TEXT`);
+    await db.execute(sql`ALTER TABLE payroll_payment_records ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ`);
+    await db.execute(sql`ALTER TABLE payroll_payment_records ADD COLUMN IF NOT EXISTS reconciled_at TIMESTAMPTZ`);
+
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS payroll_payment_audit_logs (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        company_id VARCHAR REFERENCES companies(id),
+        payroll_run_id VARCHAR REFERENCES payroll_runs(id),
+        payroll_payment_record_id VARCHAR,
+        actor_id VARCHAR,
+        event TEXT NOT NULL,
+        previous_status TEXT,
+        new_status TEXT,
+        notes TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    console.log("[MIGRATION] Payroll lifecycle schema migration completed");
+  } catch (migErr) {
+    console.error("[MIGRATION] Payroll lifecycle migration error:", migErr);
+  }
+
   const publicWritePaths = ["/auth/", "/trial/signup", "/demo/login", "/demo/provision", "/analytics/event", "/billing/activate", "/webhooks/product-events", "/webhooks/esign/", "/portal/", "/time-clock/"];
   app.use("/api", (req, res, next) => {
     if (publicWritePaths.some(p => req.path.startsWith(p))) return next();
@@ -3205,10 +3247,28 @@ export async function registerRoutes(
       }
       // ────────────────────────────────────────────────────────────────────
 
+      const prevStatus = run.status;
       const updated = await storage.updatePayrollRun(run.id, {
         approvedAt: new Date(),
         approvedBy: req.session.userId || null,
+        status: "approved",
       });
+
+      // Write audit log
+      try {
+        await storage.createPayrollPaymentAuditLog({
+          companyId: run.companyId,
+          payrollRunId: run.id,
+          actorId: req.session.userId || null,
+          event: "approved",
+          previousStatus: prevStatus,
+          newStatus: "approved",
+          notes: "Payroll run approved by admin",
+        });
+      } catch (auditErr) {
+        console.error("[PAYROLL] Audit log error on approve:", auditErr);
+      }
+
       res.json(updated);
     } catch (error) {
       console.error("Approve payroll error:", error);
@@ -3221,15 +3281,39 @@ export async function registerRoutes(
     try {
       const run = await storage.getPayrollRun(req.params.id);
       if (!run) return res.status(404).json({ message: "Payroll run not found" });
-      if (run.status !== "processed" && run.status !== "paid") return res.status(400).json({ message: "Payroll run must be processed before submitting ACH" });
+
+      // Accept approved, processed (backward compat), submitted (idempotent re-submit)
+      const allowedStatuses = ["processed", "approved", "submitted", "paid"];
+      if (!allowedStatuses.includes(run.status || "")) {
+        return res.status(400).json({ message: "Payroll run must be approved before submitting ACH" });
+      }
       if (!run.approvedAt) return res.status(400).json({ message: "Payroll run must be approved before submitting ACH" });
       if (run.lockedAt || run.isLocked) return res.status(400).json({ message: "Payroll run is locked" });
-      const batchId = `ACH-${run.id.substring(0, 8).toUpperCase()}-${Date.now()}`;
+
+      const prevStatus = run.status;
+      const batchId = run.achBatchId || `ACH-${run.id.substring(0, 8).toUpperCase()}-${Date.now()}`;
+
+      // Create ACH batch record if it doesn't exist
+      const existingBatch = await storage.getAchBatch(run.id);
+      if (!existingBatch) {
+        const items = await storage.getPayrollItems(run.id);
+        const totalAmount = items.reduce((s, i) => s + parseFloat(i.netPay || "0"), 0);
+        await storage.createAchBatch({
+          payrollRunId: run.id,
+          companyId: run.companyId,
+          batchId,
+          totalAmount: String(totalAmount),
+          transactionCount: items.length,
+          status: "submitted",
+          submittedAt: new Date(),
+        } as any);
+      }
+
       const updated = await storage.updatePayrollRun(run.id, {
         achStatus: "submitted",
         achSubmittedAt: new Date(),
         achBatchId: batchId,
-        status: "paid",
+        status: "submitted",
       });
 
       // ── Auto-create payment records (idempotent) ───────────────────────────
@@ -3251,18 +3335,333 @@ export async function registerRoutes(
             paymentMethodCode: item.paymentMethod || "check",
             fundingAccountId: run.fundingAccountId || null,
             achBatchId: batchId,
-            status: "paid",
+            status: "submitted",
             taxYear: run.payDate ? new Date(run.payDate + "T00:00:00").getFullYear() : new Date().getFullYear(),
+            initiatedAt: new Date(),
           } as any);
         }
       } catch (prErr) {
         console.error("[PAYROLL] Auto-create payment records error:", prErr);
       }
 
+      // Write audit log
+      try {
+        await storage.createPayrollPaymentAuditLog({
+          companyId: run.companyId,
+          payrollRunId: run.id,
+          actorId: req.session.userId || null,
+          event: "submitted",
+          previousStatus: prevStatus,
+          newStatus: "submitted",
+          notes: `ACH batch ${batchId} submitted`,
+        });
+      } catch (auditErr) {
+        console.error("[PAYROLL] Audit log error on submit-ach:", auditErr);
+      }
+
+      // Send notification (best-effort)
+      try {
+        const { sendPayrollSubmittedNotification } = await import("./notifications.js");
+        const company = await storage.getCompany(run.companyId);
+        const adminUsers = (await storage.getUsers()).filter(u => u.companyId === run.companyId && (u.role === "admin" || u.role === "owner"));
+        for (const admin of adminUsers) {
+          if (admin.email) {
+            await sendPayrollSubmittedNotification({
+              toEmail: admin.email,
+              adminName: admin.firstName ? `${admin.firstName} ${admin.lastName || ""}`.trim() : admin.username,
+              companyName: company?.name || "Your Company",
+              periodStart: run.periodStart || "",
+              periodEnd: run.periodEnd || "",
+              batchId,
+              totalAmount: String(updated?.totalNetPay || 0),
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.error("[PAYROLL] Notification error on submit-ach:", notifErr);
+      }
+
       res.json(updated);
     } catch (error) {
       console.error("Submit ACH error:", error);
       res.status(500).json({ message: "Failed to submit ACH batch" });
+    }
+  });
+
+  // ── Void Payroll Run ───────────────────────────────────────────────────────
+  app.post("/api/payroll-runs/:id/void", requireAuth, requireRole("admin"), requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const voidUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(voidUser?.role) && voidUser?.companyId && run.companyId !== voidUser.companyId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      // Can only void submitted or failed runs
+      const voidableStatuses = ["submitted", "processing", "failed", "approved", "processed"];
+      if (!voidableStatuses.includes(run.status || "")) {
+        return res.status(400).json({ message: `Cannot void a payroll run with status "${run.status}". Only submitted, processing, or failed runs can be voided.` });
+      }
+      const { reason } = req.body || {};
+      const prevStatus = run.status;
+
+      // Mark all payment records as voided
+      try {
+        const paymentRecords = await storage.getPayrollPaymentRecords(run.companyId, run.id);
+        for (const pr of paymentRecords) {
+          if (pr.status !== "voided" && pr.status !== "reversed") {
+            await storage.updatePayrollPaymentRecord(pr.id, {
+              status: "voided",
+              voidedAt: new Date(),
+            } as any);
+          }
+        }
+      } catch (prErr) {
+        console.error("[PAYROLL] Error voiding payment records:", prErr);
+      }
+
+      // Update ACH batch
+      try {
+        const batch = await storage.getAchBatch(run.id);
+        if (batch) {
+          await storage.updateAchBatch(batch.id, { status: "voided" });
+        }
+      } catch (batchErr) {
+        console.error("[PAYROLL] Error voiding ACH batch:", batchErr);
+      }
+
+      const updated = await storage.updatePayrollRun(run.id, {
+        status: "voided",
+        voidedAt: new Date(),
+        voidedBy: req.session.userId || null,
+        failureReason: reason || null,
+      });
+
+      await storage.createPayrollPaymentAuditLog({
+        companyId: run.companyId,
+        payrollRunId: run.id,
+        actorId: req.session.userId || null,
+        event: "voided",
+        previousStatus: prevStatus,
+        newStatus: "voided",
+        notes: reason || "Voided by admin",
+      });
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Void payroll error:", error);
+      res.status(500).json({ message: "Failed to void payroll run" });
+    }
+  });
+
+  // ── Reverse Payroll Run ─────────────────────────────────────────────────────
+  app.post("/api/payroll-runs/:id/reverse", requireAuth, requireRole("admin"), requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const revUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(revUser?.role) && revUser?.companyId && run.companyId !== revUser.companyId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      // Can only reverse paid runs
+      const reversibleStatuses = ["paid", "submitted", "processing"];
+      if (!reversibleStatuses.includes(run.status || "")) {
+        return res.status(400).json({ message: `Cannot reverse a payroll run with status "${run.status}". Only paid runs can be reversed.` });
+      }
+      const { reason } = req.body || {};
+      const prevStatus = run.status;
+
+      // Mark payment records as reversed
+      try {
+        const paymentRecords = await storage.getPayrollPaymentRecords(run.companyId, run.id);
+        for (const pr of paymentRecords) {
+          if (pr.status !== "reversed" && pr.status !== "voided") {
+            await storage.updatePayrollPaymentRecord(pr.id, {
+              status: "reversed",
+              reversedAt: new Date(),
+            } as any);
+          }
+        }
+      } catch (prErr) {
+        console.error("[PAYROLL] Error reversing payment records:", prErr);
+      }
+
+      const updated = await storage.updatePayrollRun(run.id, {
+        status: "reversed",
+        reversedAt: new Date(),
+        reversedBy: req.session.userId || null,
+        failureReason: reason || null,
+      });
+
+      await storage.createPayrollPaymentAuditLog({
+        companyId: run.companyId,
+        payrollRunId: run.id,
+        actorId: req.session.userId || null,
+        event: "reversed",
+        previousStatus: prevStatus,
+        newStatus: "reversed",
+        notes: reason || "Reversed by admin",
+      });
+
+      // Send failure notification (best-effort)
+      try {
+        const { sendPaymentFailedNotification } = await import("./notifications.js");
+        const company = await storage.getCompany(run.companyId);
+        const adminUsers = (await storage.getUsers()).filter(u => u.companyId === run.companyId && (u.role === "admin" || u.role === "owner"));
+        for (const admin of adminUsers) {
+          if (admin.email) {
+            await sendPaymentFailedNotification({
+              toEmail: admin.email,
+              adminName: admin.firstName ? `${admin.firstName} ${admin.lastName || ""}`.trim() : admin.username,
+              companyName: company?.name || "Your Company",
+              periodStart: run.periodStart || "",
+              periodEnd: run.periodEnd || "",
+              reason: reason || "Payment reversed",
+              runId: run.id,
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.error("[PAYROLL] Notification error on reverse:", notifErr);
+      }
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Reverse payroll error:", error);
+      res.status(500).json({ message: "Failed to reverse payroll run" });
+    }
+  });
+
+  // ── Reconcile payment record ────────────────────────────────────────────────
+  app.post("/api/payroll-payment-records/:id/reconcile", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const { notes } = req.body || {};
+      const records = await storage.getPayrollPaymentRecords(user?.companyId || "");
+      const record = records.find(r => r.id === req.params.id);
+      if (!record) return res.status(404).json({ message: "Payment record not found" });
+      if (!isPlatformUser(user?.role) && user?.companyId && record.companyId !== user.companyId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const updated = await storage.updatePayrollPaymentRecord(record.id, {
+        reconciledAt: new Date(),
+        status: "cleared",
+      } as any);
+
+      await storage.createPayrollPaymentAuditLog({
+        companyId: record.companyId,
+        payrollRunId: record.payrollRunId,
+        payrollPaymentRecordId: record.id,
+        actorId: req.session.userId || null,
+        event: "reconciled",
+        previousStatus: record.status,
+        newStatus: "cleared",
+        notes: notes || "Manually reconciled",
+      });
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Reconcile error:", error);
+      res.status(500).json({ message: "Failed to reconcile payment record" });
+    }
+  });
+
+  // ── Get payment records for a payroll run ──────────────────────────────────
+  app.get("/api/payroll-runs/:id/payment-records", requireAuth, requireRole("admin", "manager", "worker"), requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(user?.role) && user?.companyId && run.companyId !== user.companyId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const records = await storage.getPayrollPaymentRecords(run.companyId, run.id);
+      // Workers can only see their own payment record
+      if (user?.role === "worker") {
+        const worker = (await storage.getWorkers(run.companyId)).find(w => w.userId === user.id);
+        if (!worker) return res.json([]);
+        return res.json(records.filter(r => r.workerId === worker.id));
+      }
+      res.json(records);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get payment records" });
+    }
+  });
+
+  // ── Get audit logs for a payroll run ───────────────────────────────────────
+  app.get("/api/payroll-runs/:id/audit-logs", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    try {
+      const run = await storage.getPayrollRun(req.params.id);
+      if (!run) return res.status(404).json({ message: "Payroll run not found" });
+      const user = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(user?.role) && user?.companyId && run.companyId !== user.companyId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const logs = await storage.listPayrollPaymentAuditLogs(run.id);
+      res.json(logs);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get audit logs" });
+    }
+  });
+
+  // ── Mark payment record as paid (manual reconcile) ─────────────────────────
+  app.post("/api/payroll-payment-records/:id/mark-paid", requireAuth, requireRole("admin"), requireActiveSubscription, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const { notes } = req.body || {};
+      const records = await storage.getPayrollPaymentRecords(user?.companyId || "");
+      const record = records.find(r => r.id === req.params.id);
+      if (!record) return res.status(404).json({ message: "Payment record not found" });
+      if (!isPlatformUser(user?.role) && user?.companyId && record.companyId !== user.companyId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const updated = await storage.updatePayrollPaymentRecord(record.id, {
+        status: "paid",
+        paidAt: new Date(),
+      } as any);
+
+      await storage.createPayrollPaymentAuditLog({
+        companyId: record.companyId,
+        payrollRunId: record.payrollRunId,
+        payrollPaymentRecordId: record.id,
+        actorId: req.session.userId || null,
+        event: "paid",
+        previousStatus: record.status,
+        newStatus: "paid",
+        notes: notes || "Manually marked as paid",
+      });
+
+      // Recompute run status — if all records are paid, mark run as paid
+      try {
+        const allRecords = await storage.getPayrollPaymentRecords(record.companyId!, record.payrollRunId!);
+        const allPaid = allRecords.length > 0 && allRecords.every(r => r.status === "paid" || r.status === "cleared");
+        if (allPaid) {
+          const run = await storage.getPayrollRun(record.payrollRunId!);
+          if (run && run.status === "submitted" || run?.status === "processing") {
+            await storage.updatePayrollRun(record.payrollRunId!, {
+              status: "paid",
+              achStatus: "settled",
+              achSettledAt: new Date(),
+            });
+            await storage.createPayrollPaymentAuditLog({
+              companyId: record.companyId,
+              payrollRunId: record.payrollRunId,
+              actorId: req.session.userId || null,
+              event: "paid",
+              previousStatus: run.status,
+              newStatus: "paid",
+              notes: "All payment records marked paid — run auto-completed",
+            });
+          }
+        }
+      } catch (recomputeErr) {
+        console.error("[PAYROLL] Run status recompute error:", recomputeErr);
+      }
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Mark paid error:", error);
+      res.status(500).json({ message: "Failed to mark payment as paid" });
     }
   });
 

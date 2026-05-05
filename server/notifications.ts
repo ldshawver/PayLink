@@ -492,3 +492,92 @@ export async function sendScheduleSmsNotification(payload: ScheduleNotificationP
     return { sent: false, error: err.message };
   }
 }
+
+// ── Payroll Lifecycle Notifications ──────────────────────────────────────────
+
+export async function sendPayrollSubmittedNotification(params: {
+  toEmail: string;
+  adminName: string;
+  companyName: string;
+  periodStart: string;
+  periodEnd: string;
+  batchId: string;
+  totalAmount: string;
+}): Promise<void> {
+  const cfg = await getTransporter();
+  if (!cfg) return;
+  const { transporter, fromAddress } = cfg;
+  const subject = `[PayLink] Payroll ACH Submitted — ${params.companyName}`;
+  const html = `
+    <p>Hi ${params.adminName},</p>
+    <p>The payroll ACH batch for <strong>${params.companyName}</strong> has been submitted successfully.</p>
+    <table style="border-collapse:collapse;width:100%;max-width:480px;margin:16px 0">
+      <tr><td style="padding:6px 12px;border:1px solid #e5e7eb;color:#6b7280">Period</td>
+          <td style="padding:6px 12px;border:1px solid #e5e7eb">${params.periodStart} – ${params.periodEnd}</td></tr>
+      <tr><td style="padding:6px 12px;border:1px solid #e5e7eb;color:#6b7280">Batch ID</td>
+          <td style="padding:6px 12px;border:1px solid #e5e7eb;font-family:monospace">${params.batchId}</td></tr>
+      <tr><td style="padding:6px 12px;border:1px solid #e5e7eb;color:#6b7280">Total Amount</td>
+          <td style="padding:6px 12px;border:1px solid #e5e7eb;font-weight:600">$${Number(params.totalAmount || 0).toFixed(2)}</td></tr>
+    </table>
+    <p style="color:#6b7280;font-size:13px">Funds will typically settle within 1–3 business days. You will receive another notification when payments are confirmed.</p>
+    <p style="color:#6b7280;font-size:13px">— PayLink Payroll</p>
+  `;
+  await transporter.sendMail({ from: fromAddress, to: params.toEmail, subject, html });
+}
+
+export async function sendPaymentFailedNotification(params: {
+  toEmail: string;
+  adminName: string;
+  companyName: string;
+  periodStart: string;
+  periodEnd: string;
+  reason: string;
+  runId: string;
+}): Promise<void> {
+  const cfg = await getTransporter();
+  if (!cfg) return;
+  const { transporter, fromAddress } = cfg;
+  const subject = `[PayLink] ⚠ Payroll Payment Failed — ${params.companyName}`;
+  const html = `
+    <p>Hi ${params.adminName},</p>
+    <p style="color:#b91c1c">A payroll payment for <strong>${params.companyName}</strong> has failed and requires your attention.</p>
+    <table style="border-collapse:collapse;width:100%;max-width:480px;margin:16px 0">
+      <tr><td style="padding:6px 12px;border:1px solid #e5e7eb;color:#6b7280">Period</td>
+          <td style="padding:6px 12px;border:1px solid #e5e7eb">${params.periodStart} – ${params.periodEnd}</td></tr>
+      <tr><td style="padding:6px 12px;border:1px solid #e5e7eb;color:#6b7280">Run ID</td>
+          <td style="padding:6px 12px;border:1px solid #e5e7eb;font-family:monospace">${params.runId}</td></tr>
+      <tr><td style="padding:6px 12px;border:1px solid #e5e7eb;color:#6b7280">Reason</td>
+          <td style="padding:6px 12px;border:1px solid #e5e7eb;color:#b91c1c">${params.reason}</td></tr>
+    </table>
+    <p>Please log in to PayLink and review the payroll run to resolve this issue.</p>
+    <p style="color:#6b7280;font-size:13px">— PayLink Payroll</p>
+  `;
+  await transporter.sendMail({ from: fromAddress, to: params.toEmail, subject, html });
+}
+
+export async function sendPaymentPaidNotification(params: {
+  toEmail: string;
+  adminName: string;
+  companyName: string;
+  periodStart: string;
+  periodEnd: string;
+  runId: string;
+}): Promise<void> {
+  const cfg = await getTransporter();
+  if (!cfg) return;
+  const { transporter, fromAddress } = cfg;
+  const subject = `[PayLink] ✓ Payroll Paid — ${params.companyName}`;
+  const html = `
+    <p>Hi ${params.adminName},</p>
+    <p>All payroll payments for <strong>${params.companyName}</strong> have been confirmed as paid.</p>
+    <table style="border-collapse:collapse;width:100%;max-width:480px;margin:16px 0">
+      <tr><td style="padding:6px 12px;border:1px solid #e5e7eb;color:#6b7280">Period</td>
+          <td style="padding:6px 12px;border:1px solid #e5e7eb">${params.periodStart} – ${params.periodEnd}</td></tr>
+      <tr><td style="padding:6px 12px;border:1px solid #e5e7eb;color:#6b7280">Run ID</td>
+          <td style="padding:6px 12px;border:1px solid #e5e7eb;font-family:monospace">${params.runId}</td></tr>
+    </table>
+    <p style="color:#059669;font-weight:600">All direct deposits have been successfully processed.</p>
+    <p style="color:#6b7280;font-size:13px">— PayLink Payroll</p>
+  `;
+  await transporter.sendMail({ from: fromAddress, to: params.toEmail, subject, html });
+}

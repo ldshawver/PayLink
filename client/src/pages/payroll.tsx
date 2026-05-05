@@ -4,7 +4,7 @@ import { useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
-import type { Company, Worker, PayrollRun, PayrollItem, PayPeriod, TaxDeduction, RemittanceSource, RemittanceAgency, RemittanceAgencyEvent, PayStubAccount, PayStubAmendment, PayStubTransaction, PayPeriodSchedule, LegalEntity, CheckTemplate, PayrollPaymentMethod, FundingAccount, PayrollPaymentRecord } from "@shared/schema";
+import type { Company, Worker, PayrollRun, PayrollItem, PayPeriod, TaxDeduction, RemittanceSource, RemittanceAgency, RemittanceAgencyEvent, PayStubAccount, PayStubAmendment, PayStubTransaction, PayPeriodSchedule, LegalEntity, CheckTemplate, PayrollPaymentMethod, FundingAccount, PayrollPaymentRecord, PayrollPaymentAuditLog } from "@shared/schema";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -26,7 +26,7 @@ import {
   Layout, Eye, EyeOff, Image, Save, Copy, ExternalLink, RefreshCw,
   Banknote, Wallet, BadgeCheck, CircleDot, ToggleLeft, ToggleRight, BarChart3,
   Lock, LockOpen, Send, ShieldCheck, Info, CheckCircle2, XCircle, Brain, Sparkles,
-  AlertTriangle
+  AlertTriangle, Ban, RotateCcw, ClipboardList, BadgeX, Activity
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { PayrollSummaryReportDialog } from "@/components/reports/payroll-summary-report";
@@ -501,6 +501,22 @@ function AchStatusBadge({ achStatus }: { achStatus: string | null | undefined })
   return <Badge variant="outline" className={`text-xs ${cfg.className}`}>{cfg.label}</Badge>;
 }
 
+function PaymentRecordStatusBadge({ status }: { status: string | null | undefined }) {
+  const map: Record<string, { label: string; className: string }> = {
+    pending:    { label: "Pending",    className: "border-slate-300 text-slate-600 dark:text-slate-400" },
+    submitted:  { label: "Submitted",  className: "border-teal-300 text-teal-700 dark:text-teal-400 bg-teal-50 dark:bg-teal-950/20" },
+    processing: { label: "Processing", className: "border-blue-300 text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/20" },
+    paid:       { label: "Paid",       className: "border-emerald-400 text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/20" },
+    cleared:    { label: "Cleared",    className: "border-emerald-500 text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/30" },
+    failed:     { label: "Failed",     className: "border-red-300 text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/20" },
+    voided:     { label: "Voided",     className: "border-slate-400 text-slate-600 dark:text-slate-400" },
+    reversed:   { label: "Reversed",   className: "border-orange-400 text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-950/20" },
+    reconciled: { label: "Reconciled", className: "border-violet-400 text-violet-700 dark:text-violet-400 bg-violet-50 dark:bg-violet-950/20" },
+  };
+  const cfg = map[status || ""] || { label: status || "—", className: "" };
+  return <Badge variant="outline" className={`text-xs ${cfg.className}`}>{cfg.label}</Badge>;
+}
+
 function PayrollSummaryPanel({ run, items }: { run: PayrollRun; items: PayrollItem[] }) {
   const [reportOpen, setReportOpen] = useState(false);
   const [registerOpen, setRegisterOpen] = useState(false);
@@ -936,6 +952,109 @@ function PayrollRunCard({
     },
   });
 
+  // ── Payment records & audit logs ──────────────────────────────────────────
+  const { data: paymentRecords = [], refetch: refetchPaymentRecords } = useQuery<PayrollPaymentRecord[]>({
+    queryKey: ["/api/payroll-runs", run.id, "payment-records"],
+    queryFn: async () => {
+      const res = await fetch(`/api/payroll-runs/${run.id}/payment-records`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: expanded && ["submitted", "processing", "paid", "failed", "voided", "reversed"].includes(run.status || ""),
+  });
+
+  const { data: auditLogs = [], refetch: refetchAuditLogs } = useQuery<PayrollPaymentAuditLog[]>({
+    queryKey: ["/api/payroll-runs", run.id, "audit-logs"],
+    queryFn: async () => {
+      const res = await fetch(`/api/payroll-runs/${run.id}/audit-logs`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: expanded,
+  });
+
+  // ── Void/Reverse state ─────────────────────────────────────────────────────
+  const [voidDialogOpen, setVoidDialogOpen] = useState(false);
+  const [reverseDialogOpen, setReverseDialogOpen] = useState(false);
+  const [voidReason, setVoidReason] = useState("");
+  const [reverseReason, setReverseReason] = useState("");
+  const [auditLogOpen, setAuditLogOpen] = useState(false);
+
+  const voidMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/payroll-runs/${run.id}/void`, { reason: voidReason });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || "Failed to void payroll run");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs", run.id, "payment-records"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs", run.id, "audit-logs"] });
+      setVoidDialogOpen(false);
+      setVoidReason("");
+      toast({ title: "Payroll run voided", description: "All payment records have been voided." });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const reverseMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/payroll-runs/${run.id}/reverse`, { reason: reverseReason });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || "Failed to reverse payroll run");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs", run.id, "payment-records"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs", run.id, "audit-logs"] });
+      setReverseDialogOpen(false);
+      setReverseReason("");
+      toast({ title: "Payroll reversed", description: "All payment records have been reversed." });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const markPaidMutation = useMutation({
+    mutationFn: async (recordId: string) => {
+      const res = await apiRequest("POST", `/api/payroll-payment-records/${recordId}/mark-paid`, { notes: "Manually confirmed paid" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || "Failed to mark as paid");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs", run.id, "payment-records"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs", run.id, "audit-logs"] });
+      toast({ title: "Payment marked as paid" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const reconcileMutation = useMutation({
+    mutationFn: async (recordId: string) => {
+      const res = await apiRequest("POST", `/api/payroll-payment-records/${recordId}/reconcile`, { notes: "Manually reconciled" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || "Failed to reconcile");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs", run.id, "payment-records"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs", run.id, "audit-logs"] });
+      toast({ title: "Payment reconciled" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: async () => {
       await apiRequest("DELETE", `/api/payroll-runs/${run.id}`);
@@ -1049,18 +1168,25 @@ function PayrollRunCard({
     }
   };
 
-  const statusVariant = run.status === "paid" ? "default" : run.status === "processed" ? "secondary" : "outline";
+  const isTerminal = run.status === "voided" || run.status === "reversed";
+  const statusVariant = run.status === "paid" ? "default"
+    : run.status === "processed" || run.status === "approved" ? "secondary"
+    : run.status === "failed" ? "destructive"
+    : "outline";
 
-  // Full guided workflow step indicators matching the required sequence:
-  // Select Company → Select Pay Date → Preview Items → Generate Summary → Approve → Submit ACH/Print Checks → Lock
+  // Full guided workflow step indicators
   const steps = [
     { label: "Select Company", done: true, active: false },
     { label: "Select Pay Date", done: !!run.payDate, active: !run.payDate },
     { label: "Preview Items", done: run.status !== "draft", active: run.status === "draft" },
-    { label: "Generate Summary", done: run.status === "processed" || run.status === "paid", active: run.status === "draft" },
+    { label: "Generate Summary", done: !["draft"].includes(run.status || ""), active: run.status === "draft" },
     { label: "Approve", done: isApproved, active: run.status === "processed" && !isApproved },
-    { label: achStatus === "submitted" || achStatus === "settled" ? "ACH Submitted" : "Submit ACH / Print Checks", done: achStatus === "submitted" || achStatus === "settled", active: isApproved && !achStatus && !isLocked },
-    { label: "Locked", done: isLocked, active: isApproved && (achStatus === "submitted" || achStatus === "settled" || run.useDirectDeposit !== true) && !isLocked },
+    {
+      label: achStatus === "submitted" || achStatus === "settled" ? "ACH Submitted" : "Submit ACH / Print Checks",
+      done: achStatus === "submitted" || achStatus === "settled" || run.status === "submitted" || run.status === "processing" || run.status === "paid",
+      active: isApproved && !achStatus && !isLocked && run.status === "approved",
+    },
+    { label: run.status === "paid" ? "Paid" : run.status === "failed" ? "Failed" : run.status === "voided" ? "Voided" : run.status === "reversed" ? "Reversed" : "Locked", done: isLocked || run.status === "paid", active: isApproved && (achStatus === "submitted" || achStatus === "settled" || run.useDirectDeposit !== true) && !isLocked },
   ];
 
   return (
@@ -1078,8 +1204,20 @@ function PayrollRunCard({
               </span>
             )}
           </div>
-          <Badge variant={statusVariant} data-testid={`badge-status-${run.id}`}>{run.status}</Badge>
-          {isApproved && !isLocked && (
+          <Badge
+            variant={statusVariant}
+            data-testid={`badge-status-${run.id}`}
+            className={
+              run.status === "voided" ? "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300" :
+              run.status === "reversed" ? "bg-orange-100 text-orange-700 dark:bg-orange-950/40 dark:text-orange-400" :
+              run.status === "failed" ? "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-400" :
+              run.status === "submitted" ? "bg-teal-100 text-teal-700 dark:bg-teal-950/40 dark:text-teal-400" :
+              run.status === "processing" ? "bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400" :
+              run.status === "approved" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400" :
+              ""
+            }
+          >{run.status}</Badge>
+          {isApproved && !isLocked && run.status === "approved" && (
             <Badge variant="outline" className="border-emerald-300 text-emerald-700 dark:text-emerald-400 text-xs flex items-center gap-1">
               <ShieldCheck className="h-3 w-3" />Approved
             </Badge>
@@ -1087,6 +1225,21 @@ function PayrollRunCard({
           {isLocked && (
             <Badge variant="outline" className="border-slate-400 text-slate-600 dark:text-slate-400 text-xs flex items-center gap-1" data-testid={`badge-locked-${run.id}`}>
               <Lock className="h-3 w-3" />Locked
+            </Badge>
+          )}
+          {run.status === "voided" && (
+            <Badge variant="outline" className="border-slate-400 text-slate-600 text-xs flex items-center gap-1" data-testid={`badge-voided-${run.id}`}>
+              <Ban className="h-3 w-3" />Voided
+            </Badge>
+          )}
+          {run.status === "reversed" && (
+            <Badge variant="outline" className="border-orange-400 text-orange-600 dark:text-orange-400 text-xs flex items-center gap-1" data-testid={`badge-reversed-${run.id}`}>
+              <RotateCcw className="h-3 w-3" />Reversed
+            </Badge>
+          )}
+          {run.status === "failed" && (
+            <Badge variant="outline" className="border-red-400 text-red-600 dark:text-red-400 text-xs flex items-center gap-1" data-testid={`badge-failed-${run.id}`}>
+              <BadgeX className="h-3 w-3" />Failed
             </Badge>
           )}
           {achStatus && (
@@ -1380,7 +1533,7 @@ function PayrollRunCard({
               )}
 
               {/* ── ACH Status section ────────────────────────────────────── */}
-              {(run.status === "processed" || run.status === "paid") && run.useDirectDeposit === true && (
+              {(["processed","paid","approved","submitted","processing","failed","voided","reversed"].includes(run.status || "")) && run.useDirectDeposit === true && (
                 <div className="rounded-lg border bg-muted/20 p-3 space-y-2" data-testid={`ach-section-${run.id}`}>
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">ACH / Direct Deposit Status</p>
                   <div className="flex flex-wrap items-center gap-3">
@@ -1395,10 +1548,92 @@ function PayrollRunCard({
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    {achStatus === "submitted" || achStatus === "settled"
+                    {run.status === "submitted" || run.status === "processing"
+                      ? "ACH batch is in flight. Processing takes 1–3 business days."
+                      : achStatus === "submitted" || achStatus === "settled"
                       ? "ACH batch has been submitted to the network. Processing takes 1–3 business days."
                       : "Download the NACHA file to send to your bank, or use Submit ACH to mark it as electronically submitted."}
                   </p>
+                </div>
+              )}
+
+              {/* ── Payment Records Status Table ────────────────────────── */}
+              {paymentRecords.length > 0 && (
+                <div className="rounded-lg border overflow-hidden" data-testid={`payment-records-panel-${run.id}`}>
+                  <div className="flex items-center justify-between px-3 py-2 bg-muted/40">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-2">
+                      <Activity className="h-3.5 w-3.5" />
+                      Per-Worker Payment Status
+                    </p>
+                    <Button
+                      size="sm" variant="ghost" className="h-6 px-2 text-xs text-muted-foreground"
+                      onClick={() => setAuditLogOpen(true)}
+                      data-testid={`button-view-audit-log-${run.id}`}
+                    >
+                      <ClipboardList className="h-3 w-3 mr-1" />Audit Log
+                    </Button>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="text-xs">Worker</TableHead>
+                          <TableHead className="text-xs">Net Pay</TableHead>
+                          <TableHead className="text-xs">Method</TableHead>
+                          <TableHead className="text-xs">Status</TableHead>
+                          <TableHead className="text-xs">Batch ID</TableHead>
+                          <TableHead className="text-xs">Paid At</TableHead>
+                          <TableHead className="text-xs"></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {paymentRecords.map(pr => (
+                          <TableRow key={pr.id} data-testid={`row-payment-record-${pr.id}`}>
+                            <TableCell className="text-sm">{getWorkerName(pr.workerId || "")}</TableCell>
+                            <TableCell className="text-sm font-medium">${Number(pr.netPayAmount || 0).toFixed(2)}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{pr.paymentMethodCode || "—"}</TableCell>
+                            <TableCell>
+                              <PaymentRecordStatusBadge status={pr.status} />
+                              {pr.failureReason && (
+                                <p className="text-xs text-red-600 mt-0.5">{pr.failureReason}</p>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-xs font-mono text-muted-foreground">{(pr as any).achBatchId ? String((pr as any).achBatchId).slice(-8) : "—"}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {pr.paidAt ? new Date(pr.paidAt).toLocaleDateString() : "—"}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                {pr.status === "submitted" && (
+                                  <Button size="sm" variant="outline" className="h-6 px-2 text-xs"
+                                    disabled={markPaidMutation.isPending}
+                                    onClick={() => markPaidMutation.mutate(pr.id)}
+                                    data-testid={`button-mark-paid-${pr.id}`}
+                                  >
+                                    <Check className="h-3 w-3 mr-1" />Mark Paid
+                                  </Button>
+                                )}
+                                {(pr.status === "paid" || pr.status === "cleared") && !(pr as any).reconciledAt && (
+                                  <Button size="sm" variant="outline" className="h-6 px-2 text-xs"
+                                    disabled={reconcileMutation.isPending}
+                                    onClick={() => reconcileMutation.mutate(pr.id)}
+                                    data-testid={`button-reconcile-${pr.id}`}
+                                  >
+                                    <CheckCircle2 className="h-3 w-3 mr-1" />Reconcile
+                                  </Button>
+                                )}
+                                {(pr as any).reconciledAt && (
+                                  <span className="text-xs text-emerald-600 flex items-center gap-1">
+                                    <CheckCircle2 className="h-3 w-3" />Reconciled
+                                  </span>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </div>
               )}
 
@@ -1593,7 +1828,8 @@ function PayrollRunCard({
                       {preflightMutation.isPending ? "Running checks..." : "Approve Payroll"}
                     </Button>
                   )}
-                  {(run.status === "processed" || run.status === "paid") && isApproved && run.useDirectDeposit !== false && achStatus !== "submitted" && achStatus !== "settled" && (
+                  {/* ACH Submit — show for approved, processed (backward compat) and approved status */}
+                  {(run.status === "approved" || run.status === "processed") && isApproved && run.useDirectDeposit !== false && achStatus !== "submitted" && achStatus !== "settled" && (
                     <>
                       <Button
                         size="sm"
@@ -1617,8 +1853,9 @@ function PayrollRunCard({
                       </Button>
                     </>
                   )}
-                  {(run.status === "processed" || run.status === "paid") && isApproved && (
-                    run.useDirectDeposit !== true || achStatus === "submitted" || achStatus === "settled"
+                  {/* Lock — for paid/processed/approved runs */}
+                  {(run.status === "processed" || run.status === "approved" || run.status === "paid") && isApproved && (
+                    run.useDirectDeposit !== true || achStatus === "submitted" || achStatus === "settled" || run.status === "paid"
                       ? (
                         <Button
                           size="sm"
@@ -1638,7 +1875,32 @@ function PayrollRunCard({
                         </div>
                       )
                   )}
-                  {(run.status === "processed" || run.status === "paid" || isLocked) && (
+                  {/* Void — for submitted/processing/failed/approved/processed runs */}
+                  {["submitted", "processing", "failed", "approved", "processed"].includes(run.status || "") && !isTerminal && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-slate-400 text-slate-600 hover:bg-slate-50 dark:text-slate-400"
+                      data-testid={`button-void-run-${run.id}`}
+                      onClick={() => setVoidDialogOpen(true)}
+                    >
+                      <Ban className="mr-2 h-4 w-4" />Void Run
+                    </Button>
+                  )}
+                  {/* Reverse — for paid/submitted/processing runs */}
+                  {["paid", "submitted", "processing"].includes(run.status || "") && !isTerminal && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-orange-400 text-orange-600 hover:bg-orange-50 dark:text-orange-400 dark:hover:bg-orange-950/20"
+                      data-testid={`button-reverse-run-${run.id}`}
+                      onClick={() => setReverseDialogOpen(true)}
+                    >
+                      <RotateCcw className="mr-2 h-4 w-4" />Reverse
+                    </Button>
+                  )}
+                  {/* Reopen — for processed/paid/approved/locked runs */}
+                  {(["processed", "approved", "paid"].includes(run.status || "") || isLocked) && !isTerminal && (
                     <Button
                       variant="outline" size="sm"
                       data-testid={`button-reopen-run-${run.id}`}
@@ -1651,14 +1913,14 @@ function PayrollRunCard({
                         : (isLocked ? "Unlock & Reopen" : "Reopen for Editing")}
                     </Button>
                   )}
-                  {(run.status === "processed" || run.status === "paid") && (
+                  {(run.status === "processed" || run.status === "approved" || run.status === "paid") && (
                     <Link href={`/app/print-check/${run.id}`}>
                       <Button variant="outline" size="sm" data-testid={`button-print-checks-${run.id}`}>
                         <Printer className="mr-2 h-4 w-4" />Print Checks
                       </Button>
                     </Link>
                   )}
-                  {(run.status === "processed" || run.status === "paid") && (
+                  {(run.status === "processed" || run.status === "approved" || run.status === "paid") && (
                     <Link href={`/app/print-check/${run.id}?packet=1`}>
                       <Button variant="outline" size="sm" data-testid={`button-print-packet-${run.id}`}>
                         <FileText className="mr-2 h-4 w-4" />Print Payroll Packet
@@ -1889,6 +2151,125 @@ function PayrollRunCard({
                       </div>
                     </div>
                   )}
+                </DialogContent>
+              </Dialog>
+
+              {/* ── Void Confirm Dialog ──────────────────────────────────── */}
+              <Dialog open={voidDialogOpen} onOpenChange={setVoidDialogOpen}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                      <Ban className="h-5 w-5" />Void Payroll Run
+                    </DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3 text-sm text-amber-800 dark:text-amber-300">
+                      <p className="font-medium">This will void the payroll run and all associated payment records.</p>
+                      <p className="mt-1 text-xs">Use this if the payroll was submitted in error before any funds were disbursed. This action cannot be undone.</p>
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label className="text-sm">Reason for voiding</Label>
+                      <Textarea
+                        placeholder="e.g. Submitted in error — incorrect pay period"
+                        value={voidReason}
+                        onChange={e => setVoidReason(e.target.value)}
+                        rows={3}
+                        data-testid="input-void-reason"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2 mt-2">
+                    <Button variant="outline" onClick={() => setVoidDialogOpen(false)}>Cancel</Button>
+                    <Button
+                      variant="destructive"
+                      disabled={!voidReason.trim() || voidMutation.isPending}
+                      onClick={() => voidMutation.mutate()}
+                      data-testid="button-confirm-void"
+                    >
+                      <Ban className="mr-2 h-4 w-4" />
+                      {voidMutation.isPending ? "Voiding..." : "Confirm Void"}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+
+              {/* ── Reverse Confirm Dialog ───────────────────────────────── */}
+              <Dialog open={reverseDialogOpen} onOpenChange={setReverseDialogOpen}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2 text-orange-700 dark:text-orange-400">
+                      <RotateCcw className="h-5 w-5" />Reverse Payroll Run
+                    </DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    <div className="rounded-md border border-orange-200 bg-orange-50 dark:bg-orange-950/20 dark:border-orange-800 p-3 text-sm text-orange-800 dark:text-orange-300">
+                      <p className="font-medium">This will initiate a reversal for all payment records in this run.</p>
+                      <p className="mt-1 text-xs">Use this if funds were already disbursed and need to be pulled back. A reversal ACH entry will be created. This action cannot be undone.</p>
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label className="text-sm">Reason for reversal</Label>
+                      <Textarea
+                        placeholder="e.g. Duplicate payroll run — funds need to be recovered"
+                        value={reverseReason}
+                        onChange={e => setReverseReason(e.target.value)}
+                        rows={3}
+                        data-testid="input-reverse-reason"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2 mt-2">
+                    <Button variant="outline" onClick={() => setReverseDialogOpen(false)}>Cancel</Button>
+                    <Button
+                      className="bg-orange-600 hover:bg-orange-700 text-white"
+                      disabled={!reverseReason.trim() || reverseMutation.isPending}
+                      onClick={() => reverseMutation.mutate()}
+                      data-testid="button-confirm-reverse"
+                    >
+                      <RotateCcw className="mr-2 h-4 w-4" />
+                      {reverseMutation.isPending ? "Reversing..." : "Confirm Reversal"}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+
+              {/* ── Audit Log Dialog ─────────────────────────────────────── */}
+              <Dialog open={auditLogOpen} onOpenChange={setAuditLogOpen}>
+                <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                      <ClipboardList className="h-5 w-5" />Payment Audit Log
+                    </DialogTitle>
+                  </DialogHeader>
+                  {auditLogs.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-4 text-center">No audit events recorded yet.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {auditLogs.map((log, i) => (
+                        <div key={log.id || i} className="flex items-start gap-3 text-sm border-b pb-2 last:border-b-0" data-testid={`audit-log-entry-${log.id}`}>
+                          <div className="mt-0.5 shrink-0">
+                            <Activity className="h-4 w-4 text-muted-foreground" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-medium">{log.event}</span>
+                              {log.previousStatus && log.newStatus && (
+                                <span className="text-xs text-muted-foreground">
+                                  {log.previousStatus} → {log.newStatus}
+                                </span>
+                              )}
+                            </div>
+                            {log.notes && <p className="text-xs text-muted-foreground mt-0.5">{log.notes}</p>}
+                            <p className="text-xs text-muted-foreground/60 mt-0.5">
+                              {log.createdAt ? new Date(log.createdAt).toLocaleString() : "—"}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex justify-end pt-2">
+                    <Button variant="outline" size="sm" onClick={() => setAuditLogOpen(false)}>Close</Button>
+                  </div>
                 </DialogContent>
               </Dialog>
 

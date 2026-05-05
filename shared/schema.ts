@@ -11,7 +11,7 @@ export const entityTypeEnum = pgEnum("entity_type", ["c_corp", "s_corp", "llc", 
 export const punchTypeEnum = pgEnum("punch_type", ["clock_in", "clock_out", "break_start", "break_end"]);
 export const scheduleStatusEnum = pgEnum("schedule_status", ["draft", "published"]);
 export const timesheetStatusEnum = pgEnum("timesheet_status", ["pending", "approved", "rejected"]);
-export const payrollStatusEnum = pgEnum("payroll_status", ["draft", "processed", "paid"]);
+export const payrollStatusEnum = pgEnum("payroll_status", ["draft", "processed", "paid", "approved", "submitted", "processing", "failed", "voided", "reversed"]);
 export const jobStatusEnum = pgEnum("job_status", ["active", "completed", "cancelled", "on_hold"]);
 
 export const enterprises = pgTable("enterprises", {
@@ -267,6 +267,12 @@ export const payrollRuns = pgTable("payroll_runs", {
   totalEmployerTaxes: numeric("total_employer_taxes").default("0"),
   totalReimbursements: numeric("total_reimbursements").default("0"),
   needsRecalculation: boolean("needs_recalculation").default(false),
+  failureCode: text("failure_code"),
+  failureReason: text("failure_reason"),
+  voidedAt: timestamp("voided_at"),
+  voidedBy: varchar("voided_by"),
+  reversedAt: timestamp("reversed_at"),
+  reversedBy: varchar("reversed_by"),
 });
 
 export const payrollItems = pgTable("payroll_items", {
@@ -1557,11 +1563,35 @@ export const payrollPaymentRecords = pgTable("payroll_payment_records", {
   updatedBy: varchar("updated_by"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+  stripeOutboundPaymentId: text("stripe_outbound_payment_id"),
+  achBatchId: varchar("ach_batch_id"),
+  failureCode: text("failure_code"),
+  failureReason: text("failure_reason"),
+  reversedAt: timestamp("reversed_at"),
+  reconciledAt: timestamp("reconciled_at"),
 });
 
 export const insertPayrollPaymentRecordSchema = createInsertSchema(payrollPaymentRecords).omit({ id: true, createdAt: true, updatedAt: true });
 export type PayrollPaymentRecord = typeof payrollPaymentRecords.$inferSelect;
 export type InsertPayrollPaymentRecord = z.infer<typeof insertPayrollPaymentRecordSchema>;
+
+// ── Payroll Payment Audit Logs ────────────────────────────────────────────────
+export const payrollPaymentAuditLogs = pgTable("payroll_payment_audit_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").references(() => companies.id),
+  payrollRunId: varchar("payroll_run_id").references(() => payrollRuns.id),
+  payrollPaymentRecordId: varchar("payroll_payment_record_id"),
+  actorId: varchar("actor_id"),
+  event: text("event").notNull(),
+  previousStatus: text("previous_status"),
+  newStatus: text("new_status"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertPayrollPaymentAuditLogSchema = createInsertSchema(payrollPaymentAuditLogs).omit({ id: true, createdAt: true });
+export type PayrollPaymentAuditLog = typeof payrollPaymentAuditLogs.$inferSelect;
+export type InsertPayrollPaymentAuditLog = z.infer<typeof insertPayrollPaymentAuditLogSchema>;
 
 // ── Time-Off Requests ──────────────────────────────────────────────────────
 export const timeOffRequests = pgTable("time_off_requests", {
