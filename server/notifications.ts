@@ -452,21 +452,13 @@ export async function sendContractEventEmail(payload: ContractEventPayload): Pro
 
 export async function sendContractEventSms(payload: ContractEventPayload): Promise<{ sent: boolean; error?: string }> {
   if (!payload.phone) return { sent: false, error: "No phone number" };
-  // Safety: SMS must never contain direct document download paths — only in-app URLs are permitted
-  if (payload.actionUrl && (payload.actionUrl.includes("/uploads/") || payload.actionUrl.match(/\.(pdf|docx?|xlsx?)(\?|$)/i))) {
-    console.error("[SMS] Blocked: actionUrl contains a direct document download path. Only in-app review links may be sent via SMS.", payload.actionUrl);
-    return { sent: false, error: "SMS blocked: direct document URLs are not permitted in SMS" };
-  }
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const fromNumber = process.env.TWILIO_PHONE_NUMBER;
-  if (!accountSid || !authToken || !fromNumber) return { sent: false, error: "Twilio not configured" };
   const label = CONTRACT_EVENT_LABELS[payload.event] || payload.event;
   const message = `PayLink: ${label} — ${payload.contractTitle}${payload.amount != null ? ` ($${Number(payload.amount).toFixed(2)})` : ""}${payload.note ? `. ${payload.note}` : ""}${payload.actionUrl ? ` View: ${payload.actionUrl}` : ""}`;
   try {
-    const twilio = (await import("twilio")).default;
-    const client = twilio(accountSid, authToken);
-    await client.messages.create({ body: message, from: normalizePhone(fromNumber), to: normalizePhone(payload.phone) });
+    // Route through sendViaTwilio so the central SMS URL allowlist
+    // (only `/app/*` in-app links permitted) is enforced. Avoids any direct
+    // Twilio call path that could bypass the safety guard.
+    await sendViaTwilio(payload.phone, message);
     return { sent: true };
   } catch (err: any) {
     console.error(`[SMS] Failed contract event SMS to ${payload.phone}:`, err.message);

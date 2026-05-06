@@ -11397,8 +11397,22 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!isAdmin && doc.worker_id !== workerId) return res.status(403).json({ message: "Access denied" });
       if (isAdmin && user?.companyId && doc.company_id && doc.company_id !== user.companyId && !(user?.role || "").startsWith("platform_")) return res.status(403).json({ message: "Access denied" });
       await db.execute(sql`INSERT INTO dam_document_access_logs (document_id, accessed_by_user_id, accessed_by_worker_id, action) VALUES (${req.params.id}, ${req.session.userId}, ${workerId || null}, 'download')`).catch(() => {});
-      // Return download info; actual file serving is handled by static middleware
-      res.json({ filePath: doc.file_path, fileName: doc.file_name, mimeType: doc.mime_type });
+
+      // Stream the file directly so the browser receives the PDF/binary
+      // instead of a JSON descriptor. Resolves an absolute path safely under
+      // the project root and refuses anything that escapes it.
+      const path = await import("path");
+      const fs = await import("fs");
+      const root = process.cwd();
+      const rawPath = String(doc.file_path || "");
+      // Normalize: accept absolute paths inside cwd, or repo-relative paths.
+      const resolved = path.isAbsolute(rawPath) ? path.resolve(rawPath) : path.resolve(root, rawPath.replace(/^\/+/, ""));
+      if (!resolved.startsWith(root)) return res.status(400).json({ message: "Invalid file path" });
+      if (!fs.existsSync(resolved)) return res.status(404).json({ message: "File missing on disk" });
+      const fileName = String(doc.file_name || path.basename(resolved));
+      if (doc.mime_type) res.setHeader("Content-Type", String(doc.mime_type));
+      res.setHeader("Content-Disposition", `inline; filename="${fileName.replace(/"/g, "")}"`);
+      return res.sendFile(resolved);
     } catch (e: any) { res.status(500).json({ message: "Failed to initiate download" }); }
   });
 

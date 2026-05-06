@@ -7,7 +7,7 @@
  * raw API routes) and document file extensions must always be blocked.
  */
 import "dotenv/config";
-import { sendViaTwilio } from "../server/notifications";
+import { sendViaTwilio, sendContractEventSms } from "../server/notifications";
 
 let pass = 0;
 let fail = 0;
@@ -64,6 +64,35 @@ async function expectAllowed(label: string, body: string) {
   console.log("\n[5] Allows /app/ in-app review links");
   await expectAllowed("/app/contractor-hub URL",   "Review: https://app.example.com/app/contractor-hub?section=proposals&id=abc");
   await expectAllowed("plain text, no URL",        "Your proposal has been approved.");
+
+  console.log("\n[6] sendContractEventSms routes through sendViaTwilio guard");
+  // A contract-event SMS that contains a non-/app URL must be blocked by the
+  // central guard rather than slipped through a direct Twilio call path.
+  const blockedRes = await sendContractEventSms({
+    event: "contract_signed",
+    phone: "+15555550100",
+    recipientName: "Test",
+    contractTitle: "Bad URL Contract",
+    actionUrl: "https://app.example.com/api/dam-documents/xyz/download",
+  } as any);
+  log(
+    "contract event SMS with /api download URL is blocked",
+    blockedRes.sent === false && /SMS blocked/i.test(blockedRes.error || ""),
+    `got sent=${blockedRes.sent} error=${blockedRes.error}`,
+  );
+  // An /app/ URL should pass the guard (will fail later only if Twilio not configured).
+  const allowedRes = await sendContractEventSms({
+    event: "contract_signed",
+    phone: "+15555550100",
+    recipientName: "Test",
+    contractTitle: "Good URL Contract",
+    actionUrl: "https://app.example.com/app/contractor-hub?section=contracts&id=abc",
+  } as any);
+  log(
+    "contract event SMS with /app URL is NOT blocked by guard",
+    !(allowedRes.error || "").startsWith("SMS blocked"),
+    `error=${allowedRes.error}`,
+  );
 
   console.log(`\n=== ${pass} passed, ${fail} failed ===`);
   process.exit(fail === 0 ? 0 : 1);
