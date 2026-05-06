@@ -23,17 +23,27 @@ async function sendSchedulerReminderEmails(
     `);
     const cw = contractorRes.rows[0] as { email: string | null; name: string } | undefined;
     if (cw?.email) {
-      sendGenericNotificationEmail({ recipientName: cw.name || "Contractor", email: cw.email, title, body, actionUrl }).catch(() => {});
+      // Await send result so we only log status='sent' on actual delivery — keeps
+      // the dedup window honest (failed sends remain eligible for retry next tick).
+      let sendOk = true;
+      try {
+        await sendGenericNotificationEmail({ recipientName: cw.name || "Contractor", email: cw.email, title, body, actionUrl });
+      } catch (sendErr) {
+        sendOk = false;
+        console.warn(`[ContractorScheduler] Contractor email send failed (${templateKey}/${entityId}):`, sendErr instanceof Error ? sendErr.message : String(sendErr));
+      }
       await db.execute(sql`
         INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status)
-        VALUES (${entityType}, ${entityId}, 'email', ${cw.email}, ${templateKey}, ${title}, ${body}, 'sent')
+        VALUES (${entityType}, ${entityId}, 'email', ${cw.email}, ${templateKey}, ${title}, ${body}, ${sendOk ? 'sent' : 'failed'})
       `);
     }
-    // Admin/manager emails
+    // Admin/manager emails — broaden role filter to cover tenant role variants
     const adminRes = await db.execute(sql`
-      SELECT u.id, COALESCE(w.email, w.work_email) AS email, u.username AS name
+      SELECT u.id, COALESCE(w.email, w.work_email, u.email) AS email, u.username AS name
       FROM users u LEFT JOIN workers w ON w.id = u.worker_id
-      WHERE u.company_id = ${cid} AND u.role IN ('admin','manager','tenant_admin','tenant_owner') LIMIT 5
+      WHERE u.company_id = ${cid}
+        AND u.role IN ('admin','manager','tenant_admin','tenant_owner','tenant_manager','tenant_hr_admin','tenant_payroll_admin')
+      LIMIT 5
     `);
     for (const admin of adminRes.rows as Array<{ id: string; email: string | null; name: string }>) {
       if (admin.email) {

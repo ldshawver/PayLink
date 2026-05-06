@@ -9816,7 +9816,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const adminsRes = await db.execute(sql`
           SELECT u.email, COALESCE(w.first_name || ' ' || w.last_name, u.username) AS name
           FROM users u LEFT JOIN workers w ON w.id = u.worker_id
-          WHERE u.company_id = ${proposal.company_id} AND u.role IN ('admin','manager')
+          WHERE u.company_id = ${proposal.company_id}
+            AND u.role IN ('admin','manager','tenant_admin','tenant_owner','tenant_manager','tenant_hr_admin','tenant_payroll_admin')
           AND u.email IS NOT NULL AND u.email != ''`);
         for (const admin of (adminsRes.rows as Array<{email: string; name: string}>)) {
           sendGenericNotificationEmail({
@@ -9855,7 +9856,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       try {
         const { sendGenericNotificationEmail } = await import("./notifications.js");
         const baseUrl = getAppBaseUrl(req);
-        const cwRes = await db.execute(sql`SELECT u.email, w.first_name, w.last_name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${proposal.contractor_id} LIMIT 1`);
+        const cwRes = await db.execute(sql`
+          SELECT COALESCE(w.work_email, w.home_email, w.email, u.email) AS email,
+                 w.first_name, w.last_name
+          FROM workers w LEFT JOIN users u ON u.worker_id = w.id
+          WHERE w.id = ${proposal.contractor_id} LIMIT 1
+        `);
         const cw = cwRes.rows[0] as any;
         if (cw?.email) {
           sendGenericNotificationEmail({
@@ -9899,7 +9905,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       try {
         const { sendGenericNotificationEmail } = await import("./notifications.js");
         const baseUrl = getAppBaseUrl(req);
-        const cwRes = await db.execute(sql`SELECT u.email, w.first_name, w.last_name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${proposal.contractor_id} LIMIT 1`);
+        const cwRes = await db.execute(sql`
+          SELECT COALESCE(w.work_email, w.home_email, w.email, u.email) AS email,
+                 w.first_name, w.last_name
+          FROM workers w LEFT JOIN users u ON u.worker_id = w.id
+          WHERE w.id = ${proposal.contractor_id} LIMIT 1
+        `);
         const cw = cwRes.rows[0] as any;
         if (cw?.email) {
           sendGenericNotificationEmail({
@@ -9939,7 +9950,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       try {
         const { sendGenericNotificationEmail } = await import("./notifications.js");
         const baseUrl = getAppBaseUrl(req);
-        const cwRes = await db.execute(sql`SELECT u.email, w.first_name, w.last_name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${proposal.contractor_id} LIMIT 1`);
+        const cwRes = await db.execute(sql`
+          SELECT COALESCE(w.work_email, w.home_email, w.email, u.email) AS email,
+                 w.first_name, w.last_name
+          FROM workers w LEFT JOIN users u ON u.worker_id = w.id
+          WHERE w.id = ${proposal.contractor_id} LIMIT 1
+        `);
         const cw = cwRes.rows[0] as any;
         if (cw?.email) {
           sendGenericNotificationEmail({
@@ -10010,7 +10026,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       try {
         const { sendGenericNotificationEmail } = await import("./notifications.js");
         const baseUrl = getAppBaseUrl(req);
-        const cwRes = await db.execute(sql`SELECT u.email, w.first_name, w.last_name FROM workers w LEFT JOIN users u ON u.worker_id = w.id WHERE w.id = ${proposal.contractor_id} LIMIT 1`);
+        const cwRes = await db.execute(sql`
+          SELECT COALESCE(w.work_email, w.home_email, w.email, u.email) AS email,
+                 w.first_name, w.last_name
+          FROM workers w LEFT JOIN users u ON u.worker_id = w.id
+          WHERE w.id = ${proposal.contractor_id} LIMIT 1
+        `);
         const cw = cwRes.rows[0] as any;
         if (cw?.email) {
           sendGenericNotificationEmail({
