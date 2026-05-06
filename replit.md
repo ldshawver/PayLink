@@ -1,9 +1,79 @@
-# PayLink - HR, Payroll & Time-clock Software
+# PayLink
 
-## Overview
-PayLink is a comprehensive full-stack HR, Payroll & Time-clock application designed to manage employee and contractor time-tracking, scheduling, payroll, policies, and HR functions for multiple businesses. Its core purpose is to streamline human resources and payroll operations, providing a robust solution for efficient workforce management within a scalable architecture. The project aims to address common HR and payroll challenges, empowering businesses with advanced tools for employee management, payroll processing, and extensive HR functionalities.
+PayLink is a comprehensive HR, Payroll & Time-clock application designed to manage employee and contractor time-tracking, scheduling, payroll, policies, and HR functions for multiple businesses.
 
-## User Preferences
+## Run & Operate
+
+**Required `ENV` vars:** `DATABASE_URL`, `SESSION_SECRET`, `APP_BASE_URL`, `PORT=8000`, `NODE_ENV=production`.
+`dotenv_config_path=/etc/paylink/.env` must be used for PM2.
+
+```bash
+# Install dependencies
+npm install
+
+# Build the application
+npm run build
+
+# Run in development
+npm run dev
+
+# Typecheck
+npm run typecheck
+
+# Generate Drizzle migrations
+npm run generate
+
+# Push DB schema changes
+npm run db:push
+```
+
+## Stack
+
+**Frontend:** React, TypeScript, Tailwind CSS, shadcn/ui, Wouter, TanStack Query, Vite.
+**Backend:** Express.js, TypeScript.
+**Database:** PostgreSQL (Drizzle ORM).
+**Auth:** `express-session`, `connect-pg-simple`, `bcrypt`.
+**Runtime:** Node.js.
+**Build Tool:** Vite.
+**Mobile:** Capacitor.
+
+## Where things live
+
+-   **Frontend Source:** `client/src/`
+-   **Backend Source:** `server/`
+-   **Database Schema:** `server/db/schema.ts`
+-   **Drizzle Migrations:** `server/db/migrations/`
+-   **API Routes:** `server/routes.ts`
+-   **RBAC Definitions:** `client/src/lib/roles.ts`
+-   **Notification Templates:** `notification_templates` table in DB.
+-   **Mobile App Config:** `capacitor.config.ts`
+-   **Disaster Recovery Runbook:** `DISASTER_RECOVERY.md`
+
+## Architecture decisions
+
+-   **Multi-Company Scheduling:** A worker's `companyId` is their home/payroll company, but they can be scheduled at any company. The schedule's `companyId` determines the effective company for all downstream records (punches, time entries, payroll).
+-   **Timezone Handling:** `server/db.ts` forces `SET timezone = 'UTC'` for all PostgreSQL connections to ensure consistent UTC storage and retrieval of `TIMESTAMP` columns.
+-   **Role-Based Access Control (RBAC):** Implemented with a 3-layer hierarchy (Platform, Tenant, Worker) and scope-based permission columns (`can_view_own`, `can_edit_company`, etc.) in the `role_permissions` table.
+-   **Feature Registry & Activation System:** Platform-level feature flags are managed per tenant via `feature_registry`, `feature_overrides`, and `feature_activation_log` DB tables, enabling granular control over feature rollout.
+-   **Tax Engine Design:** `server/tax-engine.ts` is a pure, deterministic module for tax calculation, ensuring consistency and testability by avoiding direct DB calls during computation.
+
+## Product
+
+-   Time & Attendance tracking with cross-company scheduling.
+-   Employee and Contractor Management.
+-   Multi-step Payroll Processing with tax form generation and ACH direct deposit.
+-   Policy & HR Management.
+-   Reporting with CSV export.
+-   Expense Management with AI receipt scanning.
+-   TOTP MFA and comprehensive SOC 2 + GDPR compliance features (PII export/anonymization, audit logs, breach response).
+-   Mobile app with native features (push notifications, biometrics, camera).
+-   SaaS Trial & Billing, Customer & Employee Onboarding.
+-   Document Management with versioning and e-signatures.
+-   Contract Lifecycle Management from proposals to payment.
+-   Platform Audit Readiness tab for comprehensive system health checks.
+
+## User preferences
+
 When deploying updates to the VPS, ALWAYS follow this exact sequence:
 1. BACKUP the database FIRST.
 2. Pull new code.
@@ -39,163 +109,22 @@ Schema Change Rules (CRITICAL - NEVER VIOLATE):
 7. Test all schema changes on Replit dev database BEFORE deploying to VPS.
 8. The VPS database contains REAL production data - treat it as sacred.
 
-## Security & Compliance (SOC 2 + GDPR — Task #10)
+## Gotchas
 
-### TOTP MFA (Steps 1–4)
-- `server/totp.ts`: RFC 6238 TOTP using Node.js `crypto` only (no external deps). `generateBase32Secret`, `verifyTOTP`, `buildOtpAuthUri`, `encryptTotpSecret`, `decryptTotpSecret`.
-- API routes: `POST /api/auth/mfa/enroll`, `POST /api/auth/mfa/confirm`, `POST /api/auth/mfa/disable`, `GET /api/auth/mfa/status`, `POST /api/auth/mfa/verify`, `POST /api/auth/mfa/enforce`.
-- DB: `users.totp_secret` (AES-256-GCM encrypted), `users.mfa_enabled`, `users.mfa_enforced_at`.
-- UI: `/app/mfa-settings` — self-service TOTP enrollment with QR code + manual key entry.
+-   `paylinkssh` user on the VPS does not have write permissions to the marketing site web root, causing `rsync` failures during deployment for the static marketing site.
+-   Tenant-scoped users (`companyId != null`) must never access `/platform/*` routes.
+-   Platform-scoped users must never have a `companyId` assigned.
+-   `admin` role in legacy context refers to `tenant_admin`, not a platform role.
+-   Capacitor WebView requires `sameSite: "none"` for session cookies due to cross-origin nature.
 
-### Content-Security-Policy (Step 5)
-- Applied to ALL environments (dev + prod) via `server/index.ts` middleware.
-- Directives: `default-src 'self'`, `script-src 'self' 'unsafe-inline'`, `style-src + Google Fonts`, `frame-ancestors 'none'`, `object-src 'none'`.
-- HSTS (`Strict-Transport-Security`) applied in production only.
+## Pointers
 
-### PII Data Export (Step 6)
-- `GET /api/workers/:id/data-export` — exports all personal data for a worker as JSON. SSN masked in output.
-- Writes to both `privacy_audit_log` and `authorization_audit_log`.
-
-### Data Anonymization (Step 7)
-- `POST /api/workers/:id/anonymize` — overwrites all PII fields with `[ANONYMIZED]` placeholders. Payroll YTD totals are preserved for tax/legal compliance.
-- Writes to both audit logs.
-
-### GDPR Data Inventory (Step 8)
-- `client/src/pages/gdpr-inventory.tsx` — config-driven table of all data categories, legal basis (per GDPR Art. 6), retention, 3rd parties.
-- Subprocessors tab: Stripe, DocuSign, Acrobat Sign, SendGrid, Twilio, VPS hosting.
-- Route: `/platform/gdpr-inventory`.
-
-### Privacy Actions Audit Log (Steps 9–10)
-- DB: `privacy_audit_log` table — records `data_export`, `data_anonymization`, `consent_change`, `retention_policy_change`, `mfa_enrolled`, `mfa_disabled`, `breach_notification`, `data_access`.
-- API: `GET /api/privacy-audit-log` (with filters), `GET /api/privacy-audit-log/export-csv`.
-- UI: `/platform/privacy-audit-log` — filterable table with CSV export.
-
-### Breach Response Workflow (Step 11)
-- DB: `breach_incidents` table.
-- API: `GET /api/breach-incidents`, `POST /api/breach-incidents`.
-- UI: `/platform/breach-response` — 5-step GDPR Art. 33/34 guide + incident recording form.
-
-### Tenant Isolation Tests (Step 12)
-- `tests/security.test.ts` — `testTenantIsolation()` suite verifies Company A manager cannot read/export/anonymize Company B workers.
-- Also covers MFA enrollment flow tests and privacy audit log access tests.
-
-### Disaster Recovery Runbook (Step 13)
-- `DISASTER_RECOVERY.md` — RTO/RPO targets, backup verification, DB restore procedure, application rollback, escalation contacts, quarterly DR drill checklist.
-
-### Dependency Vulnerability Scan (Step 14)
-- `.github/workflows/deploy-app.yml` — `npm audit --audit-level=high` added as a required step before deployment build.
-
-### Retention Policy: Legal Basis (GDPR Art. 6)
-- `document_retention_policies.legal_basis` and `purpose_description` columns added.
-- `PATCH /api/document-retention-policies/:id/legal-basis` to update.
-
-## System Architecture
-PayLink is built with a React frontend, an Express.js backend, and a PostgreSQL database, following a microservices-inspired approach.
-
-**Frontend:**
--   **Technology Stack:** React + TypeScript, Tailwind CSS, shadcn/ui, Wouter, TanStack Query.
--   **UI/UX Design:** Sidebar navigation, teal-to-blue gradient theme (primary HSL(180, 55%, 42%)), responsive design.
--   **PWA Configuration:** Utilizes `vite-plugin-pwa` for offline capabilities and installability.
-
-**Backend:**
--   **Framework:** Express.js + TypeScript.
--   **Authentication:** Session-based with `express-session`, `connect-pg-simple`, and `bcrypt`.
--   **Authorization (RBAC):** 3-layer role hierarchy. See `client/src/lib/roles.ts` for the authoritative definition. Scope-based permission columns added to `role_permissions` table: `can_view_own`, `can_edit_own`, `can_view_subordinates`, `can_edit_subordinates`, `can_approve_subordinates`, `can_view_department`, `can_edit_department`, `can_view_company`, `can_edit_company`. Debug endpoint: `GET /api/debug/permissions/me` (requires auth). Permission Overrides UI shows Actions + Scope column groups. Contractor role has `can_view=true, can_view_own=true` on `contractor_hub` resource. Resource key normalized to `contractor_hub` (underscore only — hyphenated variants deleted).
-
-**Role Hierarchy (critical — never bypass):**
--   **Layer 1 — Platform Console** (`/platform/*`): Only explicit `platform_*` roles may access. `"admin"` is a TENANT role, never a platform role. Dev login: `admin` / `admin` (role: `platform_super_admin`, no companyId).
-    -   `platform_super_admin` — full platform access
-    -   `platform_admin` — full access, cannot change super admin settings
-    -   `platform_sales` — Sales & Licensing modules only
-    -   `platform_implementation` — Implementation/CS modules only
-    -   `platform_support` — read-only tenant data for support
-    -   `platform_billing` — Platform Finance / billing only
-    -   `platform_auditor` — read-only audit log
--   **Layer 2 — Tenant App** (`/app/*`, admin modules): Tenant-scoped roles with `companyId`. Legacy `"admin"` maps to `tenant_admin`.
-    -   `tenant_owner`, `tenant_admin`, `tenant_hr_admin`, `tenant_payroll_admin`, `tenant_finance_admin`
-    -   `tenant_manager`, `tenant_supervisor`, legacy `manager`, `supervisor`
--   **Layer 3 — Employee Portal** (`/app/*`, personal modules): Worker roles.
-    -   `employee`, `contractor`
--   **Server guard helpers** in `server/routes.ts`: `requireRole()` (expands new roles to legacy aliases), `requirePlatformRole()` (platform-only endpoints), `isAdminRole()`, `isManagerRole()`.
--   **Test accounts** (dev only, password: `test1234`): `test_platform_sales`, `test_platform_implementation`, `test_platform_support`, `test_platform_billing`, `test_platform_auditor`, `test_tenant_owner`, `test_tenant_admin`, `test_tenant_hr_admin`, `test_tenant_payroll_admin`, `test_tenant_finance_admin`, `test_tenant_manager`, `test_tenant_supervisor`, `test_employee`, `test_contractor`.
--   **CRITICAL**: Never assign `companyId` to a platform-scoped user. Never let a tenant user (`companyId != null`) access `/platform/*`.
--   **API Design:** RESTful API for managing companies, workers, time, payroll, and HR functions, including payroll summaries and time clock punches.
--   **Key Features:** Time & Attendance, Employee Management, Company Management, Payroll Processing (multi-step wizard, tax form generation, ACH direct deposit), Policy & HR Management, Reporting (with CSV export), Expense Management (photo uploads, approval, AI receipt scanning), User Account Management (PIN, username/password, kiosk login), Schedule Publishing & Time-Off, Payroll Audit, Worker Groups, Shift Marketplace, SaaS Trial & Billing, Interactive Demo Mode, Onboarding (Customer & Employee), Invoicing System, Document Management (versioning, e-signatures, audit logs), Integration Event Bus (webhooks), Automation Engine, Notifications System (admin-editable email + SMS templates via `notification_templates` table), System Documents, Contractor Onboarding + Agreement System, Trade / Non-Cash Compensation, Unified Invoices & Proposals Module (biz-docs: business creates customer invoices/proposals; Contractor Hub: contractors send proposals to companies, companies accept/reject/pay), Contract Lifecycle (ConvertToContractDialog pre-fills from approved proposal, ContractDetailPanel with signers/signing/status/admin actions, reminder banners for expiring and unsigned contracts, CreateInvoiceFromContractDialog with budget guardrail enforcement and override request flow), enhanced invoice status machine (under_review, needs_correction, approved, rejected, disputed, closed), enhanced Payments & Remittance section with date/status filters and 3 summary totals, **Feature Registry & Activation System** (platform-level feature flags per tenant: `feature_registry` + `feature_overrides` + `feature_activation_log` DB tables, platform console UI with 3-step activation wizard + audit log, tenant read-only features panel in Company page, `requireFeature()` server middleware, `useFeatureFlag()` + `useFeatureFlags()` frontend hooks in `client/src/lib/featureFlags.ts`).
-
-**Multi-Company Worker Scheduling (critical architecture):**
--   A worker's `companyId` field is their **home/payroll company** — it does NOT restrict which company they can be scheduled at.
--   Workers may be scheduled at ANY company (cross-company scheduling is explicitly allowed in `POST /api/schedules` and `POST/PATCH /api/recurring-schedules`).
--   **The schedule determines the company for all downstream records** — the punch, time entry, clock-in request, and payroll entry all use `schedule.companyId` (the effective company), NOT `worker.companyId`.
--   `GET /api/schedules`: Non-manager employees filter by `workerId` only (they see their own shifts at every company). Managers filter by their `companyId`.
--   `GET /api/workers?scheduling=true`: Returns all workers across all companies so managers can schedule cross-company workers. Standard `GET /api/workers` remains company-scoped.
--   Clock-in logic (both `/api/time-clock/clock-in-session` and `/api/time-punches`) first looks for a schedule in the worker's home company, then searches all companies. If a cross-company schedule is found, `effectiveCompanyId` is set to that company's ID and all records (punch, time entry, clock-in request, notifications) are created under that company.
--   **Timezone:** `server/db.ts` forces `SET timezone = 'UTC'` on every pg connection so `TIMESTAMP` columns are always stored and read consistently as UTC regardless of server OS timezone.
-
-**Database:**
--   **Type:** PostgreSQL, managed with Drizzle ORM.
--   **Schema Design:** Supports enterprise hierarchy, core operational data, and granular role-based access control.
-
-**Production Deployment:**
--   **Environment:** Consolidated under `mypaylink.app`. Nginx reverse-proxies app paths to Node.js (port 8000); other paths to marketing site (port 3000). Legacy `app.mypaylink.app` redirects to `mypaylink.app/app`.
--   **URL Structure:** `/login`, `/clock-in` (public); authenticated pages under `/app/*`.
--   **Security:** Secure cookie settings, hidden error details, security headers.
--   **Logout:** Redirects to `https://mypaylink.app`.
-
-**Mobile App (Capacitor):**
--   **Configuration:** `capacitor.config.ts`, app ID `app.mypaylink.paylink`, web assets from `dist/public/`.
--   **Plugins:** Push-notifications, camera, filesystem, haptics, keyboard, status-bar, app, share, browser, capacitor-native-biometric.
--   **CORS:** Express middleware configured for Capacitor WebView origins.
--   **Session cookies:** `sameSite: "none"` for cross-origin WebView compatibility.
--   **API base URL:** Detects native platform to prepend production API URL.
--   **Native Feature Hooks:** Push notifications, biometric authentication, native camera/photo library, status bar/keyboard management, haptic feedback.
--   **Native Backend Endpoints:** Device token management, notification preferences, biometric restore tokens.
--   **Native UI Pages:** Notification settings, biometric toggle in profile.
--   **NativeFileUpload component:** Replaces file inputs for native camera/photo library integration.
-
-**Platform Audit — Readiness Tab:**
-- `GET /api/platform/audit/readiness` — platform_super_admin only; runs parallel DB queries against all 22 product areas and returns per-area: status (pass/warning/fail), riskLevel (critical/high/medium/low), evidence counts, missingPieces, affectedTables, affectedRoutes, affectedUi, testCases, owner, blockingIssue, recommendedFixOrder.
-- The 22 areas: payroll engine, tax calculations, pay period schedules, multi-company income, paystubs, check printing, ACH/Stripe, reports/exports, CA labor compliance, multi-state compliance, document management, employee onboarding, contractor proposals/invoices/contracts, e-signatures, notifications, RBAC, tenant isolation, audit logs, SOC 2, GDPR, demo provisioning, customer onboarding.
-- Frontend: `ReadinessTab` component added to `platform-audit.tsx` — shows summary scorecard (pass/warning/fail/critical counts), overall readiness banner, filterable/searchable area list with expandable detail cards showing all fields. Registered as 14th tab in the Platform Audit page.
-- RBAC scope columns (`can_view_own`, `can_edit_own`, `can_view_subordinates`, `can_edit_subordinates`, `can_approve_subordinates`, `can_view_department`, `can_edit_department`, `can_view_company`, `can_edit_company`) added to `role_permissions` table; surfaced in RBAC readiness area evidence and in role-management.tsx permissions matrix.
-- Debug endpoint: `GET /api/debug/permissions/me` — returns the authenticated user's full effective permission set.
-
-## Tax Engine (Task #4)
-
-### Architecture
-- `server/tax-engine.ts` — pure, deterministic tax calculation module (no DB calls). Exports `calcAllTaxes(input: TaxEngineInput)`.
-- Taxes computed: Federal Income Tax (IRS Pub. 15-T annualized percentage method, single/married/hoh brackets), Social Security (6.2%), Medicare (1.45% + 0.9% additional), FUTA (6.0% w/credit), CA PIT (DE 44 Method B), CA SDI (1.1%), CA UI (3.4%), CA ETT (0.1%).
-- W-4 aware: reads `w4FilingStatus`, `w4Allowances`, `additionalWithholding` from worker record.
-- Pre-tax deductions (health, 401k, FSA, HSA, etc.) reduce federal/CA taxable wages before bracket calculation.
-- Post-tax deductions (Roth 401k, wage garnishments) applied after taxes.
-- Engine version stamped in every snapshot (`TAX_ENGINE_VERSION`).
-
-### New DB Tables
-- `payroll_item_taxes` — one row per tax line per payroll item (taxCode, taxName, taxableWages, rate, amount, isEmployerPaid, stateCode).
-- `payroll_tax_snapshots` — one row per payroll run capturing the full JSON snapshot of all tax lines + version.
-- `payroll_overrides` — admin-created manual adjustments to individual tax lines.
-
-### New Columns
-- `workers`: `w4FilingStatus`, `w4Allowances`, `additionalWithholding`
-- `taxes_deductions`: `taxCode`, `stateCode`, `deductionTiming` (pre_tax/post_tax/employer_only), `isTaxableBenefit`, `isReimbursement`
-
-### New API Endpoints
-- `GET /api/payroll-runs/:id/taxes` — all tax lines for a run
-- `GET /api/payroll-runs/:id/tax-snapshot` — the stored JSON snapshot
-- `GET /api/payroll-runs/:id/tax-overrides` — all overrides for a run
-- `PATCH /api/payroll-items/:id/tax-override` — create/update an override
-- `GET /api/payroll-items/:id/taxes` — per-item tax lines
-- `GET /api/companies/:id/tax-liability` — aggregated liability by taxCode for a date range
-
-### Reports
-- **Payroll Register** (`payroll-register-report.tsx`): adds a "Tax Engine Breakdown" section with per-code summary badges and per-employee tax detail table.
-- **Tax Liability Report** (`reports.tsx` → `TaxLiabilityDialog`): fetches `/api/companies/:id/tax-liability`, shows table grouped by taxCode.
-- **Tax Audit Report** (`reports.tsx` → `TaxAuditDialog`): shows stored tax lines for a specific run + any overrides applied.
-
-## External Dependencies
--   **PostgreSQL:** Primary application database.
--   **NGINX:** Reverse proxy for production deployments.
--   **PM2:** Node.js process manager for production.
--   **Nodemailer:** For email notifications.
--   **Twilio:** For SMS notifications.
--   **OpenAI:** Utilized for AI-powered receipt scanning via GPT-4o vision.
--   **Capacitor:** Cross-platform native runtime for Android and iOS apps.
+-   **PostgreSQL Documentation:** [https://www.postgresql.org/docs/](https://www.postgresql.org/docs/)
+-   **Express.js Documentation:** [https://expressjs.com/](https://expressjs.com/)
+-   **React Documentation:** [https://react.dev/](https://react.dev/)
+-   **Drizzle ORM Documentation:** [https://orm.drizzle.team/](https://orm.drizzle.team/)
+-   **Capacitor Documentation:** [https://capacitorjs.com/docs/](https://capacitorjs.com/docs/)
+-   **Tailwind CSS Documentation:** [https://tailwindcss.com/docs](https://tailwindcss.com/docs)
+-   **Node.js Crypto Module (for TOTP):** [https://nodejs.org/api/crypto.html](https://nodejs.org/api/crypto.html)
+-   **IRS Publication 15-T (for tax calculations):** _Populate as you build_
+-   **GDPR Official Text:** [https://gdpr-info.eu/](https://gdpr-info.eu/)
