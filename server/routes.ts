@@ -21430,13 +21430,10 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
 
     try {
-      const twilio = (await import("twilio")).default;
-      const client = twilio(accountSid, authToken);
-      await client.messages.create({
-        body: "PayLink test message — SMS notifications are working correctly!",
-        from: normalizePhone(fromNumber),
-        to: normalizePhone(phone),
-      });
+      // Route through sendViaTwilio so the central /app/* URL allowlist
+      // applies even to the admin test-sms endpoint (defense in depth).
+      const { sendViaTwilio } = await import("./notifications");
+      await sendViaTwilio(phone, "PayLink test message — SMS notifications are working correctly!");
       console.log(`[SMS] Test message sent to ${phone}`);
       res.json({ sent: true, to: normalizePhone(phone) });
     } catch (err: any) {
@@ -21518,15 +21515,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         return res.json({ sent: true, channel: "email", to: toEmail });
       } else if (channel === "sms") {
         if (!toPhone) return res.status(400).json({ message: "toPhone required" });
-        const accountSid = process.env.TWILIO_ACCOUNT_SID;
-        const authToken = process.env.TWILIO_AUTH_TOKEN;
-        const fromNumber = process.env.TWILIO_PHONE_NUMBER;
-        if (!accountSid || !authToken || !fromNumber) return res.status(400).json({ message: "Twilio not configured" });
-        const { normalizePhone } = await import("./notifications");
-        const twilio = (await import("twilio")).default;
-        const client = twilio(accountSid, authToken);
+        // Route through sendViaTwilio so the /app/* URL allowlist applies
+        // to template test sends (template bodies may contain URLs).
+        const { sendViaTwilio } = await import("./notifications");
         const body = `[TEST] ${fill(tmpl.sms_body)}`;
-        await client.messages.create({ body, from: normalizePhone(fromNumber), to: normalizePhone(toPhone) });
+        await sendViaTwilio(toPhone, body);
         return res.json({ sent: true, channel: "sms", to: toPhone });
       }
       return res.status(400).json({ message: "channel must be email or sms" });
@@ -21923,6 +21916,13 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           return res.status(400).json({ sent: false, message: "SMS (Twilio) is not configured" });
         }
 
+        // NOTE: This channel-config validator deliberately does NOT route
+        // through sendViaTwilio — it specifically exercises the DB-backed
+        // credentials path (including optional messagingServiceSid override),
+        // which the central helper does not yet propagate. The body is a
+        // fixed string with no URLs, so the /app/* URL allowlist would be a
+        // no-op here. If sendViaTwilio gains messagingServiceSid support,
+        // collapse this into the helper.
         const twilio = (await import("twilio")).default;
         const client = twilio(accountSid, authToken);
         const msgParams: Record<string, string> = {
@@ -22296,14 +22296,11 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       }
 
       // Pre-load SMTP transporter and Twilio client once for efficiency
-      const { getTransporter } = await import("./notifications");
+      const { getTransporter, sendViaTwilio } = await import("./notifications");
       const smtp = (channel === "email" || channel === "both") ? await getTransporter() : null;
-      let twilioClient: any = null;
       const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
-      if ((channel === "sms" || channel === "both") && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && twilioFrom) {
-        const twilio = (await import("twilio")).default;
-        twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-      }
+      const twilioConfigured = (channel === "sms" || channel === "both")
+        && !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && twilioFrom);
 
       const sendResults = await Promise.allSettled(recipientWorkers.map(async (rw) => {
         // Always insert in-app recipient record regardless of external channel
@@ -22351,13 +22348,14 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         }
 
         if (shouldSms && smsPhone) {
-          if (twilioClient) {
+          if (twilioConfigured) {
             try {
-              await twilioClient.messages.create({
-                body: `PayLink message from ${senderName}: ${subject.trim()}\n\n${body.trim().substring(0, 200)}`,
-                from: normalizePhone(twilioFrom!),
-                to: normalizePhone(smsPhone),
-              });
+              // Route through sendViaTwilio so the /app/* URL allowlist applies
+              // to user-authored staff messages (subject/body could include URLs).
+              await sendViaTwilio(
+                smsPhone,
+                `PayLink message from ${senderName}: ${subject.trim()}\n\n${body.trim().substring(0, 200)}`,
+              );
               console.log(`[SMS] Message delivered to ${smsPhone}`);
               recipientResults.push({ type: "sms", ok: true });
             } catch (smsErr: any) {
