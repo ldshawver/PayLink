@@ -150,18 +150,35 @@ export async function sendViaTwilio(to: string, body: string): Promise<void> {
   //   allowlist check rejects the entire send. This guard covers every SMS
   //   send path (contract events, invoice reminders, shift marketplace,
   //   generic notifications) since all route through this function.
+  // Determine the allowed PayLink hostname(s) from APP_BASE_URL. Anything not
+  // matching this host is rejected even if the path looks like /app/*, to
+  // prevent spoofed look-alike domains carried in template content.
+  const allowedHosts = new Set<string>();
+  try {
+    if (process.env.APP_BASE_URL) {
+      allowedHosts.add(new URL(process.env.APP_BASE_URL).hostname.toLowerCase());
+    }
+  } catch { /* malformed APP_BASE_URL — fall through to path-only check */ }
   const urlMatches = body.match(/https?:\/\/[^\s<>"]+/gi) || [];
   for (const raw of urlMatches) {
-    let pathname: string;
+    let parsed: URL;
     try {
-      pathname = new URL(raw).pathname;
+      parsed = new URL(raw);
     } catch {
       console.error("[SMS][BLOCKED] Unparseable URL in message body.", raw.slice(0, 120));
       throw new Error("SMS blocked: message body contains a malformed URL");
     }
-    if (!pathname.startsWith("/app/")) {
+    if (!parsed.pathname.startsWith("/app/")) {
       console.error("[SMS][BLOCKED] Non-app URL in message body. Only /app/* in-app review links are permitted.", raw.slice(0, 120));
       throw new Error("SMS blocked: message body contains a non-app URL (only /app/* links are allowed)");
+    }
+    // Host allowlist: only enforce when APP_BASE_URL is configured and parsed
+    // successfully. In dev/test where APP_BASE_URL is absent we allow any host
+    // so existing test fixtures (https://app.example.com/app/...) continue to
+    // exercise the path policy without requiring a real configured base URL.
+    if (allowedHosts.size > 0 && !allowedHosts.has(parsed.hostname.toLowerCase())) {
+      console.error("[SMS][BLOCKED] URL host not in PayLink allowlist.", raw.slice(0, 120));
+      throw new Error("SMS blocked: message body contains a URL outside the PayLink domain");
     }
   }
   // Belt-and-suspenders for relative paths or ext-only mentions that didn't

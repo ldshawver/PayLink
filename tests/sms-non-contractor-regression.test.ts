@@ -25,6 +25,10 @@
  * Run: npx tsx tests/sms-non-contractor-regression.test.ts
  */
 import "dotenv/config";
+// Path-only fixture URLs use https://app.example.com — clear APP_BASE_URL
+// so the host check is opt-in per assertion (round 11+ host-allowlist
+// cases below set it explicitly and restore it afterward).
+delete process.env.APP_BASE_URL;
 
 let pass = 0;
 let fail = 0;
@@ -137,6 +141,43 @@ const isGuardBlock = (err: string | undefined) =>
     r3bad.sent === false && isGuardBlock(r3bad.error),
     `result=${JSON.stringify(r3bad)}`,
   );
+
+  // --- Host allowlist (round-11 hardening) -------------------------------
+  // When APP_BASE_URL is set, the guard rejects /app/* URLs whose host is
+  // not in the allowlist (anti-spoofing). When APP_BASE_URL is unset, host
+  // is not enforced (covered by the prior assertions above using
+  // app.example.com without APP_BASE_URL configured).
+  const prevBase = process.env.APP_BASE_URL;
+  process.env.APP_BASE_URL = "https://paylink.example.com";
+
+  const r4 = await sendShiftMarketplaceSms({
+    recipientName: "Worker C",
+    email: null,
+    phone: "+15555554444",
+    subject: "Match",
+    bodyText: "PayLink: claim shift at https://paylink.example.com/app/schedule?tab=marketplace",
+  });
+  log(
+    "host-allowlist: matching APP_BASE_URL host passes the guard",
+    r4.sent === false && !isGuardBlock(r4.error),
+    `result=${JSON.stringify(r4)}`,
+  );
+
+  const r5 = await sendShiftMarketplaceSms({
+    recipientName: "Worker C",
+    email: null,
+    phone: "+15555554444",
+    subject: "Phish",
+    bodyText: "PayLink: claim shift at https://attacker.example.com/app/schedule?tab=marketplace",
+  });
+  log(
+    "host-allowlist: spoofed host with /app/* path IS blocked",
+    r5.sent === false && /outside the PayLink domain/i.test(r5.error || ""),
+    `result=${JSON.stringify(r5)}`,
+  );
+
+  if (prevBase === undefined) delete process.env.APP_BASE_URL;
+  else process.env.APP_BASE_URL = prevBase;
 
   console.log(`\n=== ${pass} passed, ${fail} failed ===`);
   process.exit(fail === 0 ? 0 : 1);

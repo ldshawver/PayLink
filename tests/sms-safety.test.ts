@@ -7,6 +7,11 @@
  * raw API routes) and document file extensions must always be blocked.
  */
 import "dotenv/config";
+// These tests use https://app.example.com/... fixture URLs to exercise the
+// path-only allowlist. Unset APP_BASE_URL so the host check (which is
+// covered separately in tests/sms-non-contractor-regression.test.ts) does
+// not reject the fixture host.
+delete process.env.APP_BASE_URL;
 import { sendViaTwilio, sendContractEventSms } from "../server/notifications";
 
 let pass = 0;

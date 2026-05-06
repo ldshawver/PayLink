@@ -25,12 +25,20 @@ async function sendSchedulerReminderEmails(
     if (cw?.email) {
       // Await send result so we only log status='sent' on actual delivery — keeps
       // the dedup window honest (failed sends remain eligible for retry next tick).
+      // sendGenericNotificationEmail returns {sent:false, error} on SMTP/transport
+      // failure WITHOUT throwing (e.g. SMTP not configured, transporter sendMail
+      // rejection). It only throws on unexpected runtime errors. Treat both as
+      // failure so the dedup window honestly reflects whether mail was delivered.
       let sendOk = true;
       try {
-        await sendGenericNotificationEmail({ recipientName: cw.name || "Contractor", email: cw.email, title, body, actionUrl });
+        const result = await sendGenericNotificationEmail({ recipientName: cw.name || "Contractor", email: cw.email, title, body, actionUrl });
+        if (!result.sent) {
+          sendOk = false;
+          console.warn(`[ContractorScheduler] Contractor email not sent (${templateKey}/${entityId}): ${result.error || "unknown"}`);
+        }
       } catch (sendErr) {
         sendOk = false;
-        console.warn(`[ContractorScheduler] Contractor email send failed (${templateKey}/${entityId}):`, sendErr instanceof Error ? sendErr.message : String(sendErr));
+        console.warn(`[ContractorScheduler] Contractor email send threw (${templateKey}/${entityId}):`, sendErr instanceof Error ? sendErr.message : String(sendErr));
       }
       await db.execute(sql`
         INSERT INTO contractor_reminder_logs (entity_type, entity_id, channel, recipient, template_key, subject, body, status)
