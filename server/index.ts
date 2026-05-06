@@ -3196,8 +3196,10 @@ Thank you,
       log(`serving on ${host}:${port}`);
 
       // Run contractor reminder scheduler once at startup (with a short delay),
-      // then periodically every 6 hours
-      const SCHEDULER_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+      // then daily. Daily cadence matches the documented contractor-reminder
+      // contract; the scheduler itself dedupes within a calendar day, so the
+      // single daily tick is sufficient.
+      const SCHEDULER_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours (daily)
       setTimeout(() => {
         runContractorReminderScheduler().catch((e: unknown) => {
           const msg = e instanceof Error ? e.message : String(e);

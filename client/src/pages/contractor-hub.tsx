@@ -1974,24 +1974,30 @@ function ProposalBuilder({
               {proposal && <div className="mt-1"><ProposalBadge status={proposal.status} /></div>}
             </div>
             <div className="flex items-center gap-2">
-              {canEdit && (
-                <Button size="sm" onClick={() => saveMutation.mutate({
-                  ...form,
-                  issueDate: form.issueDate || current.issueDate || new Date().toISOString().split("T")[0],
-                  companyId: form.companyId || current.companyId,
-                })} disabled={saveMutation.isPending} data-testid="btn-save-proposal">
-                  {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  Save
-                </Button>
-              )}
+              {canEdit && (() => {
+                const isDraftOrNew = isNew || !proposal?.status || proposal.status === "draft";
+                return (
+                  <Button size="sm" onClick={() => saveMutation.mutate({
+                    ...form,
+                    ...(isDraftOrNew ? { status: "draft" } : {}),
+                    issueDate: form.issueDate || current.issueDate || new Date().toISOString().split("T")[0],
+                    companyId: form.companyId || current.companyId,
+                  })} disabled={saveMutation.isPending} data-testid="btn-save-proposal">
+                    {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                    {isDraftOrNew ? "Save Draft" : "Save"}
+                  </Button>
+                );
+              })()}
               {canSubmit && (
-                <Button size="sm" variant="outline" onClick={() => actionMutation.mutate({ action: "submit" })} data-testid="btn-submit-proposal">
-                  <Send className="h-4 w-4 mr-1" /> Submit for Review
+                <Button size="sm" variant="outline" onClick={() => actionMutation.mutate({ action: "submit" })} disabled={actionMutation.isPending} data-testid="btn-submit-proposal">
+                  {actionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Send className="h-4 w-4 mr-1" />}
+                  Submit for Review
                 </Button>
               )}
               {canSend && (
-                <Button size="sm" variant="outline" onClick={() => actionMutation.mutate({ action: "send" })} data-testid="btn-send-proposal">
-                  <Send className="h-4 w-4 mr-1" /> Mark Sent
+                <Button size="sm" variant="outline" onClick={() => actionMutation.mutate({ action: "send" })} disabled={actionMutation.isPending} data-testid="btn-send-proposal">
+                  {actionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Send className="h-4 w-4 mr-1" />}
+                  Mark Sent
                 </Button>
               )}
               {canRevise && (
