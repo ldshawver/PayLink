@@ -142,7 +142,7 @@ async function main() {
   console.log("[7] PDF generation per variant");
   const { jsPDF } = await import("jspdf");
   const variants: Array<DocStyle["variant"]> = ["modern", "classic", "minimal"];
-  const outDir = path.join(process.cwd(), "uploads", "test-pdfs");
+  const outDir = path.join(process.cwd(), "tests", ".tmp", "pdf-output");
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
   for (const v of variants) {
     const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
