@@ -6535,7 +6535,7 @@ export async function registerRoutes(
         if (byWorker[s.workerId]) byWorker[s.workerId].shifts.push(s);
       }
 
-      const scheduleViewUrl = `${getAppBaseUrl(req)}/schedule`;
+      const scheduleViewUrl = `${getAppBaseUrl(req)}/app/schedule`;
 
       // Send notifications
       let notified = 0;
@@ -8750,7 +8750,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           pendingTimecards: 0,
           pendingAmendments: pendingAmendments.length,
           pendingExpenses: pendingExpenses.length,
-          dashboardUrl: `${getAppBaseUrl(req)}/attendance?tab=pending-approvals`,
+          dashboardUrl: `${getAppBaseUrl(req)}/app/attendance?tab=pending-approvals`,
         };
 
         let emailSent = false, smsSent = false;
@@ -16557,7 +16557,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           const statusText = decision === "approved" ? "APPROVED" : "DENIED";
           const noteText = reviewNote ? `\nNote: ${reviewNote}` : "";
           const subject = `Time-Off Request ${statusText}`;
-          const timeOffUrl = `${getAppBaseUrl(req)}/attendance?tab=time-off`;
+          const timeOffUrl = `${getAppBaseUrl(req)}/app/attendance?tab=time-off`;
           const bodyText = `Hi ${worker.firstName},\n\nYour time-off request from ${item.startDate} to ${item.endDate} has been ${statusText}.${noteText}\n\nView your requests: ${timeOffUrl}\n\nRegards,\nPayLink`;
           const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
           if (email) {
