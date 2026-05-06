@@ -7,7 +7,7 @@
  * Run: npx tsx tests/contract-email.test.ts
  */
 import "dotenv/config";
-import nodemailer from "nodemailer";
+import nodemailer, { type SendMailOptions, type SentMessageInfo } from "nodemailer";
 
 let pass = 0;
 let fail = 0;
@@ -15,6 +15,12 @@ const log = (name: string, ok: boolean, detail?: string) => {
   if (ok) { pass++; console.log(`  \u2713 ${name}`); }
   else    { fail++; console.error(`  \u2717 ${name}${detail ? ` \u2014 ${detail}` : ""}`); }
 };
+
+// Narrow writable view of the nodemailer module for monkey-patching, using
+// `unknown` rather than `any` so we don't silently drop type checks.
+type CreateTransport = typeof nodemailer.createTransport;
+type WritableNodemailer = { createTransport: CreateTransport };
+const nm = nodemailer as unknown as WritableNodemailer;
 
 (async () => {
   console.log("=== Contract Email Send Tests ===\n");
@@ -26,12 +32,15 @@ const log = (name: string, ok: boolean, detail?: string) => {
   process.env.SMTP_FROM = "noreply@example.com";
 
   // Mock nodemailer.createTransport so we can capture sendMail calls.
-  const sentMessages: any[] = [];
+  const sentMessages: SendMailOptions[] = [];
   const fakeTransporter = {
-    sendMail: async (opts: any) => { sentMessages.push(opts); return { messageId: "mock-id" }; },
+    sendMail: async (opts: SendMailOptions): Promise<SentMessageInfo> => {
+      sentMessages.push(opts);
+      return { messageId: "mock-id" } as SentMessageInfo;
+    },
   };
   const originalCreate = nodemailer.createTransport;
-  (nodemailer as any).createTransport = () => fakeTransporter;
+  nm.createTransport = (() => fakeTransporter) as unknown as CreateTransport;
 
   try {
     const { sendContractEventEmail, sendGenericNotificationEmail } = await import("../server/notifications");
@@ -85,7 +94,7 @@ const log = (name: string, ok: boolean, detail?: string) => {
       `error=${r3.error} delta=${sentMessages.length - before}`
     );
   } finally {
-    (nodemailer as any).createTransport = originalCreate;
+    nm.createTransport = originalCreate;
   }
 
   console.log(`\n=== ${pass} passed, ${fail} failed ===`);
