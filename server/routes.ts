@@ -9205,6 +9205,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!data.amount || parseFloat(data.amount) <= 0) return res.status(400).json({ message: "Positive amount required" });
       if (!data.invoiceDate) return res.status(400).json({ message: "Invoice date required" });
 
+      // Auto-attach this contractor's saved branding so the PDF picks up logo/colors/footer.
+      // Only set if caller did not provide one explicitly.
+      if (!data.brandingId) {
+        const brRes = await db.execute(sql`SELECT id FROM contractor_branding WHERE worker_id = ${user.workerId} LIMIT 1`);
+        const br = brRes.rows[0] as { id?: string } | undefined;
+        if (br?.id) data.brandingId = br.id;
+      }
+
       if (data.amount && data.invoiceNumber && data.invoiceDate) {
         const crypto = await import("crypto");
         data.duplicateHash = crypto.createHash("md5").update(`${data.contractorId}-${data.invoiceNumber}-${data.amount}-${data.invoiceDate}`).digest("hex");
@@ -9236,7 +9244,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!isOwner && !isManager) return res.status(403).json({ message: "Not authorized" });
 
       const allowedFields = ["invoiceNumber", "invoiceDate", "dueDate", "amount", "description",
-        "proposalReference", "jobId", "costCenterId", "paymentTerms", "notes", "companyId"];
+        "proposalReference", "jobId", "costCenterId", "paymentTerms", "notes", "companyId",
+        "templateId", "brandingId"];
       const sanitized: Record<string, any> = {};
       for (const key of allowedFields) { if (req.body[key] !== undefined) sanitized[key] = req.body[key]; }
 
@@ -9669,6 +9678,30 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               clientRequirements, estimatedStartDate, estimatedEndDate, tradeCategory } = req.body;
       if (!issueDate) return res.status(400).json({ message: "Issue date required" });
 
+      // Tenant guard on templateId — must be global OR owned by the contractor's
+      // home company OR owned by the recipient company. Rejects cross-tenant
+      // template ID injection (e.g. probing another tenant's private templates).
+      let safeTemplateId: string | null = null;
+      if (templateId) {
+        const tplCheck = await db.execute(sql`
+          SELECT id FROM contractor_templates
+          WHERE id = ${templateId}
+            AND (is_global = TRUE
+                 OR company_id = ${worker.companyId}
+                 ${companyId ? sql`OR company_id = ${companyId}` : sql``})
+          LIMIT 1
+        `);
+        if (!tplCheck.rows[0]) return res.status(400).json({ message: "Invalid template" });
+        safeTemplateId = templateId;
+      }
+
+      // Auto-attach this contractor's branding (if any) so generated PDFs pick
+      // up logo/colors without the client having to wire it through.
+      const brandingRes = await db.execute(sql`
+        SELECT id FROM contractor_branding WHERE worker_id = ${workerId} LIMIT 1
+      `);
+      const autoBrandingId = (brandingRes.rows[0] as { id?: string } | undefined)?.id || null;
+
       // Generate proposal number
       const countResult = await db.execute(sql`SELECT COUNT(*) as c FROM contractor_proposals WHERE contractor_id = ${workerId}`);
       const count = Number((countResult.rows[0] as any)?.c ?? 0);
@@ -9679,7 +9712,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           company_id, contractor_id, proposal_number, title, description, issue_date, expiration_date,
           amount, tax_amount, line_items, notes, terms, job_id, cost_center_id, currency, status,
           scope_of_work, estimator_name, client_message, internal_notes, payment_terms,
-          work_type, template_id, payment_type, trade_offered, trade_value, trade_terms,
+          work_type, template_id, branding_id, payment_type, trade_offered, trade_value, trade_terms,
           estimated_hours, estimated_labor_budget,
           cost_center, project_class, labor_materials_split, urgency, site_notes,
           client_requirements, estimated_start_date, estimated_end_date, trade_category
@@ -9689,7 +9722,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           ${lineItems ? JSON.stringify(lineItems) : null}, ${notes || null}, ${terms || null},
           ${jobId || null}, ${costCenterId || null}, ${currency || "USD"}, 'draft',
           ${scopeOfWork || null}, ${estimatorName || null}, ${clientMessage || null}, ${internalNotes || null}, ${paymentTerms || null},
-          ${workType || null}, ${templateId || null}, ${paymentType || null}, ${tradeOffered || null}, ${tradeValue || null}, ${tradeTerms || null},
+          ${workType || null}, ${safeTemplateId}, ${autoBrandingId}, ${paymentType || null}, ${tradeOffered || null}, ${tradeValue || null}, ${tradeTerms || null},
           ${estimatedHours != null ? Number(estimatedHours) : null}, ${estimatedLaborBudget != null ? Number(estimatedLaborBudget) : null},
           ${costCenter || null}, ${projectClass || null}, ${laborMaterialsSplit || null}, ${urgency || null}, ${siteNotes || null},
           ${clientRequirements || null}, ${estimatedStartDate || null}, ${estimatedEndDate || null}, ${tradeCategory || null}
@@ -9726,6 +9759,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               estimatedHours, estimatedLaborBudget,
               costCenter, projectClass, laborMaterialsSplit, urgency, siteNotes,
               clientRequirements, estimatedStartDate, estimatedEndDate, tradeCategory } = req.body;
+
+      // Tenant guard on templateId — same rule as POST. Rejects cross-tenant
+      // template ID injection on update.
+      if (templateId) {
+        const tplCheck = await db.execute(sql`
+          SELECT id FROM contractor_templates
+          WHERE id = ${templateId}
+            AND (is_global = TRUE
+                 ${proposal.company_id ? sql`OR company_id = ${proposal.company_id}` : sql``}
+                 ${user?.companyId ? sql`OR company_id = ${user.companyId}` : sql``})
+          LIMIT 1
+        `);
+        if (!tplCheck.rows[0]) return res.status(400).json({ message: "Invalid template" });
+      }
       await db.execute(sql`
         UPDATE contractor_proposals SET
           title = COALESCE(${title ?? null}, title),
@@ -10404,12 +10451,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/contractor-proposals/:id/ai-assist", requireAuth, async (req, res) => {
     try {
       const { action, context } = req.body;
-      // action: draft_scope | improve_scope | suggest_exclusions | suggest_assumptions | suggest_line_items | suggest_payment_terms | generate_summary | flag_missing
+      // action: draft_scope | improve_scope | suggest_exclusions | suggest_assumptions | suggest_line_items | suggest_payment_terms | generate_summary | flag_missing | suggest_warranty | fill_all
       const openaiApiKey = process.env.OPENAI_API_KEY;
       if (!openaiApiKey) return res.status(503).json({ message: "AI assistance requires OpenAI configuration" });
 
-      const proposalRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      const proposal = proposalRes.rows[0] as any || {};
+      // Tenant/ownership guard — prevent IDOR. Uses the same access rules as
+      // the rest of the proposal API: contractor owner OR same-tenant admin/manager.
+      const access = await assertProposalAccess(req.params.id, req.session.userId!);
+      if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
+      const proposal = access.prop || {};
       const lineItemsRes = await db.execute(sql`SELECT * FROM proposal_line_items WHERE proposal_id = ${req.params.id}`);
       const lineItems = lineItemsRes.rows;
 
@@ -10433,6 +10483,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         userPrompt = `Write a concise, client-friendly summary for this contractor proposal:\nTitle: ${proposal.title || ""}\nScope: ${proposal.scope_of_work || proposal.description || ""}\nKey items: ${itemNames || "Not specified"}\nTotal: $${proposal.amount || "TBD"}\n\nReturn 2-3 sentences suitable for a cover page.`;
       } else if (action === "flag_missing") {
         userPrompt = `Review this proposal for missing or unclear information:\nTitle: ${proposal.title || "MISSING"}\nScope: ${proposal.scope_of_work || "MISSING"}\nAssumptions: ${proposal.assumptions || "MISSING"}\nExclusions: ${proposal.exclusions || "MISSING"}\nPayment Terms: ${proposal.payment_terms || "MISSING"}\nLine Items Count: ${lineItems.length}\nTotal: $${proposal.amount || "MISSING"}\n\nList any missing or incomplete sections that should be addressed before sending to the client. Be specific.`;
+      } else if (action === "suggest_warranty") {
+        userPrompt = `Based on this project scope:\n${proposal.scope_of_work || context || proposal.description || "No scope"}\n\nSuggest professional warranty / guarantee terms (workmanship period, materials, what's covered, what's excluded). Plain text, 4-8 lines.`;
+      } else if (action === "fill_all") {
+        userPrompt = `You are filling out an entire contractor proposal. Use the inputs below to draft ALL sections.\n\nTitle: ${proposal.title || ""}\nDescription / Notes: ${context || proposal.description || ""}\nExisting Scope (may be empty): ${proposal.scope_of_work || ""}\n\nReturn ONLY a JSON object (no prose, no code fences) with these exact keys:\n{\n  "scopeOfWork": "string — clear scope, plain paragraphs",\n  "assumptions": "string — bulleted list using - prefix",\n  "exclusions": "string — bulleted list using - prefix",\n  "paymentTerms": "string — deposit / progress / final breakdown",\n  "warrantyNotes": "string — workmanship and materials warranty"\n}\n\nNever fabricate permits, code approvals, or specific dollar figures. Use [confirm field measurement], [vendor quote needed], etc. when uncertain.`;
       } else {
         return res.status(400).json({ message: "Unknown action" });
       }
@@ -10452,6 +10506,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         try {
           const match = text.match(/\[[\s\S]*\]/);
           if (match) return res.json({ result: text, parsed: JSON.parse(match[0]) });
+        } catch { }
+      }
+
+      // For fill_all, parse JSON object with scope/assumptions/exclusions/paymentTerms/warrantyNotes
+      if (action === "fill_all") {
+        try {
+          const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+          const match = cleaned.match(/\{[\s\S]*\}/);
+          if (match) {
+            const obj = JSON.parse(match[0]);
+            return res.json({ result: text, parsed: obj });
+          }
         } catch { }
       }
 
@@ -11956,11 +12022,18 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const invoiceNumber = `INV-${Date.now()}`;
       const today = new Date().toISOString().split("T")[0];
 
+      // Carry over template + branding from the source proposal so the invoice
+      // PDF inherits the same look — these IDs were validated/auto-attached at
+      // proposal-create time, so they are safe to forward.
+      const carriedTemplateId = prop?.template_id || null;
+      const carriedBrandingId = prop?.branding_id || null;
+
       const result = await db.execute(sql`
         INSERT INTO contractor_invoices (
           company_id, contractor_id, invoice_number, title, invoice_type,
           invoice_date, due_date, amount, approved_budget, approved_hours, approved_terms, trade_component,
-          proposal_id, contract_id, payment_terms, description, notes, status
+          proposal_id, contract_id, payment_terms, description, notes, status,
+          template_id, branding_id
         ) VALUES (
           ${source.company_id}, ${source.contractor_id}, ${invoiceNumber},
           ${"Invoice — " + (source.title || "")}, ${invoiceType || "standard"},
@@ -11974,7 +12047,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           ${paymentTerms || source.payment_terms || null},
           ${prop?.scope_of_work || contract?.scope_of_work || null},
           ${notes || null},
-          'draft'
+          'draft',
+          ${carriedTemplateId}, ${carriedBrandingId}
         )
         RETURNING *
       `);

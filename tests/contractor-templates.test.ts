@@ -152,6 +152,7 @@ async function main() {
       secondaryRgb: [37, 99, 235],
       businessName: "Acme Contracting LLC",
       footerText: null,
+      logoPath: null,
     };
     const startY = renderDocHeader(doc, doc.internal.pageSize.getWidth(), style, {
       displayName: style.businessName!,

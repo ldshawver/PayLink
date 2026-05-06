@@ -21,6 +21,8 @@ export interface DocStyle {
   secondaryRgb: Rgb;
   businessName: string | null;
   footerText: string | null;
+  /** Absolute or app-relative path to the contractor's logo (from contractor_branding.logo_path). Null when no logo uploaded. */
+  logoPath: string | null;
 }
 
 const DEFAULT_PRIMARY: Rgb = [13, 148, 136];
@@ -55,6 +57,7 @@ export async function resolveDocStyle(
   let footerText: string | null = null;
   let primaryHex: string | null = null;
   let secondaryHex: string | null = null;
+  let logoPath: string | null = null;
 
   if (templateId) {
     try {
@@ -81,17 +84,18 @@ export async function resolveDocStyle(
   if (contractorWorkerId) {
     try {
       const b = await db.execute(
-        sql`SELECT business_name, primary_color, secondary_color, footer_text
+        sql`SELECT business_name, primary_color, secondary_color, footer_text, logo_path
             FROM contractor_branding WHERE worker_id = ${contractorWorkerId} LIMIT 1`,
       );
       const br = b.rows[0] as
-        | { business_name?: string; primary_color?: string; secondary_color?: string; footer_text?: string }
+        | { business_name?: string; primary_color?: string; secondary_color?: string; footer_text?: string; logo_path?: string }
         | undefined;
       if (br) {
         businessName = br.business_name || null;
         primaryHex = br.primary_color || null;
         secondaryHex = br.secondary_color || null;
         footerText = br.footer_text || null;
+        logoPath = br.logo_path || null;
       }
     } catch {
       /* leave defaults */
@@ -104,6 +108,7 @@ export async function resolveDocStyle(
     secondaryRgb: hexToRgb(secondaryHex, DEFAULT_SECONDARY),
     businessName,
     footerText,
+    logoPath,
   };
 }
 

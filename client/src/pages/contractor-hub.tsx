@@ -26,7 +26,7 @@ import {
   ExternalLink, Info, AlertCircle, ThumbsUp, ThumbsDown, MessageCircle,
   Briefcase, Layers, SlidersHorizontal, ArrowUpDown, Globe, Phone, Mail,
   Image, Paintbrush, CheckSquare, Search, Archive, X, Filter, BellOff,
-  FileCheck, Banknote
+  FileCheck, Banknote, ShieldCheck
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -1875,9 +1875,43 @@ function ProposalBuilder({
     else if (aiAction === "suggest_exclusions") setForm(f => ({ ...f, exclusions: aiResult }));
     else if (aiAction === "suggest_assumptions") setForm(f => ({ ...f, assumptions: aiResult }));
     else if (aiAction === "suggest_payment_terms") setForm(f => ({ ...f, paymentTerms: aiResult }));
+    else if (aiAction === "suggest_warranty") setForm(f => ({ ...f, warrantyNotes: aiResult }));
     else if (aiAction === "generate_summary") setForm(f => ({ ...f, aiGeneratedSummary: aiResult }));
     toast({ title: "Applied to proposal" });
     setAiResult("");
+    setDirty(true);
+  }
+
+  async function handleAiFillAll() {
+    if (!proposalId) { toast({ title: "Save the proposal first before using AI" }); return; }
+    setAiLoading(true); setAiAction("fill_all"); setAiResult("");
+    try {
+      const r = await fetch(`/api/contractor-proposals/${proposalId}/ai-assist`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "fill_all", context: form.description || current.description || form.scopeOfWork || "" }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.message);
+      if (d.parsed && typeof d.parsed === "object") {
+        const p = d.parsed;
+        setForm(f => ({
+          ...f,
+          scopeOfWork: p.scopeOfWork || f.scopeOfWork,
+          assumptions: p.assumptions || f.assumptions,
+          exclusions: p.exclusions || f.exclusions,
+          paymentTerms: p.paymentTerms || f.paymentTerms,
+          warrantyNotes: p.warrantyNotes || f.warrantyNotes,
+        }));
+        setDirty(true);
+        toast({ title: "Proposal drafted — review and edit before sending" });
+      } else {
+        setAiResult(d.result || "");
+        toast({ title: "AI returned text — review below and apply manually", variant: "destructive" });
+      }
+    } catch (e: any) {
+      toast({ title: e.message || "AI failed", variant: "destructive" });
+    } finally { setAiLoading(false); }
   }
 
   async function handleAiLineItems() {
@@ -2457,6 +2491,21 @@ function ProposalBuilder({
                   <h3 className="font-medium text-sm">AI Proposal Assistant</h3>
                 </div>
                 <p className="text-xs text-muted-foreground mb-4">AI helps you draft professional, accurate proposals. It will never invent facts — it flags missing information instead.</p>
+
+                <Button
+                  size="lg"
+                  onClick={handleAiFillAll}
+                  disabled={aiLoading || !proposalId}
+                  className="w-full mb-4 bg-primary hover:bg-primary/90 text-primary-foreground"
+                  data-testid="btn-ai-fill-all"
+                >
+                  {aiLoading && aiAction === "fill_all"
+                    ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    : <Sparkles className="h-4 w-4 mr-2" />}
+                  Help me write this proposal
+                </Button>
+                <p className="text-[11px] text-muted-foreground -mt-2 mb-3">Drafts scope, assumptions, exclusions, payment terms, and warranty in one shot. You can edit everything before sending.</p>
+
                 <div className="grid grid-cols-2 gap-2">
                   {[
                     { action: "draft_scope", label: "Draft Scope from Notes", icon: FileText },
@@ -2464,6 +2513,7 @@ function ProposalBuilder({
                     { action: "suggest_assumptions", label: "Suggest Assumptions", icon: CheckCheck },
                     { action: "suggest_exclusions", label: "Suggest Exclusions", icon: XCircle },
                     { action: "suggest_payment_terms", label: "Draft Payment Terms", icon: DollarSign },
+                    { action: "suggest_warranty", label: "Draft Warranty Terms", icon: ShieldCheck },
                     { action: "generate_summary", label: "Generate Summary", icon: Sparkles },
                     { action: "flag_missing", label: "Flag Missing Info", icon: AlertTriangle },
                   ].map(({ action, label, icon: Icon }) => (
@@ -2522,6 +2572,20 @@ function ProposalBuilder({
 
             {/* ── Preview Tab ── */}
             <TabsContent value="preview" className="m-0">
+              <div className="flex items-center justify-between gap-2 px-6 pt-4 pb-2 border-b">
+                <div className="text-xs text-muted-foreground">
+                  This is an HTML preview using your saved branding. Click <strong>Preview PDF</strong> to see the exact PDF clients will receive.
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!proposalId}
+                  onClick={() => proposalId && window.open(`/api/contractor-proposals/${proposalId}/pdf`, "_blank")}
+                  data-testid="btn-preview-pdf"
+                >
+                  <FileText className="h-3.5 w-3.5 mr-1.5" /> Preview PDF
+                </Button>
+              </div>
               <ProposalPreview proposal={current as Proposal} lineItems={lineItems} subtotal={subtotal} tax={tax} discount={discount} total={total} branding={contractorBranding} />
             </TabsContent>
           </ScrollArea>
@@ -3419,6 +3483,24 @@ function CreateInvoiceFromContractDialog({
   const [notes, setNotes] = useState("");
   const [overrideMode, setOverrideMode] = useState(false);
   const [overrideReason, setOverrideReason] = useState("");
+  const [templateId, setTemplateId] = useState<string>("");
+
+  const { data: templates = [] } = useQuery<any[]>({
+    queryKey: ["/api/contractor-templates", "invoice"],
+    queryFn: async () => {
+      const r = await fetch("/api/contractor-templates?templateType=invoice", { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+  });
+  const invoiceTemplates = templates.filter(t => (t.template_type || t.templateType) === "invoice");
+
+  // Default to first available invoice template once loaded
+  useEffect(() => {
+    if (!templateId && invoiceTemplates.length > 0) {
+      const def = invoiceTemplates.find(t => t.is_default || t.isDefault) || invoiceTemplates[0];
+      setTemplateId(def.id);
+    }
+  }, [invoiceTemplates, templateId]);
 
   const amountNum = parseFloat(amount || "0");
   const exceedsBudget = totalValue > 0 && amountNum > totalValue;
@@ -3430,6 +3512,7 @@ function CreateInvoiceFromContractDialog({
           contractId: contract.id,
           dueDate: dueDate || undefined,
           notes: notes || undefined,
+          templateId: templateId || undefined,
         });
       } else {
         return apiRequest("POST", "/api/contractor-invoices", {
@@ -3440,6 +3523,7 @@ function CreateInvoiceFromContractDialog({
           dueDate: dueDate || undefined,
           notes: notes || undefined,
           companyId: contract.companyId,
+          templateId: templateId || undefined,
         });
       }
     },
@@ -3504,6 +3588,22 @@ function CreateInvoiceFromContractDialog({
             <Label>Notes</Label>
             <Textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Any notes for this invoice..." data-testid="textarea-invoice-notes" />
           </div>
+          {invoiceTemplates.length > 0 && (
+            <div className="space-y-1.5">
+              <Label>Invoice Template &amp; Style</Label>
+              <Select value={templateId} onValueChange={setTemplateId}>
+                <SelectTrigger data-testid="select-invoice-template"><SelectValue placeholder="Choose template..." /></SelectTrigger>
+                <SelectContent>
+                  {invoiceTemplates.map(t => (
+                    <SelectItem key={t.id} value={t.id}>
+                      {t.name}{t.layout_variant || t.layoutVariant ? ` — ${t.layout_variant || t.layoutVariant}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">Controls the PDF layout. Your saved branding (logo, colors, footer) is applied automatically.</p>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>

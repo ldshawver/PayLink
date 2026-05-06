@@ -1881,6 +1881,9 @@ export const contractorInvoices = pgTable("contractor_invoices", {
   notes: text("notes"),
   isArchived: boolean("is_archived").default(false),
   archivedAt: timestamp("archived_at"),
+  // ── Branding/template selection (added via migration; mirror DB columns) ──
+  templateId: varchar("template_id"),
+  brandingId: varchar("branding_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -2257,6 +2260,12 @@ export const contractorBranding = pgTable("contractor_branding", {
   footerText: text("footer_text"),
   showLogo: boolean("show_logo").default(true),
   showLicenseNumber: boolean("show_license_number").default(true),
+  // ── Contact / address (added via migration; mirror columns written by POST /api/contractor-branding) ──
+  logoUrl: text("logo_url"),
+  contactName: text("contact_name"),
+  contactEmail: text("contact_email"),
+  phone: text("phone"),
+  address: text("address"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
