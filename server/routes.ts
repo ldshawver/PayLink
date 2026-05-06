@@ -11225,36 +11225,44 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/contractor-proposals/:id/pdf", requireAuth, async (req, res) => {
     try {
       const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      if (!propRes.rows[0]) return res.status(404).json({ message: "Proposal not found" });
-      const prop = propRes.rows[0] as any;
+      const prop = firstRow<ProposalRow>(propRes);
+      if (!prop) return res.status(404).json({ message: "Proposal not found" });
       const user = await storage.getUser(req.session.userId!);
       const isPlatform = (user?.role || "").startsWith("platform_");
       const isAdmin = isPlatform || (user?.role || "").startsWith("tenant_") || user?.role === "admin" || user?.role === "manager";
       const wRes = await db.execute(sql`SELECT worker_id FROM users WHERE id = ${req.session.userId}`);
-      const workerId = (wRes.rows[0] as any)?.worker_id;
+      const workerRow = firstRow<{ worker_id: string | null }>(wRes);
+      const workerId = workerRow?.worker_id ?? null;
       if (!isAdmin && prop.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
       if (isAdmin && !isPlatform && user?.companyId && prop.company_id !== user.companyId) return res.status(403).json({ message: "Access denied: proposal belongs to another company" });
 
       // Check if a stored PDF already exists in DMS
       const existingPdf = await db.execute(sql`SELECT file_path, file_name FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${req.params.id} AND mime_type = 'application/pdf' ORDER BY created_at DESC LIMIT 1`);
+      const stored = firstRow<{ file_path: string | null; file_name: string | null }>(existingPdf);
       let filePath: string | null = null;
-      if (existingPdf.rows[0]) {
-        filePath = (existingPdf.rows[0] as any).file_path;
+      if (stored?.file_path) {
+        filePath = stored.file_path;
       } else {
         // Generate on demand
         filePath = await generateProposalPdf(req.params.id, prop, req.session.userId!);
       }
 
       if (!filePath) return res.status(500).json({ message: "Failed to generate proposal PDF" });
-      const absolutePath = path.join(process.cwd(), filePath.replace(/^\//, ""));
-      if (!fs.existsSync(absolutePath)) return res.status(404).json({ message: "PDF file not found on disk" });
-      const pdfFileName = path.basename(absolutePath);
+      // Reuse the same traversal-safe resolver that hardens
+      // /api/dam-documents/:id/download. Refuses anything that escapes the
+      // project root, even if the DB-stored file_path was tampered with.
+      const { resolveDamFilePath } = await import("./dam-paths");
+      const root = process.cwd();
+      const resolved = resolveDamFilePath(String(filePath), root);
+      if (!resolved) return res.status(400).json({ message: "Invalid PDF file path" });
+      if (!fs.existsSync(resolved)) return res.status(404).json({ message: "PDF file not found on disk" });
+      const pdfFileName = stored?.file_name ? String(stored.file_name) : path.basename(resolved);
       res.setHeader("Content-Type", "application/pdf");
       // inline so the UI "Preview PDF" action renders in the browser tab
       // rather than triggering a download. Callers that want to download
       // can use the link's `download` attribute.
-      res.setHeader("Content-Disposition", `inline; filename="${pdfFileName}"`);
-      res.sendFile(absolutePath);
+      res.setHeader("Content-Disposition", `inline; filename="${pdfFileName.replace(/"/g, "")}"`);
+      res.sendFile(resolved);
     } catch (e: any) { res.status(500).json({ message: "Failed to serve proposal PDF: " + e.message }); }
   });
 

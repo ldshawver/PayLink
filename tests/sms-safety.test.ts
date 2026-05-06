@@ -58,9 +58,14 @@ async function expectAllowed(label: string, body: string) {
   await expectBlocked("dam-documents download",    "Download: https://app.example.com/api/dam-documents/abc123/download");
   await expectBlocked("raw /api path",             "Hit /api/contractor-proposals/abc/pdf for PDF");
 
-  console.log("\n[3] Blocks document file extensions");
-  await expectBlocked("naked .pdf reference",      "Open contract.pdf to review");
-  await expectBlocked(".docx reference",           "See agreement.docx");
+  console.log("\n[3] Allows bare extension words in prose (policy was narrowed)");
+  // The original guard blocked any .pdf/.docx/.xlsx token in arbitrary text,
+  // which produced false positives on legitimate SMS bodies (e.g. "your
+  // invoice.pdf is ready" with a separate /app/* link). Document leakage is
+  // now policed at the URL level (host + /app/* path) instead. These two
+  // bodies must therefore be allowed because they carry no URL at all.
+  await expectAllowed("naked .pdf reference (no URL)", "Open contract.pdf to review");
+  await expectAllowed(".docx reference (no URL)",      "See agreement.docx");
 
   console.log("\n[4] Blocks non-/app/ URLs even on the same host");
   await expectBlocked("/admin URL",                "Visit https://app.example.com/admin/proposals/123");

@@ -181,10 +181,15 @@ export async function sendViaTwilio(to: string, body: string): Promise<void> {
       throw new Error("SMS blocked: message body contains a URL outside the PayLink domain");
     }
   }
-  // Belt-and-suspenders for relative paths or ext-only mentions that didn't
-  // parse as a full URL above.
-  if (/(^|[\s(<])\/(uploads|api)\//i.test(body) || /\.(pdf|docx?|xlsx?)(\?|[\s)<,.;:]|$)/i.test(body)) {
-    console.error("[SMS][BLOCKED] Message body contains a non-app document path or extension.", body.slice(0, 120));
+  // Belt-and-suspenders for *relative* document/API paths that did not parse
+  // as a full URL above (e.g. "see /uploads/foo" or "GET /api/dam-documents/...").
+  // We deliberately do NOT block bare extension words (.pdf/.docx/.xlsx) in
+  // arbitrary prose — that produced false positives on legitimate SMS bodies
+  // (e.g. "your invoice.pdf is ready" with a separate /app/* link). The
+  // absolute-URL host+path checks above are the authoritative document-link
+  // policy; this block only stops obvious relative download paths.
+  if (/(^|[\s(<])\/(uploads|api)\//i.test(body)) {
+    console.error("[SMS][BLOCKED] Message body contains a relative non-app document path.", body.slice(0, 120));
     throw new Error("SMS blocked: message body contains a non-app document URL");
   }
   const creds = await getTwilioCredentials();
