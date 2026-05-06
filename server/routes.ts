@@ -11401,13 +11401,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Stream the file directly so the browser receives the PDF/binary
       // instead of a JSON descriptor. Resolves an absolute path safely under
       // the project root and refuses anything that escapes it.
-      const path = await import("path");
       const fs = await import("fs");
+      const path = await import("path");
+      const { resolveDamFilePath } = await import("./dam-paths");
       const root = process.cwd();
-      const rawPath = String(doc.file_path || "");
-      // Normalize: accept absolute paths inside cwd, or repo-relative paths.
-      const resolved = path.isAbsolute(rawPath) ? path.resolve(rawPath) : path.resolve(root, rawPath.replace(/^\/+/, ""));
-      if (!resolved.startsWith(root)) return res.status(400).json({ message: "Invalid file path" });
+      const resolved = resolveDamFilePath(String(doc.file_path || ""), root);
+      if (!resolved) return res.status(400).json({ message: "Invalid file path" });
       if (!fs.existsSync(resolved)) return res.status(404).json({ message: "File missing on disk" });
       const fileName = String(doc.file_name || path.basename(resolved));
       if (doc.mime_type) res.setHeader("Content-Type", String(doc.mime_type));
