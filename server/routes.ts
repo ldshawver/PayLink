@@ -11250,7 +11250,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!fs.existsSync(absolutePath)) return res.status(404).json({ message: "PDF file not found on disk" });
       const pdfFileName = path.basename(absolutePath);
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="${pdfFileName}"`);
+      // inline so the UI "Preview PDF" action renders in the browser tab
+      // rather than triggering a download. Callers that want to download
+      // can use the link's `download` attribute.
+      res.setHeader("Content-Disposition", `inline; filename="${pdfFileName}"`);
       res.sendFile(absolutePath);
     } catch (e: any) { res.status(500).json({ message: "Failed to serve proposal PDF: " + e.message }); }
   });

@@ -233,6 +233,7 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
           const existing = await db.execute(sql`
             SELECT id FROM contractor_reminder_logs
             WHERE entity_type = 'contract' AND entity_id = ${c.id} AND template_key = 'renewal'
+            AND status = 'sent'
             AND sent_at > NOW() - INTERVAL '24 hours'
           `);
           if (!existing.rows.length) {
@@ -285,6 +286,7 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
           const existing = await db.execute(sql`
             SELECT id FROM contractor_reminder_logs
             WHERE entity_type = 'contract' AND entity_id = ${c.id} AND template_key = 'renegotiation'
+            AND status = 'sent'
             AND sent_at > NOW() - INTERVAL '24 hours'
           `);
           if (!existing.rows.length) {
@@ -339,6 +341,7 @@ export async function runContractorReminderScheduler(companyIds?: string[]): Pro
           const existing = await db.execute(sql`
             SELECT id FROM contractor_reminder_logs
             WHERE entity_type = 'contract' AND entity_id = ${c.id} AND template_key = 'expired'
+            AND status = 'sent'
             AND sent_at > NOW() - INTERVAL '24 hours'
           `);
           if (!existing.rows.length) {
