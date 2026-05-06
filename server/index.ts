@@ -2748,6 +2748,86 @@ Thank you,
     await run("contractor_templates.is_default", sql`ALTER TABLE contractor_templates ADD COLUMN IF NOT EXISTS is_default BOOLEAN DEFAULT FALSE`);
     await run("contractor_templates.layout_variant", sql`ALTER TABLE contractor_templates ADD COLUMN IF NOT EXISTS layout_variant TEXT DEFAULT 'standard'`);
     await run("contractor_templates.work_type_tags", sql`ALTER TABLE contractor_templates ADD COLUMN IF NOT EXISTS work_type_tags TEXT`);
+    await run("contractor_invoices.template_id", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS template_id VARCHAR`);
+    await run("contractor_invoices.branding_id", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS branding_id VARCHAR`);
+
+    // Seed 3 system contractor templates (proposal/proposal/invoice) covering the
+    // 3 layout variants. is_global=TRUE, company_id=NULL means every tenant sees
+    // them in the contractor template picker. Per-template idempotent — each
+    // missing template is backfilled independently so partial seed states heal.
+    try {
+      const SYSTEM_TEMPLATES: Array<{
+        name: string; type: "proposal" | "invoice"; variant: "modern" | "classic" | "minimal";
+        description: string; bodyJson: string; payTerms: string;
+        scope: string | null; assumptions: string | null; exclusions: string | null; warranty: string | null;
+      }> = [
+        {
+          name: "Simple Contractor Proposal", type: "proposal", variant: "modern",
+          description: "A clean single-page proposal for small to mid-size jobs. Modern dual-color header.",
+          bodyJson: JSON.stringify({
+            sections: ["client", "project", "scope", "line_items", "totals", "terms", "signature"],
+            notes: "Quick single-page proposal for small jobs.",
+          }),
+          payTerms: "Net 30. 50% deposit due on acceptance, balance due on completion.",
+          scope: "Furnish all labor, materials, and equipment necessary to complete the work described above.",
+          assumptions: "Pricing assumes site is accessible during normal business hours and existing utilities are in working order.",
+          exclusions: "Permits, inspections, and code-required upgrades not listed above are excluded.",
+          warranty: "All workmanship warranted for one (1) year from substantial completion.",
+        },
+        {
+          name: "Detailed Scope Proposal", type: "proposal", variant: "classic",
+          description: "A comprehensive scope-of-work proposal with assumptions, exclusions, and warranty. Classic centered header.",
+          bodyJson: JSON.stringify({
+            sections: ["client", "project", "scope", "assumptions", "exclusions",
+              "line_items", "labor_summary", "materials_summary", "timeline",
+              "totals", "warranty", "payment_schedule", "terms", "signature"],
+            notes: "Comprehensive scope-of-work proposal for larger projects.",
+          }),
+          payTerms: "Net 30. Progress billing per attached payment schedule.",
+          scope: "Detailed scope of work to be performed in accordance with attached drawings and specifications.",
+          assumptions: "Subsurface conditions are assumed to be free of unknown obstructions, hazardous materials, or rock.",
+          exclusions: "Furniture moving, finish cleaning, third-party inspections, and any work not explicitly listed are excluded.",
+          warranty: "Workmanship warranted two (2) years; manufacturer warranties pass through to the owner.",
+        },
+        {
+          name: "Standard Invoice", type: "invoice", variant: "minimal",
+          description: "Clean professional invoice with itemized lines and payment instructions. Minimal header.",
+          bodyJson: JSON.stringify({
+            sections: ["client", "project_reference", "line_items", "totals", "payment_instructions", "notes"],
+            notes: "Clean professional invoice covering most contractor billing needs.",
+          }),
+          payTerms: "Net 30. Payments past due will incur a 1.5% monthly service charge.",
+          scope: null, assumptions: null, exclusions: null, warranty: null,
+        },
+      ];
+      let inserted = 0;
+      for (const tpl of SYSTEM_TEMPLATES) {
+        const existsRes = await db.execute(sql`
+          SELECT 1 FROM contractor_templates
+          WHERE is_global = TRUE AND name = ${tpl.name} AND template_type = ${tpl.type}
+          LIMIT 1
+        `);
+        if ((existsRes.rows ?? []).length > 0) continue;
+        await db.execute(sql`
+          INSERT INTO contractor_templates (
+            company_id, template_type, name, description, body_json,
+            default_payment_terms, default_scope_template, default_assumptions,
+            default_exclusions, default_warranty,
+            is_global, is_default, layout_variant, is_active
+          ) VALUES (
+            NULL, ${tpl.type}, ${tpl.name}, ${tpl.description}, ${tpl.bodyJson},
+            ${tpl.payTerms}, ${tpl.scope}, ${tpl.assumptions},
+            ${tpl.exclusions}, ${tpl.warranty},
+            TRUE, FALSE, ${tpl.variant}, TRUE
+          )
+        `);
+        inserted++;
+      }
+      if (inserted > 0) console.log(`Auto-migration OK: contractor_templates seed (+${inserted} system template${inserted === 1 ? "" : "s"})`);
+      else console.log("Auto-migration OK: contractor_templates seed (already exists)");
+    } catch (e) {
+      console.log("Auto-migration skipped (contractor_templates seed):", e instanceof Error ? e.message : String(e));
+    }
     await run("contractor_workflow_settings.contract_renegotiation_warning_days", sql`ALTER TABLE contractor_workflow_settings ADD COLUMN IF NOT EXISTS contract_renegotiation_warning_days INTEGER DEFAULT 7`);
     await run("contractor_workflow_settings.reviewer_pool", sql`ALTER TABLE contractor_workflow_settings ADD COLUMN IF NOT EXISTS reviewer_pool TEXT`);
     await run("contractor_workflow_settings.document_retention_months", sql`ALTER TABLE contractor_workflow_settings ADD COLUMN IF NOT EXISTS document_retention_months INTEGER DEFAULT 84`);

@@ -22,6 +22,7 @@ import { getLocalDateStr, localTimeToUTC } from "./timezone-utils";
 import { encryptSecret, decryptSecret, isEncryptionAvailable } from "./cryptoUtils";
 import { createContractorNotification } from "./contractor-notification-helper";
 import { runContractorReminderScheduler } from "./contractor-scheduler";
+import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contractor-pdf-style";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -474,6 +475,8 @@ interface ProposalRow {
   tax_amount?: string | null;
   discount_amount?: string | null;
   total?: string | null;
+  template_id?: string | null;
+  branding_id?: string | null;
   // Contractor and company identity — populated by generateProposalPdf from DB joins
   contractor_name?: string | null;
   contractor_email?: string | null;
@@ -490,6 +493,8 @@ interface InvoiceRow {
   amount?: string | null;
   line_items?: string | Record<string, unknown>[] | null;
   notes?: string | null;
+  template_id?: string | null;
+  branding_id?: string | null;
 }
 interface LineItemRow {
   name?: string | null;
@@ -536,24 +541,16 @@ async function generateProposalPdf(proposalId: string, proposal: ProposalRow, ac
     const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const pageWidth = doc.internal.pageSize.getWidth();
 
-    // Header gradient blocks with company branding
-    doc.setFillColor(13, 148, 136);
-    doc.rect(0, 0, pageWidth, 28, "F");
-    doc.setFillColor(37, 99, 235);
-    doc.rect(pageWidth * 0.6, 0, pageWidth * 0.4, 28, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(18);
-    doc.setFont("helvetica", "bold");
-    doc.text(companyName || "PayLink", 14, 12);
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
-    doc.text("Contractor Proposal", 14, 20);
-    doc.setFontSize(9);
-    doc.text(new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }), pageWidth - 14, 12, { align: "right" });
-    doc.text(`Proposal #${proposal.proposal_number || proposalId.slice(0, 8)}`, pageWidth - 14, 20, { align: "right" });
-
-    doc.setTextColor(0, 0, 0);
-    let y = 38;
+    // Resolve style (template layout_variant + branding colors). Falls back to
+    // PayLink defaults when template/branding are missing.
+    const style = await resolveDocStyle(proposal.template_id, proposal.contractor_id, proposal.company_id);
+    const displayName = style.businessName || companyName || "PayLink";
+    let y = renderDocHeader(doc, pageWidth, style, {
+      displayName,
+      documentTypeLabel: "Contractor Proposal",
+      documentNumberLabel: `Proposal #${proposal.proposal_number || proposalId.slice(0, 8)}`,
+      dateLabel: new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+    });
 
     // Contractor identity block
     if (contractorName || contractorEmail) {
@@ -604,14 +601,14 @@ async function generateProposalPdf(proposalId: string, proposal: ProposalRow, ac
       doc.text(aLines, 14, y); y += (aLines.length * 5) + 5;
     }
 
-    // Line items table
+    // Line items table — header colored with style.primaryRgb
     if (lineItems.length > 0) {
       doc.setFontSize(11);
       doc.setFont("helvetica", "bold");
       doc.text("Line Items", 14, y);
       y += 4;
-      const teal: [number, number, number] = [13, 148, 136];
-      const white: [number, number, number] = [255, 255, 255];
+      const headFill: [number, number, number] = style.primaryRgb;
+      const headText: [number, number, number] = [255, 255, 255];
       autoTable(doc, {
         startY: y,
         head: [["Description", "Qty", "Unit", "Unit Price", "Total"]],
@@ -623,26 +620,24 @@ async function generateProposalPdf(proposalId: string, proposal: ProposalRow, ac
           `$${parseFloat(li.line_total || "0").toFixed(2)}`,
         ]),
         styles: { fontSize: 9 },
-        headStyles: { fillColor: teal, textColor: white, fontStyle: "bold" },
+        headStyles: { fillColor: headFill, textColor: headText, fontStyle: "bold" },
         margin: { left: 14, right: 14 },
       });
       y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
     }
 
-    // Totals
+    // Totals — variant-aware (filled box / framed box / plain)
     const subtotal = parseFloat(proposal.subtotal || proposal.amount || "0");
     const taxAmt = parseFloat(proposal.tax_amount || "0");
     const discount = parseFloat(proposal.discount_amount || "0");
     const total = parseFloat(proposal.total || proposal.amount || "0");
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
-    if (subtotal > 0) { doc.text(`Subtotal: $${subtotal.toFixed(2)}`, pageWidth - 14, y, { align: "right" }); y += 6; }
-    if (discount > 0) { doc.text(`Discount: -$${discount.toFixed(2)}`, pageWidth - 14, y, { align: "right" }); y += 6; }
-    if (taxAmt > 0) { doc.text(`Tax: $${taxAmt.toFixed(2)}`, pageWidth - 14, y, { align: "right" }); y += 6; }
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "bold");
-    doc.text(`Total: $${total.toFixed(2)}`, pageWidth - 14, y, { align: "right" });
-    y += 10;
+    y = renderTotalsBlock(doc, pageWidth, y, style, {
+      subtotal: subtotal > 0 ? subtotal : undefined,
+      discount: discount > 0 ? discount : undefined,
+      tax: taxAmt > 0 ? taxAmt : undefined,
+      total,
+      totalLabel: "Total",
+    });
 
     // Approval metadata
     if (proposal.reviewed_at) {
@@ -692,24 +687,20 @@ async function generateInvoicePdf(invoiceId: string, invoice: InvoiceRow, actorU
     const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const pageWidth = doc.internal.pageSize.getWidth();
 
-    // Header
-    doc.setFillColor(13, 148, 136);
-    doc.rect(0, 0, pageWidth, 28, "F");
-    doc.setFillColor(37, 99, 235);
-    doc.rect(pageWidth * 0.6, 0, pageWidth * 0.4, 28, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(18);
-    doc.setFont("helvetica", "bold");
-    doc.text("PayLink", 14, 12);
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
-    doc.text("Contractor Invoice", 14, 20);
-    doc.setFontSize(9);
-    doc.text(new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }), pageWidth - 14, 12, { align: "right" });
-    doc.text(`Invoice #${invoice.invoice_number || invoiceId.slice(0, 8)}`, pageWidth - 14, 20, { align: "right" });
-
-    doc.setTextColor(0, 0, 0);
-    let y = 38;
+    // Resolve style + company name (same lookup pattern as proposal helper)
+    const style = await resolveDocStyle(invoice.template_id, invoice.contractor_id, invoice.company_id);
+    let invoiceCompanyName: string | null = null;
+    if (invoice.company_id) {
+      const coRes = await db.execute(sql`SELECT name FROM companies WHERE id = ${invoice.company_id} LIMIT 1`);
+      if (coRes.rows[0]) invoiceCompanyName = (coRes.rows[0] as { name: string }).name || null;
+    }
+    const invDisplayName = style.businessName || invoiceCompanyName || "PayLink";
+    let y = renderDocHeader(doc, pageWidth, style, {
+      displayName: invDisplayName,
+      documentTypeLabel: "Contractor Invoice",
+      documentNumberLabel: `Invoice #${invoice.invoice_number || invoiceId.slice(0, 8)}`,
+      dateLabel: new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+    });
 
     // Invoice details
     doc.setFontSize(13);
@@ -728,15 +719,15 @@ async function generateInvoicePdf(invoiceId: string, invoice: InvoiceRow, actorU
     y += 10;
     doc.setTextColor(0, 0, 0);
 
-    // Line items if present
+    // Line items if present — header colored with style.primaryRgb
     const lineItems = invoice.line_items ? (typeof invoice.line_items === "string" ? JSON.parse(invoice.line_items) : invoice.line_items) : [];
     if (Array.isArray(lineItems) && lineItems.length > 0) {
       doc.setFontSize(11);
       doc.setFont("helvetica", "bold");
       doc.text("Line Items", 14, y);
       y += 4;
-      const invTeal: [number, number, number] = [13, 148, 136];
-      const invWhite: [number, number, number] = [255, 255, 255];
+      const invHeadFill: [number, number, number] = style.primaryRgb;
+      const invHeadText: [number, number, number] = [255, 255, 255];
       const invItems = lineItems as LineItemRow[];
       autoTable(doc, {
         startY: y,
@@ -748,18 +739,15 @@ async function generateInvoicePdf(invoiceId: string, invoice: InvoiceRow, actorU
           `$${parseFloat(li.line_total || li.lineTotal || "0").toFixed(2)}`,
         ]),
         styles: { fontSize: 9 },
-        headStyles: { fillColor: invTeal, textColor: invWhite, fontStyle: "bold" },
+        headStyles: { fillColor: invHeadFill, textColor: invHeadText, fontStyle: "bold" },
         margin: { left: 14, right: 14 },
       });
       y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
     }
 
-    // Amount
+    // Amount Due — variant-aware totals box
     const amount = parseFloat(invoice.amount || "0");
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "bold");
-    doc.text(`Amount Due: $${amount.toFixed(2)}`, pageWidth - 14, y, { align: "right" });
-    y += 10;
+    y = renderTotalsBlock(doc, pageWidth, y, style, { total: amount, totalLabel: "Amount Due" });
 
     if (invoice.notes) {
       doc.setFontSize(9);
@@ -9988,10 +9976,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const invoiceNumber = `INV-${proposal.contractor_id.slice(-4).toUpperCase()}-${String(count + 1).padStart(4, "0")}`;
       const today = new Date().toISOString().split("T")[0];
 
+      // Default the invoice template to the global "Standard Invoice" if the
+      // proposal doesn't already pin a (compatible) invoice template. Carry
+      // branding_id through so logo/colors stay consistent with the proposal.
+      let invTemplateId: string | null = null;
+      try {
+        const stdRes = await db.execute(sql`
+          SELECT id FROM contractor_templates
+          WHERE is_global = TRUE AND template_type = 'invoice' AND name = 'Standard Invoice'
+          LIMIT 1
+        `);
+        invTemplateId = (stdRes.rows[0] as { id?: string } | undefined)?.id || null;
+      } catch { /* leave null — generator falls back to defaults */ }
+      const invBrandingId: string | null = (proposal as { branding_id?: string | null }).branding_id || null;
+
       // Create the contractor invoice from the proposal
       const invResult = await db.execute(sql`
-        INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id)
-        VALUES (${proposal.company_id}, ${proposal.contractor_id}, ${invoiceNumber}, ${today}, ${proposal.expiration_date || null}, ${proposal.amount || 0}, ${proposal.description || proposal.title || null}, ${proposal.id}, ${proposal.proposal_number}, ${proposal.line_items}, ${proposal.notes || null}, 'submitted', TRUE, ${proposal.job_id || null}, ${proposal.cost_center_id || null})
+        INSERT INTO contractor_invoices (company_id, contractor_id, invoice_number, invoice_date, due_date, amount, description, proposal_id, proposal_reference, line_items, notes, status, is_1099_reportable, job_id, cost_center_id, template_id, branding_id)
+        VALUES (${proposal.company_id}, ${proposal.contractor_id}, ${invoiceNumber}, ${today}, ${proposal.expiration_date || null}, ${proposal.amount || 0}, ${proposal.description || proposal.title || null}, ${proposal.id}, ${proposal.proposal_number}, ${proposal.line_items}, ${proposal.notes || null}, 'submitted', TRUE, ${proposal.job_id || null}, ${proposal.cost_center_id || null}, ${invTemplateId}, ${invBrandingId})
         RETURNING *
       `);
       const invoice = (invResult.rows ?? (invResult as any))[0];
