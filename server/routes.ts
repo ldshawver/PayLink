@@ -10571,6 +10571,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       // Notify contractor that their proposal has been converted to a contract
       createContractorNotification({ workerId: prop.contractor_id, companyId: prop.company_id, notificationType: "proposal_converted_contract", title: `Contract Created from Proposal: ${contract.title}`, body: `Your proposal has been converted to a contract (${contractNumber}). Please review and sign.`, entityType: "contract", entityId: contract.id, actionUrl: `/app/contractor-hub?section=contracts&id=${contract.id}` }).catch(() => {});
+      // Email contractor — required by spec: in-app + email on convert-to-contract
+      try {
+        const { sendConvertToContractEmail } = await import("./contractor-conversion-email.js");
+        const baseUrl = getAppBaseUrl(req);
+        sendConvertToContractEmail(db, {
+          contractorId: prop.contractor_id,
+          contract: { id: contract.id, title: contract.title },
+          contractNumber,
+          baseUrl,
+        }).then((r) => {
+          if (!r.sent) console.warn("[Convert to contract] Contractor email skipped:", r.reason);
+        }).catch((e: unknown) => console.warn("[Convert to contract] Contractor email failed:", e instanceof Error ? e.message : String(e)));
+      } catch (emailErr) { console.warn("[Convert to contract] Contractor email setup failed:", emailErr); }
       res.status(201).json(contract);
     } catch (e: any) { console.error(e); res.status(500).json({ message: "Failed to convert to contract: " + e.message }); }
   });
