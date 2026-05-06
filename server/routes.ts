@@ -10038,8 +10038,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
       if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
-      if (!["submitted", "approved"].includes(proposal.status || "")) {
-        return res.status(400).json({ message: "Only submitted or approved proposals can be converted to invoices" });
+      if (proposal.status !== "approved") {
+        return res.status(400).json({ message: "Only approved proposals can be converted to invoices" });
       }
 
       // Generate invoice number

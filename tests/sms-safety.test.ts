@@ -73,8 +73,11 @@ async function expectAllowed(label: string, body: string) {
     phone: "+15555550100",
     recipientName: "Test",
     contractTitle: "Bad URL Contract",
+    email: "test@example.com",
+    entityId: "test-id-1",
+    entityType: "contract",
     actionUrl: "https://app.example.com/api/dam-documents/xyz/download",
-  } as any);
+  });
   log(
     "contract event SMS with /api download URL is blocked",
     blockedRes.sent === false && /SMS blocked/i.test(blockedRes.error || ""),
@@ -86,8 +89,11 @@ async function expectAllowed(label: string, body: string) {
     phone: "+15555550100",
     recipientName: "Test",
     contractTitle: "Good URL Contract",
+    email: "test@example.com",
+    entityId: "test-id-2",
+    entityType: "contract",
     actionUrl: "https://app.example.com/app/contractor-hub?section=contracts&id=abc",
-  } as any);
+  });
   log(
     "contract event SMS with /app URL is NOT blocked by guard",
     !(allowedRes.error || "").startsWith("SMS blocked"),
