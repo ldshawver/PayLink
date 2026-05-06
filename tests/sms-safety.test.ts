@@ -1,0 +1,73 @@
+/**
+ * Focused SMS safety tests — verify the central allowlist guard in
+ * sendViaTwilio rejects any SMS body containing a non-`/app/` URL.
+ *
+ * Policy: an SMS may only carry in-app review links (paths starting with
+ * /app/). Direct download endpoints (/uploads/..., /api/dam-documents/...,
+ * raw API routes) and document file extensions must always be blocked.
+ */
+import "dotenv/config";
+import { sendViaTwilio } from "../server/notifications";
+
+let pass = 0;
+let fail = 0;
+const log = (name: string, ok: boolean, detail?: string) => {
+  if (ok) { pass++; console.log(`  ✓ ${name}`); }
+  else    { fail++; console.error(`  ✗ ${name}${detail ? ` — ${detail}` : ""}`); }
+};
+
+async function expectBlocked(label: string, body: string) {
+  try {
+    await sendViaTwilio("+15555550100", body);
+    log(label, false, "expected block but call resolved");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // We accept either an SMS-blocked rejection OR a Twilio-not-configured
+    // error iff our guard never ran — but the guard runs FIRST, so any pass
+    // through to "Twilio not configured" means the guard accepted the body.
+    if (msg.startsWith("SMS blocked")) log(label, true);
+    else log(label, false, `wrong rejection: ${msg}`);
+  }
+}
+
+async function expectAllowed(label: string, body: string) {
+  try {
+    await sendViaTwilio("+15555550100", body);
+    // If credentials happen to be set we'd actually send — treat as pass.
+    log(label, true);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.startsWith("SMS blocked")) log(label, false, `unexpectedly blocked: ${msg}`);
+    else log(label, true); // e.g. "Twilio not configured" — guard let it through
+  }
+}
+
+(async () => {
+  console.log("=== SMS Safety Guard Tests ===\n");
+
+  console.log("[1] Blocks direct /uploads URLs");
+  await expectBlocked("absolute /uploads URL",     "Doc: https://app.example.com/uploads/x.pdf");
+  await expectBlocked("relative /uploads path",    "See file at /uploads/proposal.pdf");
+
+  console.log("\n[2] Blocks direct /api download endpoints");
+  await expectBlocked("dam-documents download",    "Download: https://app.example.com/api/dam-documents/abc123/download");
+  await expectBlocked("raw /api path",             "Hit /api/contractor-proposals/abc/pdf for PDF");
+
+  console.log("\n[3] Blocks document file extensions");
+  await expectBlocked("naked .pdf reference",      "Open contract.pdf to review");
+  await expectBlocked(".docx reference",           "See agreement.docx");
+
+  console.log("\n[4] Blocks non-/app/ URLs even on the same host");
+  await expectBlocked("/admin URL",                "Visit https://app.example.com/admin/proposals/123");
+  await expectBlocked("bare host URL",             "Go to https://app.example.com to review");
+
+  console.log("\n[5] Allows /app/ in-app review links");
+  await expectAllowed("/app/contractor-hub URL",   "Review: https://app.example.com/app/contractor-hub?section=proposals&id=abc");
+  await expectAllowed("plain text, no URL",        "Your proposal has been approved.");
+
+  console.log(`\n=== ${pass} passed, ${fail} failed ===`);
+  process.exit(fail === 0 ? 0 : 1);
+})().catch((e) => {
+  console.error("Fatal:", e);
+  process.exit(1);
+});

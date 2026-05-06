@@ -458,6 +458,15 @@ function periodsPerYearFromSchedule(type: string): number {
   return 26; // biweekly default
 }
 
+// Narrow typed accessor for db.execute() results — replaces ad-hoc
+// `(result.rows ?? (result as any))[0]` patterns in contractor lifecycle
+// handlers with a single, typed extraction point.
+type DbExecResult<T> = { rows?: T[] } | T[];
+function firstRow<T>(r: DbExecResult<T>): T | undefined {
+  if (Array.isArray(r)) return r[0];
+  return r.rows?.[0];
+}
+
 interface ProposalRow {
   company_id?: string | null;
   contractor_id?: string | null;
@@ -9792,10 +9801,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
       const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      const proposal = (result.rows ?? (result as any))[0];
+      const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
       if (user?.workerId !== proposal.contractor_id) return res.status(403).json({ message: "Not your proposal" });
-      if (!["draft", "revision_requested"].includes(proposal.status)) {
+      if (!["draft", "revision_requested"].includes(proposal.status || "")) {
         return res.status(400).json({ message: "Proposal cannot be submitted from current status" });
       }
       if (!proposal.company_id) return res.status(400).json({ message: "Proposal must be addressed to a company before submitting" });
@@ -9811,8 +9820,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const { sendGenericNotificationEmail } = await import("./notifications.js");
         const baseUrl = getAppBaseUrl(req);
         const cwRes = await db.execute(sql`SELECT first_name, last_name FROM workers WHERE id = ${proposal.contractor_id}`);
-        const cw = cwRes.rows[0] as any;
-        const contractorName = cw ? `${cw.first_name} ${cw.last_name}` : "A contractor";
+        const cw = firstRow<{ first_name: string | null; last_name: string | null }>(cwRes);
+        const contractorName = cw ? `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "A contractor" : "A contractor";
         const adminsRes = await db.execute(sql`
           SELECT u.email, COALESCE(w.first_name || ' ' || w.last_name, u.username) AS name
           FROM users u LEFT JOIN workers w ON w.id = u.worker_id
@@ -9829,7 +9838,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           }).catch(() => {});
         }
       } catch (emailErr) { console.warn("[Proposal submit] Admin email failed:", emailErr); }
-      res.json((updated.rows ?? (updated as any))[0]);
+      res.json(firstRow<ProposalRow>(updated));
     } catch (e) { res.status(500).json({ message: "Failed to submit proposal" }); }
   });
 
@@ -9839,10 +9848,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
       const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      const proposal = (result.rows ?? (result as any))[0];
+      const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
       if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
-      if (!["submitted", "sent", "viewed", "countered", "negotiated"].includes(proposal.status)) return res.status(400).json({ message: "Proposal cannot be accepted from its current status" });
+      if (!["submitted", "sent", "viewed", "countered", "negotiated"].includes(proposal.status || "")) return res.status(400).json({ message: "Proposal cannot be accepted from its current status" });
       const oldStatus = proposal.status;
       await autoSnapshot(req.params.id, proposal, `Approved by ${user?.username || "reviewer"}`, userId);
       await db.execute(sql`
@@ -9874,7 +9883,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         }
       } catch (emailErr) { console.warn("[Proposal accept] Contractor email failed:", emailErr); }
       // Generate PDF and store in DMS — awaited so failure is deterministically logged
-      const acceptedProposal = (updated.rows ?? (updated as any))[0] || proposal;
+      const acceptedProposal = firstRow<ProposalRow & { id: string }>(updated) || proposal;
       const pdfPath = await generateProposalPdf(req.params.id, acceptedProposal, userId).catch((e: unknown) => { console.warn("[Proposal accept] PDF generation failed:", e instanceof Error ? e.message : String(e)); return null; });
       if (!pdfPath) console.warn("[Proposal accept] DMS record may be missing for proposal", req.params.id);
       res.json({ ...acceptedProposal, _pdfGenerated: !!pdfPath });
@@ -9887,10 +9896,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
       const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      const proposal = (result.rows ?? (result as any))[0];
+      const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
       if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
-      if (!["submitted", "sent", "viewed", "countered", "negotiated", "approved"].includes(proposal.status)) return res.status(400).json({ message: "Invalid status for rejection" });
+      if (!["submitted", "sent", "viewed", "countered", "negotiated", "approved"].includes(proposal.status || "")) return res.status(400).json({ message: "Invalid status for rejection" });
       const { rejectionReason } = req.body;
       const oldStatus = proposal.status;
       await autoSnapshot(req.params.id, proposal, `Rejected: ${rejectionReason || "no reason provided"}`, userId);
@@ -9900,7 +9909,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
       await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'rejected', ${oldStatus}, 'rejected', ${userId}, ${user?.username || null}, ${rejectionReason || null}, ${req.ip || null})`);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      createContractorNotification({ workerId: proposal.contractor_id, notificationType: "proposal_rejected", title: `Proposal Rejected: ${proposal.title || proposal.proposal_number}`, body: rejectionReason || "Your proposal has been declined.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
+      createContractorNotification({ workerId: proposal.contractor_id || undefined, notificationType: "proposal_rejected", title: `Proposal Rejected: ${proposal.title || proposal.proposal_number}`, body: rejectionReason || "Your proposal has been declined.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
       // Email contractor
       try {
         const { sendGenericNotificationEmail } = await import("./notifications.js");
@@ -9922,7 +9931,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           }).catch(() => {});
         }
       } catch (emailErr) { console.warn("[Proposal reject] Contractor email failed:", emailErr); }
-      res.json((updated.rows ?? (updated as any))[0]);
+      res.json(firstRow<ProposalRow>(updated));
     } catch (e) { res.status(500).json({ message: "Failed to reject proposal" }); }
   });
 
@@ -9932,10 +9941,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
       const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      const proposal = (result.rows ?? (result as any))[0];
+      const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
       if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
-      if (!["submitted", "sent", "viewed", "countered"].includes(proposal.status)) return res.status(400).json({ message: "Cannot request revision from current status" });
+      if (!["submitted", "sent", "viewed", "countered"].includes(proposal.status || "")) return res.status(400).json({ message: "Cannot request revision from current status" });
       const { revisionNotes } = req.body;
       const oldStatus = proposal.status;
       await autoSnapshot(req.params.id, proposal, `Revision requested: ${revisionNotes || "no notes"}`, userId);
@@ -9945,7 +9954,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
       await db.execute(sql`INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, notes, ip_address) VALUES (${req.params.id}, 'revision_requested', ${oldStatus}, 'revision_requested', ${userId}, ${user?.username || null}, ${revisionNotes || null}, ${req.ip || null})`);
       const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      createContractorNotification({ workerId: proposal.contractor_id, notificationType: "proposal_revision_requested", title: `Revision Requested: ${proposal.title || proposal.proposal_number}`, body: revisionNotes || "Please revise and resubmit your proposal.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
+      createContractorNotification({ workerId: proposal.contractor_id || undefined, notificationType: "proposal_revision_requested", title: `Revision Requested: ${proposal.title || proposal.proposal_number}`, body: revisionNotes || "Please revise and resubmit your proposal.", entityType: "proposal", entityId: req.params.id, actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}` }).catch(() => {});
       // Email contractor
       try {
         const { sendGenericNotificationEmail } = await import("./notifications.js");
@@ -9969,7 +9978,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           }).catch(() => {});
         }
       } catch (emailErr) { console.warn("[Proposal revision] Contractor email failed:", emailErr); }
-      res.json((updated.rows ?? (updated as any))[0]);
+      res.json(firstRow<ProposalRow>(updated));
     } catch (e) { res.status(500).json({ message: "Failed to request revision" }); }
   });
 
@@ -9979,16 +9988,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const userId = (req.session as any).userId;
       const user = await storage.getUser(userId);
       const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
-      const proposal = (result.rows ?? (result as any))[0];
+      const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
       if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
-      if (!["submitted", "approved"].includes(proposal.status)) {
+      if (!["submitted", "approved"].includes(proposal.status || "")) {
         return res.status(400).json({ message: "Only submitted or approved proposals can be converted to invoices" });
       }
 
       // Generate invoice number
       const countResult = await db.execute(sql`SELECT COUNT(*) as c FROM contractor_invoices WHERE contractor_id = ${proposal.contractor_id}`);
-      const count = Number((countResult.rows[0] as any)?.c ?? 0);
+      const count = Number(firstRow<{ c: string | number }>(countResult)?.c ?? 0);
       const invoiceNumber = `INV-${proposal.contractor_id.slice(-4).toUpperCase()}-${String(count + 1).padStart(4, "0")}`;
       const today = new Date().toISOString().split("T")[0];
 
@@ -10002,9 +10011,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           WHERE is_global = TRUE AND template_type = 'invoice' AND name = 'Standard Invoice'
           LIMIT 1
         `);
-        invTemplateId = (stdRes.rows[0] as { id?: string } | undefined)?.id || null;
+        invTemplateId = firstRow<{ id?: string }>(stdRes)?.id || null;
       } catch { /* leave null — generator falls back to defaults */ }
-      const invBrandingId: string | null = (proposal as { branding_id?: string | null }).branding_id || null;
+      const invBrandingId: string | null = proposal.branding_id || null;
 
       // Create the contractor invoice from the proposal
       const invResult = await db.execute(sql`
@@ -10012,7 +10021,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         VALUES (${proposal.company_id}, ${proposal.contractor_id}, ${invoiceNumber}, ${today}, ${proposal.expiration_date || null}, ${proposal.amount || 0}, ${proposal.description || proposal.title || null}, ${proposal.id}, ${proposal.proposal_number}, ${proposal.line_items}, ${proposal.notes || null}, 'submitted', TRUE, ${proposal.job_id || null}, ${proposal.cost_center_id || null}, ${invTemplateId}, ${invBrandingId})
         RETURNING *
       `);
-      const invoice = (invResult.rows ?? (invResult as any))[0];
+      const invoice = firstRow<InvoiceRow & { id: string }>(invResult);
+      if (!invoice) return res.status(500).json({ message: "Failed to create invoice" });
 
       // Mark the proposal as converted
       await db.execute(sql`
@@ -10021,7 +10031,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `);
 
       // Notify contractor that their proposal has been converted to an invoice
-      createContractorNotification({ workerId: proposal.contractor_id, companyId: proposal.company_id, notificationType: "proposal_converted_invoice", title: `Proposal Approved: Invoice ${invoiceNumber} Created`, body: `Your proposal "${proposal.title || proposal.proposal_number}" has been approved and an invoice has been generated.`, entityType: "invoice", entityId: invoice.id, actionUrl: `/app/contractor-hub?section=invoices&id=${invoice.id}` }).catch(() => {});
+      createContractorNotification({ workerId: proposal.contractor_id || undefined, companyId: proposal.company_id || undefined, notificationType: "proposal_converted_invoice", title: `Proposal Approved: Invoice ${invoiceNumber} Created`, body: `Your proposal "${proposal.title || proposal.proposal_number}" has been approved and an invoice has been generated.`, entityType: "invoice", entityId: invoice.id, actionUrl: `/app/contractor-hub?section=invoices&id=${invoice.id}` }).catch(() => {});
       // Email contractor + generate invoice PDF
       try {
         const { sendGenericNotificationEmail } = await import("./notifications.js");

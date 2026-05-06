@@ -141,13 +141,34 @@ async function getTwilioCredentials(): Promise<{
   return { accountSid, authToken, fromNumber, messagingServiceSid: null };
 }
 
-async function sendViaTwilio(to: string, body: string): Promise<void> {
-  // Central SMS safety enforcement: no SMS may carry direct document download URLs.
-  // This guard covers every SMS send path (contract events, invoice reminders,
-  // shift marketplace, generic notifications) since all route through this function.
-  if (body.includes("/uploads/") || /\.(pdf|docx?|xlsx?)(\?|$)/i.test(body)) {
-    console.error("[SMS][BLOCKED] Message body contains a direct document URL. Only in-app URLs are permitted.", body.slice(0, 120));
-    throw new Error("SMS blocked: message body contains a direct document download URL");
+export async function sendViaTwilio(to: string, body: string): Promise<void> {
+  // Central SMS safety enforcement (allowlist-based):
+  //   Policy: an SMS may only carry in-app review links — i.e. URLs whose
+  //   path starts with `/app/`. This rules out direct document download
+  //   endpoints (`/uploads/...`, `/api/dam-documents/.../download`, raw API
+  //   routes, etc.) regardless of file extension. Any URL that fails the
+  //   allowlist check rejects the entire send. This guard covers every SMS
+  //   send path (contract events, invoice reminders, shift marketplace,
+  //   generic notifications) since all route through this function.
+  const urlMatches = body.match(/https?:\/\/[^\s<>"]+/gi) || [];
+  for (const raw of urlMatches) {
+    let pathname: string;
+    try {
+      pathname = new URL(raw).pathname;
+    } catch {
+      console.error("[SMS][BLOCKED] Unparseable URL in message body.", raw.slice(0, 120));
+      throw new Error("SMS blocked: message body contains a malformed URL");
+    }
+    if (!pathname.startsWith("/app/")) {
+      console.error("[SMS][BLOCKED] Non-app URL in message body. Only /app/* in-app review links are permitted.", raw.slice(0, 120));
+      throw new Error("SMS blocked: message body contains a non-app URL (only /app/* links are allowed)");
+    }
+  }
+  // Belt-and-suspenders for relative paths or ext-only mentions that didn't
+  // parse as a full URL above.
+  if (/(^|[\s(<])\/(uploads|api)\//i.test(body) || /\.(pdf|docx?|xlsx?)(\?|[\s)<,.;:]|$)/i.test(body)) {
+    console.error("[SMS][BLOCKED] Message body contains a non-app document path or extension.", body.slice(0, 120));
+    throw new Error("SMS blocked: message body contains a non-app document URL");
   }
   const creds = await getTwilioCredentials();
   if (!creds) throw new Error("Twilio not configured");
