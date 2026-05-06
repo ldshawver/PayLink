@@ -9862,7 +9862,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           FROM workers w LEFT JOIN users u ON u.worker_id = w.id
           WHERE w.id = ${proposal.contractor_id} LIMIT 1
         `);
-        const cw = cwRes.rows[0] as any;
+        const cw = cwRes.rows[0] as { email: string | null; first_name: string | null; last_name: string | null } | undefined;
         if (cw?.email) {
           sendGenericNotificationEmail({
             recipientName: `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "Contractor",
@@ -9911,7 +9911,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           FROM workers w LEFT JOIN users u ON u.worker_id = w.id
           WHERE w.id = ${proposal.contractor_id} LIMIT 1
         `);
-        const cw = cwRes.rows[0] as any;
+        const cw = cwRes.rows[0] as { email: string | null; first_name: string | null; last_name: string | null } | undefined;
         if (cw?.email) {
           sendGenericNotificationEmail({
             recipientName: `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "Contractor",
@@ -9956,7 +9956,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           FROM workers w LEFT JOIN users u ON u.worker_id = w.id
           WHERE w.id = ${proposal.contractor_id} LIMIT 1
         `);
-        const cw = cwRes.rows[0] as any;
+        const cw = cwRes.rows[0] as { email: string | null; first_name: string | null; last_name: string | null } | undefined;
         if (cw?.email) {
           sendGenericNotificationEmail({
             recipientName: `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "Contractor",
@@ -10032,7 +10032,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           FROM workers w LEFT JOIN users u ON u.worker_id = w.id
           WHERE w.id = ${proposal.contractor_id} LIMIT 1
         `);
-        const cw = cwRes.rows[0] as any;
+        const cw = cwRes.rows[0] as { email: string | null; first_name: string | null; last_name: string | null } | undefined;
         if (cw?.email) {
           sendGenericNotificationEmail({
             recipientName: `${cw.first_name || ""} ${cw.last_name || ""}`.trim() || "Contractor",
@@ -10043,10 +10043,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           }).catch(() => {});
         }
       } catch (emailErr) { console.warn("[Convert-to-invoice] Contractor email failed:", emailErr); }
-      // Generate invoice PDF and store in DMS — awaited so failure is deterministically logged
+      // Generate proposal PDF (transition-to-approved snapshot) AND invoice PDF
+      // — both are required by the contractor-hub spec so the DMS captures the
+      // approved proposal even when the approval happens via convert-to-invoice
+      // rather than the dedicated /accept endpoint.
+      const approvedProposal = { ...proposal, status: "approved", converted_to_invoice_id: invoice.id } as ProposalRow & { id: string };
+      const proposalPdfPath = await generateProposalPdf(req.params.id, approvedProposal, userId).catch((e: unknown) => { console.warn("[Convert-to-invoice] Proposal PDF generation failed:", e instanceof Error ? e.message : String(e)); return null; });
+      if (!proposalPdfPath) console.warn("[Convert-to-invoice] DMS record may be missing for proposal", req.params.id);
       const invoicePdfPath = await generateInvoicePdf(invoice.id, invoice, userId).catch((e: unknown) => { console.warn("[Convert-to-invoice] Invoice PDF generation failed:", e instanceof Error ? e.message : String(e)); return null; });
       if (!invoicePdfPath) console.warn("[Convert-to-invoice] DMS record may be missing for invoice", invoice.id);
-      res.json({ proposal: { ...proposal, status: "approved", converted_to_invoice_id: invoice.id }, invoice, _invoicePdfGenerated: !!invoicePdfPath });
+      res.json({ proposal: approvedProposal, invoice, _proposalPdfGenerated: !!proposalPdfPath, _invoicePdfGenerated: !!invoicePdfPath });
     } catch (e) { console.error("[ContractorProposals] convert-to-invoice error:", e); res.status(500).json({ message: "Failed to convert proposal to invoice" }); }
   });
 

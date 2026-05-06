@@ -4378,14 +4378,14 @@ function DocumentsSection() {
                 </div>
                 <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                   <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1"
-                    onClick={() => window.open(d.file_path, "_blank")}
+                    onClick={() => window.open(`/api/dam-documents/${d.id}/download`, "_blank")}
                     data-testid={`btn-view-pdf-${d.id}`} title="View PDF">
                     <ExternalLink className="h-3.5 w-3.5" /> View
                   </Button>
                   <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1"
                     onClick={() => {
                       const a = document.createElement("a");
-                      a.href = d.file_path;
+                      a.href = `/api/dam-documents/${d.id}/download`;
                       a.download = d.file_name || "document.pdf";
                       a.click();
                     }}
