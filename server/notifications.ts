@@ -413,7 +413,7 @@ export interface ContractEventPayload {
 
 export async function sendContractEventEmail(payload: ContractEventPayload): Promise<{ sent: boolean; error?: string }> {
   if (!payload.email) return { sent: false, error: "No email address" };
-  const smtp = getTransporter();
+  const smtp = await getTransporter();
   if (!smtp) return { sent: false, error: "SMTP not configured" };
 
   const label = CONTRACT_EVENT_LABELS[payload.event] || payload.event;
@@ -467,7 +467,7 @@ export async function sendContractEventSms(payload: ContractEventPayload): Promi
 }
 
 export async function sendGenericNotificationEmail({ recipientName, email, title, body, actionUrl }: { recipientName: string; email: string; title: string; body: string; actionUrl?: string }): Promise<{ sent: boolean; error?: string }> {
-  const smtp = getTransporter();
+  const smtp = await getTransporter();
   if (!smtp) return { sent: false, error: "SMTP not configured" };
   const actionBtn = actionUrl ? `<a href="${actionUrl}" style="display:inline-block;background:linear-gradient(135deg,#0d9488,#2563eb);color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;margin-top:12px;">View in PayLink</a>` : "";
   const html = `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;"><div style="background:linear-gradient(135deg,#0d9488,#2563eb);padding:20px;border-radius:8px 8px 0 0;"><h1 style="color:white;margin:0;font-size:20px;">${title}</h1></div><div style="background:#f9fafb;padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;"><p style="font-size:15px;color:#111827;">Hi <strong>${recipientName}</strong>,</p><p style="color:#374151;">${body}</p>${actionBtn}<p style="color:#9ca3af;font-size:12px;margin-top:24px;">This notification was sent via PayLink.</p></div></div>`;
