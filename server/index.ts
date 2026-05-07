@@ -2606,6 +2606,46 @@ Thank you,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    // ── feedback_tickets table (Feedback & Bug Reporting module) ──────────────
+    await run("feedback_tickets table", sql`CREATE TABLE IF NOT EXISTS feedback_tickets (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR,
+      submitter_user_id VARCHAR NOT NULL,
+      submitter_name TEXT,
+      submitter_email TEXT,
+      type TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'medium',
+      status TEXT NOT NULL DEFAULT 'new',
+      priority_fix BOOLEAN DEFAULT FALSE,
+      assigned_user_id VARCHAR,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      page_url TEXT,
+      browser_info TEXT,
+      screenshot_path TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("feedback_tickets indexes", sql`
+      CREATE INDEX IF NOT EXISTS idx_feedback_tickets_company ON feedback_tickets(company_id);
+      CREATE INDEX IF NOT EXISTS idx_feedback_tickets_submitter ON feedback_tickets(submitter_user_id);
+      CREATE INDEX IF NOT EXISTS idx_feedback_tickets_status ON feedback_tickets(status);
+    `);
+
+    // ── feedback_ticket_comments table ────────────────────────────────────────
+    await run("feedback_ticket_comments table", sql`CREATE TABLE IF NOT EXISTS feedback_ticket_comments (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      ticket_id VARCHAR NOT NULL,
+      author_user_id VARCHAR NOT NULL,
+      author_name TEXT,
+      body TEXT NOT NULL,
+      is_internal BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await run("feedback_ticket_comments indexes", sql`
+      CREATE INDEX IF NOT EXISTS idx_feedback_comments_ticket ON feedback_ticket_comments(ticket_id);
+    `);
+
     // ── contractor_reminders table ────────────────────────────────────────────
     await run("contractor_reminders table", sql`CREATE TABLE IF NOT EXISTS contractor_reminders (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

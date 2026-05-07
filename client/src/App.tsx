@@ -17,6 +17,7 @@ import { useSidebar } from "@/components/ui/sidebar";
 import { useTrial } from "@/hooks/use-trial";
 import { TrialBanner } from "@/components/trial-banner";
 import { UpgradeModal } from "@/components/upgrade-modal";
+import { FeedbackButton } from "@/components/FeedbackButton";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
 import { useBiometricAuth } from "@/hooks/use-biometric-auth";
 import { useKeyboardManager, usePageTransition, useAppLifecycle } from "@/hooks/use-native-platform";
@@ -78,6 +79,7 @@ const EmailSettingsPage = lazy(() => import("@/pages/email-settings"));
 const SmsSettingsPage = lazy(() => import("@/pages/sms-settings"));
 const GdprInventoryPage = lazy(() => import("@/pages/gdpr-inventory"));
 const PrivacyAuditLogPage = lazy(() => import("@/pages/privacy-audit-log"));
+const FeedbackAdminPage = lazy(() => import("@/pages/FeedbackAdminPage"));
 const BreachResponsePage = lazy(() => import("@/pages/breach-response"));
 const MfaSettingsPage = lazy(() => import("@/pages/mfa-settings"));
 
@@ -188,6 +190,7 @@ function AuthenticatedRouter() {
         <Route path="/app/kpi-goals">{() => <RoleGuard roles={["admin", "manager"]}><KpiGoalsPage /></RoleGuard>}</Route>
         <Route path="/app/mfa-settings" component={MfaSettingsPage} />
         <Route path="/app/privacy-audit-log">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"]}><PrivacyAuditLogPage /></StrictRoleGuard>}</Route>
+        <Route path="/app/feedback-admin">{() => <RoleGuard roles={["admin", "manager"]}><FeedbackAdminPage /></RoleGuard>}</Route>
         <Route component={NotFound} />
       </Switch>
     </Suspense>
@@ -258,6 +261,7 @@ function AuthenticatedLayout() {
             </div>
           </main>
           <UpgradeModal />
+          <FeedbackButton />
         </div>
       </div>
     </SidebarProvider>

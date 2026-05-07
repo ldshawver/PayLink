@@ -23,6 +23,7 @@ import { encryptSecret, decryptSecret, isEncryptionAvailable } from "./cryptoUti
 import { createContractorNotification } from "./contractor-notification-helper";
 import { runContractorReminderScheduler } from "./contractor-scheduler";
 import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contractor-pdf-style";
+import { registerFeedbackRoutes } from "./feedback-routes";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -28694,6 +28695,9 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       console.warn("[ComplianceSeed] Seed error (non-fatal):", e);
     }
   });
+
+  // ── Feedback & Bug Reporting module ────────────────────────────────────────
+  registerFeedbackRoutes(app, requireAuth, upload);
 
   return httpServer;
 }
