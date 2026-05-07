@@ -77,9 +77,16 @@ interface FeedbackCommentRow {
   created_at: string;
 }
 
-function firstRow<T>(r: { rows?: T[] } | T[]): T | undefined {
-  if (Array.isArray(r)) return r[0];
-  return r.rows?.[0];
+function firstRow<T>(r: unknown): T | undefined {
+  if (Array.isArray(r)) return r[0] as T | undefined;
+  const rows = (r as { rows?: unknown[] })?.rows;
+  return Array.isArray(rows) ? (rows[0] as T | undefined) : undefined;
+}
+
+function allRows<T>(r: unknown): T[] {
+  if (Array.isArray(r)) return r as T[];
+  const rows = (r as { rows?: unknown[] })?.rows;
+  return Array.isArray(rows) ? (rows as T[]) : [];
 }
 
 function isPlatformRole(role: string | undefined | null): boolean {
@@ -187,7 +194,7 @@ export function registerFeedbackRoutes(
             const actionUrl = `${baseUrl}/app/feedback-admin?id=${ticket.id}`;
             const subject = `New ${type} feedback: ${ticket.title}`;
             const body = `${submitterName} submitted a ${type} (${sev} severity).`;
-            for (const a of admins.rows as Array<{ id: string; email: string | null; username: string | null }>) {
+            for (const a of allRows<{ id: string; email: string | null; username: string | null }>(admins)) {
               await db.execute(sql`
                 INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read)
                 VALUES (${user.companyId}, ${a.id}, 'feedback_submitted', ${subject}, ${body}, ${actionUrl}, FALSE)
@@ -267,7 +274,7 @@ export function registerFeedbackRoutes(
         ORDER BY priority_fix DESC, created_at DESC
         LIMIT 500
       `);
-      res.json(result.rows);
+      res.json(allRows<FeedbackTicketRow>(result));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       res.status(500).json({ message: "Failed to load feedback: " + msg });
@@ -398,7 +405,7 @@ export function registerFeedbackRoutes(
         WHERE ticket_id = ${req.params.id}
         ORDER BY created_at ASC
       `);
-      const comments = result.rows as FeedbackCommentRow[];
+      const comments = allRows<FeedbackCommentRow>(result);
       res.json(admin ? comments : comments.filter((c) => !c.is_internal));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
