@@ -434,9 +434,10 @@ function fmtDate(s?: string | null) {
 
 // ─── Dashboard Stats ──────────────────────────────────────────────────────────
 
-function DashboardSection({ proposals, invoices, contracts, isAdmin, onNavigate }: {
+function DashboardSection({ proposals, invoices, contracts, isAdmin, onNavigate, expiryWarningDays }: {
   proposals: Proposal[]; invoices: Invoice[]; contracts: Contract[];
-  isAdmin: boolean; onNavigate: (s: HubSection) => void;
+  isAdmin: boolean; onNavigate: (s: HubSection, entityId?: string, statusFilter?: string) => void;
+  expiryWarningDays: number;
 }) {
   const { data: reminders = [] } = useQuery<ContractorReminder[]>({
     queryKey: ["/api/contractor-reminders", "pending"],
@@ -453,12 +454,21 @@ function DashboardSection({ proposals, invoices, contracts, isAdmin, onNavigate 
   const activeReminders = reminders.filter(r => r.status === "pending");
 
   const awaitingApproval = proposals.filter(p => ["submitted", "sent", "viewed"].includes(p.status));
+  const submittedProposals = proposals.filter(p => p.status === "submitted");
   const revisionNeeded = proposals.filter(p => p.status === "revision_requested");
   const approvedProposals = proposals.filter(p => p.status === "approved");
   const activeContracts = contracts.filter(c => c.status === "active");
   const overdueInvoices = invoices.filter(i => {
     if (["paid", "void"].includes(i.status)) return false;
     return i.dueDate && new Date(i.dueDate) < new Date();
+  });
+  const nowMs = Date.now();
+  const expiringContracts = contracts.filter((c: any) => {
+    const end = c.endDate ?? c.end_date;
+    if (!end) return false;
+    if (!["active", "fully_signed", "expiring_soon"].includes(c.status)) return false;
+    const daysLeft = Math.round((new Date(end).getTime() - nowMs) / 86400000);
+    return daysLeft >= 0 && daysLeft <= expiryWarningDays;
   });
   const totalOutstanding = invoices
     .filter(i => !["paid", "void"].includes(i.status))
@@ -502,6 +512,60 @@ function DashboardSection({ proposals, invoices, contracts, isAdmin, onNavigate 
           {isAdmin ? "Monitor contractor proposals, contracts, and payments" : "Manage your proposals, contracts, and invoices"}
         </p>
       </div>
+
+      {isAdmin && (
+        <Card className="border-primary/20" data-testid="card-admin-summary">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 text-primary" />
+              Admin Summary — Action Items
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => onNavigate("proposals", undefined, "submitted")}
+              className="text-left p-3 rounded-lg border bg-blue-50 dark:bg-blue-950/20 hover:bg-blue-100 dark:hover:bg-blue-950/40 transition-colors"
+              data-testid="btn-admin-summary-proposals"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <FileText className="h-4 w-4 text-blue-600" />
+                <p className="text-xs text-muted-foreground">Proposals awaiting review</p>
+              </div>
+              <p className="text-2xl font-bold text-blue-600" data-testid="text-admin-summary-proposals-count">{submittedProposals.length}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{submittedProposals.length === 1 ? "submission" : "submissions"} pending</p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onNavigate("invoices", undefined, "overdue")}
+              className="text-left p-3 rounded-lg border bg-red-50 dark:bg-red-950/20 hover:bg-red-100 dark:hover:bg-red-950/40 transition-colors"
+              data-testid="btn-admin-summary-invoices"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <AlertTriangle className="h-4 w-4 text-red-600" />
+                <p className="text-xs text-muted-foreground">Overdue invoices</p>
+              </div>
+              <p className="text-2xl font-bold text-red-600" data-testid="text-admin-summary-invoices-count">{overdueInvoices.length}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">past due date</p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onNavigate("contracts", undefined, "expiring")}
+              className="text-left p-3 rounded-lg border bg-orange-50 dark:bg-orange-950/20 hover:bg-orange-100 dark:hover:bg-orange-950/40 transition-colors"
+              data-testid="btn-admin-summary-contracts"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <Clock className="h-4 w-4 text-orange-600" />
+                <p className="text-xs text-muted-foreground">Contracts expiring soon</p>
+              </div>
+              <p className="text-2xl font-bold text-orange-600" data-testid="text-admin-summary-contracts-count">{expiringContracts.length}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">within {expiryWarningDays} day{expiryWarningDays !== 1 ? "s" : ""}</p>
+            </button>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {stats.map(s => (
@@ -3637,10 +3701,14 @@ function CreateInvoiceFromContractDialog({
 
 // ─── Contracts Section ────────────────────────────────────────────────────────
 
-function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelectedId }: { isAdmin: boolean; reminderEntityIds?: Set<string | null | undefined>; initialSelectedId?: string | null }) {
+function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelectedId, initialStatusFilter, expiryWarningDays = 30 }: { isAdmin: boolean; reminderEntityIds?: Set<string | null | undefined>; initialSelectedId?: string | null; initialStatusFilter?: string | null; expiryWarningDays?: number }) {
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState(initialStatusFilter || "all");
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
+
+  useEffect(() => {
+    if (initialStatusFilter) setStatusFilter(initialStatusFilter);
+  }, [initialStatusFilter]);
 
   const { data: rawContracts = [], isLoading, refetch } = useQuery<any[]>({
     queryKey: ["/api/contractor-contracts"],
@@ -3669,7 +3737,16 @@ function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelec
 
   const filtered = contracts.filter(c => {
     const matchSearch = !search || c.title?.toLowerCase().includes(search.toLowerCase()) || c.contractNumber?.toLowerCase().includes(search.toLowerCase()) || (c.contractorName as any)?.toLowerCase().includes(search.toLowerCase());
-    const matchStatus = statusFilter === "all" || c.status === statusFilter;
+    let matchStatus: boolean;
+    if (statusFilter === "all") {
+      matchStatus = true;
+    } else if (statusFilter === "expiring") {
+      const daysLeft = c.endDate ? Math.round((new Date(c.endDate).getTime() - now) / 86400000) : null;
+      matchStatus = daysLeft !== null && daysLeft >= 0 && daysLeft <= expiryWarningDays
+        && ["active", "fully_signed", "expiring_soon"].includes(c.status);
+    } else {
+      matchStatus = c.status === statusFilter;
+    }
     return matchSearch && matchStatus;
   });
 
@@ -3717,6 +3794,7 @@ function ContractsSection({ isAdmin, reminderEntityIds = new Set(), initialSelec
           <SelectTrigger className="h-8 w-40" data-testid="select-contract-status"><SelectValue placeholder="All Status" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Status</SelectItem>
+            <SelectItem value="expiring">Expiring Soon ({expiryWarningDays}d)</SelectItem>
             {Object.entries(CONTRACT_STATUS_CONFIG).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
           </SelectContent>
         </Select>
@@ -5657,6 +5735,15 @@ export default function ContractorHubPage() {
     },
   });
 
+  const { data: hubWfSettings } = useQuery<any>({
+    queryKey: ["/api/contractor-workflow-settings"],
+    queryFn: async () => {
+      const r = await fetch("/api/contractor-workflow-settings", { credentials: "include" });
+      return r.ok ? r.json() : {};
+    },
+  });
+  const hubExpiryWarningDays = hubWfSettings?.contractExpiryWarningDays ?? hubWfSettings?.contract_expiry_warning_days ?? 14;
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/contractor-proposals/${id}`),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] }); toast({ title: "Deleted" }); },
@@ -5694,7 +5781,15 @@ export default function ContractorHubPage() {
 
   const filteredInvoices = invoices.filter(i => {
     const matchSearch = !search || i.title?.toLowerCase().includes(search.toLowerCase()) || i.invoiceNumber?.toLowerCase().includes(search.toLowerCase()) || i.description?.toLowerCase().includes(search.toLowerCase());
-    const matchStatus = statusFilter === "all" || i.status === statusFilter;
+    let matchStatus: boolean;
+    if (statusFilter === "all") {
+      matchStatus = true;
+    } else if (statusFilter === "overdue") {
+      // Compute-overdue: same logic used to count "overdue" on the dashboard summary card.
+      matchStatus = !["paid", "void"].includes(i.status) && !!i.dueDate && new Date(i.dueDate) < new Date();
+    } else {
+      matchStatus = i.status === statusFilter;
+    }
     return matchSearch && matchStatus;
   });
 
@@ -5728,10 +5823,10 @@ export default function ContractorHubPage() {
 
   const [deepLinkContractId, setDeepLinkContractId] = useState<string | null>(null);
 
-  function handleSectionChange(s: HubSection, entityId?: string) {
+  function handleSectionChange(s: HubSection, entityId?: string, statusFilterOverride?: string) {
     setSection(s);
     setSearch("");
-    setStatusFilter("all");
+    setStatusFilter(statusFilterOverride ?? "all");
     setCompanyFilter("all");
     setSortBy("date_desc");
     if (entityId) {
@@ -5871,6 +5966,7 @@ export default function ContractorHubPage() {
               <DashboardSection
                 proposals={proposals} invoices={invoices} contracts={contracts}
                 isAdmin={isAdmin} onNavigate={handleSectionChange}
+                expiryWarningDays={hubExpiryWarningDays}
               />
             )}
 
@@ -5985,7 +6081,7 @@ export default function ContractorHubPage() {
             )}
 
             {/* Contracts */}
-            {section === "contracts" && <ContractsSection isAdmin={isAdmin} reminderEntityIds={reminderEntityIds} initialSelectedId={deepLinkContractId} />}
+            {section === "contracts" && <ContractsSection isAdmin={isAdmin} reminderEntityIds={reminderEntityIds} initialSelectedId={deepLinkContractId} initialStatusFilter={statusFilter !== "all" ? statusFilter : null} expiryWarningDays={hubExpiryWarningDays} />}
 
             {/* Invoices */}
             {section === "invoices" && (
