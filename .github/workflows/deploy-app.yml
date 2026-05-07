@@ -125,10 +125,13 @@ jobs:
             git pull origin main
             npm ci --legacy-peer-deps
             npm run build
-            pm2 restart paylink || pm2 start dist/index.cjs --name paylink \
+            pm2 delete paylink 2>/dev/null || true
+            pm2 start dist/index.cjs \
+              --name paylink \
               --cwd /home/paylinkssh/paylink-app/PayLink \
-              --interpreter node --node-args="-r dotenv/config" \
+              --interpreter node \
+              --node-args="-r dotenv/config" \
               -- dotenv_config_path=/etc/paylink/.env
             pm2 save --force
             sleep 10
-            curl -fs http://127.0.0.1:8001/health || (pm2 logs paylink --lines 30 --nostream && exit 1)
+            curl -fs http://127.0.0.1:8000/health || (pm2 logs paylink --lines 30 --nostream && exit 1)
