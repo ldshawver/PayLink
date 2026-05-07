@@ -71,6 +71,7 @@ npm run db:push
 -   Document Management with versioning and e-signatures.
 -   Contract Lifecycle Management from proposals to payment.
 -   Platform Audit Readiness tab for comprehensive system health checks.
+-   Native Feedback & Bug Reporting (floating button across the authenticated app, admin dashboard at `/app/feedback-admin` with filters, statuses, internal notes, assignment, Priority Fix flag, and in-app + email notifications on submit and status change).
 
 ## User preferences
 
