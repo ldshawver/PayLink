@@ -57,8 +57,8 @@ jobs:
             cat /tmp/app.log
             exit 1
           fi
-          npx wait-on http://localhost:5000/api/auth/me --timeout 30000 || (echo "❌ Health check failed. App logs:" && cat /tmp/app.log && exit 1)
-          echo "✓ App is healthy"
+          npx wait-on http://localhost:5000/ready --timeout 30000 || (echo "❌ Health check failed. App logs:" && cat /tmp/app.log && exit 1)
+          echo "✓ App is ready"
 
       - name: Run security & compliance tests
         env:
@@ -169,7 +169,7 @@ jobs:
             # Wait for app to be healthy
             sleep 5
             for i in {1..30}; do
-              if curl -fs http://127.0.0.1:8001/health > /dev/null; then
+              if curl -fs http://127.0.0.1:8001/ready > /dev/null; then
                 echo "✓ Health check passed"
                 break
               fi
