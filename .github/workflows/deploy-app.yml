@@ -166,7 +166,12 @@ jobs:
             
             # Build application
             npm run build
+            echo "✓ Build completed"
+
+            # Stop existing PM2 app if running
             pm2 delete paylink 2>/dev/null || true
+
+            # Start application with PM2, loading /etc/paylink/.env via dotenv
             pm2 start dist/index.cjs \
               --name paylink \
               --cwd /home/paylinkssh/paylink-app/PayLink \
@@ -174,5 +179,21 @@ jobs:
               --node-args="-r dotenv/config" \
               -- dotenv_config_path=/etc/paylink/.env
             pm2 save --force
-            sleep 10
-            curl -fs http://127.0.0.1:8000/health || (pm2 logs paylink --lines 30 --nostream && exit 1)
+            echo "✓ Application started with PM2"
+
+            # Wait for app to be healthy (port 8000)
+            sleep 5
+            for i in {1..30}; do
+              if curl -fs http://127.0.0.1:8000/health > /dev/null; then
+                echo "✓ Health check passed"
+                break
+              fi
+              if [ $i -eq 30 ]; then
+                echo "❌ Health check failed after 30 attempts"
+                pm2 logs paylink --lines 50 --nostream
+                exit 1
+              fi
+              sleep 1
+            done
+
+            echo "✓ Deployment successful"
