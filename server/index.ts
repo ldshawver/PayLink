@@ -2873,6 +2873,8 @@ Thank you,
     await run("contractor_workflow_settings.document_retention_months", sql`ALTER TABLE contractor_workflow_settings ADD COLUMN IF NOT EXISTS document_retention_months INTEGER DEFAULT 84`);
     await run("contractor_workflow_settings.document_archive_after_days", sql`ALTER TABLE contractor_workflow_settings ADD COLUMN IF NOT EXISTS document_archive_after_days INTEGER DEFAULT 365`);
     await run("contractor_workflow_settings.auto_archive_enabled", sql`ALTER TABLE contractor_workflow_settings ADD COLUMN IF NOT EXISTS auto_archive_enabled BOOLEAN DEFAULT FALSE`);
+    await run("contractor_workflow_settings.notification_rules", sql`ALTER TABLE contractor_workflow_settings ADD COLUMN IF NOT EXISTS notification_rules JSONB DEFAULT '{}'`);
+    await run("contractor_workflow_settings.permission_matrix", sql`ALTER TABLE contractor_workflow_settings ADD COLUMN IF NOT EXISTS permission_matrix JSONB DEFAULT '{}'`);
     await run("contractor_proposals.is_archived", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT FALSE`);
     await run("contractor_proposals.archived_at", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
     await run("contractor_contracts.is_archived", sql`ALTER TABLE contractor_contracts ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT FALSE`);

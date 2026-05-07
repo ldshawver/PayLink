@@ -5042,6 +5042,10 @@ function SettingsSection() {
         invoiceDueReminderDays: wfSettings.invoiceDueReminderDays ?? 3,
         invoiceOverdueReminderDays: wfSettings.invoiceOverdueReminderDays ?? 1,
         contractRenegotiationWarningDays: wfSettings.contractRenegotiationWarningDays ?? 14,
+        reviewerPool: wfSettings.reviewerPool ?? "",
+        documentRetentionMonths: wfSettings.documentRetentionMonths ?? 84,
+        documentArchiveAfterDays: wfSettings.documentArchiveAfterDays ?? 365,
+        autoArchiveEnabled: wfSettings.autoArchiveEnabled ?? false,
       });
       if (wfSettings.notificationRules && Object.keys(wfSettings.notificationRules).length > 0) {
         setNotifRules(wfSettings.notificationRules);

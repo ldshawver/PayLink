@@ -11868,7 +11868,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Contractor Workflow Settings (GET/PUT) ───────────────────────────────
-  app.get("/api/contractor-workflow-settings", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.get("/api/contractor-workflow-settings", requireAuth, requireRole("admin", "manager", "tenant_owner", "tenant_admin", "tenant_finance_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       const cid = user?.companyId;
@@ -11895,7 +11895,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e: any) { res.status(500).json({ message: "Failed to fetch workflow settings" }); }
   });
 
-  app.put("/api/contractor-workflow-settings", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+  app.put("/api/contractor-workflow-settings", requireAuth, requireRole("admin", "manager", "tenant_owner", "tenant_admin", "tenant_finance_admin"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       const cid = user?.companyId;
