@@ -249,22 +249,24 @@ function AuthenticatedLayout() {
   }, [location, animateTransition]);
 
   return (
-    <SidebarProvider style={style as React.CSSProperties}>
-      <div className="flex h-screen w-full overflow-hidden">
-        <AppSidebar />
-        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-          <TrialBanner />
-          <MobileHeader />
-          <main className="flex-1 overflow-y-auto overflow-x-hidden">
-            <div ref={containerRef} className="page-transition-container">
-              <AuthenticatedRouter />
-            </div>
-          </main>
-          <UpgradeModal />
-          <FeedbackButton />
+    <>
+      <SidebarProvider style={style as React.CSSProperties}>
+        <div className="flex h-screen w-full overflow-hidden">
+          <AppSidebar />
+          <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+            <TrialBanner />
+            <MobileHeader />
+            <main className="flex-1 overflow-y-auto overflow-x-hidden">
+              <div ref={containerRef} className="page-transition-container">
+                <AuthenticatedRouter />
+              </div>
+            </main>
+            <UpgradeModal />
+          </div>
         </div>
-      </div>
-    </SidebarProvider>
+      </SidebarProvider>
+      <FeedbackButton />
+    </>
   );
 }
 
