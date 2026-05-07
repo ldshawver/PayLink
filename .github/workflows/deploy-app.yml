@@ -48,8 +48,17 @@ jobs:
           SESSION_SECRET: ci-session-secret
           NODE_ENV: test
         run: |
-          npm run dev &
-          npx wait-on http://localhost:5000/api/auth/me --timeout 60000
+          npm run dev > /tmp/app.log 2>&1 &
+          APP_PID=$!
+          echo "App started with PID: $APP_PID"
+          sleep 5
+          if ! kill -0 $APP_PID 2>/dev/null; then
+            echo "❌ App crashed during startup:"
+            cat /tmp/app.log
+            exit 1
+          fi
+          npx wait-on http://localhost:5000/api/auth/me --timeout 30000 || (echo "❌ Health check failed. App logs:" && cat /tmp/app.log && exit 1)
+          echo "✓ App is healthy"
 
       - name: Run security & compliance tests
         env:
@@ -112,6 +121,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
       - name: Deploy application via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -121,14 +136,49 @@ jobs:
           key: ${{ secrets.APP_VPS_SSH_KEY }}
           script: |
             set -e
-            cd /home/paylinkssh/paylink-app/PayLink
-            git pull origin main
+            echo "Starting deployment..."
+            cd /home/paylinkssh/paylink-app/PayLink || exit 1
+            
+            # Pull latest changes
+            git fetch origin main
+            git reset --hard origin/main
+            echo "✓ Repository updated"
+            
+            # Install dependencies
             npm ci --legacy-peer-deps
+            echo "✓ Dependencies installed"
+            
+            # Build application
             npm run build
-            pm2 restart paylink || pm2 start dist/index.cjs --name paylink \
+            echo "✓ Build completed"
+            
+            # Stop existing PM2 app if running
+            pm2 delete paylink || true
+            
+            # Start application with PM2
+            pm2 start dist/index.cjs \
+              --name paylink \
               --cwd /home/paylinkssh/paylink-app/PayLink \
-              --interpreter node --node-args="-r dotenv/config" \
-              -- dotenv_config_path=/etc/paylink/.env
+              --interpreter node \
+              --node-args="-r dotenv/config" \
+              --env-file /etc/paylink/.env
+            
             pm2 save --force
-            sleep 10
-            curl -fs http://127.0.0.1:8001/health || (pm2 logs paylink --lines 30 --nostream && exit 1)
+            echo "✓ Application started with PM2"
+            
+            # Wait for app to be healthy
+            sleep 5
+            for i in {1..30}; do
+              if curl -fs http://127.0.0.1:8001/health > /dev/null; then
+                echo "✓ Health check passed"
+                break
+              fi
+              if [ $i -eq 30 ]; then
+                echo "❌ Health check failed after 30 attempts"
+                pm2 logs paylink --lines 50 --nostream
+                exit 1
+              fi
+              sleep 1
+            done
+            
+            echo "✓ Deployment successful"
