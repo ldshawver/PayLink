@@ -2275,6 +2275,9 @@ Thank you,
     await run("contractor_proposals.approval_method", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS approval_method TEXT`);
     await run("contractor_proposals.approval_notes", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS approval_notes TEXT`);
     await run("contractor_proposals.ai_generated_summary", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS ai_generated_summary TEXT`);
+    await run("contractor_proposals.signature_package_id", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS signature_package_id VARCHAR`);
+    await run("contractor_proposals.signature_requested_at", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS signature_requested_at TIMESTAMP`);
+    await run("contractor_proposals.signed_at", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS signed_at TIMESTAMP`);
 
     // ── Contractor Invoices new columns ────────────────────────────────────────
     await run("contractor_invoices.title", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS title TEXT`);

@@ -9938,6 +9938,189 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to accept proposal" }); }
   });
 
+  // POST /api/contractor-proposals/:id/request-signature — admin sends approved proposal for e-signature
+  app.post("/api/contractor-proposals/:id/request-signature", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await storage.getUser(userId);
+      const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      const proposal = firstRow<ProposalRow & { id: string; signature_package_id?: string | null }>(propRes);
+      if (!proposal) return res.status(404).json({ message: "Not found" });
+      if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      if (proposal.status !== "approved") {
+        return res.status(400).json({ message: "Only approved proposals can be sent for signature" });
+      }
+      const companyId = proposal.company_id!;
+
+      // Resolve provider — explicit body.provider, else first configured for the company.
+      const companyConfig = await getCompanyESignConfig(companyId);
+      const supported = getSupportedProviders();
+      let provider: string | undefined = req.body?.provider;
+      if (provider && !supported.includes(provider)) {
+        return res.status(400).json({ message: `Unsupported e-signature provider: ${provider}` });
+      }
+      if (!provider) {
+        if (companyConfig?.docusign) provider = "docusign";
+        else if (companyConfig?.acrobat_sign) provider = "acrobat_sign";
+        else provider = supported[0];
+      }
+      if (!provider) return res.status(400).json({ message: "No e-signature provider available" });
+
+      // Resolve contractor signer
+      const contactRes = await db.execute(sql`
+        SELECT COALESCE(w.work_email, w.home_email, w.email, u.email) AS email,
+               TRIM(COALESCE(w.first_name, '') || ' ' || COALESCE(w.last_name, '')) AS full_name
+        FROM workers w LEFT JOIN users u ON u.worker_id = w.id
+        WHERE w.id = ${proposal.contractor_id} LIMIT 1
+      `);
+      const contact = firstRow<{ email: string | null; full_name: string | null }>(contactRes);
+      const signerEmail = (req.body?.signerEmail as string | undefined) || contact?.email || null;
+      const signerName = (req.body?.signerName as string | undefined) || contact?.full_name || "Contractor";
+      if (!signerEmail) return res.status(400).json({ message: "Contractor email is required to send a signature request" });
+
+      // Ensure approval PDF exists in DMS — generate on demand if missing.
+      const existingPdfRes = await db.execute(sql`
+        SELECT file_path, file_name, file_size FROM dam_documents
+        WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${req.params.id} AND mime_type = 'application/pdf'
+        ORDER BY created_at DESC LIMIT 1
+      `);
+      let pdfRel = firstRow<{ file_path: string | null; file_name: string | null; file_size: number | null }>(existingPdfRes);
+      if (!pdfRel?.file_path) {
+        const generated = await generateProposalPdf(req.params.id, proposal, userId);
+        if (!generated) return res.status(500).json({ message: "Failed to generate proposal PDF" });
+        const refetch = await db.execute(sql`
+          SELECT file_path, file_name, file_size FROM dam_documents
+          WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${req.params.id} AND mime_type = 'application/pdf'
+          ORDER BY created_at DESC LIMIT 1
+        `);
+        pdfRel = firstRow<{ file_path: string | null; file_name: string | null; file_size: number | null }>(refetch);
+      }
+      if (!pdfRel?.file_path) return res.status(500).json({ message: "Approval PDF unavailable" });
+
+      // Create a Documents record so signature_packages can reference a real document row.
+      const docTitle = `${proposal.title || proposal.proposal_number || "Proposal"} — Signature`;
+      const docRow = await storage.createDocument({
+        companyId,
+        title: docTitle,
+        fileName: pdfRel.file_name || "proposal.pdf",
+        fileUrl: pdfRel.file_path,
+        fileSize: pdfRel.file_size || 0,
+        mimeType: "application/pdf",
+        documentType: "proposal",
+        category: "contractor_proposal",
+        createdBy: userId,
+      } as any);
+
+      const baseUrl = getAppBaseUrl(req);
+      const subject = `Signature Requested: ${proposal.title || proposal.proposal_number || "Proposal"}`;
+      const message = (req.body?.message as string | undefined) || `Please review and sign the approved proposal "${proposal.title || proposal.proposal_number}".`;
+      const returnUrl = `${baseUrl}/app/contractor-hub?section=proposals&id=${req.params.id}`;
+
+      let adapter;
+      try {
+        adapter = getESignAdapter(provider);
+      } catch {
+        return res.status(400).json({ message: `Unsupported e-signature provider: ${provider}` });
+      }
+
+      const sigRequest = await storage.createDocumentSignatureRequest({
+        documentId: docRow.id,
+        companyId,
+        provider,
+        status: "draft",
+        message,
+        createdBy: userId,
+      } as any);
+
+      await storage.createDocumentSigner({
+        signatureRequestId: sigRequest.id,
+        signerName,
+        signerEmail,
+        routingOrder: 1,
+        status: "pending",
+      } as any);
+
+      let result: { providerEnvelopeId: string; status: string };
+      try {
+        result = await adapter.createPackage({
+          companyId,
+          documentUrl: `${baseUrl}${pdfRel.file_path}`,
+          documentName: pdfRel.file_name || "proposal.pdf",
+          subject,
+          message,
+          signers: [{ name: signerName, email: signerEmail, routingOrder: 1 }],
+          returnUrl,
+        }, companyConfig);
+      } catch (sendErr) {
+        console.error("[Proposal request-signature] e-sign provider error:", sendErr);
+        await storage.updateDocumentSignatureRequest(sigRequest.id, { status: "error" } as any).catch(() => {});
+        return res.status(502).json({ message: "Failed to send signature request to e-sign provider" });
+      }
+
+      await storage.updateDocumentSignatureRequest(sigRequest.id, {
+        providerObjectId: result.providerEnvelopeId,
+        status: "sent",
+        sentAt: new Date(),
+      } as any);
+
+      const pkg = await storage.createSignaturePackage({
+        companyId,
+        signatureRequestId: sigRequest.id,
+        provider,
+        providerEnvelopeId: result.providerEnvelopeId,
+        status: result.status,
+        documentIds: docRow.id,
+        subject,
+        message,
+        metadata: JSON.stringify({ proposalId: req.params.id, kind: "contractor_proposal" }),
+        sentAt: new Date(),
+        createdBy: userId,
+      } as any);
+
+      const oldStatus = proposal.status;
+      await db.execute(sql`
+        UPDATE contractor_proposals
+        SET status = 'out_for_signature',
+            signature_package_id = ${pkg.id},
+            signature_requested_at = NOW(),
+            updated_at = NOW()
+        WHERE id = ${req.params.id}
+      `);
+      await db.execute(sql`
+        INSERT INTO proposal_approval_events
+          (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, actor_email, notes, ip_address)
+        VALUES (${req.params.id}, 'signature_requested', ${oldStatus}, 'out_for_signature', ${userId}, ${user?.username || null}, ${signerEmail}, ${`Sent for signature via ${provider} (envelope ${result.providerEnvelopeId})`}, ${req.ip || null})
+      `);
+
+      // Notify contractor via email + in-app
+      createContractorNotification({
+        workerId: proposal.contractor_id || undefined,
+        notificationType: "proposal_signature_requested",
+        title: `Signature Requested: ${proposal.title || proposal.proposal_number}`,
+        body: "Your approved proposal is ready for your signature. Check your email for the signing link.",
+        entityType: "proposal",
+        entityId: req.params.id,
+        actionUrl: `/app/contractor-hub?section=proposals&id=${req.params.id}`,
+      }).catch(() => {});
+      try {
+        const { sendGenericNotificationEmail } = await import("./notifications.js");
+        sendGenericNotificationEmail({
+          recipientName: signerName,
+          email: signerEmail,
+          title: subject,
+          body: `${message}\n\nYou will receive a separate email from ${provider === "docusign" ? "DocuSign" : "Adobe Acrobat Sign"} with the secure signing link.`,
+          actionUrl: returnUrl,
+        }).catch(() => {});
+      } catch (e) { console.warn("[Proposal request-signature] Email failed:", e); }
+
+      const updated = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
+      res.json({ ...firstRow<ProposalRow>(updated), signaturePackageId: pkg.id, provider });
+    } catch (e: any) {
+      console.error("[Proposal request-signature] failed:", e);
+      res.status(500).json({ message: "Failed to request signature: " + (e?.message || "unknown error") });
+    }
+  });
+
   // POST /api/contractor-proposals/:id/reject
   app.post("/api/contractor-proposals/:id/reject", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
@@ -10039,8 +10222,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
       if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
-      if (proposal.status !== "approved") {
-        return res.status(400).json({ message: "Only approved proposals can be converted to invoices" });
+      if (!["approved", "signed"].includes(proposal.status || "")) {
+        return res.status(400).json({ message: "Only approved or signed proposals can be converted to invoices" });
       }
 
       // Generate invoice number
@@ -10536,7 +10719,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const access = await assertProposalAccess(req.params.id, req.session.userId!);
       if (!access) return res.status(403).json({ message: "Access denied or proposal not found" });
       const prop = access.prop;
-      if (!["approved", "accepted", "negotiated"].includes(prop.status)) return res.status(400).json({ message: "Only approved or negotiated proposals can be converted to contracts" });
+      if (!["approved", "accepted", "negotiated", "signed"].includes(prop.status)) return res.status(400).json({ message: "Only approved, signed, or negotiated proposals can be converted to contracts" });
 
       const contractNumber = `CON-${Date.now()}`;
       // Allow caller to override any field; fall back to proposal values
@@ -21127,6 +21310,72 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
                 }
               } catch (downloadErr) {
                 console.error("Failed to download/store signed PDF:", downloadErr);
+              }
+            }
+
+            // ── Contractor proposal signature completion ─────────────────
+            // Packages created via /api/contractor-proposals/:id/request-signature carry
+            // metadata { proposalId, kind: "contractor_proposal" }. On completion, persist
+            // the signed PDF to dam_documents (linked to the proposal) and transition the
+            // proposal to the new "signed" terminal status.
+            if (newStatus === "completed" && pkg.metadata) {
+              try {
+                const meta = (() => { try { return JSON.parse(pkg.metadata as unknown as string); } catch { return {}; } })() as { proposalId?: string; kind?: string };
+                if (meta?.kind === "contractor_proposal" && meta.proposalId) {
+                  const proposalId = meta.proposalId;
+                  const propRes = await db.execute(sql`SELECT id, status, company_id, contractor_id, title, proposal_number FROM contractor_proposals WHERE id = ${proposalId}`);
+                  const prop = firstRow<{ id: string; status: string | null; company_id: string | null; contractor_id: string | null; title: string | null; proposal_number: string | null }>(propRes);
+                  if (prop && prop.status !== "signed") {
+                    try {
+                      const cfg = await getCompanyESignConfig(pkg.companyId);
+                      const signed = await adapter.downloadFinalPdf(verification.envelopeId, cfg);
+                      const fs2 = await import("fs");
+                      const uploadDir2 = process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads");
+                      if (!fs2.existsSync(uploadDir2)) fs2.mkdirSync(uploadDir2, { recursive: true });
+                      const signedFile = `signed_proposal_${proposalId}_${Date.now()}.pdf`;
+                      const signedAbs = path.join(uploadDir2, signedFile);
+                      fs2.writeFileSync(signedAbs, signed.buffer);
+                      await db.execute(sql`
+                        INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id)
+                        VALUES (${prop.company_id}, ${prop.contractor_id}, 'worker', 'proposal',
+                          ${(prop.title || prop.proposal_number || "Proposal") + " — Signed PDF"},
+                          ${`Signed proposal PDF via ${provider} (envelope ${verification.envelopeId})`},
+                          ${"/uploads/" + signedFile}, ${signedFile}, 'document', ${signed.buffer.length}, 'application/pdf',
+                          'proposal', ${proposalId}, ${null})
+                      `);
+                    } catch (psErr) {
+                      console.error("[Proposal signature] Failed to persist signed PDF:", psErr);
+                    }
+
+                    const updRes: any = await db.execute(sql`
+                      UPDATE contractor_proposals
+                      SET status = 'signed', signed_at = NOW(), updated_at = NOW()
+                      WHERE id = ${proposalId} AND status = 'out_for_signature'
+                      RETURNING id
+                    `);
+                    const transitioned = Array.isArray(updRes) ? updRes.length > 0 : (updRes?.rows?.length || 0) > 0;
+                    if (transitioned) {
+                      await db.execute(sql`
+                        INSERT INTO proposal_approval_events
+                          (proposal_id, event_type, old_status, new_status, actor_name, actor_email, notes)
+                        VALUES (${proposalId}, 'signed', 'out_for_signature', 'signed', 'system', ${verification.signerEmail || null}, ${`Signed via ${provider} (envelope ${verification.envelopeId})`})
+                      `);
+                    }
+                    if (transitioned && prop.contractor_id) {
+                      createContractorNotification({
+                        workerId: prop.contractor_id,
+                        notificationType: "proposal_signed",
+                        title: `Proposal Signed: ${prop.title || prop.proposal_number}`,
+                        body: "Your signature has been recorded. A signed copy has been saved to your documents.",
+                        entityType: "proposal",
+                        entityId: proposalId,
+                        actionUrl: `/app/contractor-hub?section=proposals&id=${proposalId}`,
+                      }).catch(() => {});
+                    }
+                  }
+                }
+              } catch (proposalErr) {
+                console.error("[Proposal signature] webhook handling error:", proposalErr);
               }
             }
           }

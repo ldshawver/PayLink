@@ -349,6 +349,8 @@ const PROPOSAL_STATUS_CONFIG: Record<string, { label: string; color: string; bg:
   countered:             { label: "Countered",            color: "text-amber-600",  bg: "bg-amber-50 dark:bg-amber-950/30" },
   negotiated:            { label: "Negotiated",           color: "text-teal-600",   bg: "bg-teal-50 dark:bg-teal-950/30" },
   approved:              { label: "Approved",             color: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30" },
+  out_for_signature:     { label: "Out for Signature",    color: "text-violet-700", bg: "bg-violet-50 dark:bg-violet-950/30" },
+  signed:                { label: "Signed",               color: "text-emerald-700",bg: "bg-emerald-50 dark:bg-emerald-950/30" },
   converted_to_contract: { label: "Converted to Contract",color: "text-emerald-700",bg: "bg-emerald-50 dark:bg-emerald-950/30" },
   declined:              { label: "Declined",             color: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30" },
   rejected:              { label: "Rejected",             color: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30" },
@@ -859,6 +861,7 @@ function ProposalDetailPanel({
         vars.action === "request-revision" ? "Revision requested" :
         vars.action === "counter" ? "Counter offer sent" :
         vars.action === "submit" ? "Proposal submitted" :
+        vars.action === "request-signature" ? "Signature request sent" :
         "Done"
       });
       onRefresh();
@@ -943,6 +946,11 @@ function ProposalDetailPanel({
               {canConvertToContract && (
                 <Button size="sm" className="shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setConvertToContractOpen(true)} data-testid="btn-convert-to-contract">
                   <FileSignature className="h-3.5 w-3.5 mr-1" /> Convert to Contract
+                </Button>
+              )}
+              {proposal.status === "approved" && isAdmin && (
+                <Button size="sm" variant="outline" className="shrink-0 border-violet-300 text-violet-700" onClick={() => actionMutation.mutate({ action: "request-signature" })} disabled={actionMutation.isPending} data-testid="btn-request-signature">
+                  <FileSignature className="h-3.5 w-3.5 mr-1" /> Request Signature
                 </Button>
               )}
               {proposal.status === "approved" && isAdmin && (
