@@ -1343,7 +1343,7 @@ function ProposalDetailPanel({
                         </div>
                       </div>
                       <Button size="sm" variant="ghost" asChild>
-                        <a href={`/${att.file_path}`} target="_blank" rel="noreferrer" data-testid={`btn-download-att-${att.id}`}>
+                        <a href={att.file_path?.startsWith("/") ? att.file_path : `/${att.file_path}`} target="_blank" rel="noreferrer" data-testid={`btn-download-att-${att.id}`}>
                           <Download className="h-4 w-4" />
                         </a>
                       </Button>
@@ -2526,8 +2526,8 @@ function ProposalBuilder({
                 <label className="flex flex-col items-center justify-center border-2 border-dashed rounded-lg p-6 cursor-pointer hover:border-primary/50 transition-colors" data-testid="upload-attachment">
                   <Upload className="h-8 w-8 text-muted-foreground mb-2" />
                   <p className="text-sm text-muted-foreground">Drop files here or click to upload</p>
-                  <p className="text-xs text-muted-foreground mt-1">PDFs, images, spreadsheets, blueprints, quotes</p>
-                  <input type="file" className="hidden" accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.xls,.csv,.doc,.docx"
+                  <p className="text-xs text-muted-foreground mt-1">PDFs, Word docs, and images (JPG, PNG, GIF, SVG, WebP) — up to 10MB</p>
+                  <input type="file" className="hidden" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.gif,.svg,.webp"
                     onChange={handleAttachmentUpload} disabled={!proposalId} />
                 </label>
               )}
@@ -2546,7 +2546,7 @@ function ProposalBuilder({
                       </div>
                       <div className="flex gap-2">
                         <Button size="sm" variant="ghost" asChild>
-                          <a href={`/${att.file_path}`} target="_blank" rel="noreferrer" data-testid={`btn-download-att-${att.id}`}><Download className="h-4 w-4" /></a>
+                          <a href={att.file_path?.startsWith("/") ? att.file_path : `/${att.file_path}`} target="_blank" rel="noreferrer" data-testid={`btn-download-att-${att.id}`}><Download className="h-4 w-4" /></a>
                         </Button>
                         {canEdit && (
                           <Button size="sm" variant="ghost" onClick={async () => {

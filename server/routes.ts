@@ -9452,7 +9452,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed" }); }
   });
 
-  app.post("/api/contractor-invoices/:id/attachments", requireAuth, upload.single("file"), async (req: any, res) => {
+  app.post("/api/contractor-invoices/:id/attachments", requireAuth, documentUpload.single("file"), async (req: any, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file" });
       const inv = await storage.getContractorInvoice(req.params.id);
@@ -9460,10 +9460,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.getUser(req.session.userId!);
       const isManager = user?.role === "admin" || user?.role === "manager";
       if (!isManager && user?.workerId !== inv.contractorId) return res.status(403).json({ message: "Not authorized" });
+      const filePath = `/uploads/${req.file.filename}`;
       const r = await storage.createContractorInvoiceAttachment({
-        invoiceId: req.params.id, filePath: `/uploads/${req.file.filename}`,
+        invoiceId: req.params.id, filePath,
         fileName: req.file.originalname, fileType: req.file.mimetype, fileSize: req.file.size,
       });
+      // Mirror into the document library, linked to the invoice
+      await db.execute(sql`
+        INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id)
+        VALUES (${inv.companyId || user?.companyId || null}, ${user?.workerId ?? null}, ${'company'}, ${'invoice'}, ${req.file.originalname}, ${`Attachment for invoice ${req.params.id}`}, ${filePath}, ${req.file.originalname}, ${req.file.mimetype?.split("/")[0] || null}, ${req.file.size}, ${req.file.mimetype}, ${'invoice'}, ${req.params.id}, ${req.session.userId})
+      `).catch((err) => { console.error("Failed to mirror invoice attachment to dam_documents:", err); });
       res.status(201).json(r);
     } catch (e) { res.status(500).json({ message: "Failed" }); }
   });
@@ -10379,25 +10385,56 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // PROPOSAL ATTACHMENTS
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // Authorize a user against a proposal: contractor on the proposal, or
+  // admin/manager/platform user belonging to the proposal's company.
+  async function authorizeProposalAccess(proposalId: string, userId: string | undefined): Promise<{ ok: true; proposal: any; user: any } | { ok: false; status: number; message: string }> {
+    if (!userId) return { ok: false, status: 401, message: "Not authenticated" };
+    const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${proposalId}`);
+    if (!propRes.rows.length) return { ok: false, status: 404, message: "Proposal not found" };
+    const proposal = propRes.rows[0] as any;
+    const user = await storage.getUser(userId);
+    if (!user) return { ok: false, status: 401, message: "Not authenticated" };
+    const role = user.role || "";
+    const isPlatform = role.startsWith("platform_");
+    const isManager = role === "admin" || role === "manager" || role.startsWith("tenant_");
+    const isContractorOnProposal = !!user.workerId && user.workerId === proposal.contractor_id;
+    const sameCompany = !!user.companyId && !!proposal.company_id && user.companyId === proposal.company_id;
+    if (isPlatform || isContractorOnProposal || (isManager && sameCompany)) {
+      return { ok: true, proposal, user };
+    }
+    return { ok: false, status: 403, message: "Not authorized" };
+  }
+
   // GET /api/contractor-proposals/:id/attachments
   app.get("/api/contractor-proposals/:id/attachments", requireAuth, async (req, res) => {
     try {
+      const auth = await authorizeProposalAccess(String(req.params.id), (req.session as any).userId);
+      if (!auth.ok) return res.status(auth.status).json({ message: auth.message });
       const result = await db.execute(sql`SELECT * FROM proposal_attachments WHERE proposal_id = ${req.params.id} ORDER BY created_at DESC`);
       res.json(result.rows);
     } catch (e) { res.status(500).json({ message: "Failed to fetch attachments" }); }
   });
 
   // POST /api/contractor-proposals/:id/attachments
-  app.post("/api/contractor-proposals/:id/attachments", requireAuth, upload.single("file"), async (req: any, res) => {
+  app.post("/api/contractor-proposals/:id/attachments", requireAuth, documentUpload.single("file"), async (req: any, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const { attachmentType } = req.body;
       const userId = (req.session as any).userId;
-      const user = userId ? await storage.getUser(userId) : null;
+      const auth = await authorizeProposalAccess(req.params.id, userId);
+      if (!auth.ok) return res.status(auth.status).json({ message: auth.message });
+      const user = auth.user;
+      const proposalCompanyId = auth.proposal.company_id || user?.companyId || null;
+      const filePath = `/uploads/${req.file.filename}`;
       const result = await db.execute(sql`
         INSERT INTO proposal_attachments (proposal_id, file_path, file_name, file_type, file_size, attachment_type, uploaded_by_worker_id)
-        VALUES (${req.params.id}, ${req.file.path}, ${req.file.originalname}, ${req.file.mimetype}, ${req.file.size}, ${attachmentType ?? 'supporting_doc'}, ${user?.workerId ?? null})
+        VALUES (${req.params.id}, ${filePath}, ${req.file.originalname}, ${req.file.mimetype}, ${req.file.size}, ${attachmentType ?? 'supporting_doc'}, ${user?.workerId ?? null})
         RETURNING *`);
+      // Mirror into dam_documents so the file appears in the document library linked to the proposal
+      await db.execute(sql`
+        INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id)
+        VALUES (${proposalCompanyId}, ${user?.workerId ?? null}, ${'company'}, ${'proposal'}, ${req.file.originalname}, ${`Attachment for proposal ${req.params.id}`}, ${filePath}, ${req.file.originalname}, ${req.file.mimetype?.split("/")[0] || null}, ${req.file.size}, ${req.file.mimetype}, ${'proposal'}, ${req.params.id}, ${userId})
+      `).catch((err) => { console.error("Failed to mirror attachment to dam_documents:", err); });
       res.status(201).json(result.rows[0]);
     } catch (e) { console.error(e); res.status(500).json({ message: "Failed to upload attachment" }); }
   });
@@ -10405,7 +10442,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // DELETE /api/proposal-attachments/:id
   app.delete("/api/proposal-attachments/:id", requireAuth, async (req, res) => {
     try {
+      const attRes = await db.execute(sql`SELECT proposal_id, file_path FROM proposal_attachments WHERE id = ${req.params.id}`);
+      const att = attRes.rows[0] as any;
+      if (!att) return res.status(404).json({ message: "Attachment not found" });
+      const auth = await authorizeProposalAccess(att.proposal_id, (req.session as any).userId);
+      if (!auth.ok) return res.status(auth.status).json({ message: auth.message });
       await db.execute(sql`DELETE FROM proposal_attachments WHERE id = ${req.params.id}`);
+      await db.execute(sql`DELETE FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${att.proposal_id} AND file_path = ${att.file_path}`).catch(() => {});
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete attachment" }); }
   });
