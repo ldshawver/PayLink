@@ -2030,6 +2030,23 @@ export const insertProposalAttachmentSchema = createInsertSchema(proposalAttachm
 export type ProposalAttachment = typeof proposalAttachments.$inferSelect;
 export type InsertProposalAttachment = z.infer<typeof insertProposalAttachmentSchema>;
 
+// ── Invoice Attachments ───────────────────────────────────────────────────
+export const invoiceAttachments = pgTable("invoice_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceId: varchar("invoice_id").notNull(),
+  filePath: text("file_path").notNull(),
+  fileName: text("file_name"),
+  fileType: text("file_type"),
+  fileSize: integer("file_size"),
+  attachmentType: text("attachment_type").default("supporting_doc"), // receipt | timesheet | photo | supporting_doc | signed_approval | other
+  uploadedByWorkerId: varchar("uploaded_by_worker_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertInvoiceAttachmentSchema = createInsertSchema(invoiceAttachments).omit({ id: true, createdAt: true });
+export type InvoiceAttachment = typeof invoiceAttachments.$inferSelect;
+export type InsertInvoiceAttachment = z.infer<typeof insertInvoiceAttachmentSchema>;
+
 // ── Proposal Approval Events (audit log) ─────────────────────────────────
 export const proposalApprovalEvents = pgTable("proposal_approval_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

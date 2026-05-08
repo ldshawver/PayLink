@@ -9459,9 +9459,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const inv = await storage.getContractorInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Not found" });
       const user = await storage.getUser(req.session.userId!);
-      const isManager = user?.role === "admin" || user?.role === "manager";
-      if (!isManager && user?.workerId !== inv.contractorId) return res.status(403).json({ message: "Not authorized" });
-      res.json(await storage.getContractorInvoiceAttachments(req.params.id));
+      const role = user?.role || "";
+      const isPlatform = role.startsWith("platform_");
+      const isManager = role === "admin" || role === "manager" || role.startsWith("tenant_");
+      const isContractor = !!user?.workerId && user.workerId === inv.contractorId;
+      const sameCompany = !!user?.companyId && !!inv.companyId && user.companyId === inv.companyId;
+      if (!isPlatform && !isContractor && !(isManager && sameCompany)) return res.status(403).json({ message: "Not authorized" });
+      const result = await db.execute(sql`SELECT * FROM invoice_attachments WHERE invoice_id = ${req.params.id} ORDER BY created_at DESC`);
+      res.json(result.rows);
     } catch (e) { res.status(500).json({ message: "Failed" }); }
   });
 
@@ -9471,20 +9476,45 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const inv = await storage.getContractorInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Not found" });
       const user = await storage.getUser(req.session.userId!);
-      const isManager = user?.role === "admin" || user?.role === "manager";
-      if (!isManager && user?.workerId !== inv.contractorId) return res.status(403).json({ message: "Not authorized" });
+      const role = user?.role || "";
+      const isPlatform = role.startsWith("platform_");
+      const isManager = role === "admin" || role === "manager" || role.startsWith("tenant_");
+      const isContractor = !!user?.workerId && user.workerId === inv.contractorId;
+      const sameCompany = !!user?.companyId && !!inv.companyId && user.companyId === inv.companyId;
+      if (!isPlatform && !isContractor && !(isManager && sameCompany)) return res.status(403).json({ message: "Not authorized" });
+      const { attachmentType } = req.body;
       const filePath = `/uploads/${req.file.filename}`;
-      const r = await storage.createContractorInvoiceAttachment({
-        invoiceId: req.params.id, filePath,
-        fileName: req.file.originalname, fileType: req.file.mimetype, fileSize: req.file.size,
-      });
+      const result = await db.execute(sql`
+        INSERT INTO invoice_attachments (invoice_id, file_path, file_name, file_type, file_size, attachment_type, uploaded_by_worker_id)
+        VALUES (${req.params.id}, ${filePath}, ${req.file.originalname}, ${req.file.mimetype}, ${req.file.size}, ${attachmentType ?? 'supporting_doc'}, ${user?.workerId ?? null})
+        RETURNING *`);
       // Mirror into the document library, linked to the invoice
       await db.execute(sql`
         INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id)
         VALUES (${inv.companyId || user?.companyId || null}, ${user?.workerId ?? null}, ${'company'}, ${'invoice'}, ${req.file.originalname}, ${`Attachment for invoice ${req.params.id}`}, ${filePath}, ${req.file.originalname}, ${req.file.mimetype?.split("/")[0] || null}, ${req.file.size}, ${req.file.mimetype}, ${'invoice'}, ${req.params.id}, ${req.session.userId})
       `).catch((err) => { console.error("Failed to mirror invoice attachment to dam_documents:", err); });
-      res.status(201).json(r);
+      res.status(201).json(result.rows[0]);
     } catch (e) { res.status(500).json({ message: "Failed" }); }
+  });
+
+  app.delete("/api/invoice-attachments/:id", requireAuth, async (req, res) => {
+    try {
+      const attRes = await db.execute(sql`SELECT invoice_id, file_path FROM invoice_attachments WHERE id = ${req.params.id}`);
+      const att = attRes.rows[0] as any;
+      if (!att) return res.status(404).json({ message: "Attachment not found" });
+      const inv = await storage.getContractorInvoice(att.invoice_id);
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+      const user = await storage.getUser(req.session.userId!);
+      const role = user?.role || "";
+      const isPlatform = role.startsWith("platform_");
+      const isManager = role === "admin" || role === "manager" || role.startsWith("tenant_");
+      const isContractor = !!user?.workerId && user.workerId === inv.contractorId;
+      const sameCompany = !!user?.companyId && !!inv.companyId && user.companyId === inv.companyId;
+      if (!isPlatform && !isContractor && !(isManager && sameCompany)) return res.status(403).json({ message: "Not authorized" });
+      await db.execute(sql`DELETE FROM invoice_attachments WHERE id = ${req.params.id}`);
+      await db.execute(sql`DELETE FROM dam_documents WHERE linked_entity_type = 'invoice' AND linked_entity_id = ${att.invoice_id} AND file_path = ${att.file_path}`).catch(() => {});
+      res.json({ message: "Deleted" });
+    } catch (e) { res.status(500).json({ message: "Failed to delete attachment" }); }
   });
 
   app.get("/api/contractor-invoices/:id/audit", requireAuth, async (req, res) => {

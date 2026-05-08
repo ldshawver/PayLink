@@ -2325,6 +2325,19 @@ Thank you,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    // ── Invoice Attachments ───────────────────────────────────────────────────
+    await run("invoice_attachments table", sql`CREATE TABLE IF NOT EXISTS invoice_attachments (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      invoice_id VARCHAR NOT NULL,
+      file_path TEXT NOT NULL,
+      file_name TEXT,
+      file_type TEXT,
+      file_size INTEGER,
+      attachment_type TEXT DEFAULT 'supporting_doc',
+      uploaded_by_worker_id VARCHAR,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
     // ── Proposal Approval Events ──────────────────────────────────────────────
     await run("proposal_approval_events table", sql`CREATE TABLE IF NOT EXISTS proposal_approval_events (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

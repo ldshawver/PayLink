@@ -2893,6 +2893,7 @@ function InvoiceDetailPanel({
   const [payMethod, setPayMethod] = useState("check");
   const [payRef, setPayRef] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [attUploading, setAttUploading] = useState(false);
 
   const { data: payments = [], refetch: refetchPayments } = useQuery<Payment[]>({
     queryKey: ["/api/contractor-invoices", invoice.id, "payments"],
@@ -2911,8 +2912,34 @@ function InvoiceDetailPanel({
     enabled: isAdmin,
   });
 
+  const { data: invoiceAttachments = [], refetch: refetchInvoiceAttachments } = useQuery<any[]>({
+    queryKey: ["/api/contractor-invoices", invoice.id, "attachments"],
+    queryFn: async () => {
+      const r = await fetch(`/api/contractor-invoices/${invoice.id}/attachments`, { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+  });
+
   const proposalBlocked = invoice.proposalId && proposalStatus && proposalStatus !== "approved";
   const balance = parseFloat(invoice.balanceDue ?? invoice.amount ?? "0");
+  const canEditAttachments = !isAdmin && ["draft", "submitted"].includes(invoice.status) || isAdmin;
+
+  async function handleInvoiceAttachmentUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!e.target.files?.[0]) return;
+    const fd = new FormData();
+    fd.append("file", e.target.files[0]);
+    fd.append("attachmentType", "supporting_doc");
+    setAttUploading(true);
+    try {
+      const r = await fetch(`/api/contractor-invoices/${invoice.id}/attachments`, {
+        method: "POST", credentials: "include", body: fd,
+      });
+      if (!r.ok) throw new Error("Upload failed");
+      refetchInvoiceAttachments();
+      toast({ title: "File attached" });
+    } catch { toast({ title: "Upload failed", variant: "destructive" }); }
+    finally { setAttUploading(false); e.target.value = ""; }
+  }
 
   const payMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/contractor-invoices/${invoice.id}/payments`, {
@@ -2963,15 +2990,16 @@ function InvoiceDetailPanel({
         </SheetHeader>
 
         <Tabs value={tab} onValueChange={setTab} className="flex flex-col flex-1 min-h-0">
-          <TabsList className="shrink-0 w-full rounded-none border-b bg-transparent h-auto p-0 justify-start gap-0">
+          <TabsList className="shrink-0 w-full rounded-none border-b bg-transparent h-auto p-0 justify-start gap-0 overflow-x-auto">
             {[
               { value: "summary", label: "Summary" },
               { value: "payments", label: "Payments" },
+              { value: "attachments", label: `Attachments${invoiceAttachments.length > 0 ? ` (${invoiceAttachments.length})` : ""}` },
               { value: "linked", label: "Linked Proposal" },
               ...(isAdmin ? [{ value: "reminders", label: "Reminders" }] : []),
             ].map(t => (
               <TabsTrigger key={t.value} value={t.value}
-                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2.5 text-sm"
+                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2.5 text-sm whitespace-nowrap"
                 data-testid={`tab-invoice-${t.value}`}>
                 {t.label}
               </TabsTrigger>
@@ -3082,6 +3110,50 @@ function InvoiceDetailPanel({
                   </div>
                 )}
               </div>
+            </TabsContent>
+
+            <TabsContent value="attachments" className="m-0 p-6 space-y-4">
+              {canEditAttachments && (
+                <label className="flex flex-col items-center justify-center border-2 border-dashed rounded-lg p-6 cursor-pointer hover:border-primary/50 transition-colors" data-testid="upload-invoice-attachment">
+                  {attUploading ? (
+                    <Loader2 className="h-8 w-8 text-muted-foreground mb-2 animate-spin" />
+                  ) : (
+                    <Upload className="h-8 w-8 text-muted-foreground mb-2" />
+                  )}
+                  <p className="text-sm text-muted-foreground">Drop files here or click to upload</p>
+                  <p className="text-xs text-muted-foreground mt-1">PDFs, Word docs, and images (JPG, PNG, GIF, SVG, WebP) — up to 10MB</p>
+                  <input type="file" className="hidden" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.gif,.svg,.webp"
+                    onChange={handleInvoiceAttachmentUpload} disabled={attUploading} />
+                </label>
+              )}
+              {invoiceAttachments.length === 0 ? (
+                <p className="text-center text-muted-foreground text-sm py-4">No attachments yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {invoiceAttachments.map((att: any) => (
+                    <div key={att.id} className="flex items-center justify-between p-3 border rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <Paperclip className="h-4 w-4 text-muted-foreground" />
+                        <div>
+                          <p className="text-sm font-medium">{att.file_name}</p>
+                          <p className="text-xs text-muted-foreground capitalize">{att.attachment_type?.replace(/_/g, " ")}</p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="ghost" asChild>
+                          <a href={att.file_path?.startsWith("/") ? att.file_path : `/${att.file_path}`} target="_blank" rel="noreferrer" data-testid={`btn-download-inv-att-${att.id}`}><Download className="h-4 w-4" /></a>
+                        </Button>
+                        {canEditAttachments && (
+                          <Button size="sm" variant="ghost" onClick={async () => {
+                            await apiRequest("DELETE", `/api/invoice-attachments/${att.id}`);
+                            refetchInvoiceAttachments();
+                          }} data-testid={`btn-delete-inv-att-${att.id}`}><Trash2 className="h-4 w-4 text-red-500" /></Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </TabsContent>
 
             <TabsContent value="linked" className="m-0 p-6">
