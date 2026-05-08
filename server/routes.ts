@@ -1457,6 +1457,37 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/workers/:id — fetch a single worker with tenant isolation
+  app.get("/api/workers/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const worker = await storage.getWorker(req.params.id);
+      if (!worker) return res.status(404).json({ message: "Worker not found" });
+
+      // Platform users may access any worker
+      if (isPlatformUser(user?.role)) return res.json(worker);
+
+      // Employees may only read their own worker record
+      if (!isManagerRole(user?.role)) {
+        if (!user?.workerId || user.workerId !== worker.id) {
+          return res.status(403).json({ message: "Forbidden" });
+        }
+        return res.json(worker);
+      }
+
+      // Managers/admins are scoped to their own company
+      const effectiveCompanyId = user?.companyId ?? null;
+      if (effectiveCompanyId && worker.companyId !== effectiveCompanyId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      return res.json(worker);
+    } catch (error) {
+      console.error("Failed to fetch worker:", error);
+      res.status(500).json({ message: "Failed to fetch worker" });
+    }
+  });
+
   app.post("/api/workers", requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
     try {
       if (!req.body.companyId) return res.status(400).json({ message: "Company is required" });
