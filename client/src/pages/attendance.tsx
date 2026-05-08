@@ -98,17 +98,27 @@ function useTabParam(defaultTab: string): string {
   return params.get("tab") || defaultTab;
 }
 
-function formatTimestamp(dateStr: string | Date | null): string {
+function formatTimestamp(dateStr: string | Date | null, tz?: string | null): string {
   if (!dateStr) return "-";
   const d = new Date(dateStr);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) +
+  const tzOpt = tz ? { timeZone: tz } : {};
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", ...tzOpt }) +
     ", " +
-    d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", ...tzOpt });
 }
 
-function toLocalDatetimeString(dateStr: string | Date | null): string {
+function toLocalDatetimeString(dateStr: string | Date | null, tz?: string | null): string {
   if (!dateStr) return "";
   const d = new Date(dateStr);
+  if (tz) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(d);
+    const get = (type: string) => parts.find(p => p.type === type)?.value || "00";
+    const hr = get("hour") === "24" ? "00" : get("hour");
+    return `${get("year")}-${get("month")}-${get("day")}T${hr}:${get("minute")}`;
+  }
   const pad = (n: number) => n.toString().padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
@@ -190,9 +200,11 @@ function ExceptionBadges({ entry }: { entry: TimeEntry }) {
   return <div className="flex flex-wrap gap-1">{badges}</div>;
 }
 
-function fmtTimeOnly(ts: Date | string | null | undefined) {
+function fmtTimeOnly(ts: Date | string | null | undefined, tz?: string | null) {
   if (!ts) return null;
-  return new Date(ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const opts: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  if (tz) opts.timeZone = tz;
+  return new Date(ts).toLocaleTimeString("en-US", opts);
 }
 
 function getWeekRange() {
@@ -922,18 +934,18 @@ function TimesheetTab() {
                       <TableCell className="text-xs text-muted-foreground">
                         {e.scheduledStart ? (
                           <div>
-                            <div>{fmtTimeOnly(e.scheduledStart)}</div>
-                            <div>{fmtTimeOnly(e.scheduledEnd)}</div>
+                            <div>{fmtTimeOnly(e.scheduledStart, (companies || []).find(c => c.id === (companyFilter !== "all" ? companyFilter : user?.companyId))?.timezone)}</div>
+                            <div>{fmtTimeOnly(e.scheduledEnd, (companies || []).find(c => c.id === (companyFilter !== "all" ? companyFilter : user?.companyId))?.timezone)}</div>
                           </div>
                         ) : (
                           <span className="text-muted-foreground/40">—</span>
                         )}
                       </TableCell>
                       <TableCell className="text-sm">
-                        {entry.clockIn ? formatTimestamp(entry.clockIn) : "-"}
+                        {entry.clockIn ? formatTimestamp(entry.clockIn, (companies || []).find(c => c.id === (entry as any).companyId || (companyFilter !== "all" ? companyFilter : user?.companyId))?.timezone) : "-"}
                       </TableCell>
                       <TableCell className="text-sm">
-                        {entry.clockOut ? formatTimestamp(entry.clockOut) : "-"}
+                        {entry.clockOut ? formatTimestamp(entry.clockOut, (companies || []).find(c => c.id === (entry as any).companyId || (companyFilter !== "all" ? companyFilter : user?.companyId))?.timezone) : "-"}
                       </TableCell>
                       <TableCell className="text-sm">{entry.breakMinutes || 0}m</TableCell>
                       <TableCell className="text-sm font-medium">
@@ -1417,7 +1429,7 @@ function PunchesTab() {
                       <PunchTypeBadge type={punch.punchType} />
                     </TableCell>
                     <TableCell className="text-sm">
-                      {formatTimestamp(punch.punchTime)}
+                      {formatTimestamp(punch.punchTime, (companies || []).find(c => c.id === (punch as any).companyId)?.timezone)}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate">
                       {punch.note || "-"}
@@ -1869,7 +1881,7 @@ function PendingApprovalsTab() {
                       <PunchTypeBadge type={punch.punchType} />
                     </TableCell>
                     <TableCell className="text-sm">
-                      {formatTimestamp(punch.punchTime)}
+                      {formatTimestamp(punch.punchTime, (companyMap.get((punch as any).companyId) as any)?.timezone)}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       <Badge variant="outline" className="gap-1 text-amber-700 border-amber-300">
@@ -2444,6 +2456,7 @@ type ClockInRequest = {
   last_name: string;
   employee_number: string | null;
   company_name: string;
+  company_timezone: string | null;
 };
 
 function ClockInApprovalsTab() {
@@ -2561,9 +2574,9 @@ function ClockInApprovalsTab() {
                     )}
                   </div>
                 </TableCell>
-                <TableCell className="text-sm">{formatTimestamp(r.requested_at)}</TableCell>
+                <TableCell className="text-sm">{formatTimestamp(r.requested_at, r.company_timezone)}</TableCell>
                 <TableCell className="text-sm">
-                  {r.scheduled_start ? fmtTimeOnly(r.scheduled_start) : <span className="text-muted-foreground">—</span>}
+                  {r.scheduled_start ? fmtTimeOnly(r.scheduled_start, r.company_timezone) : <span className="text-muted-foreground">—</span>}
                 </TableCell>
                 <TableCell>
                   {r.status === "pending" && <Badge variant="secondary"><Clock className="h-3 w-3 mr-1" />Pending</Badge>}

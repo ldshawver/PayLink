@@ -2004,7 +2004,7 @@ export async function registerRoutes(
               ? `Late clock-in (${minutesDiff} min late)`
               : "Unscheduled clock-in";
             const subject = `Clock-In Approval Required — ${workerName}`;
-            const bodyText = `${workerName} is requesting to clock in but is outside their scheduled time.\n\nReason: ${reasonLabel}\n${scheduledStart ? `Scheduled start: ${scheduledStart.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}\n` : ""}Current time: ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}\n\nPlease log in to approve or deny this request:\n${appUrl}/app/attendance?tab=clock-in-approvals`;
+            const bodyText = `${workerName} is requesting to clock in but is outside their scheduled time.\n\nReason: ${reasonLabel}\n${scheduledStart ? `Scheduled start: ${scheduledStart.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: companyTz })}\n` : ""}Current time: ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: companyTz })}\n\nPlease log in to approve or deny this request:\n${appUrl}/app/attendance?tab=clock-in-approvals`;
             for (const mgr of managers) {
               // 1. In-app notification (always created, visible in notification bell/inbox)
               if (mgr.companyId === effectiveCompanyId) {
@@ -2261,7 +2261,7 @@ export async function registerRoutes(
                 const workerName = `${worker.firstName} ${worker.lastName}`;
                 const appUrl = getAppBaseUrl(req);
                 const subject = `Late Clock-Out — ${workerName}`;
-                const bodyText = `${workerName} clocked out ${lateClockOutMin} minutes after their scheduled end time.\n\nScheduled end: ${workerSchedule.endTime}\nActual clock-out: ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}\n\nView timesheet: ${appUrl}/app/attendance`;
+                const bodyText = `${workerName} clocked out ${lateClockOutMin} minutes after their scheduled end time.\n\nScheduled end: ${workerSchedule.endTime}\nActual clock-out: ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: coTz })}\n\nView timesheet: ${appUrl}/app/attendance`;
                 for (const mgr of managers) {
                   const mgrWorker = mgr.workerId ? await storage.getWorker(mgr.workerId) : null;
                   const mgrEmail = mgrWorker?.workEmail || mgrWorker?.homeEmail || mgrWorker?.email || null;
@@ -5662,7 +5662,7 @@ export async function registerRoutes(
       let rows: any[];
       if (scopedCompany && status) {
         const r = await db.execute(sql`
-          SELECT r.*, w.first_name, w.last_name, w.employee_number, c.name AS company_name
+          SELECT r.*, w.first_name, w.last_name, w.employee_number, c.name AS company_name, c.timezone AS company_timezone
           FROM clock_in_requests r
           JOIN workers w ON w.id = r.worker_id
           JOIN companies c ON c.id = r.company_id
@@ -5672,7 +5672,7 @@ export async function registerRoutes(
         rows = r.rows as any[];
       } else if (scopedCompany) {
         const r = await db.execute(sql`
-          SELECT r.*, w.first_name, w.last_name, w.employee_number, c.name AS company_name
+          SELECT r.*, w.first_name, w.last_name, w.employee_number, c.name AS company_name, c.timezone AS company_timezone
           FROM clock_in_requests r
           JOIN workers w ON w.id = r.worker_id
           JOIN companies c ON c.id = r.company_id
@@ -5682,7 +5682,7 @@ export async function registerRoutes(
         rows = r.rows as any[];
       } else if (status) {
         const r = await db.execute(sql`
-          SELECT r.*, w.first_name, w.last_name, w.employee_number, c.name AS company_name
+          SELECT r.*, w.first_name, w.last_name, w.employee_number, c.name AS company_name, c.timezone AS company_timezone
           FROM clock_in_requests r
           JOIN workers w ON w.id = r.worker_id
           JOIN companies c ON c.id = r.company_id
@@ -5692,7 +5692,7 @@ export async function registerRoutes(
         rows = r.rows as any[];
       } else {
         const r = await db.execute(sql`
-          SELECT r.*, w.first_name, w.last_name, w.employee_number, c.name AS company_name
+          SELECT r.*, w.first_name, w.last_name, w.employee_number, c.name AS company_name, c.timezone AS company_timezone
           FROM clock_in_requests r
           JOIN workers w ON w.id = r.worker_id
           JOIN companies c ON c.id = r.company_id
