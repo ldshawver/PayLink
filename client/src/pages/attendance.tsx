@@ -303,9 +303,18 @@ function TimesheetTab() {
   });
 
   const workerMap = new Map(workers?.map((w) => [w.id, w]) || []);
+  const companyMapTs = new Map(companies?.map((c) => [c.id, c]) || []);
   const filteredWorkers = companyFilter !== "all"
     ? (workers || []).filter(w => w.companyId === companyFilter)
     : (workers || []);
+
+  // Pre-fill companyId when the Add Entry dialog opens
+  useEffect(() => {
+    if (!addOpen) return;
+    if (addForm.companyId) return;
+    const presetId = user?.companyId || (companyFilter !== "all" ? companyFilter : "") || (companies?.length === 1 ? companies[0].id : "");
+    if (presetId) setAddForm(f => ({ ...f, companyId: presetId }));
+  }, [addOpen, companies, user?.companyId, companyFilter]);
 
   const updateEntry = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) => {
@@ -609,7 +618,10 @@ function TimesheetTab() {
             <div className="grid gap-3 mt-2">
               <div className="grid gap-1.5">
                 <Label>Employee</Label>
-                <Select value={addForm.workerId} onValueChange={v => setAddForm(f => ({ ...f, workerId: v }))}>
+                <Select value={addForm.workerId} onValueChange={v => {
+                  const w = workerMap.get(v);
+                  setAddForm(f => ({ ...f, workerId: v, companyId: w?.companyId || f.companyId }));
+                }}>
                   <SelectTrigger data-testid="select-add-entry-worker"><SelectValue placeholder="Select employee" /></SelectTrigger>
                   <SelectContent>
                     {(workers || []).map(w => (
@@ -621,11 +633,14 @@ function TimesheetTab() {
               <div className="grid gap-1.5">
                 <Label>Company</Label>
                 <Select value={addForm.companyId} onValueChange={v => setAddForm(f => ({ ...f, companyId: v }))}>
-                  <SelectTrigger data-testid="select-add-entry-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                  <SelectTrigger data-testid="select-add-entry-company"><SelectValue placeholder={addForm.companyId ? companyMapTs.get(addForm.companyId)?.name : "Select company"} /></SelectTrigger>
                   <SelectContent>
                     {(companies || []).map(c => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
+                    {(companies || []).length === 0 && addForm.companyId && (
+                      <SelectItem value={addForm.companyId}>{addForm.companyId}</SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -1265,6 +1280,15 @@ function PunchesTab() {
   });
 
   const workerMap = new Map(workers?.map((w) => [w.id, w]) || []);
+  const companyMap2 = new Map(companies?.map((c) => [c.id, c]) || []);
+
+  // When the dialog opens, pre-fill companyId from the user's own company (or the only company)
+  useEffect(() => {
+    if (!addOpen) return;
+    if (addForm.companyId) return;
+    const presetId = user?.companyId || (companies?.length === 1 ? companies[0].id : "");
+    if (presetId) setAddForm(f => ({ ...f, companyId: presetId }));
+  }, [addOpen, companies, user?.companyId]);
 
   const updatePunch = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) => {
@@ -1342,7 +1366,10 @@ function PunchesTab() {
             <div className="grid gap-3 mt-2">
               <div className="grid gap-1.5">
                 <Label>Employee</Label>
-                <Select value={addForm.workerId} onValueChange={v => setAddForm(f => ({ ...f, workerId: v }))}>
+                <Select value={addForm.workerId} onValueChange={v => {
+                  const w = workerMap.get(v);
+                  setAddForm(f => ({ ...f, workerId: v, companyId: w?.companyId || f.companyId }));
+                }}>
                   <SelectTrigger data-testid="select-add-punch-worker"><SelectValue placeholder="Select employee" /></SelectTrigger>
                   <SelectContent>
                     {(workers || []).map(w => (
@@ -1354,11 +1381,14 @@ function PunchesTab() {
               <div className="grid gap-1.5">
                 <Label>Company</Label>
                 <Select value={addForm.companyId} onValueChange={v => setAddForm(f => ({ ...f, companyId: v }))}>
-                  <SelectTrigger data-testid="select-add-punch-company"><SelectValue placeholder="Select company" /></SelectTrigger>
+                  <SelectTrigger data-testid="select-add-punch-company"><SelectValue placeholder={addForm.companyId ? companyMap2.get(addForm.companyId)?.name : "Select company"} /></SelectTrigger>
                   <SelectContent>
                     {(companies || []).map(c => (
                       <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                     ))}
+                    {(companies || []).length === 0 && addForm.companyId && (
+                      <SelectItem value={addForm.companyId}>{addForm.companyId}</SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
