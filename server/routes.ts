@@ -5768,15 +5768,6 @@ export async function registerRoutes(
       if (actingUser?.companyId && request.company_id !== actingUser.companyId) {
         return res.status(403).json({ message: "Forbidden: request belongs to a different company" });
       }
-      // Hierarchy check: pure managers/supervisors can only approve direct reports
-      if (actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
-        const subResult = await db.execute(
-          sql`SELECT id FROM workers WHERE id = ${request.worker_id} AND manager_id = ${actingUser.workerId}`
-        );
-        if (subResult.rows.length === 0) {
-          return res.status(403).json({ message: "Forbidden: worker is not your direct report" });
-        }
-      }
 
       // Determine effective punch time: use corrected_time if manager set one, otherwise now
       const effectivePunchTime = request.corrected_time ? new Date(request.corrected_time) : new Date();
@@ -5856,15 +5847,6 @@ export async function registerRoutes(
       // Company ownership: tenant users can only deny requests in their own company
       if (actingUser?.companyId && request.company_id !== actingUser.companyId) {
         return res.status(403).json({ message: "Forbidden: request belongs to a different company" });
-      }
-      // Hierarchy check: pure managers/supervisors can only deny direct reports
-      if (actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
-        const subResult = await db.execute(
-          sql`SELECT id FROM workers WHERE id = ${request.worker_id} AND manager_id = ${actingUser.workerId}`
-        );
-        if (subResult.rows.length === 0) {
-          return res.status(403).json({ message: "Forbidden: worker is not your direct report" });
-        }
       }
 
       await db.execute(sql`
