@@ -82,6 +82,7 @@ const PrivacyAuditLogPage = lazy(() => import("@/pages/privacy-audit-log"));
 const FeedbackAdminPage = lazy(() => import("@/pages/FeedbackAdminPage"));
 const BreachResponsePage = lazy(() => import("@/pages/breach-response"));
 const MfaSettingsPage = lazy(() => import("@/pages/mfa-settings"));
+const ProposalPortalPage = lazy(() => import("@/pages/proposal-portal"));
 
 // ─── Shared page-loading fallback ────────────────────────────────────────────
 function PageLoader() {
@@ -482,6 +483,14 @@ function AppContent() {
     return (
       <Suspense fallback={<PageLoader />}>
         <PayInvoicePage />
+      </Suspense>
+    );
+  }
+
+  if (location.startsWith("/proposal/")) {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <ProposalPortalPage />
       </Suspense>
     );
   }

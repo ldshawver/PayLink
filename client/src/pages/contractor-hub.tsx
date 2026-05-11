@@ -26,7 +26,7 @@ import {
   ExternalLink, Info, AlertCircle, ThumbsUp, ThumbsDown, MessageCircle,
   Briefcase, Layers, SlidersHorizontal, ArrowUpDown, Globe, Phone, Mail,
   Image, Paintbrush, CheckSquare, Search, Archive, X, Filter, BellOff,
-  FileCheck, Banknote, ShieldCheck
+  FileCheck, Banknote, ShieldCheck, Link2, Copy
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -50,6 +50,7 @@ interface Proposal {
   projectClass?: string; costCenter?: string; laborMaterialsSplit?: string; urgency?: string;
   siteNotes?: string; clientRequirements?: string; estimatedStartDate?: string; estimatedEndDate?: string;
   tradeCategory?: string;
+  shareToken?: string;
 }
 
 interface ContractorBranding {
@@ -1025,6 +1026,36 @@ function ProposalDetailPanel({
               {canCreateRevision && (
                 <Button size="sm" variant="outline" className="shrink-0" onClick={() => revisionMutation.mutate()} disabled={revisionMutation.isPending} data-testid="btn-create-revision-from-detail">
                   <RotateCcw className="h-3.5 w-3.5 mr-1" /> New Revision
+                </Button>
+              )}
+              {["sent", "viewed", "approved", "signed", "negotiated", "countered"].includes(proposal.status) && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="shrink-0 text-muted-foreground"
+                  data-testid="btn-copy-client-link"
+                  onClick={async () => {
+                    try {
+                      // Use existing share_token or generate one via the admin endpoint
+                      let shareToken: string = proposal.shareToken || "";
+                      if (!shareToken) {
+                        const r = await fetch(`/api/contractor-proposals/${proposal.id}/share-token`, {
+                          method: "POST",
+                          credentials: "include",
+                        });
+                        if (!r.ok) throw new Error("Could not generate share link");
+                        const d = await r.json();
+                        shareToken = d.shareToken;
+                      }
+                      const url = `${window.location.origin}/proposal/${proposal.id}?token=${shareToken}`;
+                      await navigator.clipboard.writeText(url);
+                      toast({ title: "Client link copied", description: "Share this link with your client." });
+                    } catch {
+                      toast({ title: "Could not copy link", variant: "destructive" });
+                    }
+                  }}
+                >
+                  <Link2 className="h-3.5 w-3.5 mr-1" /> Copy Client Link
                 </Button>
               )}
             </div>
@@ -2664,7 +2695,7 @@ function ProposalBuilder({
                   <FileText className="h-3.5 w-3.5 mr-1.5" /> Preview PDF
                 </Button>
               </div>
-              <ProposalPreview proposal={current as Proposal} lineItems={lineItems} subtotal={subtotal} tax={tax} discount={discount} total={total} branding={contractorBranding} />
+              <ProposalPreview proposal={current as Proposal} lineItems={lineItems} subtotal={subtotal} tax={tax} discount={discount} total={total} branding={contractorBranding} attachments={attachments} />
             </TabsContent>
           </ScrollArea>
         </Tabs>
@@ -2742,8 +2773,9 @@ function LineItemRow({ item, canEdit, onDelete, onRefresh }: { item: LineItem; c
 
 // ─── Proposal Preview ─────────────────────────────────────────────────────────
 
-function ProposalPreview({ proposal, lineItems, subtotal, tax, discount, total, branding }: {
-  proposal: Proposal; lineItems: LineItem[]; subtotal: number; tax: number; discount: number; total: number; branding?: any;
+function ProposalPreview({ proposal, lineItems, subtotal, tax, discount, total, branding, attachments, getDownloadUrl }: {
+  proposal: Proposal; lineItems: LineItem[]; subtotal: number; tax: number; discount: number; total: number; branding?: any; attachments?: any[];
+  getDownloadUrl?: (att: any) => string;
 }) {
   const accentColor = branding?.primary_color || "#0f766e";
   const businessName = branding?.business_name;
@@ -2851,6 +2883,49 @@ function ProposalPreview({ proposal, lineItems, subtotal, tax, discount, total, 
           <div>
             <h2 className="text-base font-semibold mb-2 pb-1 border-b">Warranty</h2>
             <p className="text-sm whitespace-pre-wrap text-gray-700 dark:text-gray-300">{proposal.warrantyNotes}</p>
+          </div>
+        )}
+        {attachments && attachments.length > 0 && (
+          <div>
+            <h2 className="text-base font-semibold mb-3 pb-1 border-b">Attachments</h2>
+            <div className="space-y-3">
+              {attachments.map((att: any) => {
+                const isImage = /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(att.file_name || "");
+                const downloadHref = getDownloadUrl
+                  ? getDownloadUrl(att)
+                  : (att.file_path?.startsWith("/") ? att.file_path : `/${att.file_path}`);
+                return (
+                  <div key={att.id}>
+                    {isImage ? (
+                      <div className="space-y-1.5">
+                        <p className="text-xs font-medium text-muted-foreground">{att.file_name}{att.attachment_type ? ` — ${att.attachment_type.replace(/_/g, " ")}` : ""}</p>
+                        <img
+                          src={downloadHref}
+                          alt={att.file_name}
+                          className="max-w-full max-h-64 rounded border object-contain"
+                          data-testid={`attachment-img-${att.id}`}
+                        />
+                      </div>
+                    ) : (
+                      <a
+                        href={downloadHref}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center gap-2 p-2.5 rounded border hover:bg-muted/50 transition-colors group"
+                        data-testid={`attachment-link-${att.id}`}
+                      >
+                        <Paperclip className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate group-hover:text-primary transition-colors">{att.file_name}</p>
+                          {att.attachment_type && <p className="text-xs text-muted-foreground capitalize">{att.attachment_type.replace(/_/g, " ")}</p>}
+                        </div>
+                        <Download className="h-4 w-4 text-muted-foreground shrink-0" />
+                      </a>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
         {proposal.status === "approved" && proposal.approvalName && (

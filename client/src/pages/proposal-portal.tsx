@@ -1,0 +1,522 @@
+import { useState, useEffect, useCallback } from "react";
+import { useLocation } from "wouter";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  CheckCircle, Clock, AlertCircle, Loader2, Paperclip, Download, XCircle,
+} from "lucide-react";
+
+const fmt = (n: number | string | undefined | null) => {
+  const v = parseFloat(String(n || 0));
+  return isNaN(v) ? "$0.00" : v.toLocaleString("en-US", { style: "currency", currency: "USD" });
+};
+
+const fmtDate = (s?: string | null) => {
+  if (!s) return "";
+  try { return new Date(s).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }); }
+  catch { return s; }
+};
+
+interface ProposalPortalData {
+  id: string;
+  proposalNumber: string;
+  title: string;
+  description?: string;
+  status: string;
+  scopeOfWork?: string;
+  assumptions?: string;
+  exclusions?: string;
+  paymentTerms?: string;
+  warrantyNotes?: string;
+  clientMessage?: string;
+  estimatorName?: string;
+  issueDate?: string;
+  expirationDate?: string;
+  subtotal?: string;
+  taxAmount?: string;
+  discountAmount?: string;
+  amount?: string;
+  currency?: string;
+  approvalName?: string;
+  approvalEmail?: string;
+  approvalAt?: string;
+  version?: number;
+  lineItems: Array<{
+    id: string; name: string; description?: string; category?: string;
+    quantity: string; unit?: string; unitPrice: string; lineTotal: string;
+    optional: boolean; selected: boolean;
+  }>;
+  branding?: {
+    businessName?: string; primaryColor?: string; logoUrl?: string;
+    tagline?: string; websiteUrl?: string; licenseNumber?: string;
+    coverNote?: string; footerText?: string; signatureText?: string;
+  };
+  contractorName?: string;
+  companyName?: string;
+}
+
+interface Attachment {
+  id: string;
+  file_name: string;
+  file_type: string;
+  file_size: number;
+  attachment_type: string | null;
+  created_at: string;
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, { label: string; variant: "default" | "secondary" | "outline" | "destructive" }> = {
+    sent: { label: "Sent", variant: "secondary" },
+    viewed: { label: "Viewed", variant: "secondary" },
+    approved: { label: "Approved", variant: "default" },
+    signed: { label: "Signed", variant: "default" },
+    negotiated: { label: "Negotiated", variant: "secondary" },
+    countered: { label: "Counter Offer", variant: "outline" },
+  };
+  const s = map[status] || { label: status, variant: "outline" as const };
+  return <Badge variant={s.variant}>{s.label}</Badge>;
+}
+
+function ClientApprovalForm({
+  proposalId,
+  token,
+  onApproved,
+}: {
+  proposalId: string;
+  token: string;
+  onApproved: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !email.trim()) { setError("Name and email are required"); return; }
+    setSubmitting(true); setError(null);
+    try {
+      const r = await fetch(
+        `/api/portal/proposals/${proposalId}/approve?token=${encodeURIComponent(token)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approvalName: name, approvalEmail: email, approvalNotes: notes }),
+        },
+      );
+      if (!r.ok) {
+        const d = await r.json();
+        setError(d.message || "Could not submit approval");
+        setSubmitting(false);
+        return;
+      }
+      onApproved();
+    } catch {
+      setError("Network error — please try again");
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Card className="border-2 border-primary/30">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <CheckCircle className="h-5 w-5 text-primary" /> Approve This Proposal
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">
+          By approving, you confirm you have reviewed this proposal and agree to its terms.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="portal-approval-name">Your Full Name *</Label>
+              <Input
+                id="portal-approval-name"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Jane Smith"
+                required
+                data-testid="input-approval-name"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="portal-approval-email">Your Email *</Label>
+              <Input
+                id="portal-approval-email"
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="jane@example.com"
+                required
+                data-testid="input-approval-email"
+              />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="portal-approval-notes">Notes (optional)</Label>
+            <Textarea
+              id="portal-approval-notes"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="Any comments or conditions..."
+              rows={2}
+              data-testid="textarea-approval-notes"
+            />
+          </div>
+          {error && (
+            <div className="flex items-center gap-2 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+          <Button type="submit" disabled={submitting} className="w-full" data-testid="button-submit-approval">
+            {submitting
+              ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Submitting...</>
+              : <><CheckCircle className="h-4 w-4 mr-2" />Approve Proposal</>}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function ProposalPortalPage() {
+  const [location] = useLocation();
+
+  // Extract proposal ID and share token from the URL
+  // URL pattern: /proposal/:id?token=<shareToken>
+  const pathPart = location.split("/proposal/")[1] || "";
+  const [pathId, queryStr] = pathPart.split("?");
+  const proposalId = pathId || "";
+  const params = new URLSearchParams(queryStr || window.location.search);
+  const token = params.get("token") || "";
+
+  const [loading, setLoading] = useState(true);
+  const [proposal, setProposal] = useState<ProposalPortalData | null>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [approved, setApproved] = useState(false);
+
+  const loadData = useCallback(async () => {
+    if (!proposalId) { setError("Invalid proposal link"); setLoading(false); return; }
+    if (!token) {
+      setError("This link is missing a required access token. Please use the link provided in your email.");
+      setLoading(false);
+      return;
+    }
+    try {
+      const encodedToken = encodeURIComponent(token);
+      const [propRes, attRes] = await Promise.all([
+        fetch(`/api/portal/proposals/${proposalId}?token=${encodedToken}`),
+        fetch(`/api/portal/proposals/${proposalId}/attachments?token=${encodedToken}`),
+      ]);
+      if (!propRes.ok) {
+        const d = await propRes.json();
+        setError(d.message || "Proposal not available");
+        setLoading(false);
+        return;
+      }
+      const propData = await propRes.json();
+      setProposal(propData);
+      if (attRes.ok) {
+        setAttachments(await attRes.json());
+      }
+    } catch {
+      setError("Failed to load proposal — please check the link and try again.");
+    }
+    setLoading(false);
+  }, [proposalId, token]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  const accentColor = proposal?.branding?.primaryColor || "#0f766e";
+  const businessName = proposal?.branding?.businessName || proposal?.companyName || "PayLink";
+
+  const getDownloadUrl = (att: Attachment) =>
+    `/api/portal/proposals/${proposalId}/attachments/${att.id}/download?token=${encodeURIComponent(token)}`;
+
+  const subtotal = proposal?.lineItems.reduce((s, li) => s + parseFloat(li.lineTotal || "0"), 0) || 0;
+  const tax = parseFloat(proposal?.taxAmount || "0");
+  const discount = parseFloat(proposal?.discountAmount || "0");
+  const total = subtotal + tax - discount;
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 gap-4 p-6 text-center">
+        <div className="h-16 w-16 rounded-full bg-destructive/10 flex items-center justify-center">
+          <XCircle className="h-8 w-8 text-destructive" />
+        </div>
+        <h1 className="text-xl font-semibold">Proposal Unavailable</h1>
+        <p className="text-muted-foreground max-w-sm text-sm">{error}</p>
+      </div>
+    );
+  }
+
+  if (!proposal) return null;
+
+  const canApprove = ["sent", "viewed"].includes(proposal.status) && !approved;
+  const isApproved = proposal.status === "approved" || approved;
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div className="h-2" style={{ backgroundColor: accentColor }} />
+
+      <div className="px-4 sm:px-8 py-6 border-b bg-white" style={{ borderColor: accentColor + "30" }}>
+        <div className="max-w-3xl mx-auto flex flex-col sm:flex-row justify-between items-start gap-4">
+          <div>
+            <div className="flex items-center gap-3 mb-1">
+              <div
+                className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-lg shrink-0"
+                style={{ backgroundColor: accentColor }}
+              >
+                {businessName.charAt(0).toUpperCase()}
+              </div>
+              <div>
+                <h2 className="font-bold text-lg text-gray-900 leading-tight">{businessName}</h2>
+                {proposal.branding?.tagline && (
+                  <p className="text-xs text-muted-foreground">{proposal.branding.tagline}</p>
+                )}
+              </div>
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900 mt-2">{proposal.title || "Proposal"}</h1>
+            <div className="flex items-center gap-2 mt-1">
+              <p className="text-sm text-muted-foreground">{proposal.proposalNumber}</p>
+              <StatusBadge status={proposal.status} />
+            </div>
+          </div>
+          <div className="text-left sm:text-right text-sm text-muted-foreground space-y-0.5 shrink-0">
+            {proposal.issueDate && <p>Date: {fmtDate(proposal.issueDate)}</p>}
+            {proposal.expirationDate && <p>Expires: {fmtDate(proposal.expirationDate)}</p>}
+            {proposal.estimatorName && <p>Prepared by: {proposal.estimatorName}</p>}
+            {proposal.branding?.websiteUrl && <p className="text-xs">{proposal.branding.websiteUrl}</p>}
+            {proposal.branding?.licenseNumber && <p className="text-xs">Lic. #{proposal.branding.licenseNumber}</p>}
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-3xl mx-auto px-4 sm:px-8 py-8 space-y-8">
+
+        {(proposal.branding?.coverNote || proposal.clientMessage) && (
+          <div
+            className="rounded-lg p-4 italic text-sm text-muted-foreground border-l-4"
+            style={{ borderColor: accentColor, backgroundColor: accentColor + "10" }}
+          >
+            "{proposal.branding?.coverNote || proposal.clientMessage}"
+          </div>
+        )}
+
+        {proposal.scopeOfWork && (
+          <div>
+            <h2 className="text-base font-semibold mb-2 pb-1 border-b">Scope of Work</h2>
+            <p className="text-sm whitespace-pre-wrap text-gray-700">{proposal.scopeOfWork}</p>
+          </div>
+        )}
+
+        {proposal.lineItems.length > 0 && (
+          <div>
+            <h2 className="text-base font-semibold mb-3 pb-1 border-b">Pricing</h2>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-muted-foreground border-b">
+                  <th className="text-left py-1 font-medium">Item</th>
+                  <th className="text-right py-1 font-medium">Qty</th>
+                  <th className="text-right py-1 font-medium">Unit Price</th>
+                  <th className="text-right py-1 font-medium">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {proposal.lineItems.map(item => (
+                  <tr key={item.id}>
+                    <td className="py-1.5">
+                      <p className="font-medium">{item.name}{item.optional ? " (Optional)" : ""}</p>
+                      {item.description && <p className="text-xs text-muted-foreground">{item.description}</p>}
+                    </td>
+                    <td className="text-right py-1.5">{item.quantity}</td>
+                    <td className="text-right py-1.5">{fmt(item.unitPrice)}</td>
+                    <td className="text-right py-1.5 font-medium">{fmt(item.lineTotal)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="mt-3 border-t pt-3 space-y-1 text-sm max-w-xs ml-auto">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Subtotal</span><span>{fmt(subtotal)}</span>
+              </div>
+              {tax > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Tax</span><span>{fmt(tax)}</span>
+                </div>
+              )}
+              {discount > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Discount</span><span>-{fmt(discount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between font-semibold border-t pt-1">
+                <span>Total</span>
+                <span style={{ color: accentColor }}>{fmt(total || parseFloat(proposal.amount || "0"))}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {proposal.assumptions && (
+          <div>
+            <h2 className="text-base font-semibold mb-2 pb-1 border-b">Assumptions</h2>
+            <p className="text-sm whitespace-pre-wrap text-gray-700">{proposal.assumptions}</p>
+          </div>
+        )}
+        {proposal.exclusions && (
+          <div>
+            <h2 className="text-base font-semibold mb-2 pb-1 border-b">Exclusions</h2>
+            <p className="text-sm whitespace-pre-wrap text-gray-700">{proposal.exclusions}</p>
+          </div>
+        )}
+        {proposal.paymentTerms && (
+          <div>
+            <h2 className="text-base font-semibold mb-2 pb-1 border-b">Payment Terms</h2>
+            <p className="text-sm whitespace-pre-wrap text-gray-700">{proposal.paymentTerms}</p>
+          </div>
+        )}
+        {proposal.warrantyNotes && (
+          <div>
+            <h2 className="text-base font-semibold mb-2 pb-1 border-b">Warranty</h2>
+            <p className="text-sm whitespace-pre-wrap text-gray-700">{proposal.warrantyNotes}</p>
+          </div>
+        )}
+
+        {attachments.length > 0 && (
+          <div>
+            <h2 className="text-base font-semibold mb-3 pb-1 border-b">Attachments</h2>
+            <div className="space-y-3">
+              {attachments.map(att => {
+                const isImage = /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(att.file_name || "");
+                const href = getDownloadUrl(att);
+                return (
+                  <div key={att.id}>
+                    {isImage ? (
+                      <div className="space-y-1.5">
+                        <p className="text-xs font-medium text-muted-foreground">
+                          {att.file_name}
+                          {att.attachment_type ? ` — ${att.attachment_type.replace(/_/g, " ")}` : ""}
+                        </p>
+                        <img
+                          src={href}
+                          alt={att.file_name}
+                          className="max-w-full max-h-64 rounded border object-contain bg-white"
+                          data-testid={`portal-attachment-img-${att.id}`}
+                        />
+                        <a
+                          href={href}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                          data-testid={`portal-attachment-dl-${att.id}`}
+                        >
+                          <Download className="h-3 w-3" /> Download
+                        </a>
+                      </div>
+                    ) : (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center gap-2 p-2.5 rounded border hover:bg-gray-50 transition-colors group bg-white"
+                        data-testid={`portal-attachment-link-${att.id}`}
+                      >
+                        <Paperclip className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{att.file_name}</p>
+                          {att.attachment_type && (
+                            <p className="text-xs text-muted-foreground capitalize">
+                              {att.attachment_type.replace(/_/g, " ")}
+                            </p>
+                          )}
+                        </div>
+                        <Download className="h-4 w-4 text-muted-foreground shrink-0" />
+                      </a>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {isApproved && (
+          <div className="border-2 border-green-500 rounded-lg p-4 bg-green-50">
+            <div className="flex items-center gap-2 mb-2">
+              <CheckCircle className="h-5 w-5 text-green-600" />
+              <h2 className="font-semibold text-green-700">Proposal Approved</h2>
+            </div>
+            <p className="text-sm text-green-700">
+              {proposal.approvalName
+                ? <>Approved by <strong>{proposal.approvalName}</strong> ({proposal.approvalEmail})</>
+                : "Thank you — your approval has been recorded."}
+            </p>
+            {proposal.approvalAt && (
+              <p className="text-xs text-green-600 mt-1">{fmtDate(proposal.approvalAt)}</p>
+            )}
+          </div>
+        )}
+
+        {canApprove && (
+          <ClientApprovalForm
+            proposalId={proposal.id}
+            token={token}
+            onApproved={() => setApproved(true)}
+          />
+        )}
+
+        {!canApprove && !isApproved && (
+          <div className="flex items-center gap-2 p-3 rounded-lg border bg-white text-sm text-muted-foreground">
+            <Clock className="h-4 w-4 shrink-0" />
+            <span>
+              This proposal is in <strong>{proposal.status}</strong> status and cannot be approved at this time.
+            </span>
+          </div>
+        )}
+
+        {proposal.branding?.signatureText && (
+          <div className="mt-4 pt-4 border-t">
+            <p className="text-sm font-medium text-gray-700">{proposal.branding.signatureText}</p>
+            {businessName && <p className="text-xs text-muted-foreground mt-0.5">{businessName}</p>}
+          </div>
+        )}
+
+        <div className="text-center pt-4 border-t">
+          <p className="text-xs text-muted-foreground">
+            Powered by <strong>PayLink</strong> — Secure Proposal Portal
+          </p>
+        </div>
+      </div>
+
+      {(proposal.branding?.footerText || businessName) && (
+        <div
+          className="px-8 py-4 border-t text-center"
+          style={{ borderColor: accentColor + "30", backgroundColor: accentColor + "08" }}
+        >
+          <p className="text-xs text-muted-foreground">
+            {proposal.branding?.footerText || businessName}
+          </p>
+        </div>
+      )}
+      <div className="h-2" style={{ backgroundColor: accentColor }} />
+    </div>
+  );
+}
