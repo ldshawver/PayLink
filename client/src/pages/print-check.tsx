@@ -1933,8 +1933,14 @@ export default function PrintCheckPage() {
       }
       const blob = await pdfRes.blob();
       const blobUrl = URL.createObjectURL(blob);
-      window.open(blobUrl, "_blank");
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `paylink-checks-${runId.slice(0, 8)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+      toast({ title: "PDF downloaded", description: "Open the downloaded file to review and print your checks.", variant: "default" });
     } catch (e: any) {
       toast({ title: "PDF generation failed", description: e.message || "Network error", variant: "destructive" });
     }
@@ -2044,7 +2050,14 @@ export default function PrintCheckPage() {
       const pdfRes = await fetch(`/api/payroll-runs/${runId}/checks-pdf?mode=calibration`, { credentials: "include" });
       if (pdfRes.ok) {
         const blob = await pdfRes.blob();
-        window.open(URL.createObjectURL(blob), "_blank");
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = `paylink-calibration-${runId.slice(0, 8)}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
       } else {
         const err = await pdfRes.json().catch(() => ({}));
         toast({ title: "Calibration PDF failed", description: (err as any).message || "Server error", variant: "destructive" });
@@ -2068,8 +2081,15 @@ export default function PrintCheckPage() {
         return;
       }
       const blob = await pdfRes.blob();
-      window.open(URL.createObjectURL(blob), "_blank");
-      toast({ title: "Reprint PDF opened", description: "The reprint has been logged in the audit trail.", variant: "default" });
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `paylink-reprint-${payrollItemId.slice(0, 8)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+      toast({ title: "Reprint PDF downloaded", description: "The reprint has been logged in the audit trail. Open the file to print.", variant: "default" });
     } catch (e: any) {
       toast({ title: "Reprint failed", description: e.message || "Network error", variant: "destructive" });
     } finally {
