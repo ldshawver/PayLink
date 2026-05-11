@@ -2314,6 +2314,40 @@ export default function PrintCheckPage() {
         </div>
       )}
 
+      {/* Empty state — no check-eligible workers in this run */}
+      {!isPacketMode && checkWorkerItems.length === 0 && items.length > 0 && (
+        <div className="mx-4 my-6 rounded-lg border border-blue-300 bg-blue-50 dark:bg-blue-950/20 p-5 text-sm text-blue-800 dark:text-blue-300 print-hide" data-testid="banner-no-check-workers">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5 text-blue-500" />
+            <div>
+              <p className="font-semibold text-base mb-1">No paper checks to print for this payroll run.</p>
+              <p className="mb-2">
+                All {items.length} employee{items.length !== 1 ? "s" : ""} in this run{" "}
+                {items.length === 1 ? "is" : "are"} set to <strong>Direct Deposit</strong> or another non-check payment method.
+                To print a physical check, change the employee's payment method to <strong>Check</strong> in the payroll run.
+              </p>
+              <Link href="/app/payroll?tab=process">
+                <Button variant="outline" size="sm" data-testid="button-back-to-payroll-empty">
+                  <ArrowLeft className="mr-2 h-4 w-4" />Back to Payroll
+                </Button>
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!isPacketMode && items.length === 0 && run && (
+        <div className="mx-4 my-6 rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900 p-5 text-sm text-muted-foreground print-hide" data-testid="banner-no-items">
+          <p className="font-medium mb-1">No payroll items found for this run.</p>
+          <p>Process the payroll run first to generate employee pay items before printing checks.</p>
+          <Link href="/app/payroll?tab=process" className="mt-3 inline-block">
+            <Button variant="outline" size="sm">
+              <ArrowLeft className="mr-2 h-4 w-4" />Back to Payroll
+            </Button>
+          </Link>
+        </div>
+      )}
+
       <div className="print-content">
         {isPacketMode && company ? (
           <>
