@@ -28918,15 +28918,41 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const allResults: any[] = [];
       const allEvents: any[] = [];
 
+      // Fetch all time entries for the period ONCE (outside the worker loop) to avoid
+      // N redundant DB round-trips — previously called inside the loop for each worker.
+      const allPeriodEntries = await storage.getTimeEntriesByDateRange(run.companyId, run.periodStart, run.periodEnd);
+
+      // Batch-fetch all workers and compliance profiles in parallel before the loop.
+      const workerIds = [...new Set(items.map(i => i.workerId).filter(Boolean))];
+      const [workerList, workerProfileList] = await Promise.all([
+        Promise.all(workerIds.map(id => storage.getWorker(id))),
+        Promise.all(workerIds.map(id => storage.getWorkerComplianceProfile(id))),
+      ]);
+      const workerMap: Record<string, any> = {};
+      const workerProfileMap: Record<string, any> = {};
+      for (let i = 0; i < workerIds.length; i++) {
+        if (workerList[i]) workerMap[workerIds[i]] = workerList[i];
+        if (workerProfileList[i]) workerProfileMap[workerIds[i]] = workerProfileList[i];
+      }
+
+      // Batch-fetch sick leave balances for all workers at once (if sick account exists).
+      const sickBalanceMap: Record<string, number | null> = {};
+      if (sickAccount) {
+        const balanceResults = await Promise.all(workerIds.map(id => storage.getAccrualBalances(id)));
+        for (let i = 0; i < workerIds.length; i++) {
+          const sb = balanceResults[i]?.find((b: any) => b.accrualAccountId === sickAccount.id);
+          sickBalanceMap[workerIds[i]] = sb?.balance != null ? parseFloat(String(sb.balance)) : null;
+        }
+      }
+
       for (const item of items) {
-        const worker = await storage.getWorker(item.workerId);
+        const worker = workerMap[item.workerId];
         if (!worker) continue;
 
-        const workerProfile = await storage.getWorkerComplianceProfile(worker.id);
-        const entries = await storage.getTimeEntriesByDateRange(run.companyId, run.periodStart, run.periodEnd);
-        const workerEntries = entries
-          .filter(e => e.workerId === worker.id)
-          .map(e => ({
+        const workerProfile = workerProfileMap[item.workerId] ?? null;
+        const workerEntries = allPeriodEntries
+          .filter((e: any) => e.workerId === worker.id)
+          .map((e: any) => ({
             date: e.date,
             totalHours: parseFloat(String(e.totalHours ?? 0)),
             breakMinutes: e.breakMinutes ?? 0,
@@ -28974,12 +29000,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
           wageOrderNumber: companyProfile?.wageOrderNumber ?? null,
           sickLeaveMaxHours,
           sickLeaveAccrualDivisor,
-          sickLeaveBalance: await (async () => {
-            if (!sickAccount) return null;
-            const balances = await storage.getAccrualBalances(worker.id);
-            const sb = balances.find((b: any) => b.accrualAccountId === sickAccount.id);
-            return sb?.balance != null ? parseFloat(String(sb.balance)) : null;
-          })(),
+          sickLeaveBalance: sickAccount ? (sickBalanceMap[worker.id] ?? null) : null,
         };
 
         const results = evaluateCompliance(ctx);

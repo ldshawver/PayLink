@@ -913,14 +913,16 @@ function PayrollRunCard({
   const approveMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/payroll-runs/${run.id}/approve`, {});
-      return res.json();
+      return res.json().catch(() => {
+        throw new Error("Payroll approval returned an unexpected response. Please try again.");
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
       toast({ title: "Payroll run approved" });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Approval failed", description: err.message, variant: "destructive" });
     },
   });
 
