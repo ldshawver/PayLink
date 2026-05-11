@@ -28793,7 +28793,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
   });
 
   // POST /api/payroll-runs/:id/preflight — run compliance engine for the payroll run
-  app.post("/api/payroll-runs/:id/preflight", requireAuth, async (req, res) => {
+  app.post("/api/payroll-runs/:id/preflight", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { evaluateCompliance } = await import("./compliance-engine.js");
       const run = await storage.getPayrollRun(req.params.id);

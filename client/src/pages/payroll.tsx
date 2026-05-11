@@ -1084,11 +1084,9 @@ function PayrollRunCard({
   const preflightMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/payroll-runs/${run.id}/preflight`, {});
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.message || "Preflight check failed");
-      }
-      return res.json();
+      return res.json().catch(() => {
+        throw new Error("Compliance check returned an unexpected response. Please try again.");
+      });
     },
     onSuccess: (data) => {
       setPreflightResult(data);
