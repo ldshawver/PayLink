@@ -1017,11 +1017,17 @@ export async function registerRoutes(
         req.session.userId = user.id;
         req.session.username = user.username;
         req.session.mfaEnrollmentRequired = true;
-        return res.json({
-          id: user.id, username: user.username, role: user.role,
-          companyId: user.companyId, workerId: user.workerId, worker: null,
-          mfaEnrollmentRequired: true,
-          message: "MFA enrollment required. You will be redirected to set up two-factor authentication.",
+        return req.session.save((err) => {
+          if (err) {
+            console.error("Session save error (mfa-enroll):", err);
+            return res.status(500).json({ message: "Login failed" });
+          }
+          res.json({
+            id: user.id, username: user.username, role: user.role,
+            companyId: user.companyId, workerId: user.workerId, worker: null,
+            mfaEnrollmentRequired: true,
+            message: "MFA enrollment required. You will be redirected to set up two-factor authentication.",
+          });
         });
       }
 
@@ -1040,7 +1046,13 @@ export async function registerRoutes(
         const w = await storage.getWorker(user.workerId);
         if (w) workerInfo = { id: w.id, firstName: w.firstName, lastName: w.lastName, companyId: w.companyId };
       }
-      res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
+      req.session.save((err) => {
+        if (err) {
+          console.error("Session save error (login):", err);
+          return res.status(500).json({ message: "Login failed" });
+        }
+        res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
+      });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Login failed" });
@@ -1091,7 +1103,13 @@ export async function registerRoutes(
         const w = await storage.getWorker(user.workerId);
         if (w) workerInfo = { id: w.id, firstName: w.firstName, lastName: w.lastName, companyId: w.companyId };
       }
-      res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
+      req.session.save((err) => {
+        if (err) {
+          console.error("Session save error (mfa-verify):", err);
+          return res.status(500).json({ message: "MFA verification failed" });
+        }
+        res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
+      });
     } catch (e) {
       console.error("[MFA login-verify]", e);
       res.status(500).json({ message: "MFA verification failed" });
@@ -1201,7 +1219,13 @@ export async function registerRoutes(
       req.session.userId = user.id;
       req.session.username = user.username;
       const workerInfo = { id: worker.id, firstName: worker.firstName, lastName: worker.lastName, companyId: worker.companyId };
-      res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
+      req.session.save((err) => {
+        if (err) {
+          console.error("Session save error (pin-login):", err);
+          return res.status(500).json({ message: "Login failed" });
+        }
+        res.json({ id: user.id, username: user.username, role: user.role, companyId: user.companyId, workerId: user.workerId, worker: workerInfo });
+      });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Login failed" });
