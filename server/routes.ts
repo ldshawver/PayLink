@@ -722,10 +722,11 @@ async function generateProposalPdf(proposalId: string, proposal: ProposalRow, ac
     fs.writeFileSync(filePath, Buffer.from(pdfBuffer));
     const fileSize = fs.statSync(filePath).size;
 
-    // Create DMS record
+    // Create DMS record — uses document_type='proposal_pdf' (not 'proposal') so it can be
+    // narrowly targeted for cache invalidation without touching uploaded PDF attachments.
     await db.execute(sql`
       INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id)
-      VALUES (${proposal.company_id || null}, ${proposal.contractor_id}, 'worker', 'proposal',
+      VALUES (${proposal.company_id || null}, ${proposal.contractor_id}, 'worker', 'proposal_pdf',
         ${(proposal.title || proposal.proposal_number || "Proposal") + " — Approved PDF"},
         ${"Approved proposal PDF for " + (proposal.proposal_number || proposalId.slice(0, 8))},
         ${"/uploads/" + fileName}, ${fileName}, 'document', ${fileSize}, 'application/pdf',
@@ -10538,6 +10539,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         INSERT INTO dam_documents (company_id, worker_id, owner_type, document_type, title, description, file_path, file_name, file_type, file_size, mime_type, linked_entity_type, linked_entity_id, uploaded_by_user_id)
         VALUES (${proposalCompanyId}, ${user?.workerId ?? null}, ${'company'}, ${'proposal'}, ${req.file.originalname}, ${`Attachment for proposal ${req.params.id}`}, ${filePath}, ${req.file.originalname}, ${req.file.mimetype?.split("/")[0] || null}, ${req.file.size}, ${req.file.mimetype}, ${'proposal'}, ${req.params.id}, ${userId})
       `).catch((err) => { console.error("Failed to mirror attachment to dam_documents:", err); });
+      // Invalidate any cached proposal PDF so the next download regenerates it with the new attachment.
+      // Uses document_type='proposal_pdf' to avoid touching uploaded PDF attachment records.
+      await db.execute(sql`DELETE FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${req.params.id} AND document_type = 'proposal_pdf'`).catch((err) => { console.error("Failed to invalidate cached proposal PDF:", err); });
       res.status(201).json(result.rows[0]);
     } catch (e) { console.error(e); res.status(500).json({ message: "Failed to upload attachment" }); }
   });
@@ -10552,6 +10556,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!auth.ok) return res.status(auth.status).json({ message: auth.message });
       await db.execute(sql`DELETE FROM proposal_attachments WHERE id = ${req.params.id}`);
       await db.execute(sql`DELETE FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${att.proposal_id} AND file_path = ${att.file_path}`).catch(() => {});
+      // Invalidate any cached proposal PDF so the next download regenerates it without the deleted attachment.
+      // Uses document_type='proposal_pdf' to avoid touching uploaded PDF attachment records.
+      await db.execute(sql`DELETE FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${att.proposal_id} AND document_type = 'proposal_pdf'`).catch((err) => { console.error("Failed to invalidate cached proposal PDF:", err); });
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete attachment" }); }
   });
@@ -11636,8 +11643,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!isAdmin && prop.contractor_id !== workerId) return res.status(403).json({ message: "Access denied" });
       if (isAdmin && !isPlatform && user?.companyId && prop.company_id !== user.companyId) return res.status(403).json({ message: "Access denied: proposal belongs to another company" });
 
-      // Check if a stored PDF already exists in DMS
-      const existingPdf = await db.execute(sql`SELECT file_path, file_name FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${req.params.id} AND mime_type = 'application/pdf' ORDER BY created_at DESC LIMIT 1`);
+      // Check if a stored PDF already exists in DMS (document_type='proposal_pdf' targets only
+      // generated PDFs, never uploaded PDF attachments which use document_type='proposal')
+      const existingPdf = await db.execute(sql`SELECT file_path, file_name FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${req.params.id} AND document_type = 'proposal_pdf' ORDER BY created_at DESC LIMIT 1`);
       const stored = firstRow<{ file_path: string | null; file_name: string | null }>(existingPdf);
       let filePath: string | null = null;
       if (stored?.file_path) {
