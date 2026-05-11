@@ -1968,6 +1968,9 @@ export const contractorProposals = pgTable("contractor_proposals", {
   convertedToContractId: varchar("converted_to_contract_id"),
   jobId: varchar("job_id"),
   costCenterId: varchar("cost_center_id"),
+  // ── Client contact (for emailing the proposal portal link) ──
+  clientName: text("client_name"),
+  clientEmail: text("client_email"),
   // ── Extended fields (added via migration) ──
   workType: text("work_type"),
   estimatedHours: numeric("estimated_hours"),

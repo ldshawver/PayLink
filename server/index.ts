@@ -2406,6 +2406,8 @@ Thank you,
     await run("contractor_proposals.estimated_start_date", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS estimated_start_date TEXT`);
     await run("contractor_proposals.estimated_end_date", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS estimated_end_date TEXT`);
     await run("contractor_proposals.trade_category", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS trade_category TEXT`);
+    await run("contractor_proposals.client_name", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS client_name TEXT`);
+    await run("contractor_proposals.client_email", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS client_email TEXT`);
 
     // ── contractor_proposals.converted_to_contract_id ────────────────────────
     await run("contractor_proposals.converted_to_contract_id", sql`ALTER TABLE contractor_proposals ADD COLUMN IF NOT EXISTS converted_to_contract_id VARCHAR`);

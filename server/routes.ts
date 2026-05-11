@@ -9808,6 +9808,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const count = Number((countResult.rows[0] as any)?.c ?? 0);
       const proposalNumber = `CP-${workerId.slice(-4).toUpperCase()}-${String(count + 1).padStart(4, "0")}`;
 
+      const { clientName, clientEmail } = req.body;
       const result = await db.execute(sql`
         INSERT INTO contractor_proposals (
           company_id, contractor_id, proposal_number, title, description, issue_date, expiration_date,
@@ -9816,7 +9817,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           work_type, template_id, branding_id, payment_type, trade_offered, trade_value, trade_terms,
           estimated_hours, estimated_labor_budget,
           cost_center, project_class, labor_materials_split, urgency, site_notes,
-          client_requirements, estimated_start_date, estimated_end_date, trade_category
+          client_requirements, estimated_start_date, estimated_end_date, trade_category,
+          client_name, client_email
         ) VALUES (
           ${companyId || null}, ${workerId}, ${proposalNumber}, ${title || null}, ${description || null},
           ${issueDate}, ${expirationDate || null}, ${amount || null}, ${taxAmount || null},
@@ -9826,7 +9828,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           ${workType || null}, ${safeTemplateId}, ${autoBrandingId}, ${paymentType || null}, ${tradeOffered || null}, ${tradeValue || null}, ${tradeTerms || null},
           ${estimatedHours != null ? Number(estimatedHours) : null}, ${estimatedLaborBudget != null ? Number(estimatedLaborBudget) : null},
           ${costCenter || null}, ${projectClass || null}, ${laborMaterialsSplit || null}, ${urgency || null}, ${siteNotes || null},
-          ${clientRequirements || null}, ${estimatedStartDate || null}, ${estimatedEndDate || null}, ${tradeCategory || null}
+          ${clientRequirements || null}, ${estimatedStartDate || null}, ${estimatedEndDate || null}, ${tradeCategory || null},
+          ${clientName || null}, ${clientEmail || null}
         )
         RETURNING *
       `);
@@ -9859,7 +9862,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
               workType, templateId, paymentType, tradeOffered, tradeValue, tradeTerms,
               estimatedHours, estimatedLaborBudget,
               costCenter, projectClass, laborMaterialsSplit, urgency, siteNotes,
-              clientRequirements, estimatedStartDate, estimatedEndDate, tradeCategory } = req.body;
+              clientRequirements, estimatedStartDate, estimatedEndDate, tradeCategory,
+              clientName, clientEmail } = req.body;
 
       // Tenant guard on templateId — same rule as POST. Rejects cross-tenant
       // template ID injection on update.
@@ -9916,6 +9920,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           estimated_start_date = COALESCE(${estimatedStartDate ?? null}, estimated_start_date),
           estimated_end_date = COALESCE(${estimatedEndDate ?? null}, estimated_end_date),
           trade_category = COALESCE(${tradeCategory ?? null}, trade_category),
+          client_name = COALESCE(${clientName ?? null}, client_name),
+          client_email = COALESCE(${clientEmail ?? null}, client_email),
           updated_at = NOW()
         WHERE id = ${req.params.id}
       `);
@@ -10573,7 +10579,49 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const shareToken = proposal.share_token || crypto.randomBytes(32).toString("hex");
       await db.execute(sql`UPDATE contractor_proposals SET status = 'sent', sent_at = NOW(), updated_at = NOW(), share_token = ${shareToken} WHERE id = ${req.params.id}`);
       await logProposalEvent(req.params.id, "sent", oldStatus, "sent", req);
-      res.json({ message: "Proposal marked as sent", shareToken });
+
+      // Send email to client if a client email is stored on the proposal
+      let emailStatus: "sent" | "failed" | "skipped_no_client_email" = "skipped_no_client_email";
+      if (proposal.client_email) {
+        try {
+          const { sendGenericNotificationEmail } = await import("./notifications");
+          const baseUrl = getAppBaseUrl(req);
+          const portalUrl = `${baseUrl}/proposal/${req.params.id}?token=${shareToken}`;
+          const recipientName = proposal.client_name || "Valued Client";
+          const proposalTitle = proposal.title || "Proposal";
+          const totalAmount = proposal.amount != null
+            ? new Intl.NumberFormat("en-US", { style: "currency", currency: proposal.currency || "USD" }).format(Number(proposal.amount))
+            : null;
+          const expirationDate = proposal.expiration_date
+            ? new Date(proposal.expiration_date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
+            : null;
+
+          let bodyLines = [`A proposal has been prepared for you: <strong>${proposalTitle}</strong>.`];
+          if (totalAmount) bodyLines.push(`Total Amount: <strong>${totalAmount}</strong>`);
+          if (expirationDate) bodyLines.push(`This proposal expires on <strong>${expirationDate}</strong>.`);
+          bodyLines.push(`Click the button below to review and approve it online.`);
+
+          const emailResult = await sendGenericNotificationEmail({
+            recipientName,
+            email: proposal.client_email,
+            title: `Proposal Ready: ${proposalTitle}`,
+            body: bodyLines.join("<br>"),
+            actionUrl: portalUrl,
+          });
+          if (emailResult.sent) {
+            console.log(`[Proposals] Client notification email sent to ${proposal.client_email} for proposal ${req.params.id}`);
+            emailStatus = "sent";
+          } else {
+            console.error(`[Proposals] Email to ${proposal.client_email} for proposal ${req.params.id} failed: ${emailResult.error}`);
+            emailStatus = "failed";
+          }
+        } catch (emailErr: any) {
+          console.error(`[Proposals] Failed to send client email for proposal ${req.params.id}:`, emailErr.message);
+          emailStatus = "failed";
+        }
+      }
+
+      res.json({ message: "Proposal marked as sent", shareToken, emailStatus });
     } catch (e) { res.status(500).json({ message: "Failed to send proposal" }); }
   });
 

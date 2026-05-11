@@ -42,6 +42,7 @@ interface Proposal {
   scheduleNotes?: string; internalNotes?: string; clientMessage?: string; estimatorName?: string;
   paymentTerms?: string; changeOrderTerms?: string; notes?: string; terms?: string;
   version?: number; revisionOfId?: string; isChangeOrder?: boolean;
+  clientName?: string; clientEmail?: string;
   approvalName?: string; approvalEmail?: string; approvalAt?: string;
   aiGeneratedSummary?: string; sentAt?: string; viewedAt?: string; createdAt: string;
   workType?: string; paymentType?: string; estimatedHours?: string; estimatedLaborBudget?: string;
@@ -2318,6 +2319,18 @@ function ProposalBuilder({
                   <Label>Project Description</Label>
                   <Textarea value={form.description ?? current.description ?? ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
                     placeholder="Brief project overview..." rows={3} disabled={!canEdit} data-testid="textarea-description" />
+                </div>
+                <div>
+                  <Label>Client Contact Name</Label>
+                  <Input value={form.clientName ?? current.clientName ?? ""} onChange={e => setForm(f => ({ ...f, clientName: e.target.value }))}
+                    placeholder="e.g. Jane Smith" disabled={!canEdit} data-testid="input-client-name" />
+                  <p className="text-xs text-muted-foreground mt-1">Used when emailing the proposal</p>
+                </div>
+                <div>
+                  <Label>Client Email</Label>
+                  <Input type="email" value={form.clientEmail ?? current.clientEmail ?? ""} onChange={e => setForm(f => ({ ...f, clientEmail: e.target.value }))}
+                    placeholder="client@example.com" disabled={!canEdit} data-testid="input-client-email" />
+                  <p className="text-xs text-muted-foreground mt-1">A direct link will be emailed when marked as sent</p>
                 </div>
                 <div className="col-span-2">
                   <Label>Client Message (cover note)</Label>
