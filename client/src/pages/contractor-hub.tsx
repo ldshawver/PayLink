@@ -1862,6 +1862,8 @@ function ProposalBuilder({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
   const [aiAction, setAiAction] = useState("");
+  const [showSendDialog, setShowSendDialog] = useState(false);
+  const [sendEmailDraft, setSendEmailDraft] = useState("");
 
   const isNew = !proposal;
   const proposalId = proposal?.id;
@@ -1951,6 +1953,28 @@ function ProposalBuilder({
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] }); toast({ title: "New revision created" }); onClose(); },
     onError: (e: any) => toast({ title: e?.message || "Failed to create revision", variant: "destructive" }),
   });
+
+  function handleMarkSent() {
+    const existingEmail = form.clientEmail ?? current.clientEmail ?? "";
+    setSendEmailDraft(existingEmail);
+    setShowSendDialog(true);
+  }
+
+  async function confirmSend() {
+    const persistedEmail = proposal?.clientEmail ?? "";
+    if (sendEmailDraft && sendEmailDraft !== persistedEmail) {
+      try {
+        await apiRequest("PATCH", `/api/contractor-proposals/${proposalId}`, { clientEmail: sendEmailDraft });
+        setForm(f => ({ ...f, clientEmail: sendEmailDraft }));
+        queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
+      } catch (e: any) {
+        toast({ title: "Failed to save email", description: e?.message || undefined, variant: "destructive" });
+        return;
+      }
+    }
+    setShowSendDialog(false);
+    actionMutation.mutate({ action: "send" });
+  }
 
   const canEdit = isNew || ["draft", "revision_requested"].includes(proposal?.status || "draft");
   const canSubmit = !isNew && ["draft", "revision_requested"].includes(proposal?.status || "");
@@ -2066,7 +2090,57 @@ function ProposalBuilder({
   const discount = parseFloat(current.discountAmount ?? "0");
   const total = subtotal + tax - discount;
 
+  const resolvedClientEmail = current.clientEmail ?? "";
+
   return (
+    <>
+    <Dialog open={showSendDialog} onOpenChange={setShowSendDialog}>
+      <DialogContent data-testid="dialog-mark-sent">
+        <DialogHeader>
+          <DialogTitle>Mark Proposal as Sent</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          {resolvedClientEmail ? (
+            <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-3 text-sm text-blue-800 dark:text-blue-300">
+              <Mail className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>Email will be sent to: <strong>{resolvedClientEmail}</strong></span>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {sendEmailDraft ? (
+                <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-3 text-sm text-blue-800 dark:text-blue-300">
+                  <Mail className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>Email will be sent to: <strong>{sendEmailDraft}</strong></span>
+                </div>
+              ) : (
+                <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 p-3 text-sm text-amber-800 dark:text-amber-300">
+                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>No client email is set. The proposal status will be updated, but <strong>no notification email will be sent</strong> to the client.</span>
+                </div>
+              )}
+              <div className="space-y-1">
+                <Label className="text-sm">Add a client email (optional)</Label>
+                <Input
+                  type="email"
+                  placeholder="client@example.com"
+                  value={sendEmailDraft}
+                  onChange={e => setSendEmailDraft(e.target.value)}
+                  data-testid="input-send-email-override"
+                />
+                <p className="text-xs text-muted-foreground">If provided, it will be saved and a notification will be sent.</p>
+              </div>
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setShowSendDialog(false)} data-testid="btn-cancel-mark-sent">Cancel</Button>
+          <Button onClick={confirmSend} disabled={actionMutation.isPending} data-testid="btn-confirm-mark-sent">
+            {actionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+            Mark as Sent
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     <Sheet open={open} onOpenChange={() => onClose()}>
       <SheetContent side="right" className="w-full max-w-4xl p-0 flex flex-col">
         <SheetHeader className="px-6 py-4 border-b shrink-0">
@@ -2099,7 +2173,7 @@ function ProposalBuilder({
                 </Button>
               )}
               {canSend && (
-                <Button size="sm" variant="outline" onClick={() => actionMutation.mutate({ action: "send" })} disabled={actionMutation.isPending} data-testid="btn-send-proposal">
+                <Button size="sm" variant="outline" onClick={handleMarkSent} disabled={actionMutation.isPending} data-testid="btn-send-proposal">
                   {actionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Send className="h-4 w-4 mr-1" />}
                   Mark Sent
                 </Button>
@@ -2714,6 +2788,7 @@ function ProposalBuilder({
         </Tabs>
       </SheetContent>
     </Sheet>
+    </>
   );
 }
 
