@@ -186,30 +186,33 @@ export async function provisionDemoTenant(
       (${companyId}, '401(k) Employer Match','deduction','retirement','percentage', '0.03',  TRUE, 'all', TRUE, NULL,                NULL, 'pre_tax')
   `);
 
-  // ── 6. Roles ─────────────────────────────────────────────────────────────
-  const roleAdminRes = await tx.execute(sql`
+  // ── 6. Roles — idempotent upsert (unique constraint on name) ─────────────
+  await tx.execute(sql`
     INSERT INTO roles (name, description, level, is_system, capabilities)
     VALUES ('Demo Admin', 'Full administrative access to all modules', 1, FALSE,
       'payroll,timeclock,scheduling,hr,reports,documents,settings')
-    RETURNING id
+    ON CONFLICT (name) DO NOTHING
   `);
-  const roleAdminId = rowId(roleAdminRes);
+  const roleAdminRow = await tx.execute(sql`SELECT id FROM roles WHERE name = 'Demo Admin'`);
+  const roleAdminId = (roleAdminRow.rows[0] as any).id as string;
 
-  const roleMgrRes = await tx.execute(sql`
+  await tx.execute(sql`
     INSERT INTO roles (name, description, level, is_system, capabilities)
     VALUES ('Demo Manager', 'Department-level management access', 3, FALSE,
       'timeclock,scheduling,hr_view,reports_view')
-    RETURNING id
+    ON CONFLICT (name) DO NOTHING
   `);
-  const roleMgrId = rowId(roleMgrRes);
+  const roleMgrRow = await tx.execute(sql`SELECT id FROM roles WHERE name = 'Demo Manager'`);
+  const roleMgrId = (roleMgrRow.rows[0] as any).id as string;
 
-  const roleEmpRes = await tx.execute(sql`
+  await tx.execute(sql`
     INSERT INTO roles (name, description, level, is_system, capabilities)
     VALUES ('Demo Employee', 'Self-service access only', 5, FALSE,
       'timeclock_self,schedule_self,payslip_self')
-    RETURNING id
+    ON CONFLICT (name) DO NOTHING
   `);
-  const roleEmpId = rowId(roleEmpRes);
+  const roleEmpRow = await tx.execute(sql`SELECT id FROM roles WHERE name = 'Demo Employee'`);
+  const roleEmpId = (roleEmpRow.rows[0] as any).id as string;
 
   // Role permission matrix
   const resources = ['payroll','timeclock','scheduling','hr','reports','documents','settings','users','audit_log'];

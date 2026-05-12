@@ -1259,10 +1259,21 @@ export async function registerRoutes(
   app.get("/api/payroll-summary", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { year, quarter, companyId } = req.query;
-      const allRuns = companyId && companyId !== "all"
-        ? await storage.getPayrollRuns(companyId as string)
-        : await storage.getPayrollRuns();
-      const processedRuns = allRuns.filter(r => r.status === "processed");
+      // ── Tenant isolation: non-platform users are ALWAYS scoped to their own company.
+      // A tenant admin must never see another company's payroll summary, regardless
+      // of what ?companyId is passed.  Platform users may filter by ?companyId param.
+      const summaryUser = await storage.getUser(req.session.userId!);
+      const isTenantSummaryUser = !isPlatformUser(summaryUser?.role) && !!summaryUser?.companyId;
+      const effectiveSummaryCo = isTenantSummaryUser
+        ? summaryUser!.companyId!
+        : (companyId && companyId !== "all" ? companyId as string : undefined);
+      const allRuns = await storage.getPayrollRuns(effectiveSummaryCo);
+      // Never expose demo-company runs in normal payroll-summary responses.
+      // Demo companies are flagged; filter them out for tenant users so demo
+      // seed data doesn't pollute real aggregates.
+      const isDemo = (r: typeof allRuns[0]) => (r as any).isDemo === true;
+      const allRunsClean = isTenantSummaryUser ? allRuns : allRuns.filter(r => !isDemo(r));
+      const processedRuns = allRunsClean.filter(r => r.status === "processed" || r.status === "paid");
 
       let filteredRuns = processedRuns;
       if (year) {
@@ -1280,11 +1291,11 @@ export async function registerRoutes(
         });
       }
 
-      const allWorkers = await storage.getWorkers(companyId && companyId !== "all" ? companyId as string : undefined);
+      const allWorkers = await storage.getWorkers(effectiveSummaryCo);
       const workerMap: Record<string, typeof allWorkers[0]> = {};
       for (const w of allWorkers) workerMap[w.id] = w;
 
-      const companyDeductionsList = await storage.getTaxesDeductions(companyId && companyId !== "all" ? companyId as string : undefined);
+      const companyDeductionsList = await storage.getTaxesDeductions(effectiveSummaryCo);
 
       const workerTotals: Record<string, {
         workerId: string; grossPay: number; regularPay: number; overtimePay: number; doubleTimePay: number;
@@ -1726,9 +1737,9 @@ export async function registerRoutes(
 
   app.post("/api/time-clock/punch", async (req, res) => {
     try {
-      const { workerId, companyId, punchType, employeeNumber, pin } = req.body;
-      if (!workerId || !companyId || !punchType) {
-        return res.status(400).json({ message: "workerId, companyId, and punchType are required" });
+      const { workerId, punchType, employeeNumber, pin } = req.body;
+      if (!workerId || !punchType) {
+        return res.status(400).json({ message: "workerId and punchType are required" });
       }
       const worker = await storage.getWorker(workerId);
       if (!worker) return res.status(404).json({ message: "Worker not found" });
@@ -1741,6 +1752,12 @@ export async function registerRoutes(
       }
       if (worker.workerType === "contractor" && worker.contractorType === "invoice") {
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in/out." });
+      }
+      // Derive companyId from the worker record — never trust the request body for this.
+      // A spoofed companyId in the body would stamp punches with the wrong company.
+      const companyId = worker.companyId;
+      if (!companyId) {
+        return res.status(400).json({ message: "Worker is not assigned to a company" });
       }
       // Load company timezone + enforcement settings in one query
       const companyMeta = await db.execute(sql`SELECT station_enforcement_enabled, timezone FROM companies WHERE id = ${worker.companyId}`);
@@ -3158,6 +3175,22 @@ export async function registerRoutes(
 
         if (isVolunteer) {
           console.log(`[PAYROLL] Skipping volunteer worker: ${worker.firstName} ${worker.lastName} (workerGroup="${workerGroup}")`);
+          continue;
+        }
+
+        // ── Zero-gross guard ─────────────────────────────────────────────────
+        // An hourly/commission-only worker with $0 gross pay produces a meaningless
+        // zero-value paycheck. Skip them and log — they probably have no approved
+        // time entries or commission records this period.
+        // Salary workers are never skipped here (their salary base is always > 0).
+        const preGateGross = grossPay;
+        const compTypeForGate = (worker as any).compensationType || "hourly";
+        const isCommissionOnlyForGate = compTypeForGate === "commission";
+        if (preGateGross <= 0 && worker.payType !== "salary" && !isOwnerDist) {
+          const skipReason = isCommissionOnlyForGate
+            ? "commission-only worker with no approved commissions this period"
+            : "hourly worker with no approved time entries this period";
+          console.log(`[PAYROLL] Skipping ${worker.firstName} ${worker.lastName} — $0 gross (${skipReason})`);
           continue;
         }
 
@@ -5349,7 +5382,7 @@ export async function registerRoutes(
   });
 
   // Recalculate YTD for all payroll items of a company — fixes ytd_gross/ytd_net stored values
-  app.post("/api/payroll/recalculate-ytd", requireRole("admin"), async (req, res) => {
+  app.post("/api/payroll/recalculate-ytd", requireAuth, requireRole("admin"), async (req, res) => {
     try {
       const { companyId } = req.body;
       if (!companyId) return res.status(400).json({ message: "companyId required" });
@@ -6109,6 +6142,18 @@ export async function registerRoutes(
       const data = { ...req.body };
       if (data.clockIn) data.clockIn = new Date(data.clockIn);
       if (data.clockOut) data.clockOut = new Date(data.clockOut);
+
+      // ── Tenant isolation: verify the target worker belongs to the requestor's company ──
+      const teActingUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(teActingUser?.role) && teActingUser?.companyId && data.workerId) {
+        const targetWorker = await storage.getWorker(data.workerId);
+        if (targetWorker && targetWorker.companyId !== teActingUser.companyId) {
+          return res.status(403).json({ message: "Forbidden: worker belongs to a different company" });
+        }
+        // Stamp companyId from session to prevent spoofed companyId in body
+        data.companyId = teActingUser.companyId;
+      }
+
       const entry = await storage.createTimeEntry(data);
       res.status(201).json(entry);
     } catch (error) {
@@ -6263,14 +6308,15 @@ export async function registerRoutes(
   app.delete("/api/time-entries/:id", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
       const actingUser = await storage.getUser(req.session.userId!);
+      // Use single-entry lookup — avoids loading all entries (O(n) performance bug fix)
+      const existing = await storage.getTimeEntry(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Time entry not found" });
       // Company ownership check: tenant users can only delete entries in their own company
-      const allEntries = await storage.getTimeEntries();
-      const existing = allEntries.find(e => e.id === req.params.id);
-      if (existing && !isPlatformUser(actingUser?.role) && actingUser?.companyId && existing.companyId !== actingUser.companyId) {
+      if (!isPlatformUser(actingUser?.role) && actingUser?.companyId && existing.companyId !== actingUser.companyId) {
         return res.status(403).json({ message: "Forbidden: entry belongs to a different company" });
       }
       // Hierarchy check: pure managers/supervisors can only delete entries for direct reports (or self)
-      if (existing && actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
+      if (actingUser && !isAdminRole(actingUser.role) && isManagerRole(actingUser.role) && actingUser.workerId) {
         if (existing.workerId !== actingUser.workerId) {
           const subResult = await db.execute(
             sql`SELECT id FROM workers WHERE id = ${existing.workerId} AND manager_id = ${actingUser.workerId}`
@@ -6281,6 +6327,17 @@ export async function registerRoutes(
         }
       }
       await storage.deleteTimeEntry(req.params.id);
+      // Audit: write to authorization_audit_log so time-entry deletions are traceable
+      try {
+        await db.execute(sql`
+          INSERT INTO authorization_audit_log (company_id, actor_id, action, resource_type, resource_id, metadata)
+          VALUES (
+            ${existing.companyId}, ${req.session.userId!}, 'delete',
+            'time_entry', ${req.params.id},
+            ${JSON.stringify({ workerId: existing.workerId, date: existing.date, totalHours: existing.totalHours })}::jsonb
+          )
+        `);
+      } catch (_auditErr) { /* non-fatal */ }
       res.json({ message: "Time entry deleted" });
     } catch (error) {
       console.error(error);
@@ -6714,6 +6771,11 @@ export async function registerRoutes(
       if (!run) {
         return res.status(404).json({ message: "Payroll run not found" });
       }
+      // Tenant isolation: non-platform users may only read runs in their own company
+      const runFetchUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(runFetchUser?.role) && runFetchUser?.companyId && run.companyId !== runFetchUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
+      }
       res.json(run);
     } catch (error) {
       console.error(error);
@@ -6723,6 +6785,13 @@ export async function registerRoutes(
 
   app.get("/api/payroll-runs/:id/items", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
+      // Verify run ownership before returning items — items expose worker pay details
+      const runForItems = await storage.getPayrollRun(req.params.id);
+      if (!runForItems) return res.status(404).json({ message: "Payroll run not found" });
+      const itemsFetchUser = await storage.getUser(req.session.userId!);
+      if (!isPlatformUser(itemsFetchUser?.role) && itemsFetchUser?.companyId && runForItems.companyId !== itemsFetchUser.companyId) {
+        return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
+      }
       const items = await storage.getPayrollItems(req.params.id);
       res.json(items);
     } catch (error) {
@@ -7324,7 +7393,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/payroll-runs/:id", requireRole("admin", "manager"), async (req, res) => {
+  app.patch("/api/payroll-runs/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const existing = await storage.getPayrollRun(req.params.id as string);
       if (!existing) return res.status(404).json({ message: "Payroll run not found" });
@@ -7334,12 +7403,20 @@ export async function registerRoutes(
       if (isTenant && existing.companyId !== actingUser!.companyId) {
         return res.status(403).json({ message: "Forbidden: payroll run belongs to a different company" });
       }
-      const lockedCheck = existing.lockedAt || existing.isLocked;
-      if (lockedCheck) {
-        const allowed = ["achStatus", "achBatchId", "achSubmittedAt", "achSettledAt", "fundingAccountId"];
-        const attempted = Object.keys(req.body).filter(k => !allowed.includes(k));
+      // ── Guard: locked runs + paid/submitted runs — only ACH metadata fields allowed ──
+      // A run is immutable once locked OR once real money has moved (paid/submitted).
+      // Platform super-admins bypass this check (they use the dedicated unlock endpoint).
+      const MUTABLE_FIELDS = ["achStatus", "achBatchId", "achSubmittedAt", "achSettledAt", "fundingAccountId", "needsRecalculation", "failureCode", "failureReason"];
+      const isImmutable = (existing.lockedAt || existing.isLocked)
+        || (existing.status === "paid" || existing.status === "submitted");
+      const isPlatformSuper = actingUser?.role === "platform_super_admin";
+      if (isImmutable && !isPlatformSuper) {
+        const attempted = Object.keys(req.body).filter(k => !MUTABLE_FIELDS.includes(k));
         if (attempted.length > 0) {
-          return res.status(409).json({ message: "Payroll run is locked and cannot be modified" });
+          const reason = (existing.status === "paid" || existing.status === "submitted")
+            ? `Cannot modify a ${existing.status} payroll run`
+            : "Payroll run is locked and cannot be modified";
+          return res.status(409).json({ message: reason, blockedFields: attempted });
         }
       }
       const run = await storage.updatePayrollRun(req.params.id as string, req.body);
@@ -16519,20 +16596,25 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   });
 
   // ── Payroll Payment Methods ───────────────────────────────────────────────
-  app.get("/api/payroll-payment-methods", async (req, res) => {
+  app.get("/api/payroll-payment-methods", requireAuth, async (req, res) => {
     try {
-      const companyId = req.query.companyId as string | undefined;
+      const user = await storage.getUser(req.session.userId!);
+      let companyId = req.query.companyId as string | undefined;
+      // Tenant users may only fetch payment methods for their own company
+      if (!isPlatformUser(user?.role) && user?.companyId) {
+        companyId = user.companyId;
+      }
       res.json(await storage.getPayrollPaymentMethods(companyId));
     } catch (e) { res.status(500).json({ message: "Failed to fetch payment methods" }); }
   });
 
-  app.post("/api/payroll-payment-methods", requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/payroll-payment-methods", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       res.status(201).json(await storage.createPayrollPaymentMethod(req.body));
     } catch (e) { res.status(500).json({ message: "Failed to create payment method" }); }
   });
 
-  app.patch("/api/payroll-payment-methods/:id", requireRole("admin", "manager"), async (req, res) => {
+  app.patch("/api/payroll-payment-methods/:id", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const r = await storage.updatePayrollPaymentMethod(req.params.id, req.body);
       if (!r) return res.status(404).json({ message: "Not found" });
@@ -16540,14 +16622,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to update payment method" }); }
   });
 
-  app.delete("/api/payroll-payment-methods/:id", requireRole("admin"), async (req, res) => {
+  app.delete("/api/payroll-payment-methods/:id", requireAuth, requireRole("admin"), async (req, res) => {
     try {
       await storage.deletePayrollPaymentMethod(req.params.id);
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete payment method" }); }
   });
 
-  app.post("/api/payroll-payment-methods/quick-setup", requireRole("admin", "manager"), async (req, res) => {
+  app.post("/api/payroll-payment-methods/quick-setup", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { companyId } = req.body;
       const existing = await storage.getPayrollPaymentMethods(companyId);
@@ -16634,8 +16716,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const user = await storage.getUser(req.session.userId!);
       let companyId = req.query.companyId as string | undefined;
       const payrollRunId = req.query.payrollRunId as string | undefined;
-      // Managers are scoped to their company
-      if (user?.role === "manager" && user.companyId) {
+      // All non-platform users (admins and managers alike) are force-scoped to their company.
+      // This prevents a tenant admin passing ?companyId=<other_company> to read cross-company records.
+      if (!isPlatformUser(user?.role) && user?.companyId) {
         companyId = user.companyId;
       }
       res.json(await storage.getPayrollPaymentRecords(companyId, payrollRunId));
@@ -16646,8 +16729,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const user = await storage.getUser(req.session.userId!);
       let companyId = req.query.companyId as string | undefined;
-      // Managers are scoped to their company
-      if (user?.role === "manager" && user.companyId) {
+      // All non-platform users force-scoped to their company
+      if (!isPlatformUser(user?.role) && user?.companyId) {
         companyId = user.companyId;
       }
       const taxYear = req.query.taxYear ? Number(req.query.taxYear) : new Date().getFullYear();
