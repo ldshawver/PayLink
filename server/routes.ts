@@ -870,7 +870,7 @@ async function recalcProposalTotals(proposalId: string) {
 }
 
 // Helper: log a proposal approval event
-async function logProposalEvent(proposalId: string, eventType: string, oldStatus: string | null, newStatus: string | null, req: any, actorName?: string, actorEmail?: string) {
+async function logProposalEvent(proposalId: string, eventType: string, oldStatus: string | null, newStatus: string | null, req: any, actorName?: string, actorEmail?: string, notes?: string) {
   try {
     const userId = (req.session as any)?.userId;
     let userName = actorName;
@@ -881,8 +881,8 @@ async function logProposalEvent(proposalId: string, eventType: string, oldStatus
     }
     const ip = req.ip || req.socket?.remoteAddress || null;
     await db.execute(sql`
-      INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, actor_email, ip_address)
-      VALUES (${proposalId}, ${eventType}, ${oldStatus}, ${newStatus}, ${userId ?? null}, ${userName ?? null}, ${userEmail ?? null}, ${ip})
+      INSERT INTO proposal_approval_events (proposal_id, event_type, old_status, new_status, actor_user_id, actor_name, actor_email, notes, ip_address)
+      VALUES (${proposalId}, ${eventType}, ${oldStatus}, ${newStatus}, ${userId ?? null}, ${userName ?? null}, ${userEmail ?? null}, ${notes ?? null}, ${ip})
     `);
   } catch (e) { console.warn("Failed to log proposal event:", e); }
 }
@@ -10609,15 +10609,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       // Generate a share token if one doesn't exist yet
       const shareToken = proposal.share_token || crypto.randomBytes(32).toString("hex");
       await db.execute(sql`UPDATE contractor_proposals SET status = 'sent', sent_at = NOW(), updated_at = NOW(), share_token = ${shareToken} WHERE id = ${req.params.id}`);
-      await logProposalEvent(req.params.id, "sent", oldStatus, "sent", req);
 
       // Send email to client if a client email is stored on the proposal
       let emailStatus: "sent" | "failed" | "skipped_no_client_email" = "skipped_no_client_email";
+      let sentEventNotes: string | undefined;
+      const baseUrl = getAppBaseUrl(req);
+      const portalUrl = `${baseUrl}/proposal/${req.params.id}?token=${shareToken}`;
       if (proposal.client_email) {
         try {
           const { sendGenericNotificationEmail } = await import("./notifications");
-          const baseUrl = getAppBaseUrl(req);
-          const portalUrl = `${baseUrl}/proposal/${req.params.id}?token=${shareToken}`;
           const recipientName = proposal.client_name || "Valued Client";
           const proposalTitle = proposal.title || "Proposal";
           const totalAmount = proposal.amount != null
@@ -10642,15 +10642,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           if (emailResult.sent) {
             console.log(`[Proposals] Client notification email sent to ${proposal.client_email} for proposal ${req.params.id}`);
             emailStatus = "sent";
+            sentEventNotes = `Email sent to ${proposal.client_email} | Portal: ${portalUrl}`;
           } else {
             console.error(`[Proposals] Email to ${proposal.client_email} for proposal ${req.params.id} failed: ${emailResult.error}`);
             emailStatus = "failed";
+            sentEventNotes = `Email delivery failed for ${proposal.client_email} | Portal: ${portalUrl}`;
           }
         } catch (emailErr: any) {
           console.error(`[Proposals] Failed to send client email for proposal ${req.params.id}:`, emailErr.message);
           emailStatus = "failed";
+          sentEventNotes = `Email delivery failed for ${proposal.client_email} | Portal: ${portalUrl}`;
         }
+      } else {
+        sentEventNotes = `No client email on file | Portal: ${portalUrl}`;
       }
+      await logProposalEvent(req.params.id, "sent", oldStatus, "sent", req, undefined, undefined, sentEventNotes);
 
       res.json({ message: "Proposal marked as sent", shareToken, emailStatus });
     } catch (e) { res.status(500).json({ message: "Failed to send proposal" }); }

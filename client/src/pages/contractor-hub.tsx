@@ -2758,7 +2758,25 @@ function ProposalBuilder({
                       <div className="pb-4">
                         <p className="text-sm font-medium capitalize">{ev.eventType.replace(/_/g, " ")}</p>
                         <p className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} — {ev.actorName || "System"}</p>
-                        {ev.notes && <p className="text-xs text-muted-foreground mt-0.5">{ev.notes}</p>}
+                        {ev.notes && ev.eventType === "sent" && (() => {
+                          const parts = ev.notes.split(" | Portal: ");
+                          const label = parts[0];
+                          const link = parts[1];
+                          return (
+                            <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
+                              <p>{label}</p>
+                              {link && (
+                                <p>
+                                  View link:{" "}
+                                  <a href={link} target="_blank" rel="noopener noreferrer" className="text-primary underline break-all" data-testid="link-sent-portal">
+                                    {link}
+                                  </a>
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })()}
+                        {ev.notes && ev.eventType !== "sent" && <p className="text-xs text-muted-foreground mt-0.5">{ev.notes}</p>}
                       </div>
                     </div>
                   ))}
