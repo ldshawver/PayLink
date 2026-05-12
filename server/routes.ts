@@ -10565,7 +10565,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       `).catch((err) => { console.error("Failed to mirror attachment to dam_documents:", err); });
       // Invalidate any cached proposal PDF so the next download regenerates it with the new attachment.
       // Uses document_type='proposal_pdf' to avoid touching uploaded PDF attachment records.
-      await db.execute(sql`DELETE FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${req.params.id} AND document_type = 'proposal_pdf'`).catch((err) => { console.error("Failed to invalidate cached proposal PDF:", err); });
+      await (async () => {
+        try {
+          const { resolveDamFilePath } = await import("./dam-paths");
+          const cached = await db.execute(sql`SELECT file_path FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${req.params.id} AND document_type = 'proposal_pdf'`);
+          await db.execute(sql`DELETE FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${req.params.id} AND document_type = 'proposal_pdf'`);
+          for (const row of cached.rows as Array<{ file_path: string | null }>) {
+            if (row.file_path) {
+              const abs = resolveDamFilePath(row.file_path, process.cwd());
+              if (abs) await fs.promises.unlink(abs).catch((e: NodeJS.ErrnoException) => {
+                if (e.code !== "ENOENT") console.error("Failed to delete cached proposal PDF file:", e);
+              });
+            }
+          }
+        } catch (err) { console.error("Failed to invalidate cached proposal PDF:", err); }
+      })();
       res.status(201).json(result.rows[0]);
     } catch (e) { console.error(e); res.status(500).json({ message: "Failed to upload attachment" }); }
   });
@@ -10582,7 +10596,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       await db.execute(sql`DELETE FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${att.proposal_id} AND file_path = ${att.file_path}`).catch(() => {});
       // Invalidate any cached proposal PDF so the next download regenerates it without the deleted attachment.
       // Uses document_type='proposal_pdf' to avoid touching uploaded PDF attachment records.
-      await db.execute(sql`DELETE FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${att.proposal_id} AND document_type = 'proposal_pdf'`).catch((err) => { console.error("Failed to invalidate cached proposal PDF:", err); });
+      await (async () => {
+        try {
+          const { resolveDamFilePath } = await import("./dam-paths");
+          const cached = await db.execute(sql`SELECT file_path FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${att.proposal_id} AND document_type = 'proposal_pdf'`);
+          await db.execute(sql`DELETE FROM dam_documents WHERE linked_entity_type = 'proposal' AND linked_entity_id = ${att.proposal_id} AND document_type = 'proposal_pdf'`);
+          for (const row of cached.rows as Array<{ file_path: string | null }>) {
+            if (row.file_path) {
+              const abs = resolveDamFilePath(row.file_path, process.cwd());
+              if (abs) await fs.promises.unlink(abs).catch((e: NodeJS.ErrnoException) => {
+                if (e.code !== "ENOENT") console.error("Failed to delete cached proposal PDF file:", e);
+              });
+            }
+          }
+        } catch (err) { console.error("Failed to invalidate cached proposal PDF:", err); }
+      })();
       res.json({ message: "Deleted" });
     } catch (e) { res.status(500).json({ message: "Failed to delete attachment" }); }
   });
