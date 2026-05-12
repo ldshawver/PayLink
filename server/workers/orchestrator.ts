@@ -32,11 +32,24 @@ function scheduleJob(
   intervalMs:     number,
   initialDelayMs: number = 0,
 ): void {
-  const run = () =>
-    handler().catch((e: unknown) => {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.warn(`[Orchestrator][${name}] Error: ${msg}`);
-    });
+  // Per-job overlap guard: if a previous invocation is still running when the
+  // next interval fires (e.g. contractor reminders doing many DB writes), skip
+  // the new invocation rather than running both concurrently and doubling work.
+  let isRunning = false;
+
+  const run = () => {
+    if (isRunning) {
+      console.warn(`[Orchestrator][${name}] Previous run still in progress — skipping interval.`);
+      return;
+    }
+    isRunning = true;
+    handler()
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[Orchestrator][${name}] Error: ${msg}`);
+      })
+      .finally(() => { isRunning = false; });
+  };
 
   const startJob = () => {
     run();

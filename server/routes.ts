@@ -1508,9 +1508,9 @@ export async function registerRoutes(
       const forScheduling = req.query.scheduling === "true";
       // Non-manager tenant users (employees, contractors, etc.) can only see themselves
       if (user && user.workerId && !isManagerRole(user.role)) {
-        const allWorkers = await storage.getWorkers();
-        const selfWorker = allWorkers.filter(w => w.id === user.workerId);
-        return res.json(selfWorker);
+        // Fetch only the single worker record instead of loading the entire table.
+        const selfWorker = await storage.getWorker(user.workerId);
+        return res.json(selfWorker ? [selfWorker] : []);
       }
       // When a manager is building a schedule they may need to assign workers from other companies.
       // Return all active workers in this case so cross-company scheduling works.
@@ -2926,13 +2926,15 @@ export async function registerRoutes(
       }
       // ── End Integrity Gate ───────────────────────────────────────────────────
 
-      // Preserve manual-override items; delete only auto-calculated ones.
+      // Preserve manual-override items; bulk-delete only auto-calculated ones.
       // Manual overrides are payroll items an admin intentionally edited — their
       // hours and amounts must survive re-processing so the check matches expectations.
-      for (const old of existingItemsPreGate) {
-        if (!(old as any).isManualOverride) {
-          await storage.deletePayrollItem(old.id);
-        }
+      // Single DELETE WHERE id IN (...) replaces the previous per-item delete loop.
+      const idsToDelete = existingItemsPreGate
+        .filter(old => !(old as any).isManualOverride)
+        .map(old => old.id);
+      if (idsToDelete.length > 0) {
+        await storage.deletePayrollItemsBulk(idsToDelete);
       }
 
       // Pre-seed run totals with the values from preserved manual-override items
@@ -2986,15 +2988,19 @@ export async function registerRoutes(
       // Keeps "paid" over "processed"; within same status keeps the latest processedAt.
       const priorRuns = deduplicateByPeriod(priorRunsRaw);
 
+      // Bulk-fetch all payroll items for every prior run in ONE query — replaces the
+      // previous O(workers × runs) nested loop that issued up to 2 000+ individual DB
+      // queries for a company with 20 historical runs and 100 workers.
+      const priorRunIds = priorRuns.map(pr => pr.id);
+      const allPriorItems = await storage.getPayrollItemsByRunIds(priorRunIds);
+
       for (const worker of activeWorkers) {
         let ytdGross = 0, ytdDeductions = 0, ytdNet = 0;
-        for (const pr of priorRuns) {
-          const priorItems = await storage.getPayrollItems(pr.id);
-          const workerItem = priorItems.find(i => i.workerId === worker.id);
-          if (workerItem) {
-            ytdGross += parseFloat(workerItem.grossPay || "0");
-            ytdDeductions += parseFloat(workerItem.deductions || "0");
-            ytdNet += parseFloat(workerItem.netPay || "0");
+        for (const item of allPriorItems) {
+          if (item.workerId === worker.id) {
+            ytdGross      += parseFloat(item.grossPay   || "0");
+            ytdDeductions += parseFloat(item.deductions || "0");
+            ytdNet        += parseFloat(item.netPay     || "0");
           }
         }
         existingYtdByWorker[worker.id] = { gross: ytdGross, deductions: ytdDeductions, net: ytdNet };
@@ -6649,12 +6655,15 @@ export async function registerRoutes(
       const approvedTimeOff = await storage.getTimeOffRequests(companyId);
       const approvedOff = approvedTimeOff.filter((r: any) => r.status === "approved");
       const conflicts: string[] = [];
-      const allWorkersForCheck = await storage.getWorkers();
+      // Single getWorkers(companyId) call shared for both conflict-check and notification
+      // grouping — previously made two separate unscoped getWorkers() calls.
+      const allWorkers = await storage.getWorkers(companyId);
+      const allCompanies = await storage.getCompanies();
       for (const s of targetSchedules) {
         const schedDate = s.date;
         for (const off of approvedOff) {
           if (off.workerId === s.workerId && schedDate >= off.startDate && schedDate <= off.endDate) {
-            const w = allWorkersForCheck.find((x: any) => x.id === s.workerId);
+            const w = allWorkers.find((x: any) => x.id === s.workerId);
             const name = w ? `${w.firstName} ${w.lastName}` : s.workerId;
             conflicts.push(`${name} has approved time-off on ${schedDate}`);
           }
@@ -6670,10 +6679,8 @@ export async function registerRoutes(
       // Mark all as published
       await Promise.all(targetSchedules.map((s: any) => storage.updateSchedule(s.id, { status: "published" })));
 
-      // Group shifts by worker for notifications
+      // Group shifts by worker for notifications (reuse allWorkers fetched above)
       const byWorker: Record<string, { worker: any; shifts: any[] }> = {};
-      const allWorkers = await storage.getWorkers();
-      const allCompanies = await storage.getCompanies();
 
       for (const s of targetSchedules) {
         if (!byWorker[s.workerId]) {
@@ -7153,15 +7160,18 @@ export async function registerRoutes(
       );
       const priorRuns = deduplicateByPeriod(priorRunsRaw);
       const existingYtdByWorker: Record<string, { gross: number; deductions: number; net: number }> = {};
+
+      // Bulk-fetch all payroll items for every prior run in ONE query (preview route).
+      const previewPriorRunIds = priorRuns.map(pr => pr.id);
+      const allPreviewPriorItems = await storage.getPayrollItemsByRunIds(previewPriorRunIds);
+
       for (const worker of activeWorkers) {
         let ytdGross = 0, ytdDeductions = 0, ytdNet = 0;
-        for (const pr of priorRuns) {
-          const priorItems = await storage.getPayrollItems(pr.id);
-          const workerItem = priorItems.find(i => i.workerId === worker.id);
-          if (workerItem) {
-            ytdGross += parseFloat(workerItem.grossPay || "0");
-            ytdDeductions += parseFloat(workerItem.deductions || "0");
-            ytdNet += parseFloat(workerItem.netPay || "0");
+        for (const item of allPreviewPriorItems) {
+          if (item.workerId === worker.id) {
+            ytdGross      += parseFloat(item.grossPay   || "0");
+            ytdDeductions += parseFloat(item.deductions || "0");
+            ytdNet        += parseFloat(item.netPay     || "0");
           }
         }
         existingYtdByWorker[worker.id] = { gross: ytdGross, deductions: ytdDeductions, net: ytdNet };
@@ -12675,9 +12685,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const shiftTime = schedule ? `${schedule.startTime}–${schedule.endTime}` : "";
         const companyId = offeringWorker?.companyId;
         if (companyId) {
-          const allWorkers = await storage.getWorkers();
+          // Scoped to companyId — avoids loading the entire workers table.
+          const allWorkers = await storage.getWorkers(companyId);
           const eligibleWorkers = allWorkers.filter(w =>
-            w.companyId === companyId && w.id !== item.offeredByWorkerId && w.isActive && w.workerType === "employee"
+            w.id !== item.offeredByWorkerId && w.isActive && w.workerType === "employee"
           );
           const subject = "New Shift Available on Marketplace";
           const bodyText = `${offeringName} has posted their shift on ${shiftDate} ${shiftTime} to the Shift Marketplace.\n\nLog in to PayLink and go to Schedule → Shift Marketplace to claim this shift.`;
@@ -17358,9 +17369,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const shiftTime = schedule ? `${schedule.startTime}–${schedule.endTime}` : "";
         const appUrl = process.env.APP_BASE_URL || "https://mypaylink.app";
         if (listing.companyId) {
-          const allWorkers = await storage.getWorkers();
+          // Scoped to listing.companyId — avoids loading the entire workers table.
+          const allWorkers = await storage.getWorkers(listing.companyId);
           const eligible = allWorkers.filter(w =>
-            w.companyId === listing.companyId && w.id !== listing.listedByWorkerId && (w.isActive || w.status === "active") && w.workerType === "employee"
+            w.id !== listing.listedByWorkerId && (w.isActive || w.status === "active") && w.workerType === "employee"
           );
           const subject = "New Shift Available — Shift Marketplace";
           for (const w of eligible) {

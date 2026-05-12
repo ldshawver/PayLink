@@ -294,9 +294,11 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        // Truncate large response bodies (e.g. bulk worker/payroll list endpoints)
+        // to prevent multi-megabyte log lines that spike memory on every request.
+        const bodyStr = JSON.stringify(capturedJsonResponse);
+        logLine += ` :: ${bodyStr.length > 500 ? bodyStr.slice(0, 500) + "…" : bodyStr}`;
       }
-
       log(logLine);
     }
   });

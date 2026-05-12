@@ -274,8 +274,10 @@ export interface IStorage {
   updatePayrollRun(id: string, data: Partial<PayrollRun>): Promise<PayrollRun | undefined>;
 
   getPayrollItems(payrollRunId: string): Promise<PayrollItem[]>;
+  getPayrollItemsByRunIds(runIds: string[]): Promise<PayrollItem[]>;
   createPayrollItem(data: InsertPayrollItem): Promise<PayrollItem>;
   deletePayrollItem(id: string): Promise<void>;
+  deletePayrollItemsBulk(ids: string[]): Promise<void>;
   deletePayrollRun(id: string): Promise<void>;
 
   getDepartments(companyId?: string): Promise<Department[]>;
@@ -1542,12 +1544,20 @@ export class DatabaseStorage implements IStorage {
   async getPayrollItems(payrollRunId: string): Promise<PayrollItem[]> {
     return db.select().from(payrollItems).where(eq(payrollItems.payrollRunId, payrollRunId));
   }
+  async getPayrollItemsByRunIds(runIds: string[]): Promise<PayrollItem[]> {
+    if (runIds.length === 0) return [];
+    return db.select().from(payrollItems).where(inArray(payrollItems.payrollRunId, runIds));
+  }
   async createPayrollItem(data: InsertPayrollItem): Promise<PayrollItem> {
     const [item] = await db.insert(payrollItems).values(data).returning();
     return item;
   }
   async deletePayrollItem(id: string): Promise<void> {
     await db.delete(payrollItems).where(eq(payrollItems.id, id));
+  }
+  async deletePayrollItemsBulk(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await db.delete(payrollItems).where(inArray(payrollItems.id, ids));
   }
   async deletePayrollRun(id: string): Promise<void> {
     await db.delete(payrollRuns).where(eq(payrollRuns.id, id));
