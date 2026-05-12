@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  CheckCircle, Clock, AlertCircle, Loader2, Paperclip, Download, XCircle,
+  CheckCircle, Clock, AlertCircle, Loader2, Paperclip, Download, XCircle, MessageSquare, Send,
 } from "lucide-react";
 
 const fmt = (n: number | string | undefined | null) => {
@@ -180,6 +180,124 @@ function ClientApprovalForm({
             {submitting
               ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Submitting...</>
               : <><CheckCircle className="h-4 w-4 mr-2" />Approve Proposal</>}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ClientMessageForm({
+  proposalId,
+  token,
+  accentColor,
+}: {
+  proposalId: string;
+  token: string;
+  accentColor: string;
+}) {
+  const [message, setMessage] = useState("");
+  const [senderName, setSenderName] = useState("");
+  const [senderEmail, setSenderEmail] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!message.trim()) { setError("Please enter a message"); return; }
+    setSubmitting(true); setError(null);
+    try {
+      const r = await fetch(
+        `/api/portal/proposals/${proposalId}/message?token=${encodeURIComponent(token)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: message.trim(), senderName: senderName.trim() || undefined, senderEmail: senderEmail.trim() || undefined }),
+        },
+      );
+      if (!r.ok) {
+        const d = await r.json();
+        setError(d.message || "Could not send message");
+        setSubmitting(false);
+        return;
+      }
+      setSubmitted(true);
+    } catch {
+      setError("Network error — please try again");
+      setSubmitting(false);
+    }
+  };
+
+  if (submitted) {
+    return (
+      <div className="rounded-lg border-2 p-4 flex items-start gap-3" style={{ borderColor: accentColor + "40", backgroundColor: accentColor + "08" }}>
+        <CheckCircle className="h-5 w-5 mt-0.5 shrink-0" style={{ color: accentColor }} />
+        <div>
+          <p className="text-sm font-semibold" style={{ color: accentColor }}>Message sent</p>
+          <p className="text-sm text-muted-foreground">We received your message and will get back to you soon.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Card className="border">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <MessageSquare className="h-5 w-5 text-muted-foreground" /> Questions or comments?
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Have a question or want to request a change? Send a message directly to the team.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="portal-msg-name">Your Name (optional)</Label>
+              <Input
+                id="portal-msg-name"
+                value={senderName}
+                onChange={e => setSenderName(e.target.value)}
+                placeholder="Jane Smith"
+                data-testid="input-message-name"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="portal-msg-email">Your Email (optional)</Label>
+              <Input
+                id="portal-msg-email"
+                type="email"
+                value={senderEmail}
+                onChange={e => setSenderEmail(e.target.value)}
+                placeholder="jane@example.com"
+                data-testid="input-message-email"
+              />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="portal-msg-text">Message *</Label>
+            <Textarea
+              id="portal-msg-text"
+              value={message}
+              onChange={e => setMessage(e.target.value)}
+              placeholder="Ask a question or describe any changes you'd like..."
+              rows={3}
+              required
+              data-testid="textarea-message-text"
+            />
+          </div>
+          {error && (
+            <div className="flex items-center gap-2 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+          <Button type="submit" disabled={submitting} variant="outline" className="w-full" data-testid="button-send-message">
+            {submitting
+              ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending...</>
+              : <><Send className="h-4 w-4 mr-2" />Send Message</>}
           </Button>
         </form>
       </CardContent>
@@ -457,6 +575,8 @@ export default function ProposalPortalPage() {
             </div>
           </div>
         )}
+
+        <ClientMessageForm proposalId={proposal.id} token={token} accentColor={accentColor} />
 
         {isApproved && (
           <div className="border-2 border-green-500 rounded-lg p-4 bg-green-50">

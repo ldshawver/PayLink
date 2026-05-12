@@ -29387,6 +29387,30 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     } catch (e) { res.status(500).json({ message: "Failed to fetch attachments" }); }
   });
 
+  // POST /api/portal/proposals/:id/message — client sends a question/comment (token required)
+  app.post("/api/portal/proposals/:id/message", async (req, res) => {
+    try {
+      const token = req.query.token as string | undefined || req.body.token;
+      const proposal = await validatePortalToken(req.params.id, token, res);
+      if (!proposal) return;
+      const { message, senderName, senderEmail } = req.body;
+      if (!message || !String(message).trim()) {
+        return res.status(400).json({ message: "Message text is required" });
+      }
+      await logProposalEvent(
+        req.params.id,
+        "client_message",
+        proposal.status,
+        proposal.status,
+        req,
+        senderName || proposal.client_name || "Client",
+        senderEmail || proposal.client_email || undefined,
+        String(message).trim(),
+      );
+      res.json({ message: "Message sent" });
+    } catch (e: any) { res.status(500).json({ message: "Failed to send message: " + e.message }); }
+  });
+
   // GET /api/portal/proposals/:id/attachments/:attId/download — stream file (token required)
   app.get("/api/portal/proposals/:id/attachments/:attId/download", async (req, res) => {
     try {

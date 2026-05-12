@@ -1426,19 +1426,24 @@ function ProposalDetailPanel({
                             ev.eventType === "approved" ? "bg-green-100" :
                             ev.eventType === "rejected" ? "bg-red-100" :
                             ev.eventType === "submitted" ? "bg-blue-100" :
+                            ev.eventType === "client_message" ? "bg-violet-100" :
                             "bg-primary/10"
                           )}>
                             {ev.eventType === "approved" ? <CheckCircle className="h-3.5 w-3.5 text-green-600" /> :
                              ev.eventType === "rejected" ? <XCircle className="h-3.5 w-3.5 text-red-600" /> :
                              ev.eventType === "submitted" ? <Send className="h-3.5 w-3.5 text-blue-600" /> :
+                             ev.eventType === "client_message" ? <MessageSquare className="h-3.5 w-3.5 text-violet-600" /> :
                              <History className="h-3.5 w-3.5 text-primary" />}
                           </div>
                           {i < events.length - 1 && <div className="w-0.5 flex-1 bg-border mt-1" />}
                         </div>
                         <div className="pb-4 flex-1">
-                          <p className="text-sm font-medium capitalize">{ev.eventType.replace(/_/g, " ")}</p>
-                          <p className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} — {ev.actorName || "System"}</p>
-                          {ev.notes && <p className="text-xs text-muted-foreground mt-0.5 italic">"{ev.notes}"</p>}
+                          <p className="text-sm font-medium capitalize">{ev.eventType === "client_message" ? "Client Message" : ev.eventType.replace(/_/g, " ")}</p>
+                          <p className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} — {ev.actorName || "System"}{ev.actorEmail ? ` (${ev.actorEmail})` : ""}</p>
+                          {ev.notes && ev.eventType === "client_message" && (
+                            <p className="text-xs mt-1 px-2 py-1.5 rounded bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 text-violet-800 dark:text-violet-200 whitespace-pre-wrap">{ev.notes}</p>
+                          )}
+                          {ev.notes && ev.eventType !== "client_message" && <p className="text-xs text-muted-foreground mt-0.5 italic">"{ev.notes}"</p>}
                           {ev.oldStatus && ev.newStatus && (
                             <p className="text-xs text-muted-foreground mt-0.5">
                               <span className="capitalize">{ev.oldStatus.replace(/_/g, " ")}</span>
@@ -2750,15 +2755,20 @@ function ProposalBuilder({
                   {events.map((ev, i) => (
                     <div key={ev.id} className="flex gap-3">
                       <div className="flex flex-col items-center">
-                        <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                          <History className="h-3.5 w-3.5 text-primary" />
+                        <div className={cn("h-7 w-7 rounded-full flex items-center justify-center shrink-0", ev.eventType === "client_message" ? "bg-violet-100" : "bg-primary/10")}>
+                          {ev.eventType === "client_message"
+                            ? <MessageSquare className="h-3.5 w-3.5 text-violet-600" />
+                            : <History className="h-3.5 w-3.5 text-primary" />}
                         </div>
                         {i < events.length - 1 && <div className="w-0.5 flex-1 bg-border mt-1" />}
                       </div>
-                      <div className="pb-4">
-                        <p className="text-sm font-medium capitalize">{ev.eventType.replace(/_/g, " ")}</p>
-                        <p className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} — {ev.actorName || "System"}</p>
-                        {ev.notes && ev.eventType === "sent" && (() => {
+                      <div className="pb-4 flex-1">
+                        <p className="text-sm font-medium capitalize">{ev.eventType === "client_message" ? "Client Message" : ev.eventType.replace(/_/g, " ")}</p>
+                        <p className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} — {ev.actorName || "System"}{ev.actorEmail ? ` (${ev.actorEmail})` : ""}</p>
+                        {ev.notes && ev.eventType === "client_message" && (
+                          <p className="text-xs mt-1 px-2 py-1.5 rounded bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 text-violet-800 dark:text-violet-200 whitespace-pre-wrap">{ev.notes}</p>
+                        )}
+                        {ev.notes && ev.eventType === "sent" && ev.eventType !== "client_message" && (() => {
                           const parts = ev.notes.split(" | Portal: ");
                           const label = parts[0];
                           const link = parts[1];
@@ -2776,7 +2786,7 @@ function ProposalBuilder({
                             </div>
                           );
                         })()}
-                        {ev.notes && ev.eventType !== "sent" && <p className="text-xs text-muted-foreground mt-0.5">{ev.notes}</p>}
+                        {ev.notes && ev.eventType !== "sent" && ev.eventType !== "client_message" && <p className="text-xs text-muted-foreground mt-0.5">{ev.notes}</p>}
                       </div>
                     </div>
                   ))}
