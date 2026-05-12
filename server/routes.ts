@@ -16152,14 +16152,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (runRow?.funding_account_id) {
         rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${runRow.funding_account_id} LIMIT 1`)) ?? null;
       }
-      if (!rs && !isCalibration) return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
+      // Fallback: find the company's enabled remittance source directly (run may predate bank account setup)
+      if (!rs) {
+        rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' ORDER BY created_at ASC LIMIT 1`)) ?? null;
+      }
+      if (!rs) {
+        rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} ORDER BY created_at ASC LIMIT 1`)) ?? null;
+      }
+      if (!rs && !isCalibration) return res.status(422).json({ message: "No bank account (remittance source) configured for this company. Add one in Settings → Remittance Sources." });
       if (!isCalibration) {
-        if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source. Add one in Payroll → Bank Accounts." });
-        if (!rs?.account_number) return res.status(422).json({ message: "No account number configured for this company's remittance source." });
+        if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source. Add one in Settings → Remittance Sources." });
+        if (!rs?.account_number) return res.status(422).json({ message: "No account number configured for this company's remittance source. Add one in Settings → Remittance Sources." });
       }
 
       const tplRow = pgRow<CheckTplRow>(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`));
-      if (!tplRow && !isCalibration) return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
+      // No template → renderCheckPdf uses sensible defaults (all fields shown, standard layout). Not a hard error.
       const layoutConfig = tplRow ? parseLayoutConfig(tplRow.layout_config) : undefined;
       const calibrationOffsets = rs?.calibration_config ? parseCalibrationOffsets(rs.calibration_config) : undefined;
 
@@ -16219,13 +16226,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (run.funding_account_id) {
         rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${run.funding_account_id} LIMIT 1`)) ?? null;
       }
-      if (!rs && !isCalibration) return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
-      if (!isCalibration) {
-        if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured. Add one in Payroll → Bank Accounts." });
-        if (!rs?.account_number) return res.status(422).json({ message: "No account number configured." });
+      // Fallback: find the company's enabled remittance source directly (run may predate bank account setup)
+      if (!rs) {
+        rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' ORDER BY created_at ASC LIMIT 1`)) ?? null;
       }
-      if (!tplRow2 && !isCalibration) return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-
+      if (!rs) {
+        rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} ORDER BY created_at ASC LIMIT 1`)) ?? null;
+      }
+      if (!rs && !isCalibration) return res.status(422).json({ message: "No bank account (remittance source) configured for this company. Add one in Settings → Remittance Sources." });
+      if (!isCalibration) {
+        if (!rs?.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source. Add one in Settings → Remittance Sources." });
+        if (!rs?.account_number) return res.status(422).json({ message: "No account number configured for this company's remittance source. Add one in Settings → Remittance Sources." });
+      }
+      // No template → renderCheckPdf uses sensible defaults (all fields shown, standard layout). Not a hard error.
       const batchLayoutConfig = tplRow2 ? parseLayoutConfig(tplRow2.layout_config) : undefined;
       const batchCalibrationOffsets = rs?.calibration_config ? parseCalibrationOffsets(rs.calibration_config) : undefined;
 
@@ -16418,13 +16431,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (runRow?.funding_account_id) {
         rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT rs.* FROM remittance_sources rs JOIN funding_accounts fa ON fa.remittance_source_id = rs.id WHERE fa.id = ${runRow.funding_account_id} LIMIT 1`)) ?? null;
       }
-      if (!rs) return res.status(422).json({ message: "No bank account (remittance source) linked to this payroll run. Assign one in Payroll → Bank Accounts." });
-      if (!rs.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source." });
-      if (!rs.account_number)  return res.status(422).json({ message: "No account number configured for this company's remittance source." });
+      // Fallback: find the company's enabled remittance source directly (run may predate bank account setup)
+      if (!rs) {
+        rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} AND status = 'enabled' ORDER BY created_at ASC LIMIT 1`)) ?? null;
+      }
+      if (!rs) {
+        rs = pgRow<CheckRsRow>(await db.execute(sql`SELECT * FROM remittance_sources WHERE company_id = ${compId} ORDER BY created_at ASC LIMIT 1`)) ?? null;
+      }
+      if (!rs) return res.status(422).json({ message: "No bank account (remittance source) configured for this company. Add one in Settings → Remittance Sources." });
+      if (!rs.routing_number) return res.status(422).json({ message: "No routing number configured for this company's remittance source. Add one in Settings → Remittance Sources." });
+      if (!rs.account_number)  return res.status(422).json({ message: "No account number configured for this company's remittance source. Add one in Settings → Remittance Sources." });
 
       const reprintTplRow = pgRow<CheckTplRow>(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`));
-      if (!reprintTplRow) return res.status(422).json({ message: "No default check layout template configured. Create and set a default template in Payroll → Check Templates." });
-      const reprintLayoutConfig = parseLayoutConfig(reprintTplRow.layout_config);
+      // No template → renderCheckPdf uses sensible defaults. Not a hard error.
+      const reprintLayoutConfig = reprintTplRow ? parseLayoutConfig(reprintTplRow.layout_config) : undefined;
       const reprintCalibrationOffsets = rs.calibration_config ? parseCalibrationOffsets(rs.calibration_config) : undefined;
 
       const pdfBytes = await renderCheckPdf({
