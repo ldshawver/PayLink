@@ -6,7 +6,7 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import path from "path";
 import fs from "fs";
-import { runContractorReminderScheduler } from "./contractor-scheduler";
+import { startWorkerOrchestrator, shutdownOrchestrator } from "./workers/orchestrator";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -3256,23 +3256,20 @@ Thank you,
     () => {
       log(`serving on ${host}:${port}`);
 
-      // Run contractor reminder scheduler once at startup (with a short delay),
-      // then daily. Daily cadence matches the documented contractor-reminder
-      // contract; the scheduler itself dedupes within a calendar day, so the
-      // single daily tick is sufficient.
-      const SCHEDULER_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours (daily)
-      setTimeout(() => {
-        runContractorReminderScheduler().catch((e: unknown) => {
-          const msg = e instanceof Error ? e.message : String(e);
-          console.warn("[ContractorScheduler] Startup run error:", msg);
-        });
-        setInterval(() => {
-          runContractorReminderScheduler().catch((e: unknown) => {
-            const msg = e instanceof Error ? e.message : String(e);
-            console.warn("[ContractorScheduler] Periodic run error:", msg);
-          });
-        }, SCHEDULER_INTERVAL_MS);
-      }, 10000); // 10s delay after startup to allow DB migrations to complete
+      // All background jobs are managed by the worker orchestrator.
+      // It handles staggered startup, deduplication, and clean shutdown.
+      startWorkerOrchestrator();
     },
   );
 })();
+
+// ── Graceful shutdown ─────────────────────────────────────────────────────────
+// Clears all orchestrated background timers before the process exits so
+// in-flight jobs are not killed mid-run and interval handles do not leak.
+function onShutdown(signal: string) {
+  console.log(`[Server] Received ${signal}. Shutting down gracefully...`);
+  shutdownOrchestrator();
+  process.exit(0);
+}
+process.once("SIGTERM", () => onShutdown("SIGTERM"));
+process.once("SIGINT",  () => onShutdown("SIGINT"));
