@@ -616,7 +616,7 @@ function StubSummarySection({
             <span style={{ fontSize: "8px" }}>{isContractor ? "TOTAL DEDUCTIONS (none — contractor)" : "TOTAL DEDUCTIONS"}</span>
             <div style={{ display: "flex", gap: "8px" }}>
               <span style={{ width: "35px", textAlign: "right", fontWeight: "bold", fontSize: "8px" }}>${fmt(isContractor ? 0 : totalDeductions)}</span>
-              <span style={{ width: "35px", textAlign: "right", fontWeight: "bold", fontSize: "8px" }}>${fmt(isContractor ? 0 : Math.max(0, (Number(item.ytdDeductions) || (item.ytdGross - item.ytdNet))))}</span>
+              <span style={{ width: "35px", textAlign: "right", fontWeight: "bold", fontSize: "8px" }}>${fmt(isContractor ? 0 : Math.max(0, Number(item.ytdDeductions ?? 0) || Math.max(0, Number(item.ytdGross ?? 0) - Number(item.ytdNet ?? 0))))}</span>
             </div>
           </div>
 
@@ -842,7 +842,7 @@ function StubDetailSection({
                 <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
                   <td style={{ padding: "2px" }}>TOTAL DEDUCTIONS</td>
                   <td style={{ textAlign: "right", padding: "2px" }}>${fmt(computedTotalDeductions)}</td>
-                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(isContractor ? 0 : Math.max(0, Number(item.ytdDeductions) || (item.ytdGross - item.ytdNet)))}</td>}
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(isContractor ? 0 : Math.max(0, Number(item.ytdDeductions ?? 0) || Math.max(0, Number(item.ytdGross ?? 0) - Number(item.ytdNet ?? 0))))}</td>}
                 </tr>
                 <tr style={{ borderTop: "2px solid #000", fontWeight: "bold" }}>
                   <td style={{ padding: "2px" }}>NET PAY</td>
@@ -1105,7 +1105,7 @@ function StubPortion({
                 <tr style={{ borderTop: "1px solid #000", fontWeight: "bold" }}>
                   <td style={{ padding: "2px" }}>TOTAL DEDUCTIONS</td>
                   <td style={{ textAlign: "right", padding: "2px" }}>${fmt(computedTotalDeductions)}</td>
-                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(isContractor ? 0 : Math.max(0, Number(item.ytdDeductions) || (item.ytdGross - item.ytdNet)))}</td>}
+                  {config.showYtdTotals && <td style={{ textAlign: "right", padding: "2px" }}>${fmt(isContractor ? 0 : Math.max(0, Number(item.ytdDeductions ?? 0) || Math.max(0, Number(item.ytdGross ?? 0) - Number(item.ytdNet ?? 0))))}</td>}
                 </tr>
               </tbody>
             </table>
@@ -1123,7 +1123,7 @@ function StubPortion({
             </div>
             <div style={{ display: "flex", gap: "20px" }}>
               <div><div style={{ fontSize: "8px", color: "#666" }}>YTD GROSS</div><div style={{ fontWeight: "bold" }}>${fmt(item.ytdGross)}</div></div>
-              <div><div style={{ fontSize: "8px", color: "#666" }}>YTD DEDUCTIONS</div><div style={{ fontWeight: "bold" }}>${fmt(isContractor ? 0 : Math.max(0, Number(item.ytdDeductions) || (item.ytdGross - item.ytdNet)))}</div></div>
+              <div><div style={{ fontSize: "8px", color: "#666" }}>YTD DEDUCTIONS</div><div style={{ fontWeight: "bold" }}>${fmt(isContractor ? 0 : Math.max(0, Number(item.ytdDeductions ?? 0) || Math.max(0, Number(item.ytdGross ?? 0) - Number(item.ytdNet ?? 0))))}</div></div>
               <div><div style={{ fontSize: "8px", color: "#666" }}>YTD NET</div><div style={{ fontWeight: "bold" }}>${fmt(item.ytdNet)}</div></div>
             </div>
           </div>

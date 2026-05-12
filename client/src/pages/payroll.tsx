@@ -762,6 +762,22 @@ function PayrollRunCard({
     },
   });
 
+  const resetOverrideMutation = useMutation({
+    mutationFn: async (itemId: string) => {
+      const res = await apiRequest("PATCH", `/api/payroll-items/${itemId}`, { isManualOverride: false });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs", run.id, "items"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll-runs"] });
+      setEditItem(null);
+      toast({ title: "Override cleared — recalculated values restored" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error resetting override", description: err.message, variant: "destructive" });
+    },
+  });
+
   const reopenMutation = useMutation({
     mutationFn: async () => {
       if (isLocked) {

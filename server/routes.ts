@@ -24,6 +24,7 @@ import { createContractorNotification } from "./contractor-notification-helper";
 import { runContractorReminderScheduler } from "./contractor-scheduler";
 import { resolveDocStyle, renderDocHeader, renderTotalsBlock } from "./contractor-pdf-style";
 import { registerFeedbackRoutes } from "./feedback-routes";
+import { provisionDemoTenant } from "./demo-seed";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -1255,7 +1256,7 @@ export async function registerRoutes(
     next();
   });
 
-  app.get("/api/payroll-summary", async (req, res) => {
+  app.get("/api/payroll-summary", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const { year, quarter, companyId } = req.query;
       const allRuns = companyId && companyId !== "all"
@@ -15361,9 +15362,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
   });
 
-  app.get("/api/users", requireRole("admin", "manager"), async (_req, res) => {
+  app.get("/api/users", requireRole("admin", "manager"), async (req, res) => {
     try {
-      const allUsers = await storage.getUsers();
+      const requestor = await storage.getUser(req.session.userId!);
+      let allUsers = await storage.getUsers();
+      // Tenant-scoped users see only their own company; platform admins see all
+      if (!isPlatformUser(requestor?.role)) {
+        allUsers = allUsers.filter(u => u.companyId === requestor?.companyId);
+      }
       res.json(allUsers.map(u => ({ id: u.id, username: u.username, role: u.role, companyId: u.companyId, workerId: u.workerId, isActive: u.isActive, createdAt: u.createdAt })));
     } catch (error) {
       console.error(error);
@@ -18126,10 +18132,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         VALUES ('demo_started', 'demo', ${req.ip || null})
       `);
 
-      res.json({
-        message: "Demo session started",
-        user: { id: demoUser.id, username: demoUser.username, role: demoUser.role, companyId: demoCompanyId },
-        isDemo: true,
+      req.session.save((saveErr) => {
+        if (saveErr) {
+          console.error("Demo login session save error:", saveErr);
+          return res.status(500).json({ message: "Session save failed" });
+        }
+        res.json({
+          message: "Demo session started",
+          user: { id: demoUser.id, username: demoUser.username, role: demoUser.role, companyId: demoCompanyId },
+          isDemo: true,
+        });
       });
     } catch (e) {
       console.error("Demo login error:", e);
@@ -18140,138 +18152,43 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   // ── Demo Provision (public, creates fully seeded demo tenant) ─────────────
   app.post("/api/demo/provision", async (req, res) => {
     try {
-      const demoPass = await bcrypt.hash("demo123", 10);
       const demoExpiration = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      const demoUsername = 'demo_' + crypto.randomBytes(4).toString('hex');
+      const suffix = crypto.randomBytes(4).toString("hex");
       const portalToken = crypto.randomBytes(32).toString("hex");
 
-      const result = await db.transaction(async (tx) => {
-        const companyResult = await tx.execute(sql`
-          INSERT INTO companies (name, subscription_status, plan_name, is_demo, pay_frequency, overtime_threshold, trial_end, timezone, timezone_confirmed)
-          VALUES ('Demo Company', 'active_paid', 'professional', TRUE, 'biweekly', 40, ${demoExpiration}, 'America/New_York', FALSE)
-          RETURNING id
-        `);
-        const companyId = companyResult.rows[0].id as string;
+      const seed = await db.transaction(async (tx) =>
+        provisionDemoTenant(tx, { suffix, trialEnd: demoExpiration, ipAddress: req.ip ?? null })
+      );
 
-        const userResult = await tx.execute(sql`
-          INSERT INTO users (username, password, role, company_id)
-          VALUES (${demoUsername}, ${demoPass}, 'admin', ${companyId})
-          RETURNING id, username
-        `);
-        const adminUser = userResult.rows[0] as any;
+      // Portal access token for onboarding portal link
+      await db.execute(sql`
+        INSERT INTO portal_access_tokens (company_id, token, token_type, expires_at)
+        VALUES (${seed.companyId}, ${portalToken}, 'onboarding_packet', ${demoExpiration})
+      `);
 
-        const workerData = [
-          { first: "Sarah", last: "Johnson", type: "employee", email: "sarah@demo.paylink.app", rate: "28.00" },
-          { first: "Michael", last: "Chen", type: "employee", email: "michael@demo.paylink.app", rate: "32.00" },
-          { first: "Emily", last: "Rodriguez", type: "contractor", email: "emily@demo.paylink.app", rate: "45.00" },
-        ];
-        const workerIds: string[] = [];
-        for (const w of workerData) {
-          const wResult = await tx.execute(sql`
-            INSERT INTO workers (company_id, first_name, last_name, worker_type, status, hire_date, pay_rate, email, worker_group)
-            VALUES (${companyId}, ${w.first}, ${w.last}, ${w.type}, 'active', '2025-01-15', ${w.rate}, ${w.email}, ${w.type === 'contractor' ? 'hourly_contractor' : 'hourly_employee'})
-            RETURNING id
-          `);
-          workerIds.push(wResult.rows[0].id as string);
-        }
-
-        const folderNames = [
-          { name: "HR Documents", category: "hr", color: "#3B82F6" },
-          { name: "Legal", category: "legal", color: "#8B5CF6" },
-          { name: "Finance", category: "finance", color: "#10B981" },
-        ];
-        const folderIds: Record<string, string> = {};
-        for (const f of folderNames) {
-          const fResult = await tx.execute(sql`
-            INSERT INTO document_folders (company_id, name, category, color)
-            VALUES (${companyId}, ${f.name}, ${f.category}, ${f.color})
-            RETURNING id
-          `);
-          folderIds[f.category] = fResult.rows[0].id as string;
-        }
-
-        const sampleDocs = [
-          { title: "Offer Letter Template", fileName: "offer_letter_template.pdf", folder: "hr", isTemplate: true },
-          { title: "W-4 Tax Withholding Form", fileName: "w4_template.pdf", folder: "hr", isTemplate: true },
-          { title: "I-9 Employment Eligibility", fileName: "i9_template.pdf", folder: "hr", isTemplate: true },
-          { title: "Non-Disclosure Agreement", fileName: "nda_template.pdf", folder: "legal", isTemplate: true },
-        ];
-        for (const doc of sampleDocs) {
-          await tx.execute(sql`
-            INSERT INTO documents (company_id, folder_id, title, file_name, file_url, is_template, status, category)
-            VALUES (${companyId}, ${folderIds[doc.folder]}, ${doc.title}, ${doc.fileName}, ${'/demo/' + doc.fileName}, ${doc.isTemplate}, 'active', ${doc.folder})
-          `);
-        }
-
-        const empPacketResult = await tx.execute(sql`
-          INSERT INTO onboarding_packets (company_id, worker_id, template_name, status, assigned_by)
-          VALUES (${companyId}, ${workerIds[0]}, 'Standard Onboarding', 'in_progress', ${adminUser.id})
-          RETURNING id
-        `);
-        const empPacketId = empPacketResult.rows[0].id as string;
-
-        const empSteps = [
-          { name: "Offer Letter", type: "document_sign", desc: "Sign the employment offer letter" },
-          { name: "W-4 Tax Withholding", type: "document_upload", desc: "Complete W-4 federal tax withholding form" },
-          { name: "I-9 Verification", type: "document_upload", desc: "Complete employment eligibility verification" },
-          { name: "Direct Deposit Setup", type: "document_upload", desc: "Provide banking information for direct deposit" },
-          { name: "Employee Handbook", type: "document_sign", desc: "Read and sign the employee handbook" },
-          { name: "Benefits Enrollment", type: "task_complete", desc: "Review and select benefit options" },
-        ];
-        for (let i = 0; i < empSteps.length; i++) {
-          const stepStatus = i === 0 ? "completed" : (i === 1 ? "in_progress" : "pending");
-          await tx.execute(sql`
-            INSERT INTO onboarding_packet_steps (packet_id, step_name, step_type, description, sort_order, status, assigned_to)
-            VALUES (${empPacketId}, ${empSteps[i].name}, ${empSteps[i].type}, ${empSteps[i].desc}, ${i}, ${stepStatus}, ${workerIds[0]})
-          `);
-        }
-
-        const conPacketResult = await tx.execute(sql`
-          INSERT INTO onboarding_packets (company_id, worker_id, template_name, status, assigned_by)
-          VALUES (${companyId}, ${workerIds[2]}, 'Contractor Onboarding', 'pending', ${adminUser.id})
-          RETURNING id
-        `);
-        const conPacketId = conPacketResult.rows[0].id as string;
-
-        const conSteps = [
-          { name: "Contractor Agreement", type: "document_sign", desc: "Sign the independent contractor agreement" },
-          { name: "W-9 Form", type: "document_upload", desc: "Complete W-9 tax form" },
-          { name: "NDA", type: "document_sign", desc: "Sign non-disclosure agreement" },
-        ];
-        for (let i = 0; i < conSteps.length; i++) {
-          await tx.execute(sql`
-            INSERT INTO onboarding_packet_steps (packet_id, step_name, step_type, description, sort_order, status, assigned_to)
-            VALUES (${conPacketId}, ${conSteps[i].name}, ${conSteps[i].type}, ${conSteps[i].desc}, ${i}, 'pending', ${workerIds[2]})
-          `);
-        }
-
-        await tx.execute(sql`
-          INSERT INTO portal_access_tokens (company_id, token, token_type, expires_at)
-          VALUES (${companyId}, ${portalToken}, 'onboarding_packet', ${demoExpiration})
-        `);
-
-        await tx.execute(sql`
-          INSERT INTO analytics_events (event_name, page_source, ip_address)
-          VALUES ('demo_provisioned', 'demo', ${req.ip || null})
-        `);
-
-        return { companyId, adminUser };
-      });
-
-      req.session.userId = result.adminUser.id;
-      req.session.username = result.adminUser.username;
-      req.session.isDemo = true;
+      req.session.userId  = seed.adminUserId;
+      req.session.username = seed.adminUsername;
+      req.session.role    = "admin";
+      req.session.isDemo  = true;
 
       const baseUrl = getAppBaseUrl(req);
 
-      res.json({
-        message: "Demo tenant provisioned",
-        companyId: result.companyId,
-        loginUrl: baseUrl,
-        portalUrl: `${baseUrl}/portal?token=${portalToken}`,
-        expiresAt: demoExpiration.toISOString(),
-        user: { id: result.adminUser.id, username: result.adminUser.username, role: "admin", companyId: result.companyId },
-        isDemo: true,
+      req.session.save((saveErr) => {
+        if (saveErr) {
+          console.error("Demo provision session save error:", saveErr);
+          return res.status(500).json({ message: "Session save failed" });
+        }
+        res.json({
+          message: "Demo tenant provisioned",
+          companyId: seed.companyId,
+          loginUrl: baseUrl,
+          portalUrl: `${baseUrl}/portal?token=${portalToken}`,
+          expiresAt: demoExpiration.toISOString(),
+          user: { id: seed.adminUserId, username: seed.adminUsername, role: "admin", companyId: seed.companyId },
+          isDemo: true,
+          workers: seed.workerIds.length,
+          payrollRunId: seed.payrollRunId,
+        });
       });
     } catch (e) {
       console.error("Demo provision error:", e);

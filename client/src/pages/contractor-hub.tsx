@@ -2012,7 +2012,6 @@ function ProposalBuilder({
     else if (aiAction === "generate_summary") setForm(f => ({ ...f, aiGeneratedSummary: aiResult }));
     toast({ title: "Applied to proposal" });
     setAiResult("");
-    setDirty(true);
   }
 
   async function handleAiFillAll() {
@@ -2036,7 +2035,6 @@ function ProposalBuilder({
           paymentTerms: p.paymentTerms || f.paymentTerms,
           warrantyNotes: p.warrantyNotes || f.warrantyNotes,
         }));
-        setDirty(true);
         toast({ title: "Proposal drafted — review and edit before sending" });
       } else {
         setAiResult(d.result || "");
