@@ -3186,6 +3186,96 @@ Thank you,
     console.log("Auto-migration skipped (contractor_hub normalization):", (e as Error).message);
   }
 
+  // ── Compliance engine tables ──────────────────────────────────────────────
+  try {
+    await run("jurisdictions table", sql`CREATE TABLE IF NOT EXISTS jurisdictions (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      country TEXT NOT NULL DEFAULT 'US',
+      is_active BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await run("labor_rules table", sql`CREATE TABLE IF NOT EXISTS labor_rules (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      jurisdiction_id VARCHAR NOT NULL REFERENCES jurisdictions(id),
+      rule_type TEXT NOT NULL,
+      rule_value NUMERIC NOT NULL,
+      rule_unit TEXT,
+      override_level TEXT DEFAULT 'state',
+      wage_order_number TEXT,
+      company_id TEXT REFERENCES companies(id),
+      worker_id TEXT REFERENCES workers(id),
+      effective_date DATE NOT NULL,
+      expiration_date DATE,
+      description TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await run("tax_rules table", sql`CREATE TABLE IF NOT EXISTS tax_rules (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      jurisdiction_id VARCHAR NOT NULL REFERENCES jurisdictions(id),
+      rule_type TEXT NOT NULL,
+      rule_value NUMERIC NOT NULL,
+      rule_unit TEXT,
+      effective_date DATE NOT NULL,
+      expiration_date DATE,
+      description TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await run("company_compliance_profiles table", sql`CREATE TABLE IF NOT EXISTS company_compliance_profiles (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL UNIQUE REFERENCES companies(id),
+      jurisdiction_id VARCHAR REFERENCES jurisdictions(id),
+      wage_order_number TEXT,
+      local_min_wage NUMERIC,
+      enforce_daily_ot BOOLEAN DEFAULT TRUE,
+      enforce_meal_breaks BOOLEAN DEFAULT TRUE,
+      enforce_rest_breaks BOOLEAN DEFAULT TRUE,
+      enforce_weekly_ot BOOLEAN DEFAULT TRUE,
+      enforce_seventh_day BOOLEAN DEFAULT TRUE,
+      enforce_min_wage BOOLEAN DEFAULT TRUE,
+      enforce_final_paycheck BOOLEAN DEFAULT TRUE,
+      preflight_required BOOLEAN DEFAULT TRUE,
+      custom_notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await run("worker_compliance_profiles table", sql`CREATE TABLE IF NOT EXISTS worker_compliance_profiles (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      worker_id VARCHAR NOT NULL UNIQUE REFERENCES workers(id),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      exempt_status TEXT DEFAULT 'nonexempt',
+      min_wage_override NUMERIC,
+      abc_test_a BOOLEAN,
+      abc_test_b BOOLEAN,
+      abc_test_c BOOLEAN,
+      classification_notes TEXT,
+      contractor_agreement_date DATE,
+      last_i9_date DATE,
+      sick_leave_balance NUMERIC,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await run("compliance_audit_events table", sql`CREATE TABLE IF NOT EXISTS compliance_audit_events (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      payroll_run_id VARCHAR REFERENCES payroll_runs(id),
+      worker_id VARCHAR REFERENCES workers(id),
+      rule_id VARCHAR REFERENCES labor_rules(id),
+      rule_type TEXT NOT NULL,
+      entity_type TEXT NOT NULL DEFAULT 'worker',
+      entity_id TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      message TEXT NOT NULL,
+      detail JSONB,
+      resolved_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  } catch (e) {
+    console.log("Auto-migration skipped (compliance tables):", (e as Error).message);
+  }
+
   const { seedDatabase } = await import("./seed");
   try {
     await seedDatabase();
