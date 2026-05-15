@@ -2162,6 +2162,10 @@ export default function PrintCheckPage() {
   const zeroPaySkippedCount = !workerFilter
     ? items.filter(item => (!item.paymentMethod || item.paymentMethod === "check") && Number(item.netPay || 0) <= 0).length
     : 0;
+  // Individual zero-pay check items — shown as a skipped list on locked/finalized runs.
+  const zeroPayCheckItems = !workerFilter
+    ? items.filter(item => (!item.paymentMethod || item.paymentMethod === "check") && Number(item.netPay || 0) <= 0)
+    : [];
 
   // ── Duplicate check number detection ──
   const checkNumbersSeen = new Set<string>();
@@ -2233,10 +2237,14 @@ export default function PrintCheckPage() {
       </div>
 
       {isLocked && (
-        <div className="mx-4 mb-3 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300 flex items-center gap-2 print-hide" data-testid="banner-finalized-readonly">
-          <Lock className="h-4 w-4 shrink-0" />
+        <div className="mx-4 mb-3 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300 flex items-start gap-2 print-hide" data-testid="banner-finalized-readonly">
+          <Lock className="h-4 w-4 shrink-0 mt-0.5" />
           <span>
-            <strong>Finalized — Read Only.</strong> This payroll run is {run.status}. Check and stub outputs are read-only snapshots. To make changes, reopen the run for editing from the Payroll tab.
+            <strong>Finalized — Read Only.</strong> This payroll run is {run.status}. Payroll calculations are locked.{" "}
+            <strong>Check and stub PDFs can still be reprinted below</strong> using the original snapshot — no reopening required.
+            {zeroPaySkippedCount > 0 && (
+              <> {zeroPaySkippedCount} employee{zeroPaySkippedCount > 1 ? "s" : ""} with $0 net pay will be skipped.</>
+            )}
           </span>
         </div>
       )}
@@ -2386,14 +2394,16 @@ export default function PrintCheckPage() {
               <div key={item.id}>
                 {/* Server PDF is the authoritative preview — identical to what 'Print Checks' outputs */}
                 <div className="print-hide flex justify-end gap-2 mb-1 px-1" style={{ maxWidth: "8.5in", margin: "0 auto 4px auto" }}>
-                  {printedWorkerIds.has(item.workerId) && (
+                  {/* Locked runs: reprint available for all positive-net-pay checks (no prior print event required).
+                      Active runs: only show reprint when a prior print/void event exists in the audit log. */}
+                  {(isLocked || printedWorkerIds.has(item.workerId)) && (
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={() => handleReprintSingle(item.id)}
                       disabled={reprintingIds.has(item.id)}
                       data-testid={`button-reprint-${item.id}`}
-                      title="Generate a reprint copy of this check PDF; logs a reprint event in the audit trail"
+                      title="Generate a reprint copy of this check PDF using the original payroll snapshot; logs a reprint event in the audit trail"
                     >
                       <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
                       {reprintingIds.has(item.id) ? "Generating…" : `Reprint PDF${item.checkNumber ? ` #${item.checkNumber}` : ""}`}
@@ -2411,6 +2421,28 @@ export default function PrintCheckPage() {
               </div>
             );
           })
+        )}
+
+        {/* Skipped $0 checks — shown on locked/finalized runs so every employee is accounted for */}
+        {isLocked && !isPacketMode && !workerFilter && zeroPayCheckItems.length > 0 && (
+          <div className="print-hide mx-auto mt-2 mb-4" style={{ maxWidth: "8.5in" }}>
+            <div className="rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3">
+              <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-2">
+                Skipped — $0 Net Pay ({zeroPayCheckItems.length})
+              </p>
+              <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                {zeroPayCheckItems.map(item => {
+                  const w = getWorker(item.workerId);
+                  return (
+                    <div key={item.id} className="flex items-center justify-between py-1.5 text-sm text-slate-600 dark:text-slate-400" data-testid={`row-skipped-${item.id}`}>
+                      <span>{w ? `${w.firstName} ${w.lastName}` : item.workerId}</span>
+                      <span className="text-xs text-slate-400 dark:text-slate-500">Net pay $0.00 — no check printed</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
         )}
       </div>
 

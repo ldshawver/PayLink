@@ -16532,17 +16532,30 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         return res.status(403).json({ message: "Access denied: company mismatch" });
       }
 
-      // Gate: must have a prior print OR void event for this company + run + worker.
-      const origRaw = await db.execute(sql`
-        SELECT id FROM check_print_audit_logs
-        WHERE company_id = ${compId}
-          AND payroll_run_id = ${itemRow.payrollRunId}
-          AND worker_id = ${itemRow.workerId}
-          AND (event_type = 'print' OR event_type = 'void' OR event_type IS NULL)
-        ORDER BY created_at DESC LIMIT 1
-      `);
-      if (pgRows(origRaw).length === 0)
-        return res.status(422).json({ message: "No original print event found for this check. Cannot reprint." });
+      // Guard: never print a $0 check.
+      if (Number(itemRow.netPay || 0) <= 0) {
+        return res.status(422).json({ message: "Net pay is $0.00 — no check to reprint for this employee." });
+      }
+
+      // Finalized runs (processed / paid / approved / submitted / voided / reversed) use the
+      // stored payroll_item snapshot as the source of truth — no prior print event required.
+      const FINALIZED_STATUSES = ["processed", "paid", "approved", "submitted", "voided", "reversed"];
+      const isFinalizedRun = FINALIZED_STATUSES.includes(runRow?.status || "");
+
+      // For active (draft/processing) runs, gate on a prior print or void event so
+      // unprocessed items can't be reprinted before they've been printed at least once.
+      if (!isFinalizedRun) {
+        const origRaw = await db.execute(sql`
+          SELECT id FROM check_print_audit_logs
+          WHERE company_id = ${compId}
+            AND payroll_run_id = ${itemRow.payrollRunId}
+            AND worker_id = ${itemRow.workerId}
+            AND (event_type = 'print' OR event_type = 'void' OR event_type IS NULL)
+          ORDER BY created_at DESC LIMIT 1
+        `);
+        if (pgRows(origRaw).length === 0)
+          return res.status(422).json({ message: "No original print event found for this check. Cannot reprint." });
+      }
 
       const [company, worker] = await Promise.all([
         db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`).then(r => pgRow<CheckCompanyRow>(r)),
