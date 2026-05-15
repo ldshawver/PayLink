@@ -1,55 +1,69 @@
-- name: Deploy to VPS
-  uses: appleboy/ssh-action@v1.0.3
-  with:
-    host: ${{ secrets.VPS_HOST }}
-    username: ${{ secrets.VPS_USER }}
-    key: ${{ secrets.VPS_SSH_KEY }}
-    port: 22
-    command_timeout: 30m
-    script_stop: true
-    script: |
-      set -e
-      echo "Starting deployment..."
+name: Deploy PayLink App
 
-      cd /home/paylinkssh/paylink-app/PayLink
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
-      git fetch origin main
-      git reset --hard origin/main
-      echo "✓ Repository updated"
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
 
-      npm ci --legacy-peer-deps
-      echo "✓ Dependencies installed"
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          command_timeout: 30m
+          script_stop: true
+          script: |
+            set -e
+            echo "Starting deployment..."
 
-      npm run build
-      echo "✓ Build completed"
+            cd /home/paylinkssh/paylink-app/PayLink
 
-      pm2 delete paylink 2>/dev/null || true
+            git fetch origin main
+            git reset --hard origin/main
+            echo "✓ Repository updated"
 
-      pm2 start dist/index.cjs \
-        --name paylink \
-        --cwd /home/paylinkssh/paylink-app/PayLink \
-        --interpreter node \
-        --node-args="-r dotenv/config" \
-        -- dotenv_config_path=/etc/paylink/.env
+            npm ci --legacy-peer-deps
+            echo "✓ Dependencies installed"
 
-      pm2 save --force
-      echo "✓ Application started with PM2"
+            npm run build
+            echo "✓ Build completed"
 
-      sleep 5
+            pm2 delete paylink 2>/dev/null || true
 
-      for i in {1..30}; do
-        if curl -fs http://127.0.0.1:8000/health > /dev/null; then
-          echo "✓ Health check passed"
-          echo "✓ Deployment successful"
-          exit 0
-        fi
+            pm2 start dist/index.cjs \
+              --name paylink \
+              --cwd /home/paylinkssh/paylink-app/PayLink \
+              --interpreter node \
+              --node-args="-r dotenv/config" \
+              -- dotenv_config_path=/etc/paylink/.env
 
-        if [ $i -eq 30 ]; then
-          echo "❌ Health check failed after 30 attempts"
-          pm2 status
-          pm2 logs paylink --lines 80 --nostream
-          exit 1
-        fi
+            pm2 save --force
+            echo "✓ Application started with PM2"
 
-        sleep 2
-      done
+            sleep 5
+
+            for i in {1..30}; do
+              if curl -fs http://127.0.0.1:8000/health > /dev/null; then
+                echo "✓ Health check passed"
+                echo "✓ Deployment successful"
+                exit 0
+              fi
+
+              if [ $i -eq 30 ]; then
+                echo "❌ Health check failed after 30 attempts"
+                pm2 status
+                pm2 logs paylink --lines 80 --nostream
+                exit 1
+              fi
+
+              sleep 2
+            done
