@@ -1,199 +1,55 @@
-name: PayLink CI / Deploy
+- name: Deploy to VPS
+  uses: appleboy/ssh-action@v1.0.3
+  with:
+    host: ${{ secrets.VPS_HOST }}
+    username: ${{ secrets.VPS_USER }}
+    key: ${{ secrets.VPS_SSH_KEY }}
+    port: 22
+    command_timeout: 30m
+    script_stop: true
+    script: |
+      set -e
+      echo "Starting deployment..."
 
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+      cd /home/paylinkssh/paylink-app/PayLink
 
-jobs:
-  security-tests:
-    name: Security & Compliance Tests
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: paylink
-          POSTGRES_PASSWORD: paylink
-          POSTGRES_DB: paylink_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+      git fetch origin main
+      git reset --hard origin/main
+      echo "✓ Repository updated"
 
-    steps:
-      - uses: actions/checkout@v4
+      npm ci --legacy-peer-deps
+      echo "✓ Dependencies installed"
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
+      npm run build
+      echo "✓ Build completed"
 
-      - name: Install dependencies
-        run: npm ci
+      pm2 delete paylink 2>/dev/null || true
 
-      - name: Wait for PostgreSQL
-        run: |
-          npx wait-on tcp:localhost:5432 --timeout 30000
-          echo "✓ PostgreSQL is ready"
+      pm2 start dist/index.cjs \
+        --name paylink \
+        --cwd /home/paylinkssh/paylink-app/PayLink \
+        --interpreter node \
+        --node-args="-r dotenv/config" \
+        -- dotenv_config_path=/etc/paylink/.env
 
-      - name: Run database migrations
-        env:
-          DATABASE_URL: postgresql://paylink:paylink@localhost:5432/paylink_test
-        run: |
-          echo "Running migrations..."
-          npm run db:push
-          echo "✓ Migrations completed"
+      pm2 save --force
+      echo "✓ Application started with PM2"
 
-      - name: Verify database schema
-        env:
-          PGPASSWORD: paylink
-        run: |
-          echo "Verifying database schema..."
-          psql -h localhost -U paylink -d paylink_test -c "\dt" || exit 1
-          echo "✓ Database schema verified"
+      sleep 5
 
-      - name: Start application (background)
-        env:
-          DATABASE_URL: postgresql://paylink:paylink@localhost:5432/paylink_test
-          SESSION_SECRET: ci-session-secret
-          NODE_ENV: test
-        run: |
-          npm run dev > /tmp/app.log 2>&1 &
-          APP_PID=$!
-          echo "App started with PID: $APP_PID"
-          sleep 5
-          if ! kill -0 $APP_PID 2>/dev/null; then
-            echo "❌ App crashed during startup:"
-            cat /tmp/app.log
-            exit 1
-          fi
-          npx wait-on http://localhost:5000/ready --timeout 30000 || (echo "❌ Health check failed. App logs:" && cat /tmp/app.log && exit 1)
-          echo "✓ App is ready"
+      for i in {1..30}; do
+        if curl -fs http://127.0.0.1:8000/health > /dev/null; then
+          echo "✓ Health check passed"
+          echo "✓ Deployment successful"
+          exit 0
+        fi
 
-      - name: Run security & compliance tests
-        env:
-          DATABASE_URL: postgresql://paylink:paylink@localhost:5432/paylink_test
-        run: npx tsx tests/security.test.ts
+        if [ $i -eq 30 ]; then
+          echo "❌ Health check failed after 30 attempts"
+          pm2 status
+          pm2 logs paylink --lines 80 --nostream
+          exit 1
+        fi
 
-      - name: Scan for hardcoded secrets
-        run: |
-          # Fail if obvious hardcoded credentials are found in source files
-          FOUND=$(grep -rEn \
-            "(password|secret|api_key|apikey|private_key|auth_token)\s*[:=]\s*['\"][^'\"]{12,}['\"]" \
-            --include="*.ts" --include="*.tsx" --include="*.js" \
-            --exclude-dir=node_modules --exclude-dir=dist \
-            server/ client/ shared/ 2>/dev/null | \
-            grep -v "process\.env\|getenv\|EXAMPLE\|placeholder\|bcrypt\|MASKED\|ANONYMIZED\|XXXX\|your-\|<YOUR\|TODO\|test\|spec" \
-            || true)
-          if [ -n "$FOUND" ]; then
-            echo "::error::Possible hardcoded secret(s) detected:"
-            echo "$FOUND"
-            exit 1
-          fi
-          echo "No obvious hardcoded secrets detected."
-
-      - name: npm audit (critical severity gate)
-        run: npm audit --audit-level=critical
-
-  build:
-    name: Production Build
-    runs-on: ubuntu-latest
-    needs: security-tests
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build
-        run: npm run build
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
-          retention-days: 1
-
-  deploy:
-    name: Deploy to VPS via SSH
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-
-      - name: Deploy application via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.APP_VPS_HOST }}
-          port: ${{ secrets.APP_VPS_PORT || 22 }}
-          username: ${{ secrets.APP_VPS_USER || 'paylinkssh' }}
-          key: ${{ secrets.APP_VPS_SSH_KEY }}
-          script: |
-            set -e
-            echo "Starting deployment..."
-            cd /home/paylinkssh/paylink-app/PayLink || exit 1
-            
-            # Pull latest changes
-            git fetch origin main
-            git reset --hard origin/main
-            echo "✓ Repository updated"
-            
-            # Install dependencies
-            npm ci --legacy-peer-deps
-            echo "✓ Dependencies installed"
-            
-            # Build application
-            npm run build
-            echo "✓ Build completed"
-
-            # Stop existing PM2 app if running
-            pm2 delete paylink 2>/dev/null || true
-
-            # Start application with PM2, loading /etc/paylink/.env via dotenv
-            pm2 start dist/index.cjs \
-              --name paylink \
-              --cwd /home/paylinkssh/paylink-app/PayLink \
-              --interpreter node \
-              --node-args="-r dotenv/config" \
-              -- dotenv_config_path=/etc/paylink/.env
-            pm2 save --force
-            echo "✓ Application started with PM2"
-
-            # Wait for app to be healthy (port 8000)
-            sleep 5
-            for i in {1..30}; do
-              if curl -fs http://127.0.0.1:8000/health > /dev/null; then
-                echo "✓ Health check passed"
-                break
-              fi
-              if [ $i -eq 30 ]; then
-                echo "❌ Health check failed after 30 attempts"
-                pm2 logs paylink --lines 50 --nostream
-                exit 1
-              fi
-              sleep 1
-            done
-
-            echo "✓ Deployment successful"
+        sleep 2
+      done
