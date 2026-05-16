@@ -15903,11 +15903,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
     // MICR font — hard failure for production checks; calibration falls back to Courier
     let micrFont: any = null;
+    let micrFontLoaded = false;
+    let micrFontName = "(none)";
     try {
       const micrPath = path.join(process.cwd(), "client", "public", "fonts", "micrenc.ttf");
       const micrBytes = fs.readFileSync(micrPath);
       micrFont = await doc.embedFont(micrBytes);
-    } catch {
+      micrFontLoaded = true;
+      micrFontName = "micrenc.ttf (E-13B)";
+    } catch (micrErr) {
+      console.error("[CHECK_PDF] MICR font load error:", micrErr);
       if (!isCalibration) {
         throw new Error(
           "MICR font (micrenc.ttf) failed to load. Printing requires the MICR E-13B font " +
@@ -15915,7 +15920,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         );
       }
       micrFont = cour;
+      micrFontName = "Courier (FALLBACK — calibration only)";
     }
+    console.log(`[CHECK_PDF] MICR font loaded: ${micrFontLoaded}`);
+    console.log(`[CHECK_PDF] MICR font name: ${micrFontName}`);
 
     // Show/hide flags from check_templates.layoutConfig; all default true.
     const cfg                = params.layoutConfig || {};
@@ -16022,21 +16030,59 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       page.drawText("VOID", { x: z1x(1.5), y: z1y(2.0), size: 80, font: hvB,
         color: rgb(0.85, 0.1, 0.1), opacity: 0.25, rotate: { type: "degrees" as const, angle: 30 } });
 
-    // ── Company logo placeholder (calibration only; production: leave space) ─
-    drawGuide(z1x(0.30), z1y(0.66), Math.round(0.42 * 72), Math.round(0.42 * 72), "LOGO 0.42in sq");
-    if (isCalibration) {
-      page.drawRectangle({ x: z1x(0.30), y: z1y(0.66), width: Math.round(0.42*72), height: Math.round(0.42*72),
-        borderColor: rgb(0.6, 0.6, 0.6), borderWidth: 0.5, color: rgb(0.91, 0.91, 0.95) });
-      page.drawText("LOGO", { x: z1x(0.30)+4, y: z1y(0.50), size: 5, font: hv, color: rgb(0.5, 0.5, 0.5) });
+    // ── Company icon — x 0.25in, y 0.22in, 0.35in × 0.35in — LEFT of name/address ─
+    // Icon box top-left at (0.25in, 0.22in); bottom of box = 0.22+0.35 = 0.57in from check top
+    const logoX  = z1x(0.25);
+    const logoBot = z1y(0.22 + 0.35);   // PDF Y of bottom edge of icon box
+    const logoW  = Math.round(0.35 * 72);
+    const logoH  = Math.round(0.35 * 72);
+    drawGuide(logoX, logoBot, logoW, logoH, "LOGO 0.35in sq");
+
+    // Attempt to embed company logo from URL if available
+    let logoEmbedded = false;
+    const coLogoUrl: string | undefined = (company as any)?.logo_url || (company as any)?.logoUrl;
+    if (coLogoUrl && !isCalibration) {
+      try {
+        const https = await import("https");
+        const http  = await import("http");
+        const logoBytes: Buffer = await new Promise((resolve, reject) => {
+          const proto = coLogoUrl.startsWith("https") ? https : http;
+          (proto as any).get(coLogoUrl, (res: any) => {
+            const chunks: Buffer[] = [];
+            res.on("data", (c: Buffer) => chunks.push(c));
+            res.on("end", () => resolve(Buffer.concat(chunks)));
+            res.on("error", reject);
+          }).on("error", reject);
+        });
+        const isPng = coLogoUrl.toLowerCase().endsWith(".png") || logoBytes[0] === 0x89;
+        const logoImg = isPng
+          ? await doc.embedPng(logoBytes)
+          : await doc.embedJpg(logoBytes);
+        page.drawImage(logoImg, { x: logoX, y: logoBot, width: logoW, height: logoH });
+        logoEmbedded = true;
+      } catch (logoErr) {
+        console.warn("[CHECK_PDF] Company logo embed failed (skipped):", logoErr);
+      }
     }
 
-    // ── Company block — top-left (x 0.80in) ──────────────────────────────
-    drawGuide(z1x(0.80), z1y(0.90), Math.round(2.2*72), Math.round(0.66*72), "COMPANY BLOCK");
-    if (showCompanyName) page.drawText(coName,  { x: z1x(0.80), y: z1y(0.38), size: 11,  font: hvB, color: rgb(0,   0,   0  ) });
+    if (!logoEmbedded) {
+      // Calibration: draw a labeled placeholder box; production: reserved space only
+      if (isCalibration) {
+        page.drawRectangle({ x: logoX, y: logoBot, width: logoW, height: logoH,
+          borderColor: rgb(0.6, 0.6, 0.6), borderWidth: 0.5, color: rgb(0.91, 0.91, 0.95) });
+        page.drawText("LOGO", { x: logoX + 4, y: logoBot + 4, size: 5, font: hv, color: rgb(0.5, 0.5, 0.5) });
+      }
+    }
+
+    // ── Company block — x 0.68in (right of icon), name at y 0.30in ───────
+    // Spec: name at (0.68in, 0.30in); lines follow at ~12pt intervals
+    const coTextX = z1x(0.68);
+    drawGuide(coTextX, z1y(0.90), Math.round(2.5*72), Math.round(0.66*72), "COMPANY BLOCK");
+    if (showCompanyName) page.drawText(coName,  { x: coTextX, y: z1y(0.30), size: 11,  font: hvB, color: rgb(0,   0,   0  ) });
     if (showCompanyAddr) {
-      if (coAddr1) page.drawText(coAddr1, { x: z1x(0.80), y: z1y(0.56), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
-      if (coAddr2) page.drawText(coAddr2, { x: z1x(0.80), y: z1y(0.72), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
-      if (coPhone) page.drawText(coPhone, { x: z1x(0.80), y: z1y(0.88), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (coAddr1) page.drawText(coAddr1, { x: coTextX, y: z1y(0.46), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (coAddr2) page.drawText(coAddr2, { x: coTextX, y: z1y(0.62), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (coPhone) page.drawText(coPhone, { x: coTextX, y: z1y(0.78), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
     }
 
     // ── Bank block — top-center (center x 4.25in) ────────────────────────
@@ -16085,19 +16131,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     page.drawText(wName, { x: payeeNameX, y: payRowY, size: 11, font: hvB, color: rgb(0, 0, 0) });
     page.drawLine({ start: { x: payLineX1, y: payeeLineY }, end: { x: payLineX2, y: payeeLineY }, color: rgb(0, 0, 0), thickness: 0.9 });
 
-    // Amount box: x 6.42in, top y 1.13in, w 1.48in, h 0.38in; amount right-aligned inside
-    const amtBoxL  = z1x(6.42);
-    const amtBoxT  = z1y(1.13);              // top of box (higher PDF Y value)
-    const amtBoxB  = z1y(1.13 + 0.38);      // bottom of box
-    const amtBoxWd = Math.round(1.48 * 72);
-    const amtBoxHt = amtBoxT - amtBoxB;
-    drawGuide(amtBoxL, amtBoxB, amtBoxWd, amtBoxHt, "AMOUNT BOX");
-    page.drawRectangle({ x: amtBoxL, y: amtBoxB, width: amtBoxWd, height: amtBoxHt,
-      borderColor: rgb(0, 0, 0), borderWidth: 1.2 });
+    // Numeric amount — no box, right-aligned bold 12pt on same baseline as payee name row
+    // Right edge at x 7.82in, baseline at y 1.30in (same as ORDER OF / payee baseline)
     const amtStr   = `$${fmtMoney(netPay)}`;
-    const amtStrW  = Math.round(amtStr.length * 7.0); // approx width at 12pt bold
+    const amtStrW  = Math.round(amtStr.length * 7.0); // approx char width at 12pt bold
     const amtTextX = Math.round(z1x(7.82) - amtStrW);
-    page.drawText(amtStr, { x: amtTextX, y: z1y(1.38), size: 12, font: hvB, color: rgb(0, 0, 0) });
+    drawGuide(amtTextX, z1y(1.38), amtStrW + 4, 14, "AMOUNT TEXT");
+    page.drawText(amtStr, { x: amtTextX, y: payRowY, size: 12, font: hvB, color: rgb(0, 0, 0) });
 
     // ── Legal amount row: "The Sum of" (bold) + written amount + underline ─
     //    "The Sum of" same size/weight as "PAY TO THE ORDER OF" (9pt bold)
