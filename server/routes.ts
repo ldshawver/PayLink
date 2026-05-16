@@ -15871,7 +15871,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
     const dollars = Math.floor(num);
     const cents = Math.round((num - dollars) * 100);
-    return (dollars === 0 ? "Zero" : conv(dollars)) + " and " + String(cents).padStart(2, "0") + "/100";
+    return (dollars === 0 ? "Zero" : conv(dollars)) + " Dollars and " + String(cents).padStart(2, "0") + "/100";
   }
 
   function buildMicrStr(routing: string, account: string, checkNum: string): string {
@@ -16006,131 +16006,144 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
     // ═══════════════════════════════════════════════════════════════════════
     // ZONE 1 — CHECK FACE  (Y: checkBot..H = 540..792)
-    // No outer border box — only functional field lines drawn.
+    // canonicalCheckFaceRenderer v2 — spec-exact inch coordinates.
+    // No outer border, no side rules, no REPRINT watermark on PDF.
     // ═══════════════════════════════════════════════════════════════════════
+    console.log("[CHECK_PDF] using canonicalCheckFaceRenderer v2");
 
-    // Thin side rules only (no bottom border on check face — MICR band handles bottom)
-    page.drawLine({ start: { x: lm - 4, y: checkBot }, end: { x: lm - 4, y: H + gOT      }, color: rgb(0.78, 0.78, 0.78), thickness: 0.4 });
-    page.drawLine({ start: { x: rm + 4, y: checkBot }, end: { x: rm + 4, y: H + gOT      }, color: rgb(0.78, 0.78, 0.78), thickness: 0.4 });
-    page.drawLine({ start: { x: lm - 4, y: H - 1 + gOT }, end: { x: rm + 4, y: H - 1 + gOT }, color: rgb(0.78, 0.78, 0.78), thickness: 0.4 });
-    // MICR band separator
-    page.drawLine({ start: { x: lm - 4, y: micrSepY }, end: { x: rm + 4, y: micrSepY }, color: rgb(0.82, 0.82, 0.82), thickness: 0.4 });
+    // Coordinate helpers: inches from top-left of check zone → PDF page points
+    // z1x: horizontal, with global-left calibration offset
+    // z1y: vertical (PDF Y-from-bottom), with global-top calibration offset
+    const z1x = (inches: number) => Math.round(inches * 72 + gOL);
+    const z1y = (inches: number) => Math.round(H + gOT - inches * 72);
 
+    // VOID watermark only — REPRINT is a UI label only, never printed on PDF
     if (isVoid)
-      page.drawText("VOID", { x: 140, y: checkBot + 110, size: 80, font: hvB, color: rgb(0.85, 0.1, 0.1), opacity: 0.25, rotate: { type: "degrees" as const, angle: 30 } });
-    if (isReprint)
-      page.drawText("REPRINT", { x: 130, y: checkBot + 90, size: 48, font: hvB, color: rgb(0.8, 0.15, 0.15), opacity: 0.18, rotate: { type: "degrees" as const, angle: 40 } });
+      page.drawText("VOID", { x: z1x(1.5), y: z1y(2.0), size: 80, font: hvB,
+        color: rgb(0.85, 0.1, 0.1), opacity: 0.25, rotate: { type: "degrees" as const, angle: 30 } });
 
-    // ── Bank info — top-center ────────────────────────────────────────────────
-    // Configurable via cfg.bankName / cfg.bankAddress; calibration always shows sample values.
+    // ── Company logo placeholder (calibration only; production: leave space) ─
+    drawGuide(z1x(0.30), z1y(0.66), Math.round(0.42 * 72), Math.round(0.42 * 72), "LOGO 0.42in sq");
+    if (isCalibration) {
+      page.drawRectangle({ x: z1x(0.30), y: z1y(0.66), width: Math.round(0.42*72), height: Math.round(0.42*72),
+        borderColor: rgb(0.6, 0.6, 0.6), borderWidth: 0.5, color: rgb(0.91, 0.91, 0.95) });
+      page.drawText("LOGO", { x: z1x(0.30)+4, y: z1y(0.50), size: 5, font: hv, color: rgb(0.5, 0.5, 0.5) });
+    }
+
+    // ── Company block — top-left (x 0.80in) ──────────────────────────────
+    drawGuide(z1x(0.80), z1y(0.90), Math.round(2.2*72), Math.round(0.66*72), "COMPANY BLOCK");
+    if (showCompanyName) page.drawText(coName,  { x: z1x(0.80), y: z1y(0.38), size: 11,  font: hvB, color: rgb(0,   0,   0  ) });
+    if (showCompanyAddr) {
+      if (coAddr1) page.drawText(coAddr1, { x: z1x(0.80), y: z1y(0.56), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (coAddr2) page.drawText(coAddr2, { x: z1x(0.80), y: z1y(0.72), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (coPhone) page.drawText(coPhone, { x: z1x(0.80), y: z1y(0.88), size: 9, font: hv, color: rgb(0.2, 0.2, 0.2) });
+    }
+
+    // ── Bank block — top-center (center x 4.25in) ────────────────────────
     const bankName    = isCalibration ? "Bank of America"                            : (cfg.bankName    || "");
     const bankAddress = isCalibration ? "1100 Alhambra Blvd, Sacramento, CA 95816"  : (cfg.bankAddress || "");
-    const bankBaseY   = H - 14 + gOT;
     if (bankName) {
       const bnW  = bankName.length    * 5.6;
       const bnaW = bankAddress.length * 3.7;
-      page.drawText(bankName,    { x: Math.round(W / 2 - bnW  / 2), y: bankBaseY - 12, size: 10,  font: hvB, color: rgb(0.08, 0.08, 0.32) });
+      const bankCenterX = z1x(4.25);
+      page.drawText(bankName,    { x: Math.round(bankCenterX - bnW  / 2), y: z1y(0.42), size: 10,  font: hvB, color: rgb(0.08, 0.08, 0.32) });
       if (bankAddress)
-        page.drawText(bankAddress, { x: Math.round(W / 2 - bnaW / 2), y: bankBaseY - 24, size: 7.5, font: hv,  color: rgb(0.30, 0.30, 0.30) });
+        page.drawText(bankAddress, { x: Math.round(bankCenterX - bnaW / 2), y: z1y(0.59), size: 8.5, font: hv,  color: rgb(0.30, 0.30, 0.30) });
     }
 
-    // ── Company block — top-left (logo space + text) ─────────────────────────
-    const coBlockX = px(lm, "companyBlock");
-    const coBlockY = py(H - 14 + gOT, "companyBlock");
-    drawGuide(coBlockX, coBlockY - 58, 235, 58, "COMPANY BLOCK");
-    // 24pt logo placeholder shown in calibration; in production the space stays empty unless cfg.logoUrl is set
-    if (isCalibration) {
-      page.drawRectangle({ x: coBlockX, y: coBlockY - 29, width: 22, height: 22, borderColor: rgb(0.6, 0.6, 0.6), borderWidth: 0.5, color: rgb(0.91, 0.91, 0.95) });
-      page.drawText("LOGO", { x: coBlockX + 1, y: coBlockY - 21, size: 4.5, font: hv, color: rgb(0.5, 0.5, 0.5) });
-    }
-    const coTxtX = coBlockX + 28; // shift text right of logo area
-    if (showCompanyName) page.drawText(coName,  { x: coTxtX, y: coBlockY - 13, size: 11,  font: hvB, color: rgb(0,   0,   0  ) });
-    if (showCompanyAddr) {
-      if (coAddr1) page.drawText(coAddr1, { x: coTxtX, y: coBlockY - 26, size: 8.5, font: hv,  color: rgb(0.2, 0.2, 0.2) });
-      if (coAddr2) page.drawText(coAddr2, { x: coTxtX, y: coBlockY - 37, size: 8.5, font: hv,  color: rgb(0.2, 0.2, 0.2) });
-      if (coPhone) page.drawText(coPhone, { x: coTxtX, y: coBlockY - 48, size: 8.5, font: hv,  color: rgb(0.2, 0.2, 0.2) });
+    // ── Check number — right-aligned, no surrounding box (right edge 8.00in) ─
+    drawGuide(z1x(6.75), z1y(0.24), Math.round(1.25*72), Math.round(0.18*72), "CHECK #");
+    if (showCheckNumber) {
+      const cnLabel = `No. ${checkNum}`;
+      const cnWidth = Math.round(cnLabel.length * 5.8); // approx at bold 10pt
+      page.drawText(cnLabel, { x: z1x(8.00) - cnWidth, y: z1y(0.35), size: 10, font: hvB, color: rgb(0, 0, 0) });
     }
 
-    // ── Check number — top-right, plain text, no box ─────────────────────────
-    const cnY = py(H - 14 + gOT, "checkNumber");
-    const cnX = px(rm - 68, "checkNumber");
-    drawGuide(cnX, cnY - 16, 72, 16, "CHECK #");
-    if (showCheckNumber)
-      page.drawText(`No. ${checkNum}`, { x: cnX, y: cnY - 13, size: 11, font: hvB, color: rgb(0, 0, 0) });
+    // ── Date — label above, value above its underline (x 6.75in–8.00in) ──
+    const dtX1 = z1x(6.75), dtX2 = z1x(8.00);
+    drawGuide(dtX1, z1y(0.95), dtX2 - dtX1, Math.round(0.51*72), "DATE BLOCK");
+    page.drawText("DATE",   { x: dtX1, y: z1y(0.52), size: 7.5,  font: hvB, color: rgb(0.35, 0.35, 0.35) });
+    page.drawText(payDate,  { x: dtX1 + 2, y: z1y(0.70), size: 10.5, font: hv,  color: rgb(0,   0,   0  ) });
+    page.drawLine({ start: { x: dtX1, y: z1y(0.76) }, end: { x: dtX2, y: z1y(0.76) }, color: rgb(0, 0, 0), thickness: 0.9 });
+    page.drawText("VOID AFTER 90 DAYS", { x: z1x(6.75), y: z1y(0.95), size: 7, font: hv, color: rgb(0.5, 0.5, 0.5) });
 
-    // ── Date — right column, value ABOVE its underline ────────────────────────
-    const dtBaseY = py(cnY - 26, "date");
-    const dtX     = px(rm - 108, "date");
-    drawGuide(dtX, dtBaseY - 38, 112, 38, "DATE");
-    page.drawText("DATE", { x: dtX, y: dtBaseY,      size: 7.5, font: hvB, color: rgb(0.35, 0.35, 0.35) });
-    page.drawText(payDate, { x: dtX + 2, y: dtBaseY - 15, size: 10.5, font: hv,  color: rgb(0,   0,   0  ) });
-    page.drawLine({ start: { x: dtX, y: dtBaseY - 19 }, end: { x: rm, y: dtBaseY - 19 }, color: rgb(0, 0, 0), thickness: 0.9 });
-    page.drawText("VOID AFTER 90 DAYS", { x: dtX, y: dtBaseY - 30, size: 6.5, font: hv, color: rgb(0.5, 0.5, 0.5) });
+    // ── PAY TO THE ORDER OF — label + payee name ON SAME ROW, payee line below ─
+    //    Amount box right-aligned at x 6.42in, width 1.48in, height 0.38in
+    const payRowY     = z1y(1.30);             // shared baseline for label + payee name
+    const payeeLineY  = z1y(1.39);             // underline below payee name
+    const payeeNameX  = z1x(1.90);
+    const payLineX1   = z1x(1.82), payLineX2 = z1x(6.20);
 
-    // ── PAY TO THE ORDER OF ──────────────────────────────────────────────────
-    // Row 1: "PAY TO THE ORDER OF" label + thin line extending to the amount box
-    // Row 2: Payee name in bold below the label, with full-width underline
-    // Amount box spans both rows on the right (bank-standard layout).
-    const payRowY  = py(micrSepY + 122, "payeeRow");
-    const amtBoxW  = 114;
-    const amtBoxH  = 32;                              // tall enough to span label + payee rows
-    const amtBoxX  = px(rm - amtBoxW, "amountBox");
-    const amtBoxY  = py(payRowY - 14, "amountBox");   // bottom sits just below payee underline
-    const payeeEnd = amtBoxX - 8;
-    drawGuide(lm, payRowY - 14, payeeEnd - lm, 26, "PAYEE ROWS");
+    drawGuide(z1x(0.30), z1y(1.39 + 0.02), payLineX2 - z1x(0.30), Math.round(0.30*72), "PAYEE ROW");
+    page.drawText("PAY TO THE ORDER OF", { x: z1x(0.30), y: payRowY, size: 9, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(wName, { x: payeeNameX, y: payRowY, size: 11, font: hvB, color: rgb(0, 0, 0) });
+    page.drawLine({ start: { x: payLineX1, y: payeeLineY }, end: { x: payLineX2, y: payeeLineY }, color: rgb(0, 0, 0), thickness: 0.9 });
 
-    // Label row
-    page.drawText("PAY TO THE ORDER OF", { x: coBlockX, y: payRowY + 4, size: 8, font: hvB, color: rgb(0, 0, 0) });
-    // Thin line from end of label text to left edge of amount box (label row)
-    const payLabelW = 112; // approximate width of "PAY TO THE ORDER OF" at size 8
-    page.drawLine({ start: { x: coBlockX + payLabelW, y: payRowY }, end: { x: payeeEnd, y: payRowY }, color: rgb(0, 0, 0), thickness: 0.6 });
+    // Amount box: x 6.42in, top y 1.13in, w 1.48in, h 0.38in; amount right-aligned inside
+    const amtBoxL  = z1x(6.42);
+    const amtBoxT  = z1y(1.13);              // top of box (higher PDF Y value)
+    const amtBoxB  = z1y(1.13 + 0.38);      // bottom of box
+    const amtBoxWd = Math.round(1.48 * 72);
+    const amtBoxHt = amtBoxT - amtBoxB;
+    drawGuide(amtBoxL, amtBoxB, amtBoxWd, amtBoxHt, "AMOUNT BOX");
+    page.drawRectangle({ x: amtBoxL, y: amtBoxB, width: amtBoxWd, height: amtBoxHt,
+      borderColor: rgb(0, 0, 0), borderWidth: 1.2 });
+    const amtStr   = `$${fmtMoney(netPay)}`;
+    const amtStrW  = Math.round(amtStr.length * 7.0); // approx width at 12pt bold
+    const amtTextX = Math.round(z1x(7.82) - amtStrW);
+    page.drawText(amtStr, { x: amtTextX, y: z1y(1.38), size: 12, font: hvB, color: rgb(0, 0, 0) });
 
-    // Payee name — bold, on its own line below the label
-    page.drawText(wName, { x: coBlockX, y: payRowY - 10, size: 13, font: hvB, color: rgb(0, 0, 0) });
-    // Bold underline spanning full check width (extends under amount box too — standard on laser checks)
-    page.drawLine({ start: { x: coBlockX, y: payRowY - 15 }, end: { x: rm, y: payRowY - 15 }, color: rgb(0, 0, 0), thickness: 1.1 });
+    // ── Legal amount row: "The Sum of" (bold) + written amount + underline ─
+    //    "The Sum of" same size/weight as "PAY TO THE ORDER OF" (9pt bold)
+    //    Written amount includes Dollars: "Forty Dollars and 00/100"
+    //    Underline from x 1.30in to x 7.20in at y 1.84in; no underline under label
+    const legalY      = z1y(1.75);
+    const legalLineY  = z1y(1.84);
+    const writtenX    = z1x(1.30);
+    const writtenEndX = z1x(7.20);
+    const writtenStr  = amtWords.length > 58 ? amtWords.slice(0, 55) + "…" : amtWords;
+    drawGuide(z1x(0.30), legalLineY - 2, writtenEndX - z1x(0.30), Math.round(0.15*72), "LEGAL AMT");
+    page.drawText("The Sum of", { x: z1x(0.30), y: legalY, size: 9,   font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(writtenStr,   { x: writtenX,   y: legalY, size: 10.5, font: hv,  color: rgb(0, 0, 0) });
+    page.drawLine({ start: { x: writtenX, y: legalLineY }, end: { x: writtenEndX, y: legalLineY },
+      color: rgb(0, 0, 0), thickness: 0.6 });
 
-    // Amount box — aligned to right, spanning label + payee rows
-    drawGuide(amtBoxX, amtBoxY, amtBoxW, amtBoxH, "AMOUNT BOX");
-    page.drawRectangle({ x: amtBoxX, y: amtBoxY, width: amtBoxW, height: amtBoxH, borderColor: rgb(0, 0, 0), borderWidth: 1.2 });
-    page.drawText(`$${fmtMoney(netPay)}`, { x: amtBoxX + 6, y: amtBoxY + 11, size: 12, font: hvB, color: rgb(0, 0, 0) });
+    // ── Payee mailing address — moved lower (x 1.90in) ───────────────────
+    drawGuide(z1x(1.90), z1y(2.22 + 0.12), Math.round(3.0*72), Math.round(0.30*72), "PAYEE ADDR");
+    if (wStreet)       page.drawText(wStreet,       { x: z1x(1.90), y: z1y(2.05), size: 9, font: hv, color: rgb(0, 0, 0) });
+    if (wCityStateZip) page.drawText(wCityStateZip, { x: z1x(1.90), y: z1y(2.22), size: 9, font: hv, color: rgb(0, 0, 0) });
 
-    // ── Amount in words ("The Sum of…") — directly below payee row ────────
-    const wordsY   = py(payRowY - 29, "amountWords");
-    const wordsStr = "The Sum of " + (amtWords.length > 70 ? amtWords.slice(0, 67) + "..." : amtWords);
-    drawGuide(coBlockX, wordsY - 2, rm - coBlockX, 14, "AMOUNT WORDS");
-    page.drawText(wordsStr, { x: coBlockX, y: wordsY, size: 9.5, font: hv, color: rgb(0, 0, 0) });
-    // Fill line with dashes after the text
-    const fillX = coBlockX + wordsStr.length * 3.85;
-    if (fillX < rm - 10) page.drawText(" —————————————————", { x: Math.min(fillX, rm - 100), y: wordsY, size: 9.5, font: hv, color: rgb(0, 0, 0) });
-    page.drawLine({ start: { x: coBlockX, y: wordsY - 4 }, end: { x: rm, y: wordsY - 4 }, color: rgb(0, 0, 0), thickness: 0.6 });
+    // ── Memo (left) + Signature (right) — both at y 2.55in/2.62in ────────
+    //    Must not enter MICR clear band (starts y 2.875in from check top)
+    const memoLabelY = z1y(2.55);
+    const memoLineY  = z1y(2.62);
+    const memoText   = pStart !== "—" && pEnd !== "—" ? `Pay period ${pStart} – ${pEnd}` : "";
+    drawGuide(z1x(0.30), memoLineY - 2, Math.round(3.75*72), Math.round(0.24*72), "MEMO+SIG");
+    page.drawText("MEMO:",   { x: z1x(0.30), y: memoLabelY, size: 8,   font: hvB, color: rgb(0.35, 0.35, 0.35) });
+    page.drawText(memoText,  { x: z1x(0.80), y: memoLabelY, size: 8.5, font: hv,  color: rgb(0,   0,   0  ) });
+    page.drawLine({ start: { x: z1x(0.75), y: memoLineY }, end: { x: z1x(3.95), y: memoLineY },
+      color: rgb(0, 0, 0), thickness: 0.6 });
 
-    // ── Payee mailing address — below words, above memo ──────────────────────
-    const payeeAddrX = px(coBlockX, "payeeAddress");
-    const payeeAddrY = py(wordsY - 18, "payeeAddress");
-    drawGuide(payeeAddrX, payeeAddrY - 28, 260, 28, "PAYEE ADDRESS");
-    if (wStreet)       page.drawText(wStreet,       { x: payeeAddrX, y: payeeAddrY,      size: 9.5, font: hv, color: rgb(0, 0, 0) });
-    if (wCityStateZip) page.drawText(wCityStateZip, { x: payeeAddrX, y: payeeAddrY - 14, size: 9.5, font: hv, color: rgb(0, 0, 0) });
+    const sigLineY = memoLineY; // same Y as memo underline per spec
+    const sigX1    = z1x(5.35), sigX2 = z1x(7.95);
+    const sigLabel  = "AUTHORIZED SIGNATURE";
+    const sigLabelW = Math.round(sigLabel.length * 3.5);
+    const sigCenterX = z1x(6.65);
+    page.drawLine({ start: { x: sigX1, y: sigLineY }, end: { x: sigX2, y: sigLineY },
+      color: rgb(0, 0, 0), thickness: 0.6 });
+    page.drawText(sigLabel, { x: Math.round(sigCenterX - sigLabelW / 2), y: z1y(2.78),
+      size: 7, font: hv, color: rgb(0.4, 0.4, 0.4) });
 
-    // ── Memo (left) + Signature (right) ─────────────────────────────────────
-    const memoY    = py(payeeAddrY - 26, "memo");
-    const memoText = pStart !== "—" && pEnd !== "—" ? `Pay period ${pStart} – ${pEnd}` : "";
-    drawGuide(coBlockX, memoY - 2, 225, 14, "MEMO");
-    page.drawText("MEMO:", { x: coBlockX, y: memoY, size: 8,   font: hvB, color: rgb(0.35, 0.35, 0.35) });
-    page.drawText(memoText, { x: coBlockX + 38, y: memoY, size: 8.5, font: hv,  color: rgb(0, 0, 0) });
-    page.drawLine({ start: { x: coBlockX, y: memoY - 4 }, end: { x: coBlockX + 255, y: memoY - 4 }, color: rgb(0, 0, 0), thickness: 0.6 });
-    const sigY = py(memoY, "signature");
-    const sigX = px(rm - 170, "signature");
-    drawGuide(sigX, sigY - 2, 174, 14, "SIGNATURE");
-    page.drawLine({ start: { x: sigX, y: sigY }, end: { x: sigX + 174, y: sigY }, color: rgb(0, 0, 0), thickness: 0.6 });
-    page.drawText("AUTHORIZED SIGNATURE", { x: sigX + 10, y: sigY - 10, size: 6.5, font: hv, color: rgb(0.4, 0.4, 0.4) });
-
-    // ── MICR line ────────────────────────────────────────────────────────────
+    // ── MICR — inside clear band y 2.875in–3.5in, baseline at y 3.3125in ─
+    //    No other drawing inside this band.
+    drawGuide(z1x(0), z1y(3.5), W, Math.round(0.625*72), "MICR CLEAR BAND");
     if (showMicrLine)
-      page.drawText(buildMicrStr(routing, account, checkNum), { x: lm, y: micrBase, size: 12, font: micrFont, color: rgb(0, 0, 0) });
+      page.drawText(buildMicrStr(routing, account, checkNum),
+        { x: z1x(0.50), y: z1y(3.3125), size: 12, font: micrFont, color: rgb(0, 0, 0) });
 
-    // Zone 1 / Zone 2 separator (dashed cut line)
-    page.drawLine({ start: { x: 0, y: checkBot - 1 }, end: { x: W, y: checkBot - 1 }, color: rgb(0.5, 0.5, 0.5), thickness: 0.5, dashArray: [4, 4] });
+    // Zone 1 / Zone 2 separator (dashed cut line between zones)
+    page.drawLine({ start: { x: 0, y: checkBot - 1 }, end: { x: W, y: checkBot - 1 },
+      color: rgb(0.5, 0.5, 0.5), thickness: 0.5, dashArray: [4, 4] });
 
     // ═══════════════════════════════════════════════════════════════════════
     // ZONE 2 — MAIL / PAYSTUB PANEL  (Y: mailBot..checkBot = 288..540)
@@ -16315,7 +16328,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // Two-column table: EARNINGS (left half) | DEDUCTIONS (right half)
     const midX  = Math.round(W / 2) - 5;
     const rHalf = midX + 10;
-    const e1 = lm, e2 = lm + 120, e3 = lm + 165, e4 = lm + 210, e5 = midX - 55;
+    // e1=DESCRIPTION e2=HOURS e3=RATE e4=CURRENT e5=YTD  (left-to-right, no overlap)
+    // midX≈301; old e5=midX-55=246 < e4=250 caused YTDCURRENT merge & "$400" display bug
+    const e1 = lm, e2 = lm + 110, e3 = lm + 162, e4 = lm + 210, e5 = lm + 258;
     const d1 = rHalf, d4 = rm - 82,  d5 = rm - 28;
 
     page.drawRectangle({ x: lm - 2,     y: z3Y - 4, width: midX - lm + 2,  height: 14, color: rgb(0.88, 0.88, 0.88) });
