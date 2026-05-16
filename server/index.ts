@@ -236,7 +236,7 @@ app.use((req, res, next) => {
 
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("X-XSS-Protection", "1; mode=block");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   if (isProduction) {
@@ -258,7 +258,7 @@ app.use((_req, res, next) => {
     isProduction
       ? "connect-src 'self' https://api.stripe.com https://*.stripe.com"   // production: known endpoints only
       : "connect-src 'self' https: wss:",                                  // dev: broad + Vite HMR
-    "frame-ancestors 'none'",
+    "frame-ancestors 'self'",
     "form-action 'self'",
     "object-src 'none'",
     "base-uri 'self'",
