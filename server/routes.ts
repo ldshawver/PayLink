@@ -15886,15 +15886,32 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     //   'b' = ⑇ amount symbol (not used in basic check layout)
     //   'c' = ⑈ on-us symbol
     //   'd' = ⑉ dash symbol
-    // Standard US MICR sequence: ⑆routing⑆ account⑈ checkNum⑈
-    const T   = "a"; // transit ⑆
-    const O   = "c"; // on-us  ⑈
-    const r   = routing.replace(/\D/g, "").slice(0, 9).padStart(9, "0");
-    const a   = account.replace(/\D/g, "").slice(0, 17);
-    // MICR check number matches visible zero-padded number, right-justified in 10-char field
+    //
+    // ANSI X9.7 BUSINESS CHECK field order (checks > 6 inches):
+    //   Auxiliary On-Us  |  Transit Field    |  On-Us Field
+    //   ⑈ checknum ⑈       ⑆ routing ⑆         account ⑈
+    //
+    // This differs from personal-check order (⑆ routing ⑆ account ⑈ check ⑈).
+    const T      = "a"; // ⑆ transit
+    const O      = "c"; // ⑈ on-us
+    const r      = routing.replace(/\D/g, "").slice(0, 9).padStart(9, "0");
+    const a      = account.replace(/\D/g, "").slice(0, 17);
     const fmtChk = formatCheckNumber(checkNum);
-    const chk = fmtChk.padStart(10, " ");
-    return `${T}${r}${T}  ${a}${O}  ${chk}${O}`;
+    // Auxiliary On-Us field: ⑈ checknum ⑈ (check number only, no padding spaces)
+    const auxOnUs = `${O}${fmtChk}${O}`;
+    return `${auxOnUs}  ${T}${r}${T}  ${a}${O}`;
+  }
+
+  // Build fractional ABA routing number for human-readable backup on check face.
+  // Standard format: numerator = "FF-IIII" (Federal Reserve prefix - institution),
+  // denominator = Fed district code derived from routing number.
+  function buildFractionalRouting(routing: string): string {
+    const r = routing.replace(/\D/g, "").padStart(9, "0");
+    if (r.length < 9 || r === "000000000") return "";
+    const ff   = r.slice(0, 2);  // Federal Reserve prefix (district + half)
+    const iiii = r.slice(2, 6);  // institution identifier
+    const dist = r.slice(0, 2);  // denominator = Fed district
+    return `${ff}-${iiii}\n${dist}`;
   }
 
   async function renderCheckPdf(params: {
@@ -16112,6 +16129,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       page.drawText(bankName,    { x: Math.round(bankCenterX - bnW  / 2), y: z1y(0.42), size: 10,  font: hvB, color: rgb(0.08, 0.08, 0.32) });
       if (bankAddress)
         page.drawText(bankAddress, { x: Math.round(bankCenterX - bnaW / 2), y: z1y(0.59), size: 8.5, font: hv,  color: rgb(0.30, 0.30, 0.30) });
+    }
+
+    // ── Fractional ABA routing — upper-right corner (x ~5.25in), ANSI X9 requirement ─
+    //    Human-readable backup to the MICR routing code. Format: FF-IIII / FD
+    //    where FF=Fed district prefix, IIII=institution id, FD=denominator district.
+    {
+      const fracStr = buildFractionalRouting(routing);
+      if (fracStr) {
+        const [fracNum, fracDen] = fracStr.split("\n");
+        const fracX = z1x(5.25);
+        const fracNumY  = z1y(0.17);   // numerator baseline
+        const fracLineY = z1y(0.22);   // fraction rule
+        const fracDenY  = z1y(0.32);   // denominator baseline
+        drawGuide(fracX, fracDenY - 2, 70, 26, "FRACTIONAL RTG");
+        page.drawText(fracNum, { x: fracX, y: fracNumY, size: 7.5, font: hv, color: rgb(0.25, 0.25, 0.25) });
+        page.drawLine({ start: { x: fracX, y: fracLineY }, end: { x: fracX + 55, y: fracLineY }, color: rgb(0.35, 0.35, 0.35), thickness: 0.6 });
+        page.drawText(fracDen, { x: fracX, y: fracDenY, size: 7.5, font: hv, color: rgb(0.25, 0.25, 0.25) });
+      }
     }
 
     // ── Check number — right edge at 7.15in (≈0.85in left of right margin) ─
