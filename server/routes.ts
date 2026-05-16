@@ -3593,7 +3593,7 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Payroll processing error:", error);
       const detail = error?.message || String(error);
-      res.status(500).json({ message: "Failed to process payroll", detail });
+      res.status(500).json({ message: detail || "Failed to process payroll", detail });
     }
   });
 

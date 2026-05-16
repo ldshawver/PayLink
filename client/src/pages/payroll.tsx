@@ -119,7 +119,10 @@ function ProcessPayrollTab() {
       let description = err.message;
       const jsonStart = description.indexOf("{");
       if (jsonStart !== -1) {
-        try { description = JSON.parse(description.slice(jsonStart)).message || description; } catch { /* keep raw */ }
+        try {
+          const parsed = JSON.parse(description.slice(jsonStart));
+          description = parsed.detail || parsed.message || description;
+        } catch { /* keep raw */ }
       }
       toast({ title: "Payroll Error", description, variant: "destructive" });
     },

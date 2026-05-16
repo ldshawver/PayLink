@@ -3272,6 +3272,46 @@ Thank you,
     console.log("Auto-migration skipped (contractor_hub normalization):", (e as Error).message);
   }
 
+  // ── Payroll tax engine tables (must exist before any payroll run is processed) ─
+  try {
+    const { db: dbTax } = await import("./db");
+    const { sql: sqlTax } = await import("drizzle-orm");
+    await dbTax.execute(sqlTax`CREATE TABLE IF NOT EXISTS payroll_item_taxes (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      payroll_item_id VARCHAR NOT NULL REFERENCES payroll_items(id) ON DELETE CASCADE,
+      tax_code TEXT NOT NULL,
+      tax_name TEXT NOT NULL,
+      taxable_wages NUMERIC DEFAULT 0,
+      rate NUMERIC DEFAULT 0,
+      amount NUMERIC DEFAULT 0,
+      is_employer_paid BOOLEAN DEFAULT FALSE,
+      state_code TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await dbTax.execute(sqlTax`CREATE TABLE IF NOT EXISTS payroll_tax_snapshots (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      payroll_run_id VARCHAR NOT NULL REFERENCES payroll_runs(id) ON DELETE CASCADE,
+      company_id VARCHAR NOT NULL REFERENCES companies(id),
+      snapshot_json TEXT NOT NULL,
+      engine_version TEXT DEFAULT '1.0.0',
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await dbTax.execute(sqlTax`CREATE TABLE IF NOT EXISTS payroll_overrides (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      payroll_item_id VARCHAR NOT NULL REFERENCES payroll_items(id) ON DELETE CASCADE,
+      tax_code TEXT NOT NULL,
+      original_amount NUMERIC NOT NULL,
+      override_amount NUMERIC NOT NULL,
+      reason TEXT NOT NULL,
+      overridden_by VARCHAR NOT NULL,
+      overridden_at TIMESTAMP DEFAULT NOW(),
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    console.log("Auto-migration OK: payroll_item_taxes, payroll_tax_snapshots, payroll_overrides tables");
+  } catch (e) {
+    console.log("Auto-migration skipped (payroll tax tables):", (e as Error).message);
+  }
+
   const { seedDatabase } = await import("./seed");
   try {
     await seedDatabase();
