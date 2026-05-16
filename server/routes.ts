@@ -15894,7 +15894,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // MICR check number matches visible zero-padded number, right-justified in 10-char field
     const fmtChk = formatCheckNumber(checkNum);
     const chk = fmtChk.padStart(10, " ");
-    return `${T}${r}${T} ${a}${O} ${chk}${O}`;
+    return `${T}${r}${T}  ${a}${O}  ${chk}${O}`;
   }
 
   async function renderCheckPdf(params: {
@@ -15916,7 +15916,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     let micrFont: any = null;
     let micrFontLoaded = false;
     const MICR_FONT_FILE = "ConnectCodeMICRT_X9.ttf"; // ANSI X9.7 compliant E-13B
-    const MICR_FONT_SIZE = 20;                         // 20pt — visible, machine-weight
+    const MICR_FONT_SIZE = 18;                         // 18pt — ANSI X9.7 machine-weight
     let micrFontName = "(none)";
     try {
       const micrPath = path.join(process.cwd(), "client", "public", "fonts", MICR_FONT_FILE);
@@ -16114,13 +16114,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         page.drawText(bankAddress, { x: Math.round(bankCenterX - bnaW / 2), y: z1y(0.59), size: 8.5, font: hv,  color: rgb(0.30, 0.30, 0.30) });
     }
 
-    // ── Check number — right edge at 7.55in (≈0.45in left of old 8.00in edge) ─
+    // ── Check number — right edge at 7.15in (≈0.85in left of right margin) ─
     //    Zero-padded to 4 digits; visually aligns with DATE block below it
-    drawGuide(z1x(6.30), z1y(0.24), Math.round(1.25*72), Math.round(0.18*72), "CHECK #");
+    drawGuide(z1x(5.90), z1y(0.24), Math.round(1.25*72), Math.round(0.18*72), "CHECK #");
     if (showCheckNumber) {
       const cnLabel = `No. ${fmtCheckNum}`;
       const cnWidth = Math.round(cnLabel.length * 5.8); // approx at bold 10pt
-      page.drawText(cnLabel, { x: z1x(7.55) - cnWidth, y: z1y(0.35), size: 10, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(cnLabel, { x: z1x(7.15) - cnWidth, y: z1y(0.35), size: 10, font: hvB, color: rgb(0, 0, 0) });
     }
 
     // ── Date — label above, value above its underline (x 6.75in–8.00in) ──
@@ -16173,14 +16173,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       color: rgb(0, 0, 0), thickness: 0.6 });
 
     // ── Payee mailing address — moved lower (x 1.90in) ───────────────────
-    drawGuide(z1x(1.90), z1y(2.22 + 0.12), Math.round(3.0*72), Math.round(0.30*72), "PAYEE ADDR");
-    if (wStreet)       page.drawText(wStreet,       { x: z1x(1.90), y: z1y(2.05), size: 9, font: hv, color: rgb(0, 0, 0) });
-    if (wCityStateZip) page.drawText(wCityStateZip, { x: z1x(1.90), y: z1y(2.22), size: 9, font: hv, color: rgb(0, 0, 0) });
+    drawGuide(z1x(1.90), z1y(2.40 + 0.12), Math.round(3.0*72), Math.round(0.30*72), "PAYEE ADDR");
+    if (wStreet)       page.drawText(wStreet,       { x: z1x(1.90), y: z1y(2.23), size: 9, font: hv, color: rgb(0, 0, 0) });
+    if (wCityStateZip) page.drawText(wCityStateZip, { x: z1x(1.90), y: z1y(2.40), size: 9, font: hv, color: rgb(0, 0, 0) });
 
-    // ── Memo (left) + Signature (right) — both at y 2.55in/2.62in ────────
+    // ── Memo (left) + Signature (right) — both at y 2.65in/2.72in ────────
     //    Must not enter MICR clear band (starts y 2.875in from check top)
-    const memoLabelY = z1y(2.55);
-    const memoLineY  = z1y(2.62);
+    const memoLabelY = z1y(2.65);
+    const memoLineY  = z1y(2.72);
     const memoText   = pStart !== "—" && pEnd !== "—" ? `Pay period ${pStart} – ${pEnd}` : "";
     drawGuide(z1x(0.30), memoLineY - 2, Math.round(3.75*72), Math.round(0.24*72), "MEMO+SIG");
     page.drawText("MEMO:",   { x: z1x(0.30), y: memoLabelY, size: 8,   font: hvB, color: rgb(0.35, 0.35, 0.35) });
@@ -16198,12 +16198,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     page.drawText(sigLabel, { x: Math.round(sigCenterX - sigLabelW / 2), y: z1y(2.78),
       size: 7, font: hv, color: rgb(0.4, 0.4, 0.4) });
 
-    // ── MICR — inside clear band y 2.875in–3.5in, baseline at y 3.3125in ─
+    // ── MICR — inside clear band y 2.875in–3.5in, baseline at y 3.38in ──
     //    No other drawing inside this band.
     drawGuide(z1x(0), z1y(3.5), W, Math.round(0.625*72), "MICR CLEAR BAND");
     if (showMicrLine)
       page.drawText(buildMicrStr(routing, account, checkNum),
-        { x: z1x(0.50), y: z1y(3.3125), size: MICR_FONT_SIZE, font: micrFont, color: rgb(0, 0, 0) });
+        { x: z1x(0.50), y: z1y(3.38), size: MICR_FONT_SIZE, font: micrFont, color: rgb(0, 0, 0) });
 
     // Zone 1 / Zone 2 separator (dashed cut line between zones)
     page.drawLine({ start: { x: 0, y: checkBot - 1 }, end: { x: W, y: checkBot - 1 },
@@ -16397,8 +16397,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const rHalf = midX + 10;
     // e1=DESCRIPTION e2=HOURS e3=RATE e4=CURRENT e5=YTD  (left-to-right, no overlap)
     // midX≈301; old e5=midX-55=246 < e4=250 caused YTDCURRENT merge & "$400" display bug
-    const e1 = lm, e2 = lm + 110, e3 = lm + 162, e4 = lm + 210, e5 = lm + 258;
-    const d1 = rHalf, d4 = rm - 82,  d5 = rm - 28;
+    const e1 = lm, e2 = lm + 110, e3 = lm + 162, e4 = lm + 210, e5 = lm + 245;
+    const d1 = rHalf + 8, d4 = rm - 82,  d5 = rm - 28;
 
     page.drawRectangle({ x: lm - 2,     y: z3Y - 4, width: midX - lm + 2,  height: 14, color: rgb(0.88, 0.88, 0.88) });
     page.drawRectangle({ x: rHalf - 2,  y: z3Y - 4, width: rm - rHalf + 2, height: 14, color: rgb(0.88, 0.88, 0.88) });
