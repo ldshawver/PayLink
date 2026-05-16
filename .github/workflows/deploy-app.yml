@@ -31,6 +31,7 @@ jobs:
             git reset --hard origin/main
             echo "✓ Repository updated"
 
+            sudo rm -rf node_modules 2>/dev/null || rm -rf node_modules 2>/dev/null || true
             npm ci --legacy-peer-deps
             echo "✓ Dependencies installed"
 
@@ -53,7 +54,7 @@ jobs:
             sleep 5
 
             for i in {1..30}; do
-              if curl -fs http://127.0.0.1:8001/health > /dev/null; then
+              if curl -fs http://127.0.0.1:8000/health > /dev/null; then
                 echo "✓ Health check passed"
                 echo "✓ Deployment successful"
                 exit 0
