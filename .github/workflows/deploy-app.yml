@@ -31,11 +31,20 @@ jobs:
             git reset --hard origin/main
             echo "✓ Repository updated"
 
-            sudo rm -rf node_modules 2>/dev/null || rm -rf node_modules 2>/dev/null || true
+            # Take ownership of any root-owned build artifacts from prior sudo runs.
+            # This must happen before rm or npm, otherwise both will fail with EACCES.
+            sudo chown -R paylinkssh:paylinkssh . 2>/dev/null || true
+
+            rm -rf node_modules || {
+              echo "❌ Cannot remove node_modules (still root-owned). Fix with:"
+              echo "   ssh into VPS as root and run:"
+              echo "   sudo chown -R paylinkssh:paylinkssh /home/paylinkssh/paylink-app/PayLink"
+              exit 1
+            }
             npm ci --legacy-peer-deps
             echo "✓ Dependencies installed"
 
-            sudo rm -rf dist/ 2>/dev/null || rm -rf dist/ 2>/dev/null || true
+            rm -rf dist/
             npm run build
             echo "✓ Build completed"
 
