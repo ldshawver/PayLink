@@ -15950,7 +15950,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const checkBot = H - checkH + gOT;      // bottom of Zone 1 (540 with gOT=0)
     const mailBot  = checkBot - mailH;      // bottom of Zone 2 (288 with gOT=0)
     const micrBandH = 45;                   // 0.625" MICR clear band (ANSI X9.7)
-    const micrBase  = checkBot + 12;        // MICR baseline, inside Zone 1 bottom
+    const micrBase  = checkBot + 14;        // MICR baseline — 0.1875" (13.5pt) from check bottom per ANSI X9.7
     const micrSepY  = checkBot + micrBandH; // top of MICR band = 585
 
     // ── Data values ─────────────────────────────────────────────────────────
@@ -16064,24 +16064,35 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     page.drawText("VOID AFTER 90 DAYS", { x: dtX, y: dtBaseY - 30, size: 6.5, font: hv, color: rgb(0.5, 0.5, 0.5) });
 
     // ── PAY TO THE ORDER OF ──────────────────────────────────────────────────
-    // 115pt above micrSepY = Y≈700 (gOT=0). Leaves room for words + address + memo above MICR band.
-    const payRowY  = py(micrSepY + 115, "payeeRow");
+    // Row 1: "PAY TO THE ORDER OF" label + thin line extending to the amount box
+    // Row 2: Payee name in bold below the label, with full-width underline
+    // Amount box spans both rows on the right (bank-standard layout).
+    const payRowY  = py(micrSepY + 122, "payeeRow");
     const amtBoxW  = 114;
-    const amtBoxH  = 28;
+    const amtBoxH  = 32;                              // tall enough to span label + payee rows
     const amtBoxX  = px(rm - amtBoxW, "amountBox");
-    const amtBoxY  = py(payRowY - 8, "amountBox");
-    const payeeEnd = amtBoxX - 10;
-    drawGuide(lm, payRowY - 8, payeeEnd - lm, 20, "PAYEE ROW");
-    page.drawText("PAY TO THE ORDER OF", { x: coBlockX, y: payRowY + 5, size: 8,  font: hvB, color: rgb(0, 0, 0) });
-    page.drawText(wName,                  { x: coBlockX + 150, y: payRowY + 4, size: 13, font: hvB, color: rgb(0, 0, 0) });
-    page.drawLine({ start: { x: coBlockX + 148, y: payRowY }, end: { x: payeeEnd, y: payRowY }, color: rgb(0, 0, 0), thickness: 1.1 });
-    // Clean amount box — no internal divider line
+    const amtBoxY  = py(payRowY - 14, "amountBox");   // bottom sits just below payee underline
+    const payeeEnd = amtBoxX - 8;
+    drawGuide(lm, payRowY - 14, payeeEnd - lm, 26, "PAYEE ROWS");
+
+    // Label row
+    page.drawText("PAY TO THE ORDER OF", { x: coBlockX, y: payRowY + 4, size: 8, font: hvB, color: rgb(0, 0, 0) });
+    // Thin line from end of label text to left edge of amount box (label row)
+    const payLabelW = 112; // approximate width of "PAY TO THE ORDER OF" at size 8
+    page.drawLine({ start: { x: coBlockX + payLabelW, y: payRowY }, end: { x: payeeEnd, y: payRowY }, color: rgb(0, 0, 0), thickness: 0.6 });
+
+    // Payee name — bold, on its own line below the label
+    page.drawText(wName, { x: coBlockX, y: payRowY - 10, size: 13, font: hvB, color: rgb(0, 0, 0) });
+    // Bold underline spanning full check width (extends under amount box too — standard on laser checks)
+    page.drawLine({ start: { x: coBlockX, y: payRowY - 15 }, end: { x: rm, y: payRowY - 15 }, color: rgb(0, 0, 0), thickness: 1.1 });
+
+    // Amount box — aligned to right, spanning label + payee rows
     drawGuide(amtBoxX, amtBoxY, amtBoxW, amtBoxH, "AMOUNT BOX");
     page.drawRectangle({ x: amtBoxX, y: amtBoxY, width: amtBoxW, height: amtBoxH, borderColor: rgb(0, 0, 0), borderWidth: 1.2 });
-    page.drawText(`$${fmtMoney(netPay)}`, { x: amtBoxX + 6, y: amtBoxY + 9, size: 11, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(`$${fmtMoney(netPay)}`, { x: amtBoxX + 6, y: amtBoxY + 11, size: 12, font: hvB, color: rgb(0, 0, 0) });
 
-    // ── Amount in words ("The Sum of…") — directly below PAY TO ORDER ────────
-    const wordsY   = py(payRowY - 16, "amountWords");
+    // ── Amount in words ("The Sum of…") — directly below payee row ────────
+    const wordsY   = py(payRowY - 29, "amountWords");
     const wordsStr = "The Sum of " + (amtWords.length > 70 ? amtWords.slice(0, 67) + "..." : amtWords);
     drawGuide(coBlockX, wordsY - 2, rm - coBlockX, 14, "AMOUNT WORDS");
     page.drawText(wordsStr, { x: coBlockX, y: wordsY, size: 9.5, font: hv, color: rgb(0, 0, 0) });
@@ -16277,7 +16288,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // Banner
     const z3BannerY = mailBot - 14;
     page.drawRectangle({ x: lm - 4, y: z3BannerY - 4, width: rm - lm + 8, height: 13, color: rgb(0.93, 0.93, 0.93) });
-    page.drawText("EARNINGS STATEMENT — DETACH BEFORE CASHING", { x: lm, y: z3BannerY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText("EMPLOYEE EARNINGS STATEMENT — DETACH BEFORE CASHING", { x: lm, y: z3BannerY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
 
     // Employee info (left) + period dates (right)
     let z3Y = z3BannerY - 14;
