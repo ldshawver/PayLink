@@ -15874,6 +15874,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return (dollars === 0 ? "Zero" : conv(dollars)) + " Dollars and " + String(cents).padStart(2, "0") + "/100";
   }
 
+  // Zero-pad check number to `length` digits (default 4).
+  // If the number already exceeds `length` digits it is kept as-is.
+  function formatCheckNumber(n: string | number, length = 4): string {
+    return String(n).replace(/\D/g, "").padStart(length, "0");
+  }
+
   function buildMicrStr(routing: string, account: string, checkNum: string): string {
     // ConnectCodeMICRT_X9.ttf (ANSI X9.7 compliant E-13B):
     //   'a' = ⑆ transit routing delimiter
@@ -15885,7 +15891,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const O   = "c"; // on-us  ⑈
     const r   = routing.replace(/\D/g, "").slice(0, 9).padStart(9, "0");
     const a   = account.replace(/\D/g, "").slice(0, 17);
-    const chk = checkNum.replace(/\D/g, "").slice(0, 10).padStart(10, " ");
+    // MICR check number matches visible zero-padded number, right-justified in 10-char field
+    const fmtChk = formatCheckNumber(checkNum);
+    const chk = fmtChk.padStart(10, " ");
     return `${T}${r}${T} ${a}${O} ${chk}${O}`;
   }
 
@@ -15977,7 +15985,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const netPay   = isCalibration ? 1234.56 : Number(item?.netPay   || 0);
     const grossPay = isCalibration ? 1380.23 : Number(item?.grossPay || 0);
     const totalDed = isCalibration ? 145.67  : Number(item?.deductions || 0);
-    const checkNum = isCalibration ? "0001"  : String(item?.checkNumber || "0000");
+    const checkNum    = isCalibration ? "0001"  : String(item?.checkNumber || "0000");
+    const fmtCheckNum = formatCheckNumber(checkNum); // zero-padded to 4 digits, e.g. "0011"
     const routing  = isCalibration ? "123456789"  : (remittanceSource?.routingNumber  || "").replace(/\D/g, "");
     const account  = isCalibration ? "1234567890" : (remittanceSource?.accountNumber  || "").replace(/\D/g, "");
     const fmtDate  = (d: string | null | undefined) =>
@@ -16105,12 +16114,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         page.drawText(bankAddress, { x: Math.round(bankCenterX - bnaW / 2), y: z1y(0.59), size: 8.5, font: hv,  color: rgb(0.30, 0.30, 0.30) });
     }
 
-    // ── Check number — right-aligned, no surrounding box (right edge 8.00in) ─
-    drawGuide(z1x(6.75), z1y(0.24), Math.round(1.25*72), Math.round(0.18*72), "CHECK #");
+    // ── Check number — right edge at 7.55in (≈0.45in left of old 8.00in edge) ─
+    //    Zero-padded to 4 digits; visually aligns with DATE block below it
+    drawGuide(z1x(6.30), z1y(0.24), Math.round(1.25*72), Math.round(0.18*72), "CHECK #");
     if (showCheckNumber) {
-      const cnLabel = `No. ${checkNum}`;
+      const cnLabel = `No. ${fmtCheckNum}`;
       const cnWidth = Math.round(cnLabel.length * 5.8); // approx at bold 10pt
-      page.drawText(cnLabel, { x: z1x(8.00) - cnWidth, y: z1y(0.35), size: 10, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(cnLabel, { x: z1x(7.55) - cnWidth, y: z1y(0.35), size: 10, font: hvB, color: rgb(0, 0, 0) });
     }
 
     // ── Date — label above, value above its underline (x 6.75in–8.00in) ──
@@ -16234,7 +16244,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // "PAYSTUB" header bar — "Check No. XX" right-aligned in same bar
     page.drawRectangle({ x: psX - 4, y: checkBot - 18, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
     page.drawText("PAYSTUB", { x: psX + psW / 2 - 22, y: checkBot - 14, size: 10, font: hvB, color: rgb(1, 1, 1) });
-    const psChkLabel = `Check No. ${checkNum}`;
+    const psChkLabel = `Check No. ${fmtCheckNum}`;
     page.drawText(psChkLabel, { x: rm - Math.round(psChkLabel.length * 5.0), y: checkBot - 14, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
 
     // Company + EIN
@@ -16361,7 +16371,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const z3BannerY = mailBot - 14;
     page.drawRectangle({ x: lm - 4, y: z3BannerY - 4, width: rm - lm + 8, height: 13, color: rgb(0.93, 0.93, 0.93) });
     page.drawText("EMPLOYEE EARNINGS STATEMENT — DETACH BEFORE CASHING", { x: lm, y: z3BannerY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
-    const z3ChkLabel = `Check No. ${checkNum}`;
+    const z3ChkLabel = `Check No. ${fmtCheckNum}`;
     page.drawText(z3ChkLabel, { x: rm - Math.round(z3ChkLabel.length * 4.2), y: z3BannerY, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
 
     // Employee info (left) + period dates (right)
