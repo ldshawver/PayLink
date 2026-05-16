@@ -472,11 +472,11 @@ function StubSummarySection({
     .filter(d => d.amount > 0);
 
   return (
-    <div style={{ height: "3.667in", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
+    <div style={{ height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
 
       {/* ══ ENVELOPE WINDOWS + PAYSTUB LAYOUT ══
-           Company address top-left | Employee address (0.5" indent) below
-           Paystub starts at 4.3" and extends right (larger fonts) */}
+           Guide Zone 2: return addr y4.08"–4.78" (rel 0.58"–1.28"), recipient y5.75"–6.55" (rel 2.25"–3.05")
+           Paystub right column starts at page x4.95" */}
       <div style={{
         flex: 1,
         boxSizing: "border-box",
@@ -485,10 +485,10 @@ function StubSummarySection({
         flexDirection: "row",
         padding: "0.1in 0.35in",
       }}>
-        {/* LEFT SECTION: Addresses positioned for #10 double-window envelope */}
-        <div style={{ position: "absolute", left: "0.35in", top: "0", width: "3.95in", height: "100%" }}>
-          {/* TOP WINDOW: Company return address — 12mm from top of section, 9mm from left */}
-          <div style={{ position: "absolute", top: "12mm", left: "9mm", fontSize: "9px" }}>
+        {/* LEFT SECTION: Addresses per guide Zone 2 window coordinates */}
+        <div style={{ position: "absolute", left: "0.35in", top: "0", width: "4.25in", height: "100%" }}>
+          {/* TOP WINDOW: Company return address — guide x0.65"–4.00", y4.08" from page (0.58" from zone top) */}
+          <div style={{ position: "absolute", top: "0.46in", left: "0.30in", fontSize: "9px" }}>
             <div style={{ fontWeight: "bold", fontSize: "10px", marginBottom: "2px" }}>{company.name}</div>
             {company.address && <div style={{ fontSize: "8px", lineHeight: "1.1" }}>{company.address}</div>}
             {(company.city || company.state || company.zip) && (
@@ -496,8 +496,8 @@ function StubSummarySection({
             )}
           </div>
 
-          {/* BOTTOM WINDOW: Employee mailing address — 55mm from top, 15mm from left */}
-          <div style={{ position: "absolute", top: "55mm", left: "15mm", fontSize: "10px" }}>
+          {/* BOTTOM WINDOW: Employee mailing address — guide x0.80"–4.55", y5.75" from page (2.25" from zone top) */}
+          <div style={{ position: "absolute", top: "2.25in", left: "0.45in", fontSize: "10px" }}>
             <div style={{ fontWeight: "bold", fontSize: "11px", marginBottom: "3px" }}>{worker.firstName} {worker.lastName}</div>
             {worker.address && <div style={{ fontSize: "9px", lineHeight: "1.1" }}>{worker.address}</div>}
             {(worker.city || worker.state || worker.zip) && (
@@ -506,8 +506,8 @@ function StubSummarySection({
           </div>
         </div>
 
-        {/* RIGHT: PAYSTUB DETAIL — starts at 4.3", larger fonts */}
-        <div style={{ marginLeft: "4.3in", flex: 1, fontSize: "8px", display: "flex", flexDirection: "column", justifyContent: "flex-start", paddingRight: "0.2in" }}>
+        {/* RIGHT: PAYSTUB DETAIL — guide Zone 2 x4.95"–8.15" → marginLeft=4.60" (4.95-0.35pad) */}
+        <div style={{ marginLeft: "4.60in", flex: 1, fontSize: "8px", display: "flex", flexDirection: "column", justifyContent: "flex-start", paddingRight: "0.2in" }}>
           {/* Header: company name, EIN, pay period */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "2px" }}>
             <div>
@@ -1283,17 +1283,288 @@ function VoucherCheck({ item, worker, company, run, deductions, config, payStubA
   );
 }
 
-function ThreePartCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [] }: CheckProps) {
+// ── Zone 1 check face for 3-part window-mailer check (U.S. Payroll Check Layout Guide) ──
+// All field positions per ANSI/X9 guide §Physical template dimensions.
+// Check face: 8.5" × 3.5" with absolute-positioned fields.
+function GuidedCheckFace({
+  item, worker, company, run, config, overrideNetPay, remittanceSources = [],
+  calibration, showGuides = false,
+}: {
+  item: PayrollItem; worker: Worker; company: Company; run: PayrollRun;
+  config: Record<string, boolean>; overrideNetPay?: number;
+  remittanceSources?: RemittanceSource[];
+  calibration?: CheckCalibration;
+  showGuides?: boolean;
+}) {
+  void showGuides;
+  const remittanceSource = remittanceSources.find(s => s.companyId === company.id && s.status === "enabled")
+    || remittanceSources.find(s => s.companyId === company.id);
+  const netPay = overrideNetPay !== undefined ? overrideNetPay : Number(item.netPay || 0);
+  const checkDate = run.payDate
+    ? new Date(run.payDate + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+    : "—";
+  const periodStart = run.periodStart
+    ? new Date(run.periodStart + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+    : "";
+  const periodEnd = run.periodEnd
+    ? new Date(run.periodEnd + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
+    : "";
+  const memoText = periodStart && periodEnd ? `Pay period ${periodStart} – ${periodEnd}` : "";
+
+  const routing = (remittanceSource?.routingNumber || "").replace(/\D/g, "");
+  const account = (remittanceSource?.accountNumber || "").replace(/\D/g, "");
+  const checkNum = String(item.checkNumber || "").replace(/\D/g, "").padStart(4, "0");
+  const micrReady = routing.length === 9 && account.length >= 4 && !!(item.checkNumber);
+  const institutionName = remittanceSource?.institution || "";
+
+  const cal = calibration ?? DEFAULT_CALIBRATION;
+  const gTop = cal.globalTop !== 0 ? cal.globalTop : Number(remittanceSource?.verticalAlignment || 0);
+  const gLeft = cal.globalLeft !== 0 ? cal.globalLeft : Number(remittanceSource?.horizontalAlignment || 0);
+
+  return (
+    <div style={{
+      position: "relative",
+      width: "8.5in",
+      height: "3.5in",
+      fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif",
+      boxSizing: "border-box",
+      top: gTop ? `${gTop}in` : undefined,
+      left: gLeft ? `${gLeft}in` : undefined,
+      overflow: "hidden",
+    }}>
+
+      {/* ── LOGO: x 0.30", y 0.24", 0.42"×0.42" ── */}
+      {config.showCompanyLogo && company.logoUrl && (
+        <img src={company.logoUrl} alt="" style={{
+          position: "absolute", left: "0.30in", top: "0.24in",
+          width: "0.42in", height: "0.42in", objectFit: "contain",
+        }} />
+      )}
+
+      {/* ── COMPANY BLOCK: x 0.80", baselines y 0.40" / 0.57" / 0.74" / 0.91" ── */}
+      <div style={{ position: "absolute", left: "0.80in", top: "0.28in" }}>
+        {config.showCompanyName && (
+          <div style={{ fontSize: "12pt", fontWeight: "700", lineHeight: "1", marginBottom: "4px" }}>{company.name}</div>
+        )}
+        {config.showCompanyAddress && company.address && (
+          <div style={{ fontSize: "9pt", lineHeight: "1.2", marginBottom: "2px" }}>{company.address}</div>
+        )}
+        {config.showCompanyAddress && (company.city || company.state || company.zip) && (
+          <div style={{ fontSize: "9pt", lineHeight: "1.2", marginBottom: "2px" }}>
+            {[company.city, company.state].filter(Boolean).join(", ")}{company.zip ? " " + company.zip : ""}
+          </div>
+        )}
+        {config.showCompanyAddress && company.phone && (
+          <div style={{ fontSize: "9pt", lineHeight: "1.2" }}>{company.phone}</div>
+        )}
+      </div>
+
+      {/* ── BANK BLOCK: centered at x 4.25" (page center), baselines y 0.42" / 0.58" ── */}
+      {institutionName && (
+        <div style={{
+          position: "absolute", left: 0, right: 0, top: "0.30in",
+          textAlign: "center", pointerEvents: "none",
+        }}>
+          <div style={{ fontSize: "10pt", fontWeight: "700", lineHeight: "1", marginBottom: "3px" }}>{institutionName}</div>
+        </div>
+      )}
+
+      {/* ── CHECK NUMBER: plain text, right edge x 8.00" (right: 0.50"), baseline y 0.34" ── */}
+      {config.showCheckNumber && (
+        <div style={{
+          position: "absolute", right: "0.50in", top: "0.22in",
+          fontSize: "11pt", fontWeight: "700", letterSpacing: "0.3px", textAlign: "right",
+        }}>
+          No. {checkNum}
+        </div>
+      )}
+
+      {/* ── DATE BLOCK: right edge x 8.00", text baseline y 0.69", rule at y 0.76" ── */}
+      <div style={{
+        position: "absolute", right: "0.50in",
+        top: cal.dateTop ? `${0.45 + cal.dateTop}in` : "0.45in",
+        textAlign: "right",
+      }}>
+        <div style={{ fontSize: "7.5pt", fontWeight: "700", letterSpacing: "0.5px", marginBottom: "2px", color: "#444" }}>DATE</div>
+        <div style={{
+          fontSize: "10pt", fontWeight: "600",
+          borderBottom: "1.5pt solid #000", paddingBottom: "2px",
+          minWidth: "1.20in", textAlign: "center", boxSizing: "border-box",
+        }}>
+          {checkDate}
+        </div>
+        <div style={{ fontSize: "7pt", color: "#777", fontStyle: "italic", marginTop: "3px" }}>VOID AFTER 90 DAYS</div>
+      </div>
+
+      {/* ── PAY TO THE ORDER OF: x 0.30", baseline y 1.30" ── */}
+      <div style={{
+        position: "absolute", left: "0.30in", top: "1.18in",
+        fontSize: "8.5pt", fontWeight: "700", letterSpacing: "0.7px",
+      }}>
+        PAY TO THE ORDER OF
+      </div>
+
+      {/* ── PAYEE NAME: start x 1.92", baseline y 1.40" (above payee rule at y 1.49") ── */}
+      <div style={{
+        position: "absolute", left: "1.92in", top: "1.27in",
+        right: "2.30in",
+        fontSize: "12pt", fontWeight: "600", letterSpacing: "0.2px",
+        whiteSpace: "nowrap", overflow: "hidden",
+      }}>
+        {worker.firstName} {worker.lastName}
+      </div>
+
+      {/* ── PAYEE RULE: x 1.82"–6.25" at y 1.49" ── */}
+      <div style={{
+        position: "absolute", left: "1.82in", top: "1.49in",
+        width: "4.43in", borderTop: "1.5pt solid #000",
+      }} />
+
+      {/* ── NUMERIC AMOUNT BOX: x 6.42", y 1.16", w 1.48", h 0.36" ── */}
+      <div style={{
+        position: "absolute", left: "6.42in", top: "1.16in",
+        width: "1.48in", height: "0.36in",
+        border: "1.5pt solid #000",
+        display: "flex", alignItems: "center", justifyContent: "flex-end",
+        paddingRight: "0.06in", boxSizing: "border-box",
+      }}>
+        <span style={{ fontSize: "13pt", fontWeight: "700", fontFamily: "'Courier New', Courier, monospace" }}>
+          ${fmt(netPay)}
+        </span>
+      </div>
+
+      {/* ── "THE SUM OF" label: x 0.30", baseline y 1.77" ── */}
+      <div style={{
+        position: "absolute", left: "0.30in",
+        top: cal.amountWordsTop ? `${1.65 + cal.amountWordsTop}in` : "1.65in",
+        fontSize: "8.5pt", fontWeight: "700", letterSpacing: "0.4px",
+      }}>
+        The Sum of
+      </div>
+
+      {/* ── WRITTEN AMOUNT + filler + DOLLARS: x 1.30"–7.95" with underline ── */}
+      <div style={{
+        position: "absolute", left: "1.30in", right: "0.55in",
+        top: cal.amountWordsTop ? `${1.63 + cal.amountWordsTop}in` : "1.63in",
+        display: "flex", alignItems: "baseline",
+        borderBottom: "1pt solid #000", paddingBottom: "3px",
+      }}>
+        <span style={{ fontSize: "10pt", fontWeight: "600" }}>
+          {numberToWords(netPay)}
+        </span>
+        <span style={{
+          flex: 1, overflow: "hidden",
+          color: "#ccc", fontSize: "9pt",
+          paddingLeft: "3px", paddingRight: "3px",
+          userSelect: "none",
+        }}>{"— — — — — — — — — — — — — — — — — — — —"}</span>
+        <span style={{ fontSize: "8.5pt", fontWeight: "700", letterSpacing: "0.5px", whiteSpace: "nowrap" }}>
+          DOLLARS
+        </span>
+      </div>
+
+      {/* ── PAYEE MAILING ADDRESS: x 1.92", baselines y 2.00" / 2.16" ── */}
+      {config.showEmployeeAddress && (worker.address || worker.city) && (
+        <div style={{ position: "absolute", left: "1.92in", top: "1.86in" }}>
+          {worker.address && (
+            <div style={{ fontSize: "10pt", lineHeight: "1.25" }}>
+              {worker.address}{worker.address2 ? ", " + worker.address2 : ""}
+            </div>
+          )}
+          {(worker.city || worker.state || worker.zip) && (
+            <div style={{ fontSize: "10pt", lineHeight: "1.25" }}>
+              {[worker.city, worker.state].filter(Boolean).join(", ")}{worker.zip ? " " + worker.zip : ""}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── MEMO LABEL: x 0.30", baseline y 2.43" ── */}
+      <div style={{
+        position: "absolute", left: "0.30in",
+        top: cal.memoTop ? `${2.31 + cal.memoTop}in` : "2.31in",
+        fontSize: "7.5pt", fontWeight: "700", color: "#555", letterSpacing: "0.5px",
+      }}>
+        MEMO
+      </div>
+
+      {/* ── MEMO RULE + TEXT: x 0.72"–3.85" at y 2.56" ── */}
+      <div style={{
+        position: "absolute", left: "0.72in", width: "3.13in",
+        top: cal.memoTop ? `${2.44 + cal.memoTop}in` : "2.44in",
+        borderBottom: "1pt solid #000", paddingBottom: "2px",
+        fontSize: "9pt", color: "#333",
+        whiteSpace: "nowrap", overflow: "hidden",
+      }}>
+        {memoText}
+      </div>
+
+      {/* ── SIGNATURE RULE: x 5.55"–7.98" at y 2.56" ── */}
+      <div style={{
+        position: "absolute", left: "5.55in", width: "2.43in",
+        top: cal.signatureTop ? `${2.56 + cal.signatureTop}in` : "2.56in",
+        borderTop: "1.5pt solid #000",
+      }} />
+      <div style={{
+        position: "absolute", left: "5.55in", width: "2.43in",
+        top: cal.signatureTop ? `${2.60 + cal.signatureTop}in` : "2.60in",
+        textAlign: "center", fontSize: "7pt", color: "#555", letterSpacing: "0.5px",
+      }}>
+        AUTHORIZED SIGNATURE
+      </div>
+
+      {/* ── MICR CLEAR BAND: y 2.875"–3.500" — NO printing except MICR line ── */}
+      {/* MICR baseline at y 3.3125" → 0.1875" from band bottom (3.5–3.3125=0.1875") */}
+      <div style={{
+        position: "absolute", left: 0, right: 0,
+        top: "2.875in", height: "0.625in",
+        display: "flex", alignItems: "flex-end",
+        paddingBottom: "0.1875in", paddingLeft: "0.25in",
+        boxSizing: "border-box",
+      }}>
+        {config.showMicrLine && micrReady && (
+          <MicrLine routing={routing} account={account} checkNum={checkNum} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── 3-Zone Window-Mailer Check (U.S. Payroll Check Layout Guide) ──
+// Zone 1: Check face 3.5"  — guided absolute-positioned fields
+// Zone 2: Mailing panel 3.5" — address windows + compact paystub
+// Zone 3: Detail statement 4.0" — full earnings/deductions
+function ThreePartCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [], remittanceSources = [], calibration, showGuides = false }: CheckProps) {
+  void payStubAccounts;
+  const computedNetPay = computeCheckNetPay(item, worker, deductions, amendments);
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
-      <div style={{ height: "3.667in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
+
+      {/* ── ZONE 1: Check face — 3.5" (guide §Physical template dimensions) ── */}
+      <div style={{ height: "3.5in", overflow: "hidden" }}>
+        <GuidedCheckFace
+          item={item} worker={worker} company={company} run={run}
+          config={config} overrideNetPay={computedNetPay}
+          remittanceSources={remittanceSources}
+          calibration={calibration} showGuides={showGuides}
+        />
       </div>
-      <div style={{ height: "3.667in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
+
+      {/* ── ZONE 2: Mailing panel — 3.5" (guide: return addr y4.08", recipient y5.75") ── */}
+      <div style={{ height: "3.5in" }}>
+        <StubSummarySection
+          item={item} worker={worker} company={company} run={run}
+          config={config} deductions={deductions}
+          accrualAccounts={accrualAccounts} accrualBalances={accrualBalances}
+        />
       </div>
-      <div style={{ height: "3.666in" }}>
-        <StubPortion item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} payStubAccounts={payStubAccounts} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} amendments={amendments} />
+
+      {/* ── ZONE 3: Detailed earnings/deductions statement — 4.0" ── */}
+      <div style={{ height: "4.0in" }}>
+        <StubDetailSection
+          item={item} worker={worker} company={company} run={run}
+          deductions={deductions} config={config} amendments={amendments}
+        />
       </div>
     </div>
   );

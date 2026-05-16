@@ -53,7 +53,6 @@ SMTP_USER = "no-reply@mypaylink.app"
 SMTP_FROM = "no-reply@mypaylink.app"
 SMTP_ENCRYPTION = "STARTTLS"
 SMTP_AUTHENTICATION = "Required"
-ADMIN_USERNAME = "admin"
 
 [agent]
 integrations = ["stripe:1.0.0"]
