@@ -1,6 +1,7 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
 import { rm, readFile, copyFile } from "fs/promises";
+import { execSync } from "child_process";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import viteConfig from "../vite.config";
@@ -38,8 +39,27 @@ const allowlist = [
   "zod-validation-error",
 ];
 
+async function clearDist() {
+  try {
+    await rm("dist", { recursive: true, force: true });
+  } catch (e: any) {
+    if (e.code === "EACCES") {
+      // dist/ was created by a root PM2 process; escalate to sudo
+      console.warn("Warning: dist/ is root-owned — attempting sudo cleanup");
+      try {
+        execSync("sudo rm -rf dist/", { stdio: "inherit" });
+      } catch {
+        // sudo unavailable; fix ownership then retry
+        execSync(`sudo chown -R "$(id -un):$(id -un)" dist/ && rm -rf dist/`, { stdio: "inherit", shell: true });
+      }
+    } else {
+      throw e;
+    }
+  }
+}
+
 async function buildAll() {
-  await rm("dist", { recursive: true, force: true });
+  await clearDist();
 
   // Build the client using the already-imported vite config object.
   // Passing configFile:false tells Vite not to re-load vite.config.ts from
