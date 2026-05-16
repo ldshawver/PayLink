@@ -1670,8 +1670,9 @@ app.use((req, res, next) => {
     await run("companies.grace_period_days", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS grace_period_days INTEGER DEFAULT 14`);
     await run("companies.stripe_customer_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`);
     await run("companies.stripe_subscription_id", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT`);
-    await run("companies.timezone", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'America/New_York'`);
+    await run("companies.timezone", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC'`);
     await run("companies.timezone_confirmed", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone_confirmed BOOLEAN NOT NULL DEFAULT FALSE`);
+    await run("companies.timezone.reset_eastern_default", sql`UPDATE companies SET timezone = 'UTC' WHERE timezone = 'America/New_York' AND timezone_confirmed = FALSE`);
     await run("companies.clock_in_grace_minutes", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS clock_in_grace_minutes INTEGER NOT NULL DEFAULT 10`);
     await run("companies.notify_mgr_on_violations", sql`ALTER TABLE companies ADD COLUMN IF NOT EXISTS notify_mgr_on_violations BOOLEAN NOT NULL DEFAULT TRUE`);
     await run("clock_in_requests.manager_notes", sql`ALTER TABLE clock_in_requests ADD COLUMN IF NOT EXISTS manager_notes TEXT`);

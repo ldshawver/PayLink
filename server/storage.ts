@@ -1194,7 +1194,7 @@ export class DatabaseStorage implements IStorage {
   async convertPunchesToTimeEntries(companyId: string, startDate: string, endDate: string): Promise<{ created: number; skipped: number; entries: TimeEntry[] }> {
     // Load company timezone so punch-to-date grouping uses company local time, not UTC
     const companyRows = await db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
-    const companyTz = companyRows[0]?.timezone || "America/New_York";
+    const companyTz = companyRows[0]?.timezone || "UTC";
 
     const allPunches = await db.select().from(timePunches)
       .where(and(

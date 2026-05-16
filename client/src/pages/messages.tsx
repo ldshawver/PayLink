@@ -467,7 +467,7 @@ function MessageThread({ message, onBack, timezone }: { message: Message; onBack
 }
 
 function MessageBubble({ msg, isFirst, timezone }: { msg: Message; isFirst?: boolean; timezone?: string }) {
-  const tz = timezone || "America/New_York";
+  const tz = timezone || "UTC";
   const createdAt = msg.created_at ? new Date(msg.created_at) : null;
   return (
     <div className={cn("rounded-lg border p-4", isFirst ? "bg-card" : "bg-muted/40")}>
@@ -508,7 +508,7 @@ function MessageRow({
   onSelect: () => void;
   timezone?: string;
 }) {
-  const tz = timezone || "America/New_York";
+  const tz = timezone || "UTC";
   const createdAt = msg.created_at ? new Date(msg.created_at) : null;
   const isUnread = !msg.read_at;
 
@@ -597,7 +597,7 @@ export default function MessagesPage() {
     staleTime: 5 * 60 * 1000,
   });
 
-  const companyTimezone = companyData?.timezone || "America/New_York";
+  const companyTimezone = companyData?.timezone || "UTC";
 
   const unread = unreadCount?.count ?? 0;
 

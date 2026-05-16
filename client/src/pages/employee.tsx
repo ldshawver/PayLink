@@ -978,7 +978,7 @@ function PreferencesTab() {
   const workers = workersQuery.data || [];
   const [selectedWorkerId, setSelectedWorkerId] = useState("");
   const [prefData, setPrefData] = useState({
-    language: "English", dateFormat: "MM/DD/YYYY", timeFormat: "12-hour", timezone: "America/New_York"
+    language: "English", dateFormat: "MM/DD/YYYY", timeFormat: "12-hour", timezone: "UTC"
   });
   const [noteText, setNoteText] = useState("");
 
@@ -992,10 +992,10 @@ function PreferencesTab() {
         language: parsed.language || "English",
         dateFormat: parsed.dateFormat || "MM/DD/YYYY",
         timeFormat: parsed.timeFormat || "12-hour",
-        timezone: parsed.timezone || "America/New_York"
+        timezone: parsed.timezone || "UTC"
       });
     } catch {
-      setPrefData({ language: "English", dateFormat: "MM/DD/YYYY", timeFormat: "12-hour", timezone: "America/New_York" });
+      setPrefData({ language: "English", dateFormat: "MM/DD/YYYY", timeFormat: "12-hour", timezone: "UTC" });
     }
   }
 

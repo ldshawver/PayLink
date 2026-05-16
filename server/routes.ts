@@ -1766,7 +1766,7 @@ export async function registerRoutes(
       // Load company timezone + enforcement settings in one query
       const companyMeta = await db.execute(sql`SELECT station_enforcement_enabled, timezone FROM companies WHERE id = ${worker.companyId}`);
       const companyTzRow = companyMeta.rows[0] as any;
-      const punchCompanyTz = companyTzRow?.timezone || "America/New_York";
+      const punchCompanyTz = companyTzRow?.timezone || "UTC";
 
       let matchedStationId: string | undefined;
       if (punchType === "clock_in" && worker.companyId) {
@@ -2047,7 +2047,7 @@ export async function registerRoutes(
       // Load company timezone so late-night punches get the correct LOCAL date.
       // Without this, an 11 PM Eastern punch stores as the next day in UTC.
       const companyObj = worker.companyId ? await storage.getCompany(worker.companyId) : null;
-      const companyTz = companyObj?.timezone || "America/New_York";
+      const companyTz = companyObj?.timezone || "UTC";
       const now = new Date();
       const today = getLocalDateStr(now, companyTz); // correct local date in company TZ
       // Use per-company configurable grace period (default 10 min if not set)
@@ -2304,7 +2304,7 @@ export async function registerRoutes(
         });
 
         const coObj = worker.companyId ? await storage.getCompany(worker.companyId) : null;
-        const coTz = coObj?.timezone || "America/New_York";
+        const coTz = coObj?.timezone || "UTC";
         const todayStr = getLocalDateStr(now, coTz);
 
         // Auto-create a pending commission record for self-reported tips
@@ -2371,7 +2371,7 @@ export async function registerRoutes(
       if (worker.companyId) {
         // Use company timezone so late-night clock-outs resolve to the correct local date
         const coObj = worker.companyId ? await storage.getCompany(worker.companyId) : null;
-        const coTz = coObj?.timezone || "America/New_York";
+        const coTz = coObj?.timezone || "UTC";
         const today = getLocalDateStr(now, coTz);
         const todaySchedules = await storage.getSchedulesByDateRange(worker.companyId, today, today);
         const workerSchedule = todaySchedules.find(s => s.workerId === worker.id);
@@ -5493,7 +5493,7 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Invoice-based contractors cannot clock in/out. They submit invoices instead." });
       }
       const punchCompanyTzRow = await db.execute(sql`SELECT timezone FROM companies WHERE id = ${worker.companyId}`);
-      const punchCompanyTz2 = (punchCompanyTzRow.rows[0] as any)?.timezone || "America/New_York";
+      const punchCompanyTz2 = (punchCompanyTzRow.rows[0] as any)?.timezone || "UTC";
       let matchedStationId: string | undefined;
       if (req.body.punchType === "clock_in" && worker.companyId) {
         const companyRows = await db.execute(sql`SELECT station_enforcement_enabled FROM companies WHERE id = ${worker.companyId}`);
@@ -5532,7 +5532,7 @@ export async function registerRoutes(
           (actingUser2.workerId && actingUser2.workerId === worker.id);
         if (isSelfClock) {
           const companyForClk = await storage.getCompany(worker.companyId);
-          let companyTzForClk = (companyForClk as any)?.timezone || "America/New_York";
+          let companyTzForClk = (companyForClk as any)?.timezone || "UTC";
           const nowForClk = new Date();
           const todayForClk = getLocalDateStr(nowForClk, companyTzForClk);
 
@@ -5905,7 +5905,7 @@ export async function registerRoutes(
 
       // Create time entry — use company local date (not UTC)
       const approvalCompanyTzRow = await db.execute(sql`SELECT timezone FROM companies WHERE id = ${request.company_id}`);
-      const approvalCompanyTz = (approvalCompanyTzRow.rows[0] as any)?.timezone || "America/New_York";
+      const approvalCompanyTz = (approvalCompanyTzRow.rows[0] as any)?.timezone || "UTC";
       await storage.createTimeEntry({
         workerId: request.worker_id,
         companyId: request.company_id,

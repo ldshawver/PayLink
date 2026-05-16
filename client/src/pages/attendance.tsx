@@ -254,6 +254,7 @@ function TimesheetTab() {
   const [convertStart, setConvertStart] = useState(weekStart);
   const [convertEnd, setConvertEnd] = useState(weekEnd);
   const [editForm, setEditForm] = useState({
+    date: "",
     clockIn: "",
     clockOut: "",
     breakMinutes: "0",
@@ -267,7 +268,7 @@ function TimesheetTab() {
   const [addForm, setAddForm] = useState({
     workerId: "",
     companyId: "",
-    date: new Date().toISOString().split("T")[0],
+    date: new Date().toLocaleDateString("en-CA"),
     clockIn: "",
     clockOut: "",
     breakMinutes: "0",
@@ -349,7 +350,7 @@ function TimesheetTab() {
       setAddForm({
         workerId: "",
         companyId: "",
-        date: new Date().toISOString().split("T")[0],
+        date: new Date().toLocaleDateString("en-CA"),
         clockIn: "",
         clockOut: "",
         breakMinutes: "0",
@@ -469,6 +470,7 @@ function TimesheetTab() {
   const openEdit = (entry: TimeEntry) => {
     setEditEntry(entry);
     setEditForm({
+      date: entry.date || "",
       clockIn: toLocalDatetimeString(entry.clockIn),
       clockOut: toLocalDatetimeString(entry.clockOut),
       breakMinutes: String(entry.breakMinutes || 0),
@@ -1097,8 +1099,17 @@ function TimesheetTab() {
               <p className="text-sm text-muted-foreground">
                 {workerMap.get(editEntry.workerId)
                   ? `${workerMap.get(editEntry.workerId)!.firstName} ${workerMap.get(editEntry.workerId)!.lastName}`
-                  : "Unknown"} — {editEntry.date}
+                  : "Unknown"}
               </p>
+              <div className="grid gap-1.5">
+                <Label>Date</Label>
+                <Input
+                  type="date"
+                  value={editForm.date}
+                  onChange={e => setEditForm(f => ({ ...f, date: e.target.value }))}
+                  data-testid="input-edit-date"
+                />
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="grid gap-1.5">
                   <Label>Clock In</Label>
@@ -1207,6 +1218,7 @@ function TimesheetTab() {
                 onClick={() => updateEntry.mutate({
                   id: editEntry.id,
                   data: {
+                    date: editForm.date || editEntry.date,
                     clockIn: editForm.clockIn ? new Date(editForm.clockIn).toISOString() : null,
                     clockOut: editForm.clockOut ? new Date(editForm.clockOut).toISOString() : null,
                     breakMinutes: parseInt(editForm.breakMinutes) || 0,

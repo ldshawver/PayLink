@@ -80,12 +80,12 @@ function CompanyPolicyEditor({ company }: { company: Company }) {
       breakAfterHours: company.breakAfterHours ?? 6,
       timeRoundingMinutes: company.timeRoundingMinutes ?? 15,
       payFrequency: (company.payFrequency as any) || "biweekly",
-      timezone: (company as any).timezone || "America/New_York",
+      timezone: (company as any).timezone || "UTC",
     },
   });
 
   const timezoneConfirmed = (company as any).timezoneConfirmed ?? false;
-  const currentTimezone = (company as any).timezone || "America/New_York";
+  const currentTimezone = (company as any).timezone || "UTC";
   const tzLabel = US_TIMEZONES.find(t => t.value === currentTimezone)?.label || currentTimezone;
 
   const confirmTimezoneMutation = useMutation({
