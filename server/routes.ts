@@ -16067,15 +16067,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     page.drawLine({ start: { x: dtX1, y: z1y(0.76) }, end: { x: dtX2, y: z1y(0.76) }, color: rgb(0, 0, 0), thickness: 0.9 });
     page.drawText("VOID AFTER 90 DAYS", { x: z1x(6.75), y: z1y(0.95), size: 7, font: hv, color: rgb(0.5, 0.5, 0.5) });
 
-    // ── PAY TO THE ORDER OF — label + payee name ON SAME ROW, payee line below ─
+    // ── PAY TO THE ORDER OF — stacked two-line label matching sample layout ──
+    //    "PAY TO THE" on line 1 (y 1.18in), "ORDER OF" on line 2 (y 1.30in)
+    //    Payee name sits on SAME BASELINE as "ORDER OF" (y 1.30in)
+    //    Payee underline directly below payee name
     //    Amount box right-aligned at x 6.42in, width 1.48in, height 0.38in
-    const payRowY     = z1y(1.30);             // shared baseline for label + payee name
+    const payLabelX   = z1x(0.30);
+    const payLine1Y   = z1y(1.18);             // "PAY TO THE"
+    const payRowY     = z1y(1.30);             // "ORDER OF" + payee name shared baseline
     const payeeLineY  = z1y(1.39);             // underline below payee name
     const payeeNameX  = z1x(1.90);
     const payLineX1   = z1x(1.82), payLineX2 = z1x(6.20);
 
-    drawGuide(z1x(0.30), z1y(1.39 + 0.02), payLineX2 - z1x(0.30), Math.round(0.30*72), "PAYEE ROW");
-    page.drawText("PAY TO THE ORDER OF", { x: z1x(0.30), y: payRowY, size: 9, font: hvB, color: rgb(0, 0, 0) });
+    drawGuide(payLabelX, z1y(1.39 + 0.02), payLineX2 - payLabelX, Math.round(0.30*72), "PAYEE ROW");
+    page.drawText("PAY TO THE",   { x: payLabelX, y: payLine1Y, size: 9, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("ORDER OF",     { x: payLabelX, y: payRowY,   size: 9, font: hvB, color: rgb(0, 0, 0) });
     page.drawText(wName, { x: payeeNameX, y: payRowY, size: 11, font: hvB, color: rgb(0, 0, 0) });
     page.drawLine({ start: { x: payLineX1, y: payeeLineY }, end: { x: payLineX2, y: payeeLineY }, color: rgb(0, 0, 0), thickness: 0.9 });
 
@@ -16139,7 +16145,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     drawGuide(z1x(0), z1y(3.5), W, Math.round(0.625*72), "MICR CLEAR BAND");
     if (showMicrLine)
       page.drawText(buildMicrStr(routing, account, checkNum),
-        { x: z1x(0.50), y: z1y(3.3125), size: 12, font: micrFont, color: rgb(0, 0, 0) });
+        { x: z1x(0.50), y: z1y(3.3125), size: 14, font: micrFont, color: rgb(0, 0, 0) });
 
     // Zone 1 / Zone 2 separator (dashed cut line between zones)
     page.drawLine({ start: { x: 0, y: checkBot - 1 }, end: { x: W, y: checkBot - 1 },
@@ -16177,10 +16183,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     if (wCityStateZip) page.drawText(wCityStateZip, { x: lm, y: recipBaseY - 36, size: 8, font: hv, color: rgb(0, 0, 0) });
 
     // ── Paystub summary (right column of Zone 2) ─────────────────────────────
-    // "PAYSTUB" header bar
+    // "PAYSTUB" header bar — "Check No. XX" right-aligned in same bar
     page.drawRectangle({ x: psX - 4, y: checkBot - 18, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
-    const psHdrLabel = "PAYSTUB";
-    page.drawText(psHdrLabel, { x: psX + psW / 2 - 22, y: checkBot - 14, size: 10, font: hvB, color: rgb(1, 1, 1) });
+    page.drawText("PAYSTUB", { x: psX + psW / 2 - 22, y: checkBot - 14, size: 10, font: hvB, color: rgb(1, 1, 1) });
+    const psChkLabel = `Check No. ${checkNum}`;
+    page.drawText(psChkLabel, { x: rm - Math.round(psChkLabel.length * 5.0), y: checkBot - 14, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
 
     // Company + EIN
     const coEinLine = coEin ? `${coName} — EIN: ${coEin}` : coName;
@@ -16306,6 +16313,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const z3BannerY = mailBot - 14;
     page.drawRectangle({ x: lm - 4, y: z3BannerY - 4, width: rm - lm + 8, height: 13, color: rgb(0.93, 0.93, 0.93) });
     page.drawText("EMPLOYEE EARNINGS STATEMENT — DETACH BEFORE CASHING", { x: lm, y: z3BannerY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+    const z3ChkLabel = `Check No. ${checkNum}`;
+    page.drawText(z3ChkLabel, { x: rm - Math.round(z3ChkLabel.length * 4.2), y: z3BannerY, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
 
     // Employee info (left) + period dates (right)
     let z3Y = z3BannerY - 14;
