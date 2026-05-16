@@ -15875,11 +15875,14 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   }
 
   function buildMicrStr(routing: string, account: string, checkNum: string): string {
-    // micrenc.ttf: 'c' = ⑆ transit symbol, 'd' = ⑈ on-us symbol
-    // Standard US MICR sequence (ANSI X9.7 / Fed Reg Check 21):
-    //   ⑆routing⑆  account⑈  check#⑈
-    const T   = "c"; // transit ⑆
-    const O   = "d"; // on-us  ⑈
+    // ConnectCodeMICRT_X9.ttf (ANSI X9.7 compliant E-13B):
+    //   'a' = ⑆ transit routing delimiter
+    //   'b' = ⑇ amount symbol (not used in basic check layout)
+    //   'c' = ⑈ on-us symbol
+    //   'd' = ⑉ dash symbol
+    // Standard US MICR sequence: ⑆routing⑆ account⑈ checkNum⑈
+    const T   = "a"; // transit ⑆
+    const O   = "c"; // on-us  ⑈
     const r   = routing.replace(/\D/g, "").slice(0, 9).padStart(9, "0");
     const a   = account.replace(/\D/g, "").slice(0, 17);
     const chk = checkNum.replace(/\D/g, "").slice(0, 10).padStart(10, " ");
@@ -15904,18 +15907,20 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // MICR font — hard failure for production checks; calibration falls back to Courier
     let micrFont: any = null;
     let micrFontLoaded = false;
+    const MICR_FONT_FILE = "ConnectCodeMICRT_X9.ttf"; // ANSI X9.7 compliant E-13B
+    const MICR_FONT_SIZE = 20;                         // 20pt — visible, machine-weight
     let micrFontName = "(none)";
     try {
-      const micrPath = path.join(process.cwd(), "client", "public", "fonts", "micrenc.ttf");
+      const micrPath = path.join(process.cwd(), "client", "public", "fonts", MICR_FONT_FILE);
       const micrBytes = fs.readFileSync(micrPath);
       micrFont = await doc.embedFont(micrBytes);
       micrFontLoaded = true;
-      micrFontName = "micrenc.ttf (E-13B)";
+      micrFontName = MICR_FONT_FILE;
     } catch (micrErr) {
       console.error("[CHECK_PDF] MICR font load error:", micrErr);
       if (!isCalibration) {
         throw new Error(
-          "MICR font (micrenc.ttf) failed to load. Printing requires the MICR E-13B font " +
+          `MICR font (${MICR_FONT_FILE}) failed to load. Printing requires the MICR E-13B font ` +
           "for machine-readable routing/account numbers. Contact support or run in calibration mode."
         );
       }
@@ -15923,7 +15928,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       micrFontName = "Courier (FALLBACK — calibration only)";
     }
     console.log(`[CHECK_PDF] MICR font loaded: ${micrFontLoaded}`);
-    console.log(`[CHECK_PDF] MICR font name: ${micrFontName}`);
+    console.log(`[CHECK_PDF] MICR font family: ${micrFontName}`);
+    console.log(`[CHECK_PDF] MICR font embedded: ${micrFontLoaded}`);
+    console.log(`[CHECK_PDF] MICR font size: ${MICR_FONT_SIZE}`);
+    console.log(`[CHECK_PDF] MICR render mode: vector`);
 
     // Show/hide flags from check_templates.layoutConfig; all default true.
     const cfg                = params.layoutConfig || {};
@@ -16185,7 +16193,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     drawGuide(z1x(0), z1y(3.5), W, Math.round(0.625*72), "MICR CLEAR BAND");
     if (showMicrLine)
       page.drawText(buildMicrStr(routing, account, checkNum),
-        { x: z1x(0.50), y: z1y(3.3125), size: 14, font: micrFont, color: rgb(0, 0, 0) });
+        { x: z1x(0.50), y: z1y(3.3125), size: MICR_FONT_SIZE, font: micrFont, color: rgb(0, 0, 0) });
 
     // Zone 1 / Zone 2 separator (dashed cut line between zones)
     page.drawLine({ start: { x: 0, y: checkBot - 1 }, end: { x: W, y: checkBot - 1 },
