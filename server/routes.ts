@@ -905,6 +905,10 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // ── Health / readiness endpoints (required by deploy health check) ───────────
+  app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
+  app.get("/ready",  (_req, res) => res.status(200).json({ status: "ready" }));
+
   // ── Payroll lifecycle schema migration (idempotent) ─────────────────────────
   try {
     await db.execute(sql`ALTER TYPE payroll_status ADD VALUE IF NOT EXISTS 'approved'`);

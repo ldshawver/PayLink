@@ -1897,6 +1897,12 @@ app.use((req, res, next) => {
     await run("taxes_deductions.remittance_agency_id", sql`ALTER TABLE taxes_deductions ADD COLUMN IF NOT EXISTS remittance_agency_id VARCHAR`);
     await run("taxes_deductions.effective_date", sql`ALTER TABLE taxes_deductions ADD COLUMN IF NOT EXISTS effective_date DATE`);
     await run("taxes_deductions.expiry_date", sql`ALTER TABLE taxes_deductions ADD COLUMN IF NOT EXISTS expiry_date DATE`);
+    // ── Tax engine columns (fixes "column tax_code does not exist" payroll crash) ──
+    await run("taxes_deductions.tax_code", sql`ALTER TABLE taxes_deductions ADD COLUMN IF NOT EXISTS tax_code TEXT`);
+    await run("taxes_deductions.state_code", sql`ALTER TABLE taxes_deductions ADD COLUMN IF NOT EXISTS state_code TEXT`);
+    await run("taxes_deductions.deduction_timing", sql`ALTER TABLE taxes_deductions ADD COLUMN IF NOT EXISTS deduction_timing TEXT DEFAULT 'post_tax'`);
+    await run("taxes_deductions.is_taxable_benefit", sql`ALTER TABLE taxes_deductions ADD COLUMN IF NOT EXISTS is_taxable_benefit BOOLEAN DEFAULT FALSE`);
+    await run("taxes_deductions.is_reimbursement", sql`ALTER TABLE taxes_deductions ADD COLUMN IF NOT EXISTS is_reimbursement BOOLEAN DEFAULT FALSE`);
     await run("funding_accounts.remittance_source_id", sql`ALTER TABLE funding_accounts ADD COLUMN IF NOT EXISTS remittance_source_id VARCHAR`);
     await run("funding_accounts.is_default", sql`ALTER TABLE funding_accounts ADD COLUMN IF NOT EXISTS is_default BOOLEAN DEFAULT FALSE`);
 
@@ -3308,6 +3314,22 @@ Thank you,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
     console.log("Auto-migration OK: payroll_item_taxes, payroll_tax_snapshots, payroll_overrides tables");
+    // Safety: ADD COLUMN IF NOT EXISTS for each column in case tables pre-existed
+    // on VPS without these columns (CREATE TABLE IF NOT EXISTS skips re-creation).
+    await dbTax.execute(sqlTax`ALTER TABLE payroll_item_taxes ADD COLUMN IF NOT EXISTS tax_code TEXT NOT NULL DEFAULT ''`);
+    await dbTax.execute(sqlTax`ALTER TABLE payroll_item_taxes ADD COLUMN IF NOT EXISTS tax_name TEXT NOT NULL DEFAULT ''`);
+    await dbTax.execute(sqlTax`ALTER TABLE payroll_item_taxes ADD COLUMN IF NOT EXISTS taxable_wages NUMERIC DEFAULT 0`);
+    await dbTax.execute(sqlTax`ALTER TABLE payroll_item_taxes ADD COLUMN IF NOT EXISTS rate NUMERIC DEFAULT 0`);
+    await dbTax.execute(sqlTax`ALTER TABLE payroll_item_taxes ADD COLUMN IF NOT EXISTS amount NUMERIC DEFAULT 0`);
+    await dbTax.execute(sqlTax`ALTER TABLE payroll_item_taxes ADD COLUMN IF NOT EXISTS is_employer_paid BOOLEAN DEFAULT FALSE`);
+    await dbTax.execute(sqlTax`ALTER TABLE payroll_item_taxes ADD COLUMN IF NOT EXISTS state_code TEXT`);
+    await dbTax.execute(sqlTax`ALTER TABLE payroll_overrides ADD COLUMN IF NOT EXISTS tax_code TEXT NOT NULL DEFAULT ''`);
+    await dbTax.execute(sqlTax`ALTER TABLE payroll_overrides ADD COLUMN IF NOT EXISTS original_amount NUMERIC NOT NULL DEFAULT 0`);
+    await dbTax.execute(sqlTax`ALTER TABLE payroll_overrides ADD COLUMN IF NOT EXISTS override_amount NUMERIC NOT NULL DEFAULT 0`);
+    await dbTax.execute(sqlTax`ALTER TABLE payroll_overrides ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT ''`);
+    await dbTax.execute(sqlTax`ALTER TABLE payroll_overrides ADD COLUMN IF NOT EXISTS overridden_by VARCHAR NOT NULL DEFAULT ''`);
+    await dbTax.execute(sqlTax`ALTER TABLE payroll_overrides ADD COLUMN IF NOT EXISTS overridden_at TIMESTAMP DEFAULT NOW()`);
+    console.log("Auto-migration OK: payroll_item_taxes, payroll_overrides columns ensured");
   } catch (e) {
     console.log("Auto-migration skipped (payroll tax tables):", (e as Error).message);
   }
