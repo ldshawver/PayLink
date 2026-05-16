@@ -808,7 +808,7 @@ function OnboardingTab({ companyId }: { companyId?: string }) {
             <div><Label>Employee</Label>
               <Select value={newPacket.workerId} onValueChange={v => setNewPacket(p => ({...p, workerId: v}))}>
                 <SelectTrigger data-testid="select-packet-worker"><SelectValue placeholder="Select employee..." /></SelectTrigger>
-                <SelectContent>{workers.filter(w => w.isActive).map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}</SelectContent>
+                <SelectContent>{workers.filter(w => w.isActive !== false).map(w => <SelectItem key={w.id} value={w.id}>{w.firstName} {w.lastName}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div><Label>Template</Label>
