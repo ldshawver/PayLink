@@ -1247,19 +1247,20 @@ function computeCheckNetPay(item: PayrollItem, worker: Worker, deductions: TaxDe
 }
 
 function StandardCheck({ item, worker, company, run, deductions, config, payStubAccounts, accrualAccounts, accrualBalances, amendments = [], remittanceSources = [], calibration, showGuides = false }: CheckProps) {
+  void payStubAccounts;
   const computedNetPay = computeCheckNetPay(item, worker, deductions, amendments);
   return (
     <div className="check-page" style={{ width: "8.5in", height: "11in", pageBreakAfter: "always", fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif" }}>
-      {/* Top third: the actual check */}
-      <div style={{ height: "3.667in" }}>
-        <CheckPortion item={item} worker={worker} company={company} run={run} config={config} overrideNetPay={computedNetPay} remittanceSources={remittanceSources} calibration={calibration} showGuides={showGuides} />
+      {/* Zone 1: Check face — 3.5" per guide */}
+      <div style={{ height: "3.5in", overflow: "hidden" }}>
+        <GuidedCheckFace item={item} worker={worker} company={company} run={run} config={config} overrideNetPay={computedNetPay} remittanceSources={remittanceSources} calibration={calibration} showGuides={showGuides} />
       </div>
-      {/* Middle third: pay stub summary */}
-      <div style={{ height: "3.667in" }}>
+      {/* Zone 2: Mailing stub — 3.5" per guide */}
+      <div style={{ height: "3.5in" }}>
         <StubSummarySection item={item} worker={worker} company={company} run={run} config={config} deductions={deductions} accrualAccounts={accrualAccounts} accrualBalances={accrualBalances} />
       </div>
-      {/* Bottom third: earnings & deductions detail */}
-      <div style={{ height: "3.666in" }}>
+      {/* Zone 3: Earnings & deductions detail — 4.0" per guide */}
+      <div style={{ height: "4.0in" }}>
         <StubDetailSection item={item} worker={worker} company={company} run={run} deductions={deductions} config={config} amendments={amendments} />
       </div>
     </div>
