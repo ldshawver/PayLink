@@ -16375,7 +16375,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const workerIds = [...new Set(items.map(i => i.worker_id as string).filter(Boolean))];
       const workerMap: Record<string, CheckWorkerRow> = {};
       if (workerIds.length > 0) {
-        for (const w of pgRows<CheckWorkerRow>(await db.execute(sql`SELECT * FROM workers WHERE id = ANY(${workerIds}::text[])`))) workerMap[w.id] = w;
+        const workerIdList = sql.join(workerIds.map(id => sql`${id}`), sql`, `);
+        for (const w of pgRows<CheckWorkerRow>(await db.execute(sql`SELECT * FROM workers WHERE id IN (${workerIdList})`))) workerMap[w.id] = w;
       }
 
       const runNorm = { payDate: run.pay_date, periodStart: run.period_start, periodEnd: run.period_end };
