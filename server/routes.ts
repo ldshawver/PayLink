@@ -15903,15 +15903,19 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   }
 
   // Build fractional ABA routing number for human-readable backup on check face.
-  // Standard format: numerator = "FF-IIII" (Federal Reserve prefix - institution),
-  // denominator = Fed district code derived from routing number.
-  function buildFractionalRouting(routing: string): string {
+  // Correct ABA fractional formula per ABA standard:
+  //   Numerator   = prefix-institution  (e.g. "11-35")
+  //     prefix    = ABA geographic city/state code (configured per remittance source)
+  //     institution = digits 5–8 of routing, leading zeros dropped (e.g. "0035" → "35")
+  //   Denominator = first 4 digits of routing, leading zeros kept  (e.g. "1210")
+  // Example: routing 121000358, prefix "11" → "11-35\n1210" → rendered as 11-35/1210
+  function buildFractionalRouting(routing: string, abaPrefix?: string): string {
     const r = routing.replace(/\D/g, "").padStart(9, "0");
     if (r.length < 9 || r === "000000000") return "";
-    const ff   = r.slice(0, 2);  // Federal Reserve prefix (district + half)
-    const iiii = r.slice(2, 6);  // institution identifier
-    const dist = r.slice(0, 2);  // denominator = Fed district
-    return `${ff}-${iiii}\n${dist}`;
+    const denom  = r.slice(0, 4);                         // "1210" — keep leading zeros
+    const instit = String(parseInt(r.slice(4, 8), 10));   // "0035" → "35"
+    const num    = abaPrefix ? `${abaPrefix}-${instit}` : instit;
+    return `${num}\n${denom}`;
   }
 
   async function renderCheckPdf(params: {
@@ -15967,6 +15971,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const showEarningsDetail = cfg.showEarningsDetail   !== false;
     const showDeductions     = cfg.showDeductionsDetail !== false;
     const showYtdTotals      = cfg.showYtdTotals        !== false;
+    // ABA fractional prefix — ABA city/state geographic code (e.g. "11" for San Francisco area).
+    // Configured per check template (cfg.abaPrefix). Not derivable from routing alone.
+    const cfgAbaPrefix: string | undefined = cfg.abaPrefix ? String(cfg.abaPrefix) : undefined;
 
     // Per-field position overrides from check_templates.layoutConfig.positions
     const positions: Record<string, { x?: number; y?: number }> = cfg.positions || {};
@@ -16120,8 +16127,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     }
 
     // ── Bank block — top-center (center x 4.25in) ────────────────────────
-    const bankName    = isCalibration ? "Bank of America"                            : (cfg.bankName    || "");
-    const bankAddress = isCalibration ? "1100 Alhambra Blvd, Sacramento, CA 95816"  : (cfg.bankAddress || "");
+    // Bank name: template config takes priority; fall back to remittance source institution field.
+    const bankName    = isCalibration ? "Bank of America"                           : (cfg.bankName    || (remittanceSource as any)?.bankName || "");
+    const bankAddress = isCalibration ? "1100 Alhambra Blvd, Sacramento, CA 95816" : (cfg.bankAddress || "");
     if (bankName) {
       const bnW  = bankName.length    * 5.6;
       const bnaW = bankAddress.length * 3.7;
@@ -16135,7 +16143,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     //    Human-readable backup to the MICR routing code. Format: FF-IIII / FD
     //    where FF=Fed district prefix, IIII=institution id, FD=denominator district.
     {
-      const fracStr = buildFractionalRouting(routing);
+      const fracStr = buildFractionalRouting(routing, isCalibration ? "11" : cfgAbaPrefix);
       if (fracStr) {
         const [fracNum, fracDen] = fracStr.split("\n");
         const fracX = z1x(5.25);
@@ -16240,9 +16248,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       page.drawText(buildMicrStr(routing, account, checkNum),
         { x: z1x(0.50), y: z1y(3.38), size: MICR_FONT_SIZE, font: micrFont, color: rgb(0, 0, 0) });
 
-    // Zone 1 / Zone 2 separator (dashed cut line between zones)
-    page.drawLine({ start: { x: 0, y: checkBot - 1 }, end: { x: W, y: checkBot - 1 },
-      color: rgb(0.5, 0.5, 0.5), thickness: 0.5, dashArray: [4, 4] });
+    // Zone 1 / Zone 2 separator — drawn in Zone 2 space, well below MICR clear band.
+    // ANSI X9.7: the bottom 0.625" (micrBandH=45pt) of the check face must remain clear.
+    // A dashed line at checkBot-1 would appear inside that band; place it 20pt into Zone 2.
+    page.drawLine({ start: { x: 0, y: checkBot - 20 }, end: { x: W, y: checkBot - 20 },
+      color: rgb(0.6, 0.6, 0.6), thickness: 0.4, dashArray: [4, 6] });
 
     // ═══════════════════════════════════════════════════════════════════════
     // ZONE 2 — MAIL / PAYSTUB PANEL  (Y: mailBot..checkBot = 288..540)
@@ -16545,7 +16555,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   interface CheckRunRow { company_id: string; pay_date: string; period_start: string; period_end: string; funding_account_id: string | null; }
   interface CheckCompanyRow { name: string; address: string; city: string; state: string; zip: string; phone: string; ein: string; }
   interface CheckWorkerRow { id: string; first_name: string; last_name: string; address: string; address_2: string; city: string; state: string; zip: string; ssn: string; compensation_type: string; }
-  interface CheckRsRow { id: string; company_id: string; routing_number: string; account_number: string; calibration_config: unknown; }
+  interface CheckRsRow { id: string; company_id: string; routing_number: string; account_number: string; calibration_config: unknown; institution: string | null; }
   interface CheckTplRow { layout_config: unknown; }
   // Normalize pg / drizzle raw execute result to a typed array.
   function pgRows<T>(result: unknown): T[] {
@@ -16588,7 +16598,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       const pdfBytes = await renderCheckPdf({
         item: null, worker: null, run: null, company: null,
-        remittanceSource: { routingNumber: rs.routing_number, accountNumber: rs.account_number },
+        remittanceSource: { routingNumber: rs.routing_number, accountNumber: rs.account_number, bankName: rs.institution || "" },
         isCalibration: true,
         calibrationOffsets,
         layoutConfig: calLayoutConfig,
@@ -16668,7 +16678,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type } : null,
         run: runRow ? { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end } : null,
         company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null,
-        remittanceSource: rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number } : null,
+        remittanceSource: rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number, bankName: rs.institution || "" } : null,
         isCalibration,
         isVoid,
         layoutConfig,
@@ -16752,7 +16762,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       const runNorm = { payDate: run.pay_date, periodStart: run.period_start, periodEnd: run.period_end };
       const coNorm  = company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null;
-      const remSrc  = rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number } : null;
+      const remSrc  = rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number, bankName: rs.institution || "" } : null;
 
       const { PDFDocument } = await import("pdf-lib");
       const merged = await PDFDocument.create();
@@ -16959,7 +16969,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type } : null,
         run: runRow ? { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end } : null,
         company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null,
-        remittanceSource: { routingNumber: rs.routing_number, accountNumber: rs.account_number },
+        remittanceSource: { routingNumber: rs.routing_number, accountNumber: rs.account_number, bankName: rs.institution || "" },
         isCalibration: false,
         isVoid: false,
         isReprint: true,
