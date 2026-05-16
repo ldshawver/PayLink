@@ -15887,11 +15887,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const { item, worker, run, company, remittanceSource, isCalibration, isVoid, isReprint } = params;
     const doc = await PDFDocument.create();
     doc.registerFontkit(fontkit);
-    const hv  = await doc.embedFont(StandardFonts.Helvetica);
-    const hvB = await doc.embedFont(StandardFonts.HelveticaBold);
+    const hv   = await doc.embedFont(StandardFonts.Helvetica);
+    const hvB  = await doc.embedFont(StandardFonts.HelveticaBold);
     const cour = await doc.embedFont(StandardFonts.Courier);
 
-    // MICR font — hard failure for production checks; calibration mode falls back to Courier
+    // MICR font — hard failure for production checks; calibration falls back to Courier
     let micrFont: any = null;
     try {
       const micrPath = path.join(process.cwd(), "client", "public", "fonts", "micrenc.ttf");
@@ -15904,249 +15904,468 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           "for machine-readable routing/account numbers. Contact support or run in calibration mode."
         );
       }
-      micrFont = cour; // calibration-only fallback
+      micrFont = cour;
     }
 
-    // Show/hide flags from check_templates.layoutConfig; default all to true when not set.
-    // This implements the standard top-check layout fallback: when no template is assigned,
-    // params.layoutConfig is undefined and all flags remain true (everything shown, default positions).
-    const cfg = params.layoutConfig || {};
-    const showCompanyName    = cfg.showCompanyName    !== false;
-    const showCompanyAddr    = cfg.showCompanyAddress !== false;
-    const showCheckNumber    = cfg.showCheckNumber    !== false;
-    const showMicrLine       = cfg.showMicrLine       !== false;
-    const showEarningsDetail = cfg.showEarningsDetail !== false;
+    // Show/hide flags from check_templates.layoutConfig; all default true.
+    const cfg                = params.layoutConfig || {};
+    const showCompanyName    = cfg.showCompanyName      !== false;
+    const showCompanyAddr    = cfg.showCompanyAddress   !== false;
+    const showCheckNumber    = cfg.showCheckNumber      !== false;
+    const showMicrLine       = cfg.showMicrLine         !== false;
+    const showEarningsDetail = cfg.showEarningsDetail   !== false;
     const showDeductions     = cfg.showDeductionsDetail !== false;
-    const showYtdTotals      = cfg.showYtdTotals      !== false;
+    const showYtdTotals      = cfg.showYtdTotals        !== false;
 
-    // Position overrides from check_templates.layoutConfig.positions.
-    // Each key maps to an optional {x?, y?} specifying the field's base PDF coordinates
-    // (pts from page bottom-left, before calibration). Calibration offsets are applied on top.
-    // Supported keys: companyBlock, checkNumber, date, payeeRow, amountBox, amountWords, memo, signature.
+    // Per-field position overrides from check_templates.layoutConfig.positions
     const positions: Record<string, { x?: number; y?: number }> = cfg.positions || {};
 
-    // Global calibration offsets from remittance_sources.calibration_config (points).
-    // globalTop > 0 shifts elements down (CSS top semantics); in PDF Y-up coords = subtract.
+    // Global calibration offsets (globalTop > 0 = shift down in CSS; = subtract in PDF Y-up)
     const gOT = -(params.calibrationOffsets?.globalTop  || 0);
     const gOL =   params.calibrationOffsets?.globalLeft || 0;
 
-    // Position helpers: return template-specified position (+ calibration) or the computed default.
-    // defaultVal is already calibration-adjusted (derived from lm/rm/checkBot/curY which include gOL/gOT).
-    // Template override is a base coordinate; we add gOL/gOT to match the calibration level of defaults.
-    const px = (defaultVal: number, key: string): number =>
-      positions[key]?.x !== undefined ? Math.round(positions[key].x! + gOL) : defaultVal;
-    const py = (defaultVal: number, key: string): number =>
-      positions[key]?.y !== undefined ? Math.round(positions[key].y! + gOT) : defaultVal;
+    const px = (def: number, key: string): number =>
+      positions[key]?.x !== undefined ? Math.round(positions[key].x! + gOL) : def;
+    const py = (def: number, key: string): number =>
+      positions[key]?.y !== undefined ? Math.round(positions[key].y! + gOT) : def;
 
     const page = doc.addPage([612, 792]);
     const W = 612, H = 792;
-    const checkH    = Math.round(3.667 * 72); // 264pt
-    const micrBandH = Math.round(0.625 * 72); // 45pt
-    const baseLm    = Math.round(0.55  * 72); // 40pt base left margin
-    const lm        = baseLm + gOL;           // calibration-adjusted left margin
-    const rm        = W - baseLm + gOL;       // calibration-adjusted right boundary
-    const checkBot  = H - checkH + gOT;       // calibration-adjusted check bottom
-    const micrBase  = checkBot + Math.round(0.625 * 72); // 0.625" from check-area bottom per ANSI X9.7
 
+    // ── 3-part mailer zone boundaries ───────────────────────────────────────
+    // Zone 1 (check face): top 3.5" = 252pt
+    // Zone 2 (mail/paystub panel): middle 3.5" = 252pt
+    // Zone 3 (detailed earnings statement): bottom 4" = 288pt
+    const checkH   = 252;
+    const mailH    = 252;
+    const baseLm   = 40;
+    const lm       = baseLm + gOL;
+    const rm       = W - baseLm + gOL;
+    const checkBot = H - checkH + gOT;      // bottom of Zone 1 (540 with gOT=0)
+    const mailBot  = checkBot - mailH;      // bottom of Zone 2 (288 with gOT=0)
+    const micrBandH = 45;                   // 0.625" MICR clear band (ANSI X9.7)
+    const micrBase  = checkBot + 12;        // MICR baseline, inside Zone 1 bottom
+    const micrSepY  = checkBot + micrBandH; // top of MICR band = 585
+
+    // ── Data values ─────────────────────────────────────────────────────────
     const netPay   = isCalibration ? 1234.56 : Number(item?.netPay   || 0);
     const grossPay = isCalibration ? 1380.23 : Number(item?.grossPay || 0);
     const totalDed = isCalibration ? 145.67  : Number(item?.deductions || 0);
     const checkNum = isCalibration ? "0001"  : String(item?.checkNumber || "0000");
     const routing  = isCalibration ? "123456789"  : (remittanceSource?.routingNumber  || "").replace(/\D/g, "");
     const account  = isCalibration ? "1234567890" : (remittanceSource?.accountNumber  || "").replace(/\D/g, "");
-    const wName    = isCalibration ? "John Q Employee" : `${worker?.firstName || ""} ${worker?.lastName || ""}`.trim();
-    const coName   = isCalibration ? "ACME Corporation" : (company?.name || "");
-    const coAddr   = isCalibration
-      ? "123 Main St, Anytown CA 90210"
-      : [company?.address, [company?.city, company?.state].filter(Boolean).join(", ") + (company?.zip ? " " + company.zip : "")].filter(Boolean).join(", ");
-    const fmtDate = (d: string | null | undefined) =>
+    const fmtDate  = (d: string | null | undefined) =>
       d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "—";
-    const payDate = isCalibration
+    const payDate  = isCalibration
       ? new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
       : fmtDate(run?.payDate);
-    const pStart = isCalibration ? "01/01/2025" : fmtDate(run?.periodStart);
-    const pEnd   = isCalibration ? "01/15/2025" : fmtDate(run?.periodEnd);
-    const amtWords = numToWords(netPay);
-    const fmt2 = (v: any) => Number(v || 0).toFixed(2);
+    const pStart   = isCalibration ? "01/01/2025" : fmtDate(run?.periodStart);
+    const pEnd     = isCalibration ? "01/15/2025" : fmtDate(run?.periodEnd);
     const fmtMoney = (v: number) => v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmt2     = (v: any)    => Number(v || 0).toFixed(2);
+    const amtWords = numToWords(netPay);
+    const ytdGross = isCalibration ? 9876.54 : Number(item?.ytdGross      || 0);
+    const ytdDed   = isCalibration ? 1167.65 : Number(item?.ytdDeductions || 0);
+    const ytdNet   = isCalibration ? 8708.89 : Number(item?.ytdNet        || 0);
 
+    // Worker fields
+    const wName         = isCalibration ? "John Q Employee"    : `${worker?.firstName || ""} ${worker?.lastName || ""}`.trim();
+    const wStreet       = isCalibration ? "123 Employee Street": (worker?.address || "");
+    const wCityStateZip = isCalibration ? "Anytown, CA 90210"  :
+      [[worker?.city, worker?.state].filter(Boolean).join(", "), worker?.zip].filter(Boolean).join(" ");
+    const wSsnRaw       = worker?.ssn ? String(worker.ssn).replace(/\D/g, "") : "";
+    const wSsnLine      = isCalibration ? "SSN: ***-**-1234" : (wSsnRaw.length >= 4 ? `SSN: ***-**-${wSsnRaw.slice(-4)}` : "");
+    const isContractor  = isCalibration
+      ? true
+      : (worker?.compensationType === "contractor" || worker?.compensationType === "1099");
+
+    // Company fields
+    const coName  = isCalibration ? "ACME Corporation"  : (company?.name    || "");
+    const coAddr1 = isCalibration ? "123 Main Street"   : (company?.address || "");
+    const coAddr2 = isCalibration ? "Anytown, CA 90210" :
+      [[company?.city, company?.state].filter(Boolean).join(", "), company?.zip].filter(Boolean).join(" ");
+    const coPhone = isCalibration ? "(555) 555-0100"    : (company?.phone || "");
+    const coEin   = isCalibration ? "12-3456789"        : (company?.ein   || "");
+
+    // Calibration guide — only drawn in calibration mode
     const drawGuide = (x: number, y: number, w: number, h: number, label: string) => {
       if (!isCalibration) return;
       page.drawRectangle({ x, y, width: w, height: h, borderColor: rgb(0.8, 0.2, 0.2), borderWidth: 0.5, borderDashArray: [3, 3] });
       page.drawText(label, { x: x + 2, y: y + h - 8, size: 5.5, font: hv, color: rgb(0.8, 0.2, 0.2) });
     };
 
-    // Check border
-    page.drawRectangle({ x: lm - 4, y: checkBot, width: W - (lm - 4) * 2, height: checkH, borderColor: rgb(0.7, 0.7, 0.7), borderWidth: 0.5 });
-    page.drawLine({ start: { x: lm - 4, y: checkBot + micrBandH }, end: { x: rm + 4, y: checkBot + micrBandH }, color: rgb(0.8, 0.8, 0.8), thickness: 0.3 });
+    // ═══════════════════════════════════════════════════════════════════════
+    // ZONE 1 — CHECK FACE  (Y: checkBot..H = 540..792)
+    // ═══════════════════════════════════════════════════════════════════════
 
-    // VOID watermark
-    if (isVoid) {
+    // Check border + MICR band separator
+    page.drawRectangle({ x: lm - 4, y: checkBot, width: W - (lm - 4) * 2, height: checkH, borderColor: rgb(0.7, 0.7, 0.7), borderWidth: 0.5 });
+    page.drawLine({ start: { x: lm - 4, y: micrSepY }, end: { x: rm + 4, y: micrSepY }, color: rgb(0.8, 0.8, 0.8), thickness: 0.3 });
+
+    if (isVoid)
       page.drawText("VOID", { x: 140, y: checkBot + 120, size: 80, font: hvB, color: rgb(0.85, 0.1, 0.1), opacity: 0.25, rotate: { type: "degrees" as const, angle: 30 } });
+    if (isReprint)
+      page.drawText("REPRINT", { x: 130, y: checkBot + 100, size: 48, font: hvB, color: rgb(0.8, 0.15, 0.15), opacity: 0.18, rotate: { type: "degrees" as const, angle: 40 } });
+
+    // ── Company block (top-left) ─────────────────────────────────────────────
+    const coBlockX = px(lm, "companyBlock");
+    const coBlockY = py(H - 16 + gOT, "companyBlock");
+    drawGuide(coBlockX, coBlockY - 56, 230, 56, "COMPANY BLOCK");
+    if (showCompanyName) page.drawText(coName,  { x: coBlockX, y: coBlockY - 12, size: 11, font: hvB, color: rgb(0, 0, 0) });
+    if (showCompanyAddr) {
+      if (coAddr1) page.drawText(coAddr1, { x: coBlockX, y: coBlockY - 25, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (coAddr2) page.drawText(coAddr2, { x: coBlockX, y: coBlockY - 36, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (coPhone) page.drawText(coPhone, { x: coBlockX, y: coBlockY - 47, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
     }
 
-    // Company header — position may be overridden by check_templates.layoutConfig.positions.companyBlock
-    let curY = H - 16 + gOT;  // apply global vertical calibration offset
-    const coBlockX = px(lm, "companyBlock");
-    const coBlockY = py(curY, "companyBlock");
-    drawGuide(coBlockX, coBlockY - 42, 220, 42, "COMPANY BLOCK");
-    if (showCompanyName)
-      page.drawText(coName, { x: coBlockX, y: coBlockY - 12, size: 11, font: hvB, color: rgb(0, 0, 0) });
-    if (showCompanyAddr)
-      page.drawText(coAddr, { x: coBlockX, y: coBlockY - 24, size:  8, font: hv,  color: rgb(0.2, 0.2, 0.2) });
-
-    // Check number box (top-right) — position may be overridden by layoutConfig.positions.checkNumber
-    const cnBoxX = px(rm - 102, "checkNumber");
-    const cnBoxY = py(curY - 32, "checkNumber");
+    // ── Check number box (top-right) ────────────────────────────────────────
+    const cnBoxW = 110;
+    const cnBoxH = 26;
+    const cnBoxX = px(rm - cnBoxW, "checkNumber");
+    const cnBoxY = py(H - 30 + gOT, "checkNumber");
+    drawGuide(cnBoxX, cnBoxY, cnBoxW, cnBoxH, "CHECK #");
     if (showCheckNumber) {
-      drawGuide(cnBoxX, cnBoxY, 102, 24, "CHECK #");
-      page.drawRectangle({ x: cnBoxX, y: cnBoxY, width: 102, height: 24, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+      page.drawRectangle({ x: cnBoxX, y: cnBoxY, width: cnBoxW, height: cnBoxH, borderColor: rgb(0, 0, 0), borderWidth: 1 });
       page.drawText(`No. ${checkNum}`, { x: cnBoxX + 6, y: cnBoxY + 8, size: 10, font: hvB, color: rgb(0, 0, 0) });
     }
 
-    // Date (below check number) — position may be overridden by layoutConfig.positions.date
-    const dtY = py(cnBoxY - 22, "date");
-    const dtX = px(cnBoxX, "date");
-    drawGuide(dtX, dtY, 102, 18, "DATE");
-    page.drawText("DATE", { x: dtX, y: dtY + 9, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
-    page.drawLine({ start: { x: dtX, y: dtY }, end: { x: dtX + 102, y: dtY }, color: rgb(0, 0, 0), thickness: 0.8 });
-    page.drawText(payDate, { x: dtX + 2, y: dtY + 2, size: 9, font: hv, color: rgb(0, 0, 0) });
-    page.drawText("VOID AFTER 90 DAYS", { x: dtX, y: dtY - 9, size: 6, font: hv, color: rgb(0.5, 0.5, 0.5) });
+    // ── Date block (below check# box, right-aligned) ─────────────────────────
+    const dtY = py(cnBoxY - 14, "date");
+    drawGuide(cnBoxX, dtY - 36, cnBoxW, 34, "DATE");
+    page.drawText("DATE", { x: cnBoxX, y: dtY, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
+    page.drawLine({ start: { x: cnBoxX, y: dtY - 12 }, end: { x: rm, y: dtY - 12 }, color: rgb(0, 0, 0), thickness: 0.8 });
+    page.drawText(payDate, { x: cnBoxX + 2, y: dtY - 22, size: 9, font: hv, color: rgb(0, 0, 0) });
+    page.drawText("VOID AFTER 90 DAYS", { x: cnBoxX, y: dtY - 34, size: 6, font: hv, color: rgb(0.5, 0.5, 0.5) });
 
-    // Pay to order row — y may be overridden by layoutConfig.positions.payeeRow
-    const payRowY = py(curY - 58, "payeeRow");
-    const amtBoxW = 102;
-    const amtBoxX = px(rm - amtBoxW, "amountBox");
-    const amtBoxY = py(payRowY - 4, "amountBox");
+    // ── PAY TO THE ORDER OF ──────────────────────────────────────────────────
+    // payRowY sits below both the company phone line (coBlockY-47) and the date block (dtY-34).
+    // 95pt above micrSepY keeps it clear of the MICR band and leaves room for payee address + words.
+    const payRowY  = py(micrSepY + 95, "payeeRow");
+    const amtBoxW  = 110;
+    const amtBoxX  = px(rm - amtBoxW, "amountBox");
+    const amtBoxY  = py(payRowY - 8, "amountBox");
     const payeeEnd = amtBoxX - 8;
+    drawGuide(coBlockX + 136, payRowY - 8, payeeEnd - coBlockX - 136, 20, "PAYEE NAME");
     page.drawText("PAY TO THE ORDER OF", { x: coBlockX, y: payRowY + 4, size: 7, font: hvB, color: rgb(0, 0, 0) });
-    drawGuide(coBlockX + 138, payRowY - 4, payeeEnd - (coBlockX + 138), 20, "PAYEE NAME");
-    page.drawText(wName, { x: coBlockX + 140, y: payRowY + 3, size: 12, font: hvB, color: rgb(0, 0, 0) });
-    page.drawLine({ start: { x: coBlockX + 138, y: payRowY }, end: { x: payeeEnd, y: payRowY }, color: rgb(0, 0, 0), thickness: 1 });
-    drawGuide(amtBoxX, amtBoxY, amtBoxW, 22, "AMOUNT BOX");
-    page.drawRectangle({ x: amtBoxX, y: amtBoxY, width: amtBoxW, height: 22, borderColor: rgb(0, 0, 0), borderWidth: 1 });
-    page.drawLine({ start: { x: amtBoxX + 4, y: amtBoxY }, end: { x: amtBoxX + 4, y: amtBoxY + 22 }, color: rgb(0, 0, 0), thickness: 2 });
-    page.drawText(`$${fmtMoney(netPay)}`, { x: amtBoxX + 8, y: amtBoxY + 6, size: 11, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(wName, { x: coBlockX + 138, y: payRowY + 3, size: 12, font: hvB, color: rgb(0, 0, 0) });
+    page.drawLine({ start: { x: coBlockX + 136, y: payRowY }, end: { x: payeeEnd, y: payRowY }, color: rgb(0, 0, 0), thickness: 1 });
+    drawGuide(amtBoxX, amtBoxY, amtBoxW, 26, "AMOUNT BOX");
+    page.drawRectangle({ x: amtBoxX, y: amtBoxY, width: amtBoxW, height: 26, borderColor: rgb(0, 0, 0), borderWidth: 1 });
+    page.drawLine({ start: { x: amtBoxX + 4, y: amtBoxY }, end: { x: amtBoxX + 4, y: amtBoxY + 26 }, color: rgb(0, 0, 0), thickness: 2 });
+    page.drawText(`$${fmtMoney(netPay)}`, { x: amtBoxX + 8, y: amtBoxY + 8, size: 11, font: hvB, color: rgb(0, 0, 0) });
 
-    // Amount in words — y may be overridden by layoutConfig.positions.amountWords
-    const wordsY = py(payRowY - 18, "amountWords");
-    drawGuide(coBlockX, wordsY - 2, rm - coBlockX, 14, "AMOUNT WORDS");
+    // ── Payee mailing address (mail-window zone inside check face) ───────────
+    // Appears below "PAY TO THE ORDER OF"; shows through envelope window when mailer is folded.
+    const payeeAddrX = px(coBlockX, "payeeAddress");
+    const payeeAddrY = py(payRowY - 16, "payeeAddress");
+    drawGuide(payeeAddrX, payeeAddrY - 26, 240, 26, "PAYEE ADDRESS");
+    if (wStreet)       page.drawText(wStreet,       { x: payeeAddrX, y: payeeAddrY,      size: 9, font: hv, color: rgb(0, 0, 0) });
+    if (wCityStateZip) page.drawText(wCityStateZip, { x: payeeAddrX, y: payeeAddrY - 13, size: 9, font: hv, color: rgb(0, 0, 0) });
+
+    // ── Amount in words ──────────────────────────────────────────────────────
+    const wordsY   = py(payeeAddrY - 28, "amountWords");
     const wordsStr = (amtWords.length > 80 ? amtWords.slice(0, 77) + "..." : amtWords) + " ————————";
+    drawGuide(coBlockX, wordsY - 2, rm - coBlockX, 14, "AMOUNT WORDS");
     page.drawText(wordsStr, { x: coBlockX, y: wordsY, size: 9, font: hv, color: rgb(0, 0, 0) });
     page.drawLine({ start: { x: coBlockX, y: wordsY - 3 }, end: { x: rm, y: wordsY - 3 }, color: rgb(0, 0, 0), thickness: 0.5 });
 
-    // Memo — y may be overridden by layoutConfig.positions.memo
-    const memoY = py(wordsY - 22, "memo");
+    // ── Memo (left) + Signature (right) — same horizontal band ──────────────
+    const memoY    = py(wordsY - 24, "memo");
     const memoText = pStart !== "—" && pEnd !== "—" ? `Pay period ${pStart} – ${pEnd}` : "";
     drawGuide(coBlockX, memoY - 2, 200, 14, "MEMO");
     page.drawText("MEMO:", { x: coBlockX, y: memoY, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
     page.drawText(memoText, { x: coBlockX + 32, y: memoY, size: 8, font: hv, color: rgb(0, 0, 0) });
     page.drawLine({ start: { x: coBlockX, y: memoY - 3 }, end: { x: coBlockX + 240, y: memoY - 3 }, color: rgb(0, 0, 0), thickness: 0.5 });
-
-    // Signature line — position may be overridden by layoutConfig.positions.signature
-    const sigY = py(memoY - 22, "signature");
+    const sigY = py(memoY, "signature");
     const sigX = px(rm - 162, "signature");
     drawGuide(sigX, sigY - 2, 162, 14, "SIGNATURE");
     page.drawLine({ start: { x: sigX, y: sigY }, end: { x: sigX + 162, y: sigY }, color: rgb(0, 0, 0), thickness: 0.5 });
     page.drawText("AUTHORIZED SIGNATURE", { x: sigX + 5, y: sigY - 9, size: 6, font: hv, color: rgb(0.4, 0.4, 0.4) });
 
-    // MICR line (conditionally rendered per layoutConfig)
+    // ── MICR line ────────────────────────────────────────────────────────────
     if (showMicrLine)
       page.drawText(buildMicrStr(routing, account, checkNum), { x: lm, y: micrBase, size: 12, font: micrFont, color: rgb(0, 0, 0) });
 
-    // Stub separator
-    page.drawLine({ start: { x: 0, y: checkBot - 2 }, end: { x: W, y: checkBot - 2 }, color: rgb(0.6, 0.6, 0.6), thickness: 0.5, dashArray: [4, 4] });
+    // Zone 1 / Zone 2 separator (dashed cut line)
+    page.drawLine({ start: { x: 0, y: checkBot - 1 }, end: { x: W, y: checkBot - 1 }, color: rgb(0.5, 0.5, 0.5), thickness: 0.5, dashArray: [4, 4] });
 
-    // Stub header
-    const sHdrY = checkBot - 16;
-    page.drawRectangle({ x: lm - 4, y: sHdrY - 4, width: rm - lm + 8, height: 16, color: rgb(0.93, 0.93, 0.93) });
-    page.drawText("EMPLOYEE EARNINGS STATEMENT — DETACH BEFORE CASHING", { x: lm, y: sHdrY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+    // ═══════════════════════════════════════════════════════════════════════
+    // ZONE 2 — MAIL / PAYSTUB PANEL  (Y: mailBot..checkBot = 288..540)
+    // Left column: return-address + recipient-address windows (mailer fold zones)
+    // Right column: compact paystub summary
+    // ═══════════════════════════════════════════════════════════════════════
 
-    // Stub employee/period info
-    let sY = sHdrY - 16;
-    page.drawText(`Employee: ${wName}`,    { x: lm,       y: sY, size: 8, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText(`Company: ${coName}`,    { x: lm + 250, y: sY, size: 8, font: hv,  color: rgb(0, 0, 0) });
-    sY -= 12;
-    page.drawText(`Pay Period: ${pStart} – ${pEnd}`, { x: lm,       y: sY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
-    page.drawText(`Pay Date: ${payDate}`,             { x: lm + 250, y: sY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
-    sY -= 12;
-    page.drawText(`Check No: ${checkNum}`, { x: lm, y: sY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
-    sY -= 16;
+    const mailColDiv = lm + 195;  // X divider between address col and paystub col
+    const psX        = mailColDiv + 8;
+    const psW        = rm - psX;
 
-    // Earnings table (conditionally rendered per layoutConfig)
-    const c1 = lm, c2 = lm + 185, c3 = lm + 280, c4 = rm - 75;
-    if (showEarningsDetail) {
-    page.drawRectangle({ x: c1 - 2, y: sY - 4, width: rm - c1 + 2, height: 14, color: rgb(0.88, 0.88, 0.88) });
-    page.drawText("DESCRIPTION", { x: c1, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText("HOURS",       { x: c2, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText("RATE",        { x: c3, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText("CURRENT",     { x: c4, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
-    sY -= 14;
+    // Vertical divider between columns
+    page.drawLine({ start: { x: mailColDiv, y: mailBot }, end: { x: mailColDiv, y: checkBot - 2 }, color: rgb(0.8, 0.8, 0.8), thickness: 0.5 });
 
-    type ERow = [string, string, string, string];
-    const earningRows: ERow[] = [];
+    // ── Sender/return address window (upper-left of Zone 2) ──────────────────
+    // Shows through the return-address window of a window envelope.
+    drawGuide(lm, checkBot - 82, mailColDiv - lm - 4, 78, "SENDER ADDR");
+    const senderY = checkBot - 18;
+    if (showCompanyName) page.drawText(coName, { x: lm, y: senderY, size: 8, font: hvB, color: rgb(0, 0, 0) });
+    if (showCompanyAddr) {
+      if (coAddr1) page.drawText(coAddr1, { x: lm, y: senderY - 12, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (coAddr2) page.drawText(coAddr2, { x: lm, y: senderY - 24, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
+    }
+
+    // ── Recipient/delivery address window (lower-left of Zone 2) ────────────
+    // Shows through the main address window of a window envelope.
+    drawGuide(lm, mailBot + 16, mailColDiv - lm - 4, 60, "RECIPIENT ADDR");
+    const recipBaseY = mailBot + 16 + 60;  // top of the guide box
+    page.drawText(wName,           { x: lm, y: recipBaseY - 12, size: 8, font: hvB, color: rgb(0, 0, 0) });
+    if (wStreet)       page.drawText(wStreet,       { x: lm, y: recipBaseY - 24, size: 8, font: hv, color: rgb(0, 0, 0) });
+    if (wCityStateZip) page.drawText(wCityStateZip, { x: lm, y: recipBaseY - 36, size: 8, font: hv, color: rgb(0, 0, 0) });
+
+    // ── Paystub summary (right column of Zone 2) ─────────────────────────────
+    // "PAYSTUB" header bar
+    page.drawRectangle({ x: psX - 4, y: checkBot - 18, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
+    const psHdrLabel = "PAYSTUB";
+    page.drawText(psHdrLabel, { x: psX + psW / 2 - 22, y: checkBot - 14, size: 10, font: hvB, color: rgb(1, 1, 1) });
+
+    // Company + EIN
+    const coEinLine = coEin ? `${coName} — EIN: ${coEin}` : coName;
+    page.drawText(coEinLine, { x: psX, y: checkBot - 30, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+    // Period dates
+    page.drawText(`Pay Period Start: ${pStart}`, { x: psX, y: checkBot - 42, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
+    page.drawText(`Pay Period End: ${pEnd}`,     { x: psX, y: checkBot - 52, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
+    page.drawText(`Pay Date: ${payDate}`,        { x: psX, y: checkBot - 62, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
+    // Contractor note
+    if (isContractor)
+      page.drawText("Independent contractor — responsible for self-employment tax (15.3%: SS 12.4% + Medicare 2.9%)",
+        { x: psX, y: checkBot - 74, size: 5.5, font: hv, color: rgb(0.45, 0.32, 0.05) });
+
+    // Compact earnings table
+    const psC1 = psX, psC2 = psX + 115, psC3 = psX + 160, psC4 = psX + 210, psC5 = psX + 262;
+    let psY = checkBot - 88;
+    page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 13, color: rgb(0.88, 0.88, 0.88) });
+    page.drawText("EARNINGS",  { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("HOURS",     { x: psC2, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("RATE",      { x: psC3, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("CURRENT",   { x: psC4, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+    if (showYtdTotals) page.drawText("YTD", { x: psC5, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+    psY -= 13;
+
+    type ERow = [string, string, string, string, string];
+    const earnRows: ERow[] = [];
+    let totalHrs = 0;
     if (isCalibration) {
-      earningRows.push(["Regular",            "80.00", "$15.45/hr", "$1,236.00"]);
-      earningRows.push(["Overtime (1.5x)",     "2.50", "$23.18/hr",    "$57.95"]);
-      earningRows.push(["Holiday",             "8.00", "$15.45/hr",   "$123.60"]);
+      earnRows.push(["Regular",         "80.00", "$15.45/hr", `$${fmtMoney(grossPay)}`, `$${fmtMoney(ytdGross)}`]);
+      earnRows.push(["Overtime (1.5x)", "2.50",  "$23.18/hr", "$57.95",                 "—"]);
+      earnRows.push(["Holiday",         "8.00",  "$15.45/hr", "$123.60",                "—"]);
+      totalHrs = 90.5;
     } else if (item) {
       const rate = Number(item.payRate || 0);
-      if (Number(item.regularHours     || 0) > 0) earningRows.push(["Regular",          fmt2(item.regularHours),    rate > 0 ? `$${fmt2(rate)}/hr`       : "", `$${fmt2(item.regularPay)}`]);
-      if (Number(item.overtimeHours    || 0) > 0) earningRows.push(["Overtime (1.5x)",  fmt2(item.overtimeHours),   rate > 0 ? `$${fmt2(rate*1.5)}/hr`   : "", `$${fmt2(item.overtimePay)}`]);
-      if (Number(item.doubleTimeHours  || 0) > 0) earningRows.push(["Double Time (2x)", fmt2(item.doubleTimeHours), rate > 0 ? `$${fmt2(rate*2)}/hr`     : "", `$${fmt2(item.doubleTimePay)}`]);
-      if (Number(item.salaryPay        || 0) > 0) earningRows.push(["Salary",           "",                         "",                                        `$${fmt2(item.salaryPay)}`]);
-      if (Number(item.bonusPay         || 0) > 0) earningRows.push(["Bonus",            "",                         "",                                        `$${fmt2(item.bonusPay)}`]);
-      if (Number(item.tipsPay          || 0) > 0) earningRows.push(["Tips",             "",                         "",                                        `$${fmt2(item.tipsPay)}`]);
-      if (Number(item.ptoPay           || 0) > 0) earningRows.push(["PTO",              fmt2(item.ptoHours),        "",                                        `$${fmt2(item.ptoPay)}`]);
-      if (Number(item.sickPay          || 0) > 0) earningRows.push(["Sick Leave",       fmt2(item.sickHours),       "",                                        `$${fmt2(item.sickPay)}`]);
-      if (Number(item.holidayPay       || 0) > 0) earningRows.push(["Holiday",          fmt2(item.holidayHours),    "",                                        `$${fmt2(item.holidayPay)}`]);
+      const rh = Number(item.regularHours || 0);
+      if (rh > 0) { earnRows.push(["Regular", fmt2(rh), rate > 0 ? `$${fmt2(rate)}/hr` : "—", `$${fmt2(item.regularPay)}`, showYtdTotals ? `$${fmtMoney(ytdGross)}` : ""]); totalHrs += rh; }
+      const oh = Number(item.overtimeHours || 0);
+      if (oh > 0) { earnRows.push(["Overtime (1.5x)", fmt2(oh), rate > 0 ? `$${fmt2(rate*1.5)}/hr` : "—", `$${fmt2(item.overtimePay)}`, "—"]); totalHrs += oh; }
+      const dh = Number(item.doubleTimeHours || 0);
+      if (dh > 0) { earnRows.push(["Double Time (2x)", fmt2(dh), rate > 0 ? `$${fmt2(rate*2)}/hr` : "—", `$${fmt2(item.doubleTimePay)}`, "—"]); totalHrs += dh; }
+      if (Number(item.salaryPay  || 0) > 0) earnRows.push(["Salary",     "", "", `$${fmt2(item.salaryPay)}`,  "—"]);
+      if (Number(item.bonusPay   || 0) > 0) earnRows.push(["Bonus",      "", "", `$${fmt2(item.bonusPay)}`,   "—"]);
+      if (Number(item.tipsPay    || 0) > 0) earnRows.push(["Tips",       "", "", `$${fmt2(item.tipsPay)}`,    "—"]);
+      const ph = Number(item.ptoHours || 0);
+      if (Number(item.ptoPay || 0) > 0)     { earnRows.push(["PTO", fmt2(ph), "", `$${fmt2(item.ptoPay)}`, "—"]);     totalHrs += ph; }
+      const sh = Number(item.sickHours || 0);
+      if (Number(item.sickPay || 0) > 0)    { earnRows.push(["Sick Leave", fmt2(sh), "", `$${fmt2(item.sickPay)}`, "—"]); totalHrs += sh; }
+      const hh = Number(item.holidayHours || 0);
+      if (Number(item.holidayPay || 0) > 0) { earnRows.push(["Holiday", fmt2(hh), "", `$${fmt2(item.holidayPay)}`, "—"]); totalHrs += hh; }
     }
-    for (const [desc, hrs, rate, amt] of earningRows) {
-      page.drawText(desc, { x: c1, y: sY, size: 7.5, font: hv,   color: rgb(0, 0, 0) });
-      page.drawText(hrs,  { x: c2, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
-      page.drawText(rate, { x: c3, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
-      page.drawText(amt,  { x: c4, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
-      sY -= 11;
+    for (const [desc, hrs, rate, cur, ytd] of earnRows) {
+      if (psY < mailBot + 8) break;
+      page.drawText(desc, { x: psC1, y: psY, size: 7,   font: hv,   color: rgb(0, 0, 0) });
+      page.drawText(hrs,  { x: psC2, y: psY, size: 7,   font: cour, color: rgb(0, 0, 0) });
+      page.drawText(rate, { x: psC3, y: psY, size: 7,   font: cour, color: rgb(0, 0, 0) });
+      page.drawText(cur,  { x: psC4, y: psY, size: 7,   font: cour, color: rgb(0, 0, 0) });
+      if (showYtdTotals) page.drawText(ytd, { x: psC5, y: psY, size: 7, font: cour, color: rgb(0, 0, 0) });
+      psY -= 11;
     }
-    } // end if (showEarningsDetail)
+    if (totalHrs > 0 && psY >= mailBot + 8) {
+      page.drawText("TOTAL HOURS",  { x: psC1, y: psY, size: 6.5, font: hvB,  color: rgb(0.25, 0.25, 0.25) });
+      page.drawText(fmt2(totalHrs), { x: psC2, y: psY, size: 6.5, font: cour, color: rgb(0.25, 0.25, 0.25) });
+      psY -= 11;
+    }
 
-    sY -= 4;
-    // Deductions section (conditionally rendered per layoutConfig)
-    if (showDeductions) {
-    page.drawRectangle({ x: c1 - 2, y: sY - 4, width: rm - c1 + 2, height: 14, color: rgb(0.88, 0.88, 0.88) });
-    page.drawText("DEDUCTIONS", { x: c1, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText("CURRENT",    { x: c4, y: sY, size: 7, font: hvB, color: rgb(0, 0, 0) });
-    sY -= 14;
+    psY -= 4;
+    if (showDeductions && psY >= mailBot + 8) {
+      page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 13, color: rgb(0.88, 0.88, 0.88) });
+      page.drawText("DEDUCTIONS", { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText("CURRENT",    { x: psC4, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+      if (showYtdTotals) page.drawText("YTD", { x: psC5, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
+      psY -= 13;
+      if (isCalibration) {
+        if (psY >= mailBot + 8) { page.drawText("Federal Income Tax",     { x: psC1, y: psY, size: 7, font: hv,   color: rgb(0, 0, 0) }); page.drawText("-$98.45",  { x: psC4, y: psY, size: 7, font: cour, color: rgb(0, 0, 0) }); psY -= 11; }
+        if (psY >= mailBot + 8) { page.drawText("Social Security (6.2%)", { x: psC1, y: psY, size: 7, font: hv,   color: rgb(0, 0, 0) }); page.drawText("-$47.22",  { x: psC4, y: psY, size: 7, font: cour, color: rgb(0, 0, 0) }); psY -= 11; }
+      } else if (totalDed > 0 && psY >= mailBot + 8) {
+        page.drawText("Taxes & Deductions",      { x: psC1, y: psY, size: 7, font: hv,   color: rgb(0, 0, 0) });
+        page.drawText(`-$${fmtMoney(totalDed)}`, { x: psC4, y: psY, size: 7, font: cour, color: rgb(0, 0, 0) });
+        if (showYtdTotals) page.drawText(`-$${fmtMoney(ytdDed)}`, { x: psC5, y: psY, size: 7, font: cour, color: rgb(0, 0, 0) });
+        psY -= 11;
+      } else if (psY >= mailBot + 8) {
+        page.drawText("No deductions", { x: psC1, y: psY, size: 7, font: hv, color: rgb(0.5, 0.5, 0.5) }); psY -= 11;
+      }
+    }
+
+    psY -= 4;
+    if (psY >= mailBot + 34) {
+      page.drawLine({ start: { x: psC1 - 2, y: psY + 8 }, end: { x: rm + 2, y: psY + 8 }, color: rgb(0.5, 0.5, 0.5), thickness: 0.5 });
+      page.drawText("GROSS PAY",              { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(`$${fmtMoney(grossPay)}`, { x: psC4, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
+      if (showYtdTotals) page.drawText(`$${fmtMoney(ytdGross)}`, { x: psC5, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
+      psY -= 11;
+      page.drawText("TOTAL DEDUCTIONS",         { x: psC1, y: psY, size: 7.5, font: hvB, color: rgb(0, 0, 0) });
+      page.drawText(`-$${fmtMoney(totalDed)}`,  { x: psC4, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
+      if (showYtdTotals) page.drawText(`-$${fmtMoney(ytdDed)}`, { x: psC5, y: psY, size: 7.5, font: hvB, color: rgb(0.6, 0, 0) });
+      psY -= 11;
+      page.drawRectangle({ x: psC1 - 2, y: psY - 3, width: rm - psC1 + 2, height: 13, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
+      page.drawText("NET PAY",              { x: psC1, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
+      page.drawText(`$${fmtMoney(netPay)}`, { x: psC4, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
+      if (showYtdTotals) page.drawText(`$${fmtMoney(ytdNet)}`, { x: psC5, y: psY, size: 8, font: hvB, color: rgb(0, 0, 0.55) });
+      psY -= 14;
+    }
+
+    // SE tax reference (Zone 2 right col, contractor only)
+    if (isContractor && psY >= mailBot + 50) {
+      const ssSEcur = grossPay * 0.124, medSEcur = grossPay * 0.029, totSEcur = grossPay * 0.153;
+      const ssSEytd = ytdGross  * 0.124, medSEytd = ytdGross  * 0.029, totSEytd = ytdGross  * 0.153;
+      page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 13, color: rgb(0.95, 0.92, 0.82), opacity: 0.85 });
+      page.drawText("SELF-EMPLOYMENT TAX REFERENCE", { x: psC1, y: psY, size: 6, font: hvB, color: rgb(0.5, 0.35, 0) }); psY -= 12;
+      if (psY >= mailBot + 8) { page.drawText("Social Security (SS) 12.4%", { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(ssSEcur)}`, { x: psC4, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(ssSEytd)}`, { x: psC5, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); psY -= 10; }
+      if (psY >= mailBot + 8) { page.drawText("Medicare 2.9%",              { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(medSEcur)}`, { x: psC4, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(medSEytd)}`, { x: psC5, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); psY -= 10; }
+      if (psY >= mailBot + 8) { page.drawText("Total SE Tax 15.3%",         { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(totSEcur)}`, { x: psC4, y: psY, size: 6.5, font: hvB,  color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(totSEytd)}`, { x: psC5, y: psY, size: 6.5, font: hvB,  color: rgb(0,0,0) }); }
+    }
+
+    // Zone 2 / Zone 3 separator (dashed cut line)
+    page.drawLine({ start: { x: 0, y: mailBot - 1 }, end: { x: W, y: mailBot - 1 }, color: rgb(0.5, 0.5, 0.5), thickness: 0.5, dashArray: [4, 4] });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ZONE 3 — DETAILED EARNINGS STATEMENT  (Y: 0..mailBot = 0..288)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // Banner
+    const z3BannerY = mailBot - 14;
+    page.drawRectangle({ x: lm - 4, y: z3BannerY - 4, width: rm - lm + 8, height: 13, color: rgb(0.93, 0.93, 0.93) });
+    page.drawText("EARNINGS STATEMENT — DETACH BEFORE CASHING", { x: lm, y: z3BannerY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+
+    // Employee info (left) + period dates (right)
+    let z3Y = z3BannerY - 14;
+    page.drawText(wName, { x: lm, y: z3Y, size: 9, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(`Pay Period Start: ${pStart}`, { x: rm - 160, y: z3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) });
+    z3Y -= 12;
+    if (wStreet)       page.drawText(wStreet,       { x: lm, y: z3Y, size: 8, font: hv, color: rgb(0, 0, 0) });
+    page.drawText(`Pay Period End: ${pEnd}`,     { x: rm - 160, y: z3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) });
+    z3Y -= 12;
+    if (wCityStateZip) page.drawText(wCityStateZip, { x: lm, y: z3Y, size: 8, font: hv, color: rgb(0, 0, 0) });
+    page.drawText(`Pay Date: ${payDate}`,        { x: rm - 160, y: z3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) });
+    z3Y -= 12;
+    if (wSsnLine)      page.drawText(wSsnLine,       { x: lm, y: z3Y, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText("Payment: Check",              { x: rm - 160, y: z3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) });
+    z3Y -= 14;
+
+    // Header rule
+    page.drawLine({ start: { x: lm - 4, y: z3Y + 6 }, end: { x: rm + 4, y: z3Y + 6 }, color: rgb(0.4, 0.4, 0.4), thickness: 0.7 });
+
+    // Two-column table: EARNINGS (left half) | DEDUCTIONS (right half)
+    const midX  = Math.round(W / 2) - 5;
+    const rHalf = midX + 10;
+    const e1 = lm, e2 = lm + 120, e3 = lm + 165, e4 = lm + 210, e5 = midX - 55;
+    const d1 = rHalf, d4 = rm - 82,  d5 = rm - 28;
+
+    page.drawRectangle({ x: lm - 2,     y: z3Y - 4, width: midX - lm + 2,  height: 14, color: rgb(0.88, 0.88, 0.88) });
+    page.drawRectangle({ x: rHalf - 2,  y: z3Y - 4, width: rm - rHalf + 2, height: 14, color: rgb(0.88, 0.88, 0.88) });
+    page.drawText("EARNINGS",  { x: e1, y: z3Y, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("HOURS",     { x: e2, y: z3Y, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("RATE",      { x: e3, y: z3Y, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("CURRENT",   { x: e4, y: z3Y, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("YTD",       { x: e5, y: z3Y, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("DEDUCTIONS", { x: d1, y: z3Y, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("CURRENT",    { x: d4, y: z3Y, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText("YTD",        { x: d5, y: z3Y, size: 7, font: hvB, color: rgb(0, 0, 0) });
+    z3Y -= 14;
+
+    // Vertical divider
+    const tableBottom = z3Y - earnRows.length * 11 - 28;
+    page.drawLine({ start: { x: midX + 5, y: z3Y + 14 }, end: { x: midX + 5, y: Math.max(tableBottom, 90) }, color: rgb(0.75, 0.75, 0.75), thickness: 0.5 });
+
+    // Earnings rows (left)
+    let z3EarnY = z3Y;
+    for (const [desc, hrs, rate, cur, ytd] of earnRows) {
+      page.drawText(desc, { x: e1, y: z3EarnY, size: 7.5, font: hv,   color: rgb(0, 0, 0) });
+      page.drawText(hrs,  { x: e2, y: z3EarnY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
+      page.drawText(rate, { x: e3, y: z3EarnY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
+      page.drawText(cur,  { x: e4, y: z3EarnY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
+      page.drawText(ytd,  { x: e5, y: z3EarnY, size: 7.5, font: cour, color: rgb(0, 0, 0) });
+      z3EarnY -= 11;
+    }
+    if (totalHrs > 0) {
+      page.drawText("TOTAL HOURS",  { x: e1, y: z3EarnY, size: 7, font: hvB,  color: rgb(0.3, 0.3, 0.3) });
+      page.drawText(fmt2(totalHrs), { x: e2, y: z3EarnY, size: 7, font: cour, color: rgb(0.3, 0.3, 0.3) });
+      z3EarnY -= 11;
+    }
+
+    // Deductions rows (right)
+    let z3DedY = z3Y;
     if (isCalibration) {
-      page.drawText("Federal Income Tax",      { x: c1, y: sY, size: 7.5, font: hv,   color: rgb(0, 0, 0) });
-      page.drawText("-$98.45",                 { x: c4, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) }); sY -= 11;
-      page.drawText("Social Security (6.2%)",  { x: c1, y: sY, size: 7.5, font: hv,   color: rgb(0, 0, 0) });
-      page.drawText("-$47.22",                 { x: c4, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) }); sY -= 11;
+      page.drawText("Federal Income Tax",      { x: d1, y: z3DedY, size: 7.5, font: hv,   color: rgb(0,0,0) }); page.drawText("-$98.45",    { x: d4, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText("-$786.00",   { x: d5, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); z3DedY -= 11;
+      page.drawText("Social Security (6.2%)",  { x: d1, y: z3DedY, size: 7.5, font: hv,   color: rgb(0,0,0) }); page.drawText("-$47.22",    { x: d4, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText("-$377.76",   { x: d5, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); z3DedY -= 11;
+      page.drawText("Medicare (1.45%)",         { x: d1, y: z3DedY, size: 7.5, font: hv,   color: rgb(0,0,0) }); page.drawText("-$11.05",    { x: d4, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText("-$88.40",    { x: d5, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); z3DedY -= 11;
     } else if (totalDed > 0) {
-      page.drawText("Taxes & Deductions",             { x: c1, y: sY, size: 7.5, font: hv,   color: rgb(0, 0, 0) });
-      page.drawText(`-$${fmtMoney(totalDed)}`,        { x: c4, y: sY, size: 7.5, font: cour, color: rgb(0, 0, 0) }); sY -= 11;
-    }
-    } // end if (showDeductions)
-
-    sY -= 4;
-    page.drawLine({ start: { x: c1 - 2, y: sY + 8 }, end: { x: rm + 2, y: sY + 8 }, color: rgb(0.5, 0.5, 0.5), thickness: 0.5 });
-    page.drawText("GROSS PAY",        { x: c1, y: sY, size: 8, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText(`$${fmtMoney(grossPay)}`, { x: c4, y: sY, size: 8, font: hvB, color: rgb(0, 0, 0) }); sY -= 11;
-    page.drawText("TOTAL DEDUCTIONS", { x: c1, y: sY, size: 8, font: hvB, color: rgb(0, 0, 0) });
-    page.drawText(`-$${fmtMoney(totalDed)}`, { x: c4, y: sY, size: 8, font: hvB, color: rgb(0.65, 0, 0) }); sY -= 11;
-    page.drawRectangle({ x: c1 - 2, y: sY - 3, width: rm - c1 + 2, height: 14, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
-    page.drawText("NET PAY",               { x: c1, y: sY, size: 9, font: hvB, color: rgb(0, 0, 0.55) });
-    page.drawText(`$${fmtMoney(netPay)}`,  { x: c4, y: sY, size: 9, font: hvB, color: rgb(0, 0, 0.55) });
-
-    // YTD totals (conditionally rendered per layoutConfig)
-    if (!isCalibration && item && showYtdTotals) {
-      sY -= 14;
-      page.drawText(`YTD Gross: $${fmtMoney(Number(item.ytdGross || 0))}`,      { x: c1,       y: sY, size: 7.5, font: hv, color: rgb(0.35, 0.35, 0.35) });
-      page.drawText(`YTD Deductions: $${fmtMoney(Number(item.ytdDeductions||0))}`, { x: c1+160, y: sY, size: 7.5, font: hv, color: rgb(0.35, 0.35, 0.35) });
-      page.drawText(`YTD Net: $${fmtMoney(Number(item.ytdNet || 0))}`,          { x: c3 + 20,  y: sY, size: 7.5, font: hv, color: rgb(0.35, 0.35, 0.35) });
+      page.drawText("Taxes & Deductions",          { x: d1, y: z3DedY, size: 7.5, font: hv,   color: rgb(0,0,0) });
+      page.drawText(`-$${fmtMoney(totalDed)}`,     { x: d4, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) });
+      page.drawText(`-$${fmtMoney(ytdDed)}`,       { x: d5, y: z3DedY, size: 7.5, font: cour, color: rgb(0,0,0) }); z3DedY -= 11;
+    } else {
+      page.drawText("No deductions", { x: d1, y: z3DedY, size: 7.5, font: hv, color: rgb(0.5, 0.5, 0.5) }); z3DedY -= 11;
     }
 
-    // Calibration grid + watermark
+    // Sync Y cursors and draw summary rows
+    z3Y = Math.min(z3EarnY, z3DedY) - 5;
+    page.drawLine({ start: { x: lm - 2, y: z3Y + 6 }, end: { x: rm + 2, y: z3Y + 6 }, color: rgb(0.55, 0.55, 0.55), thickness: 0.5 });
+
+    page.drawText("TOTAL DEDUCTIONS",        { x: d1, y: z3Y, size: 8, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(`$${fmtMoney(totalDed)}`,  { x: d4, y: z3Y, size: 8, font: hvB, color: rgb(0.6, 0, 0) });
+    page.drawText(`$${fmtMoney(ytdDed)}`,    { x: d5, y: z3Y, size: 8, font: hvB, color: rgb(0.6, 0, 0) });
+    z3Y -= 11;
+
+    page.drawLine({ start: { x: lm - 2, y: z3Y + 9 }, end: { x: rm + 2, y: z3Y + 9 }, color: rgb(0.35, 0.35, 0.35), thickness: 0.8 });
+    page.drawText("GROSS PAY",               { x: e1, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(`$${fmtMoney(grossPay)}`,  { x: e4, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0) });
+    page.drawText(`$${fmtMoney(ytdGross)}`,  { x: e5, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0) });
+    page.drawRectangle({ x: rHalf - 2, y: z3Y - 3, width: rm - rHalf + 2, height: 13, color: rgb(0.05, 0.05, 0.5), opacity: 0.07 });
+    page.drawText("NET PAY",                 { x: d1, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0.55) });
+    page.drawText(`$${fmtMoney(netPay)}`,    { x: d4, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0.55) });
+    page.drawText(`$${fmtMoney(ytdNet)}`,    { x: d5, y: z3Y, size: 8.5, font: hvB, color: rgb(0, 0, 0.55) });
+    z3Y -= 18;
+
+    // SE tax reference detail (contractor only, Zone 3)
+    if (isContractor && z3Y > 55) {
+      const ssSEcur = grossPay * 0.124, medSEcur = grossPay * 0.029, totSEcur = grossPay * 0.153;
+      const ssSEytd = ytdGross  * 0.124, medSEytd = ytdGross  * 0.029, totSEytd = ytdGross  * 0.153;
+      page.drawRectangle({ x: lm - 2, y: z3Y - 4, width: rm - lm + 2, height: 13, color: rgb(0.95, 0.92, 0.82), opacity: 0.85 });
+      page.drawText("SELF-EMPLOYMENT TAX REFERENCE — NOT DEDUCTED FROM PAY", { x: lm, y: z3Y, size: 6.5, font: hvB, color: rgb(0.5, 0.35, 0) }); z3Y -= 13;
+      // SE table header
+      const se4 = rm - 200, se5 = rm - 128, se6 = rm - 55;
+      page.drawRectangle({ x: lm - 2, y: z3Y - 3, width: rm - lm + 2, height: 12, color: rgb(0.92, 0.89, 0.78) });
+      page.drawText("DESCRIPTION", { x: lm,  y: z3Y, size: 7, font: hvB, color: rgb(0,0,0) });
+      page.drawText("RATE",        { x: se4, y: z3Y, size: 7, font: hvB, color: rgb(0,0,0) });
+      page.drawText("CURRENT",     { x: se5, y: z3Y, size: 7, font: hvB, color: rgb(0,0,0) });
+      page.drawText("YTD",         { x: se6, y: z3Y, size: 7, font: hvB, color: rgb(0,0,0) }); z3Y -= 12;
+      if (z3Y > 30) { page.drawText("Social Security (SSI)", { x: lm, y: z3Y, size: 7.5, font: hv, color: rgb(0,0,0) }); page.drawText("12.4%", { x: se4, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(ssSEcur)}`, { x: se5, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(ssSEytd)}`, { x: se6, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); z3Y -= 11; }
+      if (z3Y > 30) { page.drawText("Medicare",              { x: lm, y: z3Y, size: 7.5, font: hv, color: rgb(0,0,0) }); page.drawText("2.9%",  { x: se4, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(medSEcur)}`, { x: se5, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(medSEytd)}`, { x: se6, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); z3Y -= 11; }
+      if (z3Y > 30) { page.drawText("Total SE Tax",          { x: lm, y: z3Y, size: 7.5, font: hvB, color: rgb(0,0,0) }); page.drawText("15.3%", { x: se4, y: z3Y, size: 7.5, font: cour, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(totSEcur)}`, { x: se5, y: z3Y, size: 7.5, font: hvB,  color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(totSEytd)}`, { x: se6, y: z3Y, size: 7.5, font: hvB,  color: rgb(0,0,0) }); z3Y -= 11; }
+      if (z3Y > 18)
+        page.drawText("As an independent contractor, you are responsible for self-employment tax (SSI 12.4% + Medicare 2.9% = 15.3%) directly to the IRS. SS applies to first $168,600 of earnings.",
+          { x: lm, y: z3Y, size: 5.5, font: hv, color: rgb(0.4, 0.4, 0.4) });
+    }
+
+    // Footer
+    const footerText = coEin ? `This is a computer-generated document. ${coName} - EIN: ${coEin}` : "This is a computer-generated document.";
+    page.drawText(footerText, { x: W / 2 - 120, y: 8, size: 6.5, font: hv, color: rgb(0.5, 0.5, 0.5) });
+
+    // ── Calibration overlays (grid + watermark) ──────────────────────────────
     if (isCalibration) {
       const gc = rgb(0.5, 0.7, 0.9);
       for (let gy = 0; gy < H; gy += 18)
@@ -16159,21 +16378,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       });
     }
 
-    // Reprint watermark — rendered diagonally across the check face
-    if (isReprint) {
-      page.drawText("REPRINT", {
-        x: 130, y: H / 2 - 10, size: 48, font: hvB, color: rgb(0.8, 0.15, 0.15), opacity: 0.18,
-        rotate: { type: "degrees" as const, angle: 40 },
-      });
-    }
-
     return doc.save();
   }
 
   // Typed interfaces for raw SQL rows returned by check PDF endpoints.
   interface CheckRunRow { company_id: string; pay_date: string; period_start: string; period_end: string; funding_account_id: string | null; }
-  interface CheckCompanyRow { name: string; address: string; city: string; state: string; zip: string; }
-  interface CheckWorkerRow { id: string; first_name: string; last_name: string; }
+  interface CheckCompanyRow { name: string; address: string; city: string; state: string; zip: string; phone: string; ein: string; }
+  interface CheckWorkerRow { id: string; first_name: string; last_name: string; address: string; address_2: string; city: string; state: string; zip: string; ssn: string; compensation_type: string; }
   interface CheckRsRow { id: string; company_id: string; routing_number: string; account_number: string; calibration_config: unknown; }
   interface CheckTplRow { layout_config: unknown; }
   // Normalize pg / drizzle raw execute result to a typed array.
@@ -16294,9 +16505,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       const pdfBytes = await renderCheckPdf({
         item: itemRow,
-        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name } : null,
+        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type } : null,
         run: runRow ? { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end } : null,
-        company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip } : null,
+        company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null,
         remittanceSource: rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number } : null,
         isCalibration,
         isVoid,
@@ -16380,7 +16591,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       const runNorm = { payDate: run.pay_date, periodStart: run.period_start, periodEnd: run.period_end };
-      const coNorm  = company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip } : null;
+      const coNorm  = company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null;
       const remSrc  = rs ? { routingNumber: rs.routing_number, accountNumber: rs.account_number } : null;
 
       const { PDFDocument } = await import("pdf-lib");
@@ -16422,7 +16633,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           };
           const bytes = await renderCheckPdf({
             item: normalizedItem,
-            worker: w ? { firstName: w.first_name, lastName: w.last_name } : null,
+            worker: w ? { firstName: w.first_name, lastName: w.last_name, address: w.address, city: w.city, state: w.state, zip: w.zip, ssn: w.ssn, compensationType: w.compensation_type } : null,
             run: runNorm, company: coNorm, remittanceSource: remSrc,
             layoutConfig: batchLayoutConfig,
             calibrationOffsets: batchCalibrationOffsets,
@@ -16585,9 +16796,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       const pdfBytes = await renderCheckPdf({
         item: itemRow,
-        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name } : null,
+        worker: worker ? { firstName: worker.first_name, lastName: worker.last_name, address: worker.address, city: worker.city, state: worker.state, zip: worker.zip, ssn: worker.ssn, compensationType: worker.compensation_type } : null,
         run: runRow ? { payDate: runRow.pay_date, periodStart: runRow.period_start, periodEnd: runRow.period_end } : null,
-        company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip } : null,
+        company: company ? { name: company.name, address: company.address, city: company.city, state: company.state, zip: company.zip, phone: company.phone, ein: company.ein } : null,
         remittanceSource: { routingNumber: rs.routing_number, accountNumber: rs.account_number },
         isCalibration: false,
         isVoid: false,
