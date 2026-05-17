@@ -101,10 +101,15 @@ function useTabParam(defaultTab: string): string {
 function formatTimestamp(dateStr: string | Date | null, tz?: string | null): string {
   if (!dateStr) return "-";
   const d = new Date(dateStr);
-  const tzOpt = tz ? { timeZone: tz } : {};
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", ...tzOpt }) +
-    ", " +
-    d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", ...tzOpt });
+  // Always use a named IANA timezone so toLocale* is unambiguous.
+  // Priority: company timezone → browser's actual IANA timezone.
+  // Never silently omit timeZone — that relies on whatever the host OS reports,
+  // which may differ from the user's location (e.g., Replit cloud = UTC).
+  const effectiveTz = tz || Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Los_Angeles";
+  const tzOpt = { timeZone: effectiveTz };
+  const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric", ...tzOpt });
+  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short", ...tzOpt });
+  return `${date}, ${time}`;
 }
 
 function toLocalDatetimeString(dateStr: string | Date | null, tz?: string | null): string {

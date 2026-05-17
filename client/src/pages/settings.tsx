@@ -80,12 +80,12 @@ function CompanyPolicyEditor({ company }: { company: Company }) {
       breakAfterHours: company.breakAfterHours ?? 6,
       timeRoundingMinutes: company.timeRoundingMinutes ?? 15,
       payFrequency: (company.payFrequency as any) || "biweekly",
-      timezone: (company as any).timezone || "UTC",
+      timezone: (company as any).timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Los_Angeles",
     },
   });
 
   const timezoneConfirmed = (company as any).timezoneConfirmed ?? false;
-  const currentTimezone = (company as any).timezone || "UTC";
+  const currentTimezone = (company as any).timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Los_Angeles";
   const tzLabel = US_TIMEZONES.find(t => t.value === currentTimezone)?.label || currentTimezone;
 
   const confirmTimezoneMutation = useMutation({
