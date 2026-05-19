@@ -5757,6 +5757,13 @@ const DEFAULT_LAYOUT_CONFIG = {
   showYtdTotals: true,
   showPayPeriod: true,
   showEmployeeAddress: true,
+  // Address & paystub position offsets (in points; positive X = right, positive Y = up)
+  senderAddrOffsetX: 0,
+  senderAddrOffsetY: 0,
+  employeeAddrOffsetX: 0,
+  employeeAddrOffsetY: 0,
+  paystubOffsetX: 72,   // +1 inch right (keeps paystub clear of envelope address windows)
+  paystubOffsetY: -18,  // -0.25 inch down (keeps paystub clear of envelope address windows)
 };
 
 const TEMPLATE_PRESETS: Record<string, { label: string; description: string }> = {
@@ -5994,7 +6001,7 @@ function CheckLayoutTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newType, setNewType] = useState("standard");
-  const [layoutConfig, setLayoutConfig] = useState<Record<string, boolean>>({ ...DEFAULT_LAYOUT_CONFIG });
+  const [layoutConfig, setLayoutConfig] = useState<Record<string, any>>({ ...DEFAULT_LAYOUT_CONFIG });
 
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const effectiveCompanyId = selectedCompany && selectedCompany !== "all" ? selectedCompany : undefined;
@@ -6078,6 +6085,22 @@ function CheckLayoutTab() {
     setLayoutConfig(prev => ({ ...prev, [field]: !prev[field] }));
   };
 
+  const setOffsetField = (field: string, value: number) => {
+    setLayoutConfig(prev => ({ ...prev, [field]: value }));
+  };
+
+  const resetLayoutDefaults = () => {
+    setLayoutConfig(prev => ({
+      ...prev,
+      senderAddrOffsetX: 0,
+      senderAddrOffsetY: 0,
+      employeeAddrOffsetX: 0,
+      employeeAddrOffsetY: 0,
+      paystubOffsetX: 72,
+      paystubOffsetY: -18,
+    }));
+  };
+
   const layoutFields = [
     { key: "showCompanyLogo", label: "Company Logo" },
     { key: "showCompanyName", label: "Company Name" },
@@ -6149,6 +6172,43 @@ function CheckLayoutTab() {
                         />
                       </div>
                     ))}
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Address &amp; Paystub Position Offsets <span className="text-xs text-muted-foreground font-normal">(points · 72 pt = 1 inch)</span></Label>
+                    <Button type="button" size="sm" variant="ghost" data-testid="button-reset-offsets-new" onClick={resetLayoutDefaults} className="text-xs h-7">
+                      Reset to Default
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide mt-1">Sender (Company) Address</div>
+                    <div className="grid gap-1">
+                      <Label className="text-xs">X Offset (right +)</Label>
+                      <Input data-testid="input-sender-x" type="number" value={layoutConfig.senderAddrOffsetX ?? 0} onChange={e => setOffsetField("senderAddrOffsetX", Number(e.target.value))} className="h-8" />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-xs">Y Offset (up +)</Label>
+                      <Input data-testid="input-sender-y" type="number" value={layoutConfig.senderAddrOffsetY ?? 0} onChange={e => setOffsetField("senderAddrOffsetY", Number(e.target.value))} className="h-8" />
+                    </div>
+                    <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide mt-1">Employee (Payee) Address</div>
+                    <div className="grid gap-1">
+                      <Label className="text-xs">X Offset (right +)</Label>
+                      <Input data-testid="input-employee-x" type="number" value={layoutConfig.employeeAddrOffsetX ?? 0} onChange={e => setOffsetField("employeeAddrOffsetX", Number(e.target.value))} className="h-8" />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-xs">Y Offset (up +)</Label>
+                      <Input data-testid="input-employee-y" type="number" value={layoutConfig.employeeAddrOffsetY ?? 0} onChange={e => setOffsetField("employeeAddrOffsetY", Number(e.target.value))} className="h-8" />
+                    </div>
+                    <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide mt-1">Paystub Panel</div>
+                    <div className="grid gap-1">
+                      <Label className="text-xs">X Offset (right +)</Label>
+                      <Input data-testid="input-paystub-x" type="number" value={layoutConfig.paystubOffsetX ?? 72} onChange={e => setOffsetField("paystubOffsetX", Number(e.target.value))} className="h-8" />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-xs">Y Offset (up +)</Label>
+                      <Input data-testid="input-paystub-y" type="number" value={layoutConfig.paystubOffsetY ?? -18} onChange={e => setOffsetField("paystubOffsetY", Number(e.target.value))} className="h-8" />
+                    </div>
                   </div>
                 </div>
                 <CheckPreview templateType={newType} config={layoutConfig} company={selectedCompanyObj} />
@@ -6259,6 +6319,43 @@ function CheckLayoutTab() {
                       />
                     </div>
                   ))}
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <div className="flex items-center justify-between">
+                  <Label>Address &amp; Paystub Position Offsets <span className="text-xs text-muted-foreground font-normal">(points · 72 pt = 1 inch)</span></Label>
+                  <Button type="button" size="sm" variant="ghost" data-testid="button-reset-offsets-edit" onClick={resetLayoutDefaults} className="text-xs h-7">
+                    Reset to Default
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide mt-1">Sender (Company) Address</div>
+                  <div className="grid gap-1">
+                    <Label className="text-xs">X Offset (right +)</Label>
+                    <Input data-testid="input-edit-sender-x" type="number" value={layoutConfig.senderAddrOffsetX ?? 0} onChange={e => setOffsetField("senderAddrOffsetX", Number(e.target.value))} className="h-8" />
+                  </div>
+                  <div className="grid gap-1">
+                    <Label className="text-xs">Y Offset (up +)</Label>
+                    <Input data-testid="input-edit-sender-y" type="number" value={layoutConfig.senderAddrOffsetY ?? 0} onChange={e => setOffsetField("senderAddrOffsetY", Number(e.target.value))} className="h-8" />
+                  </div>
+                  <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide mt-1">Employee (Payee) Address</div>
+                  <div className="grid gap-1">
+                    <Label className="text-xs">X Offset (right +)</Label>
+                    <Input data-testid="input-edit-employee-x" type="number" value={layoutConfig.employeeAddrOffsetX ?? 0} onChange={e => setOffsetField("employeeAddrOffsetX", Number(e.target.value))} className="h-8" />
+                  </div>
+                  <div className="grid gap-1">
+                    <Label className="text-xs">Y Offset (up +)</Label>
+                    <Input data-testid="input-edit-employee-y" type="number" value={layoutConfig.employeeAddrOffsetY ?? 0} onChange={e => setOffsetField("employeeAddrOffsetY", Number(e.target.value))} className="h-8" />
+                  </div>
+                  <div className="col-span-2 text-xs text-muted-foreground font-medium uppercase tracking-wide mt-1">Paystub Panel</div>
+                  <div className="grid gap-1">
+                    <Label className="text-xs">X Offset (right +)</Label>
+                    <Input data-testid="input-edit-paystub-x" type="number" value={layoutConfig.paystubOffsetX ?? 72} onChange={e => setOffsetField("paystubOffsetX", Number(e.target.value))} className="h-8" />
+                  </div>
+                  <div className="grid gap-1">
+                    <Label className="text-xs">Y Offset (up +)</Label>
+                    <Input data-testid="input-edit-paystub-y" type="number" value={layoutConfig.paystubOffsetY ?? -18} onChange={e => setOffsetField("paystubOffsetY", Number(e.target.value))} className="h-8" />
+                  </div>
                 </div>
               </div>
               <CheckPreview templateType={editingTemplate.templateType || "standard"} config={layoutConfig} company={companies.find(c => c.id === editingTemplate.companyId)} />

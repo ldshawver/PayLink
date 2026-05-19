@@ -15937,7 +15937,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     let micrFont: any = null;
     let micrFontLoaded = false;
     const MICR_FONT_FILE = "ConnectCodeMICRT_X9.ttf"; // ANSI X9.7 compliant E-13B
-    const MICR_FONT_SIZE = 18;                         // 18pt — ANSI X9.7 machine-weight
+    const MICR_FONT_SIZE = 12;                         // 12pt — reduced to match standard payroll check MICR sizing
     let micrFontName = "(none)";
     try {
       const micrPath = path.join(process.cwd(), "client", "public", "fonts", MICR_FONT_FILE);
@@ -15977,6 +15977,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
     // Per-field position overrides from check_templates.layoutConfig.positions
     const positions: Record<string, { x?: number; y?: number }> = cfg.positions || {};
+
+    // Admin-adjustable address/paystub position offsets (stored in layoutConfig, in points)
+    // Positive X = right, positive Y = up (PDF coordinate direction)
+    const senderAddrOffX   = Number(cfg.senderAddrOffsetX   ?? 0);
+    const senderAddrOffY   = Number(cfg.senderAddrOffsetY   ?? 0);
+    const employeeAddrOffX = Number(cfg.employeeAddrOffsetX ?? 0);
+    const employeeAddrOffY = Number(cfg.employeeAddrOffsetY ?? 0);
+    const paystubOffX      = Number(cfg.paystubOffsetX      ?? 72);  // default +1in right (envelope window safety)
+    const paystubOffY      = Number(cfg.paystubOffsetY      ?? -18); // default -0.25in (down, envelope window safety)
 
     // Global calibration offsets (globalTop > 0 = shift down in CSS; = subtract in PDF Y-up)
     const gOT = -(params.calibrationOffsets?.globalTop  || 0);
@@ -16183,8 +16192,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const payLine1Y   = z1y(1.18);             // "PAY TO THE"
     const payRowY     = z1y(1.30);             // "ORDER OF" + payee name shared baseline
     const payeeLineY  = z1y(1.39);             // underline below payee name
-    const payeeNameX  = z1x(1.90);
-    const payLineX1   = z1x(1.82), payLineX2 = z1x(6.20);
+    const payeeNameX  = z1x(1.35);                          // was 1.90 — moved closer to label
+    const payLineX1   = z1x(1.27), payLineX2 = z1x(6.45); // line extended: was 1.82/6.20
 
     drawGuide(payLabelX, z1y(1.39 + 0.02), payLineX2 - payLabelX, Math.round(0.30*72), "PAYEE ROW");
     page.drawText("PAY TO THE",   { x: payLabelX, y: payLine1Y, size: 9, font: hvB, color: rgb(0, 0, 0) });
@@ -16196,7 +16205,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // Right edge at x 7.82in, baseline at y 1.30in (same as ORDER OF / payee baseline)
     const amtStr   = `$${fmtMoney(netPay)}`;
     const amtStrW  = Math.round(amtStr.length * 7.0); // approx char width at 12pt bold
-    const amtTextX = Math.round(z1x(7.82) - amtStrW);
+    const amtTextX = Math.round(z1x(7.20) - amtStrW); // was 7.82 — moved left toward date/check# area
     drawGuide(amtTextX, z1y(1.38), amtStrW + 4, 14, "AMOUNT TEXT");
     page.drawText(amtStr, { x: amtTextX, y: payRowY, size: 12, font: hvB, color: rgb(0, 0, 0) });
 
@@ -16238,8 +16247,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const sigCenterX = z1x(6.65);
     page.drawLine({ start: { x: sigX1, y: sigLineY }, end: { x: sigX2, y: sigLineY },
       color: rgb(0, 0, 0), thickness: 0.6 });
-    page.drawText(sigLabel, { x: Math.round(sigCenterX - sigLabelW / 2), y: z1y(2.78),
-      size: 7, font: hv, color: rgb(0.4, 0.4, 0.4) });
+    page.drawText(sigLabel, { x: Math.round(sigCenterX - sigLabelW / 2), y: z1y(2.90),
+      size: 7, font: hv, color: rgb(0.4, 0.4, 0.4) }); // was z1y(2.78) — moved below line so it doesn't get cut
 
     // ── MICR — inside clear band y 2.875in–3.5in, baseline at y 3.38in ──
     //    No other drawing inside this band.
@@ -16248,11 +16257,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       page.drawText(buildMicrStr(routing, account, checkNum),
         { x: z1x(0.50), y: z1y(3.38), size: MICR_FONT_SIZE, font: micrFont, color: rgb(0, 0, 0) });
 
-    // Zone 1 / Zone 2 separator — drawn in Zone 2 space, well below MICR clear band.
-    // ANSI X9.7: the bottom 0.625" (micrBandH=45pt) of the check face must remain clear.
-    // A dashed line at checkBot-1 would appear inside that band; place it 20pt into Zone 2.
-    page.drawLine({ start: { x: 0, y: checkBot - 20 }, end: { x: W, y: checkBot - 20 },
-      color: rgb(0.6, 0.6, 0.6), thickness: 0.4, dashArray: [4, 6] });
+    // Zone 1 / Zone 2 separator — REMOVED: check stock has physical perforations; software lines are redundant.
 
     // ═══════════════════════════════════════════════════════════════════════
     // ZONE 2 — MAIL / PAYSTUB PANEL  (Y: mailBot..checkBot = 288..540)
@@ -16261,7 +16266,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // ═══════════════════════════════════════════════════════════════════════
 
     const mailColDiv = lm + 195;  // X divider between address col and paystub col
-    const psX        = mailColDiv + 8;
+    const psX        = mailColDiv + 8 + paystubOffX; // shifted right per paystubOffX (default +72pt = 1in)
     const psW        = rm - psX;
 
     // Vertical divider between columns
@@ -16271,42 +16276,44 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     // Shows through the return-address window of a window envelope.
     drawGuide(lm, checkBot - 82, mailColDiv - lm - 4, 78, "SENDER ADDR");
     const senderY = checkBot - 18;
-    if (showCompanyName) page.drawText(coName, { x: lm, y: senderY, size: 8, font: hvB, color: rgb(0, 0, 0) });
+    if (showCompanyName) page.drawText(coName, { x: lm + senderAddrOffX, y: senderY + senderAddrOffY, size: 8, font: hvB, color: rgb(0, 0, 0) });
     if (showCompanyAddr) {
-      if (coAddr1) page.drawText(coAddr1, { x: lm, y: senderY - 12, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
-      if (coAddr2) page.drawText(coAddr2, { x: lm, y: senderY - 24, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (coAddr1) page.drawText(coAddr1, { x: lm + senderAddrOffX, y: senderY - 12 + senderAddrOffY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
+      if (coAddr2) page.drawText(coAddr2, { x: lm + senderAddrOffX, y: senderY - 24 + senderAddrOffY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
     }
 
     // ── Recipient/delivery address window (lower-left of Zone 2) ────────────
     // Shows through the main address window of a window envelope.
     drawGuide(lm, mailBot + 16, mailColDiv - lm - 4, 60, "RECIPIENT ADDR");
     const recipBaseY = mailBot + 16 + 60;  // top of the guide box
-    page.drawText(wName,           { x: lm, y: recipBaseY - 12, size: 8, font: hvB, color: rgb(0, 0, 0) });
-    if (wStreet)       page.drawText(wStreet,       { x: lm, y: recipBaseY - 24, size: 8, font: hv, color: rgb(0, 0, 0) });
-    if (wCityStateZip) page.drawText(wCityStateZip, { x: lm, y: recipBaseY - 36, size: 8, font: hv, color: rgb(0, 0, 0) });
+    page.drawText(wName,           { x: lm + employeeAddrOffX, y: recipBaseY - 12 + employeeAddrOffY, size: 8, font: hvB, color: rgb(0, 0, 0) });
+    if (wStreet)       page.drawText(wStreet,       { x: lm + employeeAddrOffX, y: recipBaseY - 24 + employeeAddrOffY, size: 8, font: hv, color: rgb(0, 0, 0) });
+    if (wCityStateZip) page.drawText(wCityStateZip, { x: lm + employeeAddrOffX, y: recipBaseY - 36 + employeeAddrOffY, size: 8, font: hv, color: rgb(0, 0, 0) });
 
     // ── Paystub summary (right column of Zone 2) ─────────────────────────────
     // "PAYSTUB" header bar — "Check No. XX" right-aligned in same bar
-    page.drawRectangle({ x: psX - 4, y: checkBot - 18, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
-    page.drawText("PAYSTUB", { x: psX + psW / 2 - 22, y: checkBot - 14, size: 10, font: hvB, color: rgb(1, 1, 1) });
+    // paystubOffY shifts all content vertically (default -18pt = 0.25in down for envelope window safety)
+    page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
+    page.drawText("PAYSTUB", { x: psX + psW / 2 - 22, y: checkBot - 14 + paystubOffY, size: 10, font: hvB, color: rgb(1, 1, 1) });
     const psChkLabel = `Check No. ${fmtCheckNum}`;
-    page.drawText(psChkLabel, { x: rm - Math.round(psChkLabel.length * 5.0), y: checkBot - 14, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
+    page.drawText(psChkLabel, { x: rm - Math.round(psChkLabel.length * 5.0), y: checkBot - 14 + paystubOffY, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
 
     // Company + EIN
     const coEinLine = coEin ? `${coName} — EIN: ${coEin}` : coName;
-    page.drawText(coEinLine, { x: psX, y: checkBot - 30, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText(coEinLine, { x: psX, y: checkBot - 30 + paystubOffY, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
     // Period dates
-    page.drawText(`Pay Period Start: ${pStart}`, { x: psX, y: checkBot - 42, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
-    page.drawText(`Pay Period End: ${pEnd}`,     { x: psX, y: checkBot - 52, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
-    page.drawText(`Pay Date: ${payDate}`,        { x: psX, y: checkBot - 62, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
+    page.drawText(`Pay Period Start: ${pStart}`, { x: psX, y: checkBot - 42 + paystubOffY, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
+    page.drawText(`Pay Period End: ${pEnd}`,     { x: psX, y: checkBot - 52 + paystubOffY, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
+    page.drawText(`Pay Date: ${payDate}`,        { x: psX, y: checkBot - 62 + paystubOffY, size: 7, font: hv, color: rgb(0.3, 0.3, 0.3) });
     // Contractor note
     if (isContractor)
       page.drawText("Independent contractor — responsible for self-employment tax (15.3%: SS 12.4% + Medicare 2.9%)",
-        { x: psX, y: checkBot - 74, size: 5.5, font: hv, color: rgb(0.45, 0.32, 0.05) });
+        { x: psX, y: checkBot - 74 + paystubOffY, size: 5.5, font: hv, color: rgb(0.45, 0.32, 0.05) });
 
     // Compact earnings table
-    const psC1 = psX, psC2 = psX + 115, psC3 = psX + 160, psC4 = psX + 210, psC5 = psX + 262;
-    let psY = checkBot - 88;
+    const psC1 = psX, psC2 = psX + 115, psC3 = psX + 160, psC4 = psX + 210;
+    const psC5 = Math.min(psX + 262, rm - 5); // capped so YTD column never overflows right margin
+    let psY = checkBot - 88 + paystubOffY;
     page.drawRectangle({ x: psC1 - 2, y: psY - 4, width: rm - psC1 + 2, height: 13, color: rgb(0.88, 0.88, 0.88) });
     page.drawText("EARNINGS",  { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
     page.drawText("HOURS",     { x: psC2, y: psY, size: 6.5, font: hvB, color: rgb(0, 0, 0) });
@@ -16405,8 +16412,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (psY >= mailBot + 8) { page.drawText("Total SE Tax 15.3%",         { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(totSEcur)}`, { x: psC4, y: psY, size: 6.5, font: hvB,  color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(totSEytd)}`, { x: psC5, y: psY, size: 6.5, font: hvB,  color: rgb(0,0,0) }); }
     }
 
-    // Zone 2 / Zone 3 separator (dashed cut line)
-    page.drawLine({ start: { x: 0, y: mailBot - 1 }, end: { x: W, y: mailBot - 1 }, color: rgb(0.5, 0.5, 0.5), thickness: 0.5, dashArray: [4, 4] });
+    // Zone 2 / Zone 3 separator — REMOVED: check stock has physical perforations; software lines are redundant.
 
     // ═══════════════════════════════════════════════════════════════════════
     // ZONE 3 — DETAILED EARNINGS STATEMENT  (Y: 0..mailBot = 0..288)
