@@ -126,6 +126,7 @@
   body:has(.schedule-print-view) {
     visibility: hidden;
     position: relative;
+    overflow: hidden; /* clip hidden app content so it doesn't bleed onto a blank page 2 */
   }
   body:has(.schedule-print-view) .schedule-print-view {
     display: block !important;
