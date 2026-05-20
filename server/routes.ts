@@ -29878,5 +29878,31 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     } catch (e: any) { res.status(500).json({ message: "Failed to download attachment: " + e.message }); }
   });
 
+  // ── Daily contractor scheduler auto-run ─────────────────────────────────────
+  // Runs once on startup (after a short delay so DB is fully ready), then every
+  // 24 hours. Scans all active companies for: contract renewals approaching,
+  // expired contracts, renegotiation follow-ups, and overdue invoices.
+  const runDailyScheduler = async () => {
+    try {
+      const companiesRes = await db.execute(sql`
+        SELECT id FROM companies
+        WHERE subscription_status NOT IN ('suspended', 'cancelled', 'deleted')
+      `);
+      const companyIds = (companiesRes.rows as Array<{ id: string }>).map(r => r.id);
+      if (companyIds.length === 0) return;
+      const result = await runContractorReminderScheduler(companyIds);
+      if (result.created > 0 || result.errors.length > 0) {
+        console.log(`[DailyScheduler] Contractor reminders: ${result.created} created, ${result.errors.length} errors`);
+      }
+    } catch (e) {
+      console.warn("[DailyScheduler] Contractor scheduler failed:", e instanceof Error ? e.message : String(e));
+    }
+  };
+  // Delay initial run by 30s to let DB connections settle, then repeat every 24h
+  setTimeout(() => {
+    runDailyScheduler();
+    setInterval(runDailyScheduler, 24 * 60 * 60 * 1000);
+  }, 30_000);
+
   return httpServer;
 }

@@ -842,6 +842,7 @@ function ProposalDetailPanel({
       const r = await fetch(`/api/contractor-proposals/${proposal.id}/line-items`, { credentials: "include" });
       return r.ok ? r.json() : [];
     },
+    select: (data: any) => snakeToCamel(data) as LineItem[],
   });
 
   const { data: events = [], refetch: refetchEvents } = useQuery<ProposalEvent[]>({
@@ -850,6 +851,7 @@ function ProposalDetailPanel({
       const r = await fetch(`/api/contractor-proposals/${proposal.id}/events`, { credentials: "include" });
       return r.ok ? r.json() : [];
     },
+    select: (data: any) => snakeToCamel(data) as ProposalEvent[],
   });
 
   const { data: attachments = [] } = useQuery<any[]>({
@@ -1438,7 +1440,7 @@ function ProposalDetailPanel({
                           {i < events.length - 1 && <div className="w-0.5 flex-1 bg-border mt-1" />}
                         </div>
                         <div className="pb-4 flex-1">
-                          <p className="text-sm font-medium capitalize">{ev.eventType === "client_message" ? "Client Message" : ev.eventType.replace(/_/g, " ")}</p>
+                          <p className="text-sm font-medium capitalize">{ev.eventType === "client_message" ? "Client Message" : (ev.eventType ?? "event").replace(/_/g, " ")}</p>
                           <p className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} — {ev.actorName || "System"}{ev.actorEmail ? ` (${ev.actorEmail})` : ""}</p>
                           {ev.notes && ev.eventType === "client_message" && (
                             <p className="text-xs mt-1 px-2 py-1.5 rounded bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 text-violet-800 dark:text-violet-200 whitespace-pre-wrap">{ev.notes}</p>
@@ -1495,7 +1497,7 @@ function ProposalDetailPanel({
                           "bg-muted/40"
                         )}>
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-semibold capitalize text-muted-foreground">{ev.eventType.replace(/_/g, " ")}</span>
+                            <span className="text-xs font-semibold capitalize text-muted-foreground">{(ev.eventType ?? "event").replace(/_/g, " ")}</span>
                             <span className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} · {ev.actorName || "System"}</span>
                           </div>
                           <p className="italic">"{ev.notes}"</p>
@@ -2766,7 +2768,7 @@ function ProposalBuilder({
                         {ev.notes && ev.eventType === "client_message" && (
                           <p className="text-xs mt-1 px-2 py-1.5 rounded bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 text-violet-800 dark:text-violet-200 whitespace-pre-wrap">{ev.notes}</p>
                         )}
-                        {ev.notes && ev.eventType === "sent" && ev.eventType !== "client_message" && (() => {
+                        {ev.notes && ev.eventType === "sent" && (() => {
                           const parts = ev.notes.split(" | Portal: ");
                           const label = parts[0];
                           const link = parts[1];
@@ -4427,12 +4429,12 @@ function DocumentsSection() {
     })),
   ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-  const contractorOptions = [...new Set(allDocs.map(d => d.contractorId).filter(Boolean))].map(id => ({
+  const contractorOptions = Array.from(new Set(allDocs.map(d => d.contractorId).filter(Boolean))).map(id => ({
     id: id!, name: allDocs.find(d => d.contractorId === id)?.contractorName || id!.slice(0, 8),
   }));
-  const costCenterOptions = [...new Set(allDocs.map(d => d.costCenter).filter(Boolean))];
-  const jobOptions = [...new Set(allDocs.map(d => d.workType).filter(Boolean))];
-  const companyOptions = [...new Set(allDocs.map(d => d.companyId).filter(Boolean))].map(id => ({
+  const costCenterOptions = Array.from(new Set(allDocs.map(d => d.costCenter).filter(Boolean)));
+  const jobOptions = Array.from(new Set(allDocs.map(d => d.workType).filter(Boolean)));
+  const companyOptions = Array.from(new Set(allDocs.map(d => d.companyId).filter(Boolean))).map(id => ({
     id: id!, name: allDocs.find(d => d.companyId === id)?.companyName || id!.slice(0, 8),
   }));
 
@@ -4522,7 +4524,7 @@ function DocumentsSection() {
     onError: (e: any) => toast({ title: e?.message || "Archive failed", variant: "destructive" }),
   });
 
-  const statusOptions = [...new Set(allDocs.map(d => d.status))].sort();
+  const statusOptions = Array.from(new Set(allDocs.map(d => d.status))).sort();
   const DOC_TYPES = ["all", "proposal", "contract", "invoice", "payment"] as const;
 
   return (
