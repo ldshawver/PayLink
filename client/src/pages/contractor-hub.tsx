@@ -31,7 +31,7 @@ import {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type HubSection = "dashboard" | "proposals" | "contracts" | "invoices" | "payments" | "documents" | "messages" | "branding" | "settings";
+type HubSection = "dashboard" | "proposals" | "contracts" | "invoices" | "payments" | "messages" | "branding" | "settings";
 
 interface Proposal {
   id: string; proposalNumber: string; title: string; description: string;
@@ -5961,7 +5961,6 @@ const NAV_ITEMS: { id: HubSection; label: string; icon: React.FC<{ className?: s
   { id: "contracts", label: "Contracts", icon: FileSignature },
   { id: "invoices", label: "Invoices", icon: Receipt },
   { id: "payments", label: "Payments", icon: CreditCard },
-  { id: "documents", label: "Documents", icon: FolderOpen },
   { id: "messages", label: "Messages", icon: MessageSquare },
   { id: "branding", label: "Profile & Branding", icon: Palette },
   { id: "settings", label: "Settings", icon: Settings },
@@ -5974,7 +5973,7 @@ export default function ContractorHubPage() {
     try {
       const params = new URLSearchParams(window.location.search);
       const s = params.get("section") as HubSection | null;
-      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","payments","documents","messages","branding","settings"];
+      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","payments","messages","branding","settings"];
       return (s && valid.includes(s)) ? s : "dashboard";
     } catch { return "dashboard"; }
   })();
@@ -5985,7 +5984,7 @@ export default function ContractorHubPage() {
     try {
       const params = new URLSearchParams(window.location.search);
       const s = params.get("section") as HubSection | null;
-      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","payments","documents","messages","branding","settings"];
+      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","payments","messages","branding","settings"];
       if (s && valid.includes(s)) setSection(s);
       else if (!s) setSection("dashboard");
     } catch {}
@@ -6230,7 +6229,6 @@ export default function ContractorHubPage() {
               {section === "contracts" && `${contracts.length} contract${contracts.length !== 1 ? "s" : ""}`}
               {section === "invoices" && `${invoices.length} invoice${invoices.length !== 1 ? "s" : ""} · ${overdueInvoices} overdue`}
               {section === "payments" && "Payment history and remittance"}
-              {section === "documents" && "Document management"}
               {section === "messages" && "Activity notifications and workflow events"}
               {section === "branding" && "Profile and proposal templates"}
               {section === "settings" && "Hub configuration"}
@@ -6502,9 +6500,6 @@ export default function ContractorHubPage() {
 
             {/* Payments */}
             {section === "payments" && <PaymentsSection invoices={invoices} />}
-
-            {/* Documents */}
-            {section === "documents" && <DocumentsSection />}
 
             {/* Messages */}
             {section === "messages" && <MessagesSection onNavigate={handleSectionChange} />}

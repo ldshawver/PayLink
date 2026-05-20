@@ -9888,8 +9888,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (!worker || worker.workerType !== "contractor") {
         return res.status(403).json({ message: "Only contractors can create proposals" });
       }
-      const { companyId, title, description, issueDate, expirationDate, amount, taxAmount, lineItems, notes, terms, jobId, costCenterId, currency,
-              scopeOfWork, estimatorName, clientMessage, internalNotes, paymentTerms,
+      const { companyId, title, description, issueDate, expirationDate, amount, taxAmount, discountAmount, lineItems, notes, terms, jobId, costCenterId, currency,
+              scopeOfWork, assumptions, exclusions, allowances, materials, warrantyNotes, scheduleNotes,
+              estimatorName, clientMessage, internalNotes, paymentTerms, changeOrderTerms,
               workType, templateId, paymentType, tradeOffered, tradeValue, tradeTerms,
               estimatedHours, estimatedLaborBudget,
               costCenter, projectClass, laborMaterialsSplit, urgency, siteNotes,
@@ -9929,8 +9930,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const result = await db.execute(sql`
         INSERT INTO contractor_proposals (
           company_id, contractor_id, proposal_number, title, description, issue_date, expiration_date,
-          amount, tax_amount, line_items, notes, terms, job_id, cost_center_id, currency, status,
-          scope_of_work, estimator_name, client_message, internal_notes, payment_terms,
+          amount, tax_amount, discount_amount, line_items, notes, terms, job_id, cost_center_id, currency, status,
+          scope_of_work, assumptions, exclusions, allowances, materials, warranty_notes, schedule_notes,
+          estimator_name, client_message, internal_notes, payment_terms, change_order_terms,
           work_type, template_id, branding_id, payment_type, trade_offered, trade_value, trade_terms,
           estimated_hours, estimated_labor_budget,
           cost_center, project_class, labor_materials_split, urgency, site_notes,
@@ -9938,10 +9940,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
           client_name, client_email
         ) VALUES (
           ${companyId || null}, ${workerId}, ${proposalNumber}, ${title || null}, ${description || null},
-          ${issueDate}, ${expirationDate || null}, ${amount || null}, ${taxAmount || null},
+          ${issueDate}, ${expirationDate || null}, ${amount || null}, ${taxAmount || null}, ${discountAmount || null},
           ${lineItems ? JSON.stringify(lineItems) : null}, ${notes || null}, ${terms || null},
           ${jobId || null}, ${costCenterId || null}, ${currency || "USD"}, 'draft',
-          ${scopeOfWork || null}, ${estimatorName || null}, ${clientMessage || null}, ${internalNotes || null}, ${paymentTerms || null},
+          ${scopeOfWork || null}, ${assumptions || null}, ${exclusions || null}, ${allowances || null}, ${materials || null}, ${warrantyNotes || null}, ${scheduleNotes || null},
+          ${estimatorName || null}, ${clientMessage || null}, ${internalNotes || null}, ${paymentTerms || null}, ${changeOrderTerms || null},
           ${workType || null}, ${safeTemplateId}, ${autoBrandingId}, ${paymentType || null}, ${tradeOffered || null}, ${tradeValue || null}, ${tradeTerms || null},
           ${estimatedHours != null ? Number(estimatedHours) : null}, ${estimatedLaborBudget != null ? Number(estimatedLaborBudget) : null},
           ${costCenter || null}, ${projectClass || null}, ${laborMaterialsSplit || null}, ${urgency || null}, ${siteNotes || null},
