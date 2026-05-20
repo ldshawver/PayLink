@@ -2764,6 +2764,8 @@ Thank you,
     await run("role_permissions.can_edit_department", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_edit_department BOOLEAN DEFAULT FALSE`);
     await run("role_permissions.can_view_company", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_view_company BOOLEAN DEFAULT FALSE`);
     await run("role_permissions.can_edit_company", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_edit_company BOOLEAN DEFAULT FALSE`);
+    await run("role_permissions.can_approve_department", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_approve_department BOOLEAN DEFAULT FALSE`);
+    await run("role_permissions.can_approve_company", sql`ALTER TABLE role_permissions ADD COLUMN IF NOT EXISTS can_approve_company BOOLEAN DEFAULT FALSE`);
 
     await run("weekly_labor_goals table", sql`CREATE TABLE IF NOT EXISTS weekly_labor_goals (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
