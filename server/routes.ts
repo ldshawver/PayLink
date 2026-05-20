@@ -11038,8 +11038,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const { action, context } = req.body;
       // action: draft_scope | improve_scope | suggest_exclusions | suggest_assumptions | suggest_line_items | suggest_payment_terms | generate_summary | flag_missing | suggest_warranty | fill_all
+      // Support both OpenAI (OPENAI_API_KEY) and xAI/Grok (XAI_API_KEY).
+      // xAI's API is OpenAI-SDK-compatible — only the baseURL and model differ.
       const openaiApiKey = process.env.OPENAI_API_KEY;
-      if (!openaiApiKey) return res.status(503).json({ message: "AI assistance requires OpenAI configuration" });
+      const xaiApiKey = process.env.XAI_API_KEY;
+      const aiApiKey = openaiApiKey || xaiApiKey;
+      if (!aiApiKey) return res.status(503).json({ message: "AI assistance requires OPENAI_API_KEY or XAI_API_KEY" });
+      const useXai = !openaiApiKey && !!xaiApiKey;
 
       // Tenant/ownership guard — prevent IDOR. Uses the same access rules as
       // the rest of the proposal API: contractor owner OR same-tenant admin/manager.
@@ -11078,9 +11083,13 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       const { default: OpenAI } = await import("openai");
-      const openai = new OpenAI({ apiKey: openaiApiKey });
+      const openai = new OpenAI({
+        apiKey: aiApiKey,
+        ...(useXai ? { baseURL: "https://api.x.ai/v1" } : {}),
+      });
+      const aiModel = useXai ? "grok-3-fast-beta" : "gpt-4o";
       const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
+        model: aiModel,
         messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
         max_tokens: 1000,
         temperature: 0.5,

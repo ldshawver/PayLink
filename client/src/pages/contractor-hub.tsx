@@ -2149,16 +2149,16 @@ function ProposalBuilder({
       </DialogContent>
     </Dialog>
     <Sheet open={open} onOpenChange={() => onClose()}>
-      <SheetContent side="right" className="w-full max-w-4xl p-0 flex flex-col">
-        <SheetHeader className="px-6 py-4 border-b shrink-0">
-          <div className="flex items-center justify-between">
-            <div>
-              <SheetTitle className="text-base">
+      <SheetContent side="right" className="!w-screen !max-w-none h-screen p-0 flex flex-col" data-testid="sheet-proposal-editor">
+        <SheetHeader className="px-6 py-3 border-b shrink-0">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <SheetTitle className="text-base truncate">
                 {isNew ? "New Proposal" : proposal?.proposalNumber || "Proposal"}
               </SheetTitle>
-              {proposal && <div className="mt-1"><ProposalBadge status={proposal.status} /></div>}
+              {proposal && <ProposalBadge status={proposal.status} />}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               {canEdit && (() => {
                 const isDraftOrNew = isNew || !proposal?.status || proposal.status === "draft";
                 return (
@@ -2190,6 +2190,9 @@ function ProposalBuilder({
                   <RotateCcw className="h-4 w-4 mr-1" /> Create Revision
                 </Button>
               )}
+              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground" onClick={() => onClose()} data-testid="btn-close-proposal-editor" aria-label="Close">
+                <X className="h-4 w-4" />
+              </Button>
             </div>
           </div>
         </SheetHeader>
