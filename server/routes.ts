@@ -10148,7 +10148,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
-      if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      // Platform-scoped users (no companyId) may manage any proposal; tenant users must own the proposal's company
+      const isPlatformUser = !user?.companyId;
+      if (!isPlatformUser && proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
       if (!["submitted", "sent", "viewed", "countered", "negotiated"].includes(proposal.status || "")) return res.status(400).json({ message: "Proposal cannot be accepted from its current status" });
       const oldStatus = proposal.status;
       await autoSnapshot(req.params.id, proposal, `Approved by ${user?.username || "reviewer"}`, userId);
@@ -10196,7 +10198,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const propRes = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       const proposal = firstRow<ProposalRow & { id: string; signature_package_id?: string | null }>(propRes);
       if (!proposal) return res.status(404).json({ message: "Not found" });
-      if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      // Platform-scoped users (no companyId) may manage any proposal; tenant users must own the proposal's company
+      const isPlatformUser = !user?.companyId;
+      if (!isPlatformUser && proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
       if (proposal.status !== "approved") {
         return res.status(400).json({ message: "Only approved proposals can be sent for signature" });
       }
@@ -10379,7 +10383,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const result = await db.execute(sql`SELECT * FROM contractor_proposals WHERE id = ${req.params.id}`);
       const proposal = firstRow<ProposalRow & { id: string }>(result);
       if (!proposal) return res.status(404).json({ message: "Not found" });
-      if (proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
+      // Platform-scoped users (no companyId) may manage any proposal; tenant users must own the proposal's company
+      const isPlatformUser = !user?.companyId;
+      if (!isPlatformUser && proposal.company_id !== user?.companyId) return res.status(403).json({ message: "Forbidden" });
       if (!["submitted", "sent", "viewed", "countered", "negotiated", "approved"].includes(proposal.status || "")) return res.status(400).json({ message: "Invalid status for rejection" });
       const { rejectionReason } = req.body;
       const oldStatus = proposal.status;
