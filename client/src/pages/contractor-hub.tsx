@@ -3169,8 +3169,8 @@ function InvoiceDetailPanel({
 
   return (
     <Sheet open onOpenChange={() => onClose()}>
-      <SheetContent side="right" className="w-full max-w-2xl p-0 flex flex-col">
-        <SheetHeader className="px-6 py-4 border-b shrink-0">
+      <SheetContent side="right" className="!w-screen !max-w-none sm:!max-w-2xl p-0 flex flex-col">
+        <SheetHeader className="px-4 sm:px-6 py-4 border-b shrink-0">
           <div className="flex items-start justify-between">
             <div>
               <SheetTitle className="text-base">Invoice #{invoice.invoiceNumber || invoice.id.slice(0, 8)}</SheetTitle>
@@ -3495,7 +3495,7 @@ function ContractDetailPanel({
 
   return (
     <Sheet open onOpenChange={v => !v && onClose()}>
-      <SheetContent side="right" className="w-full sm:max-w-2xl p-0 flex flex-col" data-testid="sheet-contract-detail">
+      <SheetContent side="right" className="!w-screen !max-w-none sm:!max-w-2xl p-0 flex flex-col" data-testid="sheet-contract-detail">
         <SheetHeader className="shrink-0 px-6 py-4 border-b">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
@@ -4291,7 +4291,7 @@ function VersionHistoryDrawer({ open, onClose, entityType, entityId, entityTitle
 
   return (
     <Sheet open={open} onOpenChange={v => !v && onClose()}>
-      <SheetContent className="w-[400px] sm:w-[540px]">
+      <SheetContent className="!w-screen !max-w-none sm:!max-w-lg">
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2">
             <History className="h-4 w-4" /> Version History
@@ -6150,9 +6150,9 @@ export default function ContractorHubPage() {
 
   return (
     <div className="flex h-full bg-background overflow-hidden">
-      {/* ── Left Sidebar ── */}
+      {/* ── Left Sidebar — hidden on mobile, icon or full on sm+ ── */}
       <div className={cn(
-        "flex flex-col border-r bg-muted/20 shrink-0 transition-all duration-200",
+        "hidden sm:flex flex-col border-r bg-muted/20 shrink-0 transition-all duration-200",
         sidebarCollapsed ? "w-14" : "w-52"
       )}>
         {/* Sidebar header */}
@@ -6219,12 +6219,12 @@ export default function ContractorHubPage() {
       {/* ── Main Content ── */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Content Header */}
-        <div className="px-6 py-4 border-b shrink-0 flex items-center justify-between gap-4">
+        <div className="px-3 sm:px-6 py-3 sm:py-4 border-b shrink-0 flex items-center justify-between gap-2 sm:gap-4">
           <div className="min-w-0">
             <h1 className="text-base font-semibold truncate">
               {NAV_ITEMS.find(n => n.id === section)?.label}
             </h1>
-            <p className="text-xs text-muted-foreground mt-0.5">
+            <p className="text-xs text-muted-foreground mt-0.5 hidden sm:block">
               {section === "dashboard" && (isAdmin ? "Review and manage all contractor activity" : "Your hub overview")}
               {section === "proposals" && (isAdmin ? `${proposals.length} total · ${pendingProposals} awaiting review` : `${proposals.length} total · ${revisionNeeded} need revision`)}
               {section === "contracts" && `${contracts.length} contract${contracts.length !== 1 ? "s" : ""}`}
@@ -6241,15 +6241,43 @@ export default function ContractorHubPage() {
             <NotificationBell onNavigate={handleSectionChange} />
             {section === "proposals" && (
               <Button onClick={openBuilderForNew} data-testid="btn-new-proposal">
-                <Plus className="h-4 w-4 mr-1" /> New Proposal
+                <Plus className="h-4 w-4 sm:mr-1" />
+                <span className="hidden sm:inline">New Proposal</span>
               </Button>
             )}
           </div>
         </div>
 
+        {/* Mobile section nav — horizontal scrollable tabs, hidden on sm+ */}
+        <div className="sm:hidden border-b shrink-0 flex overflow-x-auto scrollbar-none bg-background">
+          {NAV_ITEMS.map(item => {
+            const badge =
+              item.id === "proposals" ? (isAdmin ? pendingProposals : revisionNeeded) :
+              item.id === "invoices" ? overdueInvoices :
+              item.id === "messages" ? unreadMessages : 0;
+            return (
+              <button
+                key={item.id}
+                onClick={() => handleSectionChange(item.id)}
+                className={cn(
+                  "flex items-center gap-1 px-3 py-2.5 text-xs font-medium whitespace-nowrap border-b-2 transition-colors shrink-0",
+                  section === item.id ? "border-primary text-primary" : "border-transparent text-muted-foreground"
+                )}
+                data-testid={`mobile-nav-${item.id}`}
+              >
+                <item.icon className="h-3.5 w-3.5" />
+                <span>{item.label}</span>
+                {badge > 0 && (
+                  <span className="ml-0.5 inline-flex items-center justify-center h-4 min-w-4 rounded-full text-xs font-bold px-1 bg-primary text-primary-foreground">{badge}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
         {/* Content Area */}
         <ScrollArea className="flex-1">
-          <div className="p-6">
+          <div className="p-3 sm:p-6">
             {/* Dashboard */}
             {section === "dashboard" && (
               <DashboardSection
@@ -6337,25 +6365,25 @@ export default function ContractorHubPage() {
                             {isAdmin && proposal.status === "submitted" && (
                               <>
                                 <Button size="sm" variant="ghost" className="h-8 px-2 text-green-600 text-xs" onClick={() => proposalActionMutation.mutate({ id: proposal.id, action: "accept" })} data-testid={`btn-accept-proposal-${proposal.id}`}>
-                                  <CheckCircle className="h-3.5 w-3.5 mr-1" /> Approve
+                                  <CheckCircle className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Approve</span>
                                 </Button>
                                 <Button size="sm" variant="ghost" className="h-8 px-2 text-orange-600 text-xs" onClick={() => proposalActionMutation.mutate({ id: proposal.id, action: "request-revision" })} data-testid={`btn-revision-proposal-${proposal.id}`}>
-                                  <RotateCcw className="h-3.5 w-3.5 mr-1" /> Revise
+                                  <RotateCcw className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Revise</span>
                                 </Button>
                               </>
                             )}
                             {isAdmin && proposal.status === "approved" && (
                               <Button size="sm" variant="ghost" className="h-8 px-2 text-primary text-xs" onClick={() => proposalActionMutation.mutate({ id: proposal.id, action: "convert-to-invoice" })} data-testid={`btn-convert-invoice-${proposal.id}`}>
-                                <FilePlus className="h-3.5 w-3.5 mr-1" /> Invoice
+                                <FilePlus className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Invoice</span>
                               </Button>
                             )}
                             {["draft", "revision_requested"].includes(proposal.status) && (
-                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100" onClick={() => openBuilderForEdit(proposal)} data-testid={`btn-edit-proposal-${proposal.id}`}>
+                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100" onClick={() => openBuilderForEdit(proposal)} data-testid={`btn-edit-proposal-${proposal.id}`}>
                                 <Edit className="h-4 w-4" />
                               </Button>
                             )}
                             {["draft", "rejected"].includes(proposal.status) && (
-                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-red-500 opacity-0 group-hover:opacity-100" onClick={() => { if (confirm("Delete this proposal?")) deleteMutation.mutate(proposal.id); }} data-testid={`btn-delete-proposal-${proposal.id}`}>
+                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-red-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100" onClick={() => { if (confirm("Delete this proposal?")) deleteMutation.mutate(proposal.id); }} data-testid={`btn-delete-proposal-${proposal.id}`}>
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             )}
