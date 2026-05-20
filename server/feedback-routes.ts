@@ -6,45 +6,30 @@
  *
  * Authorization model
  *   - All routes require an authenticated session.
- *   - Regular users (and contractors) can only see/comment on their own
- *     submissions.
- *   - Tenant admins/managers (role startsWith "tenant_" OR legacy
- *     "admin"/"manager") can see all tickets within their company.
- *   - Platform admins (role startsWith "platform_") can see every
- *     ticket across every tenant.
- *   - Status changes, ticket assignment, priority-fix flagging, and
- *     internal-only comments are admin-only.
- *
- * Notifications
- *   - On submit: in-app notification to each company admin/manager,
- *     plus an email via sendGenericNotificationEmail (best-effort).
- *   - On status change: in-app notification + email to the submitter.
- *   Both paths use the existing notifications table and the generic
- *   notification email helper — no new template plumbing.
+ *   - Regular users can only see/comment on their own submissions
+ *     (also via GET /api/feedback/mine).
+ *   - Tenant admins/managers see all tickets within their company.
+ *   - Platform admins see every ticket across every tenant.
+ *   - Status changes, assignment, priority-fix, and internal comments
+ *     are admin-only.
  */
 import type { Express, Request, Response } from "express";
 import multer from "multer";
-import path from "path";
 import { sql } from "drizzle-orm";
 import { db } from "./db";
 import { storage } from "./storage";
 import { sendGenericNotificationEmail } from "./notifications";
 
-const ALLOWED_TYPES = new Set(["bug", "ux", "feature", "general"]);
+const ALLOWED_TYPES = new Set(["bug", "ux", "feature", "change_request", "general"]);
 const ALLOWED_SEVERITIES = new Set(["low", "medium", "high", "critical"]);
 const ALLOWED_STATUSES = new Set([
-  "new",
-  "reviewed",
-  "priority_fix",
-  "in_progress",
-  "waiting_on_user",
-  "closed",
-  "rejected",
+  "new", "reviewed", "priority_fix", "in_progress",
+  "waiting_on_user", "closed", "rejected",
 ]);
 
 interface SessionRequest extends Request {
   session: Request["session"] & { userId?: string };
-  file?: Express.Multer.File;
+  files?: Express.Multer.File[] | { [fieldname: string]: Express.Multer.File[] };
 }
 
 interface FeedbackTicketRow {
@@ -63,6 +48,12 @@ interface FeedbackTicketRow {
   page_url: string | null;
   browser_info: string | null;
   screenshot_path: string | null;
+  screenshot_paths: string[] | null;
+  error_code: string | null;
+  steps_to_reproduce: string | null;
+  expected_behavior: string | null;
+  actual_behavior: string | null;
+  console_errors: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -96,10 +87,8 @@ function isPlatformRole(role: string | undefined | null): boolean {
 function isAdminRole(role: string | undefined | null): boolean {
   if (!role) return false;
   return (
-    role === "admin" ||
-    role === "manager" ||
-    role.startsWith("tenant_") ||
-    role.startsWith("platform_")
+    role === "admin" || role === "manager" || role === "system_admin" ||
+    role.startsWith("tenant_") || role.startsWith("platform_")
   );
 }
 
@@ -108,6 +97,7 @@ function buildBrowserInfo(req: Request): string {
     userAgent: req.headers["user-agent"] || null,
     acceptLanguage: req.headers["accept-language"] || null,
     referer: req.headers["referer"] || null,
+    ip: req.headers["x-forwarded-for"] || req.socket?.remoteAddress || null,
     capturedAt: new Date().toISOString(),
   });
 }
@@ -120,13 +110,9 @@ function getAppBaseUrl(req: Request): string {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  new: "New",
-  reviewed: "Reviewed",
-  priority_fix: "Priority Fix",
-  in_progress: "In Progress",
-  waiting_on_user: "Waiting on User",
-  closed: "Closed",
-  rejected: "Rejected",
+  new: "New", reviewed: "Reviewed", priority_fix: "Priority Fix",
+  in_progress: "In Progress", waiting_on_user: "Waiting on User",
+  closed: "Closed / Resolved", rejected: "Rejected",
 };
 
 export function registerFeedbackRoutes(
@@ -134,46 +120,65 @@ export function registerFeedbackRoutes(
   requireAuth: (req: Request, res: Response, next: () => void) => void,
   upload: multer.Multer,
 ): void {
+
   // POST /api/feedback — create a new ticket (any authenticated user)
   app.post(
     "/api/feedback",
     requireAuth,
-    upload.single("screenshot"),
+    upload.array("screenshots", 3),
     async (req: SessionRequest, res: Response) => {
       try {
         const userId = req.session.userId!;
         const user = await storage.getUser(userId);
         if (!user) return res.status(401).json({ message: "User not found" });
 
-        const { type, severity, title, description, pageUrl } = req.body as Record<string, string>;
+        const {
+          type, severity, title, description, pageUrl,
+          errorCode, stepsToReproduce, expectedBehavior, actualBehavior, consoleErrors,
+        } = req.body as Record<string, string>;
+
         if (!type || !ALLOWED_TYPES.has(type)) {
-          return res.status(400).json({ message: "Invalid type. Must be bug, ux, feature, or general." });
+          return res.status(400).json({ message: "Invalid type." });
         }
         const sev = severity || "medium";
         if (!ALLOWED_SEVERITIES.has(sev)) {
           return res.status(400).json({ message: "Invalid severity." });
         }
         if (!title || !title.trim()) return res.status(400).json({ message: "Title is required" });
-        if (!description || !description.trim()) {
-          return res.status(400).json({ message: "Description is required" });
-        }
+        if (!description || !description.trim()) return res.status(400).json({ message: "Description is required" });
 
-        const screenshotPath = req.file ? `/uploads/${req.file.filename}` : null;
+        // Handle multiple uploaded screenshots
+        const files = Array.isArray(req.files)
+          ? (req.files as Express.Multer.File[])
+          : [];
+        const screenshotPathsArr = files.map(f => `/uploads/${f.filename}`);
+        const screenshotPath = screenshotPathsArr[0] ?? null;
+        // Build a Postgres-compatible array literal for screenshot_paths
+        const screenshotPathsPg = screenshotPathsArr.length > 0
+          ? `{${screenshotPathsArr.map(p => `"${p.replace(/"/g, '\\"')}"`).join(",")}}`
+          : null;
+
         const submitterName =
           [(user as any).firstName, (user as any).lastName].filter(Boolean).join(" ") ||
-          (user as any).username ||
-          "User";
+          (user as any).username || "User";
         const submitterEmail = (user as any).email ?? null;
         const browserInfo = buildBrowserInfo(req);
 
         const inserted = await db.execute(sql`
           INSERT INTO feedback_tickets (
             company_id, submitter_user_id, submitter_name, submitter_email,
-            type, severity, status, title, description, page_url, browser_info, screenshot_path
+            type, severity, status, title, description, page_url, browser_info,
+            screenshot_path, screenshot_paths,
+            error_code, steps_to_reproduce, expected_behavior, actual_behavior, console_errors
           ) VALUES (
             ${user.companyId ?? null}, ${userId}, ${submitterName}, ${submitterEmail},
             ${type}, ${sev}, 'new', ${title.trim()}, ${description.trim()},
-            ${pageUrl ?? null}, ${browserInfo}, ${screenshotPath}
+            ${pageUrl ?? null}, ${browserInfo},
+            ${screenshotPath},
+            ${screenshotPathsPg ? sql`${screenshotPathsPg}::text[]` : sql`NULL`},
+            ${errorCode?.trim() || null}, ${stepsToReproduce?.trim() || null},
+            ${expectedBehavior?.trim() || null}, ${actualBehavior?.trim() || null},
+            ${consoleErrors?.trim() || null}
           )
           RETURNING *
         `);
@@ -187,7 +192,7 @@ export function registerFeedbackRoutes(
               SELECT u.id, u.email, u.username
               FROM users u
               WHERE u.company_id = ${user.companyId}
-                AND u.role IN ('admin','manager','tenant_admin','tenant_owner','tenant_manager')
+                AND u.role IN ('admin','manager','tenant_admin','tenant_owner','tenant_manager','system_admin')
               LIMIT 25
             `);
             const baseUrl = getAppBaseUrl(req);
@@ -222,7 +227,25 @@ export function registerFeedbackRoutes(
     },
   );
 
-  // GET /api/feedback — list tickets with scope-based filtering
+  // GET /api/feedback/mine — current user's own submissions (any role)
+  app.get("/api/feedback/mine", requireAuth, async (req: SessionRequest, res: Response) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) return res.status(401).json({ message: "User not found" });
+      const result = await db.execute(sql`
+        SELECT * FROM feedback_tickets
+        WHERE submitter_user_id = ${user.id}
+        ORDER BY created_at DESC
+        LIMIT 200
+      `);
+      res.json(allRows<FeedbackTicketRow>(result));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      res.status(500).json({ message: "Failed to load submissions: " + msg });
+    }
+  });
+
+  // GET /api/feedback — list tickets (admin/manager: company scope; platform: all)
   app.get("/api/feedback", requireAuth, async (req: SessionRequest, res: Response) => {
     try {
       const user = await storage.getUser(req.session.userId!);
@@ -231,26 +254,17 @@ export function registerFeedbackRoutes(
       const admin = isAdminRole(user.role);
 
       const {
-        companyId: filterCompanyId,
-        type: filterType,
-        status: filterStatus,
-        severity: filterSeverity,
-        priorityFix,
-        assignedUserId,
-        from,
-        to,
+        companyId: filterCompanyId, type: filterType, status: filterStatus,
+        severity: filterSeverity, priorityFix, assignedUserId, from, to,
       } = req.query as Record<string, string | undefined>;
 
-      // Build dynamic WHERE clause via parameterized fragments.
       const conditions: ReturnType<typeof sql>[] = [];
       if (platform) {
         if (filterCompanyId) conditions.push(sql`company_id = ${filterCompanyId}`);
       } else if (admin) {
-        // Tenant admins see only their company's tickets.
         if (!user.companyId) return res.json([]);
         conditions.push(sql`company_id = ${user.companyId}`);
       } else {
-        // Regular users see only their own submissions.
         conditions.push(sql`submitter_user_id = ${user.id}`);
       }
       if (filterType && ALLOWED_TYPES.has(filterType)) conditions.push(sql`type = ${filterType}`);
@@ -271,7 +285,7 @@ export function registerFeedbackRoutes(
       }
       const result = await db.execute(sql`
         SELECT * FROM feedback_tickets${where}
-        ORDER BY priority_fix DESC, created_at DESC
+        ORDER BY priority_fix DESC NULLS LAST, created_at DESC
         LIMIT 500
       `);
       res.json(allRows<FeedbackTicketRow>(result));
@@ -281,7 +295,7 @@ export function registerFeedbackRoutes(
     }
   });
 
-  // GET /api/feedback/:id — single ticket (with auth scope check)
+  // GET /api/feedback/:id — single ticket
   app.get("/api/feedback/:id", requireAuth, async (req: SessionRequest, res: Response) => {
     try {
       const user = await storage.getUser(req.session.userId!);
@@ -293,9 +307,7 @@ export function registerFeedbackRoutes(
       const admin = isAdminRole(user.role);
       if (!platform) {
         if (admin) {
-          if (ticket.company_id !== user.companyId) {
-            return res.status(403).json({ message: "Access denied" });
-          }
+          if (ticket.company_id !== user.companyId) return res.status(403).json({ message: "Access denied" });
         } else if (ticket.submitter_user_id !== user.id) {
           return res.status(403).json({ message: "Access denied" });
         }
@@ -307,7 +319,7 @@ export function registerFeedbackRoutes(
     }
   });
 
-  // PATCH /api/feedback/:id — admin-only updates (status, assignment, priority)
+  // PATCH /api/feedback/:id — admin-only updates
   app.patch("/api/feedback/:id", requireAuth, async (req: SessionRequest, res: Response) => {
     try {
       const user = await storage.getUser(req.session.userId!);
@@ -323,9 +335,7 @@ export function registerFeedbackRoutes(
       }
 
       const { status, priorityFix, assignedUserId } = req.body as {
-        status?: string;
-        priorityFix?: boolean;
-        assignedUserId?: string | null;
+        status?: string; priorityFix?: boolean; assignedUserId?: string | null;
       };
 
       const sets: ReturnType<typeof sql>[] = [];
@@ -354,9 +364,9 @@ export function registerFeedbackRoutes(
       if (ticket && newStatus && newStatus !== existing.status) {
         try {
           const baseUrl = getAppBaseUrl(req);
-          const actionUrl = `${baseUrl}/app/my-feedback?id=${ticket.id}`;
+          const actionUrl = `${baseUrl}/app/my-feedback`;
           const subject = `Your feedback "${ticket.title}" was updated`;
-          const body = `Status changed to ${STATUS_LABELS[newStatus] || newStatus}.`;
+          const body = `Status changed to: ${STATUS_LABELS[newStatus] || newStatus}.`;
           if (ticket.company_id) {
             await db.execute(sql`
               INSERT INTO notifications (company_id, user_id, type, title, message, action_url, is_read)
@@ -383,7 +393,7 @@ export function registerFeedbackRoutes(
     }
   });
 
-  // GET /api/feedback/:id/comments — list comments (internal hidden from non-admins)
+  // GET /api/feedback/:id/comments
   app.get("/api/feedback/:id/comments", requireAuth, async (req: SessionRequest, res: Response) => {
     try {
       const user = await storage.getUser(req.session.userId!);
@@ -406,14 +416,14 @@ export function registerFeedbackRoutes(
         ORDER BY created_at ASC
       `);
       const comments = allRows<FeedbackCommentRow>(result);
-      res.json(admin ? comments : comments.filter((c) => !c.is_internal));
+      res.json(admin || platform ? comments : comments.filter(c => !c.is_internal));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       res.status(500).json({ message: "Failed to load comments: " + msg });
     }
   });
 
-  // POST /api/feedback/:id/comments — add a comment
+  // POST /api/feedback/:id/comments
   app.post("/api/feedback/:id/comments", requireAuth, async (req: SessionRequest, res: Response) => {
     try {
       const user = await storage.getUser(req.session.userId!);
@@ -432,12 +442,10 @@ export function registerFeedbackRoutes(
       }
       const { body, isInternal } = req.body as { body?: string; isInternal?: boolean };
       if (!body || !body.trim()) return res.status(400).json({ message: "Comment body is required" });
-      // Only admins can mark a comment as internal.
-      const internalFlag = !!isInternal && admin;
+      const internalFlag = !!isInternal && (admin || platform);
       const authorName =
         [(user as any).firstName, (user as any).lastName].filter(Boolean).join(" ") ||
-        (user as any).username ||
-        "User";
+        (user as any).username || "User";
       const inserted = await db.execute(sql`
         INSERT INTO feedback_ticket_comments (ticket_id, author_user_id, author_name, body, is_internal)
         VALUES (${req.params.id}, ${user.id}, ${authorName}, ${body.trim()}, ${internalFlag})

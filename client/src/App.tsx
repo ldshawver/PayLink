@@ -80,6 +80,7 @@ const SmsSettingsPage = lazy(() => import("@/pages/sms-settings"));
 const GdprInventoryPage = lazy(() => import("@/pages/gdpr-inventory"));
 const PrivacyAuditLogPage = lazy(() => import("@/pages/privacy-audit-log"));
 const FeedbackAdminPage = lazy(() => import("@/pages/FeedbackAdminPage"));
+const MyFeedbackPage = lazy(() => import("@/pages/MyFeedbackPage"));
 const BreachResponsePage = lazy(() => import("@/pages/breach-response"));
 const MfaSettingsPage = lazy(() => import("@/pages/mfa-settings"));
 const ProposalPortalPage = lazy(() => import("@/pages/proposal-portal"));
@@ -192,6 +193,7 @@ function AuthenticatedRouter() {
         <Route path="/app/mfa-settings" component={MfaSettingsPage} />
         <Route path="/app/privacy-audit-log">{() => <StrictRoleGuard roles={["admin", "system_admin", "platform_super_admin", "platform_admin", "tenant_owner", "tenant_admin"]}><PrivacyAuditLogPage /></StrictRoleGuard>}</Route>
         <Route path="/app/feedback-admin">{() => <RoleGuard roles={["admin", "manager"]}><FeedbackAdminPage /></RoleGuard>}</Route>
+        <Route path="/app/my-feedback" component={MyFeedbackPage} />
         <Route component={NotFound} />
       </Switch>
     </Suspense>

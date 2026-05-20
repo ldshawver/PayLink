@@ -2672,6 +2672,15 @@ Thank you,
     await run("feedback_ticket_comments indexes", sql`
       CREATE INDEX IF NOT EXISTS idx_feedback_comments_ticket ON feedback_ticket_comments(ticket_id);
     `);
+    await run("feedback_tickets new columns", sql`
+      ALTER TABLE feedback_tickets
+        ADD COLUMN IF NOT EXISTS error_code TEXT,
+        ADD COLUMN IF NOT EXISTS steps_to_reproduce TEXT,
+        ADD COLUMN IF NOT EXISTS expected_behavior TEXT,
+        ADD COLUMN IF NOT EXISTS actual_behavior TEXT,
+        ADD COLUMN IF NOT EXISTS console_errors TEXT,
+        ADD COLUMN IF NOT EXISTS screenshot_paths TEXT[]
+    `);
 
     // ── contractor_reminders table ────────────────────────────────────────────
     await run("contractor_reminders table", sql`CREATE TABLE IF NOT EXISTS contractor_reminders (

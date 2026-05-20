@@ -54,6 +54,7 @@ interface Proposal {
   shareToken?: string;
   convertedToInvoiceId?: string | null;
   convertedToContractId?: string | null;
+  rejectionReason?: string | null;
 }
 
 interface ContractorBranding {
@@ -1088,6 +1089,25 @@ function ProposalDetailPanel({
           <ScrollArea className="flex-1">
             {/* Overview */}
             <TabsContent value="overview" className="m-0 p-6 space-y-4">
+              {/* Revision request banner — shown to contractor when revision is requested */}
+              {!isAdmin && proposal.status === "revision_requested" && (
+                <div className="flex gap-3 rounded-lg border border-orange-300 bg-orange-50 dark:bg-orange-950/30 p-4" data-testid="banner-revision-requested">
+                  <RotateCcw className="h-5 w-5 text-orange-600 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-orange-800 dark:text-orange-300 text-sm">Revision Requested</p>
+                    {proposal.rejectionReason ? (
+                      <p className="text-sm text-orange-700 dark:text-orange-400 mt-1 whitespace-pre-wrap">{proposal.rejectionReason}</p>
+                    ) : (
+                      <p className="text-sm text-orange-700 dark:text-orange-400 mt-1">Please review and resubmit your proposal.</p>
+                    )}
+                    {canSubmit && (
+                      <Button size="sm" className="mt-3 bg-orange-600 hover:bg-orange-700 text-white" onClick={() => actionMutation.mutate({ action: "submit" })} disabled={actionMutation.isPending} data-testid="btn-resubmit-from-banner">
+                        <Send className="h-3.5 w-3.5 mr-1" /> Resubmit for Review
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <p className="text-muted-foreground text-xs">Issue Date</p>
@@ -6333,63 +6353,113 @@ export default function ContractorHubPage() {
                     )}
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    {filteredProposals.map(proposal => (
-                      <div
-                        key={proposal.id}
-                        className="border rounded-lg p-4 hover:bg-muted/30 transition-colors cursor-pointer group"
-                        onClick={() => setSelectedProposal(proposal)}
-                        data-testid={`row-proposal-${proposal.id}`}
-                      >
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="font-medium text-sm truncate">{proposal.title || "Untitled Proposal"}</p>
-                              <ProposalBadge status={proposal.status} />
-                              {proposal.isChangeOrder && <span className="text-xs bg-purple-100 text-purple-700 rounded px-1.5 py-0.5">Change Order</span>}
-                              {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">v{proposal.version}</span>}
-                            </div>
-                            <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-                              <span>{proposal.proposalNumber}</span>
-                              <span>·</span>
-                              <span>Issued {fmtDate(proposal.issueDate)}</span>
-                              {proposal.expirationDate && <><span>·</span><span>Expires {fmtDate(proposal.expirationDate)}</span></>}
-                              <span>·</span>
-                              <span className="font-semibold text-foreground">{fmt(proposal.amount)}</span>
-                            </div>
-                            {proposal.description && <p className="text-xs text-muted-foreground mt-1 truncate">{proposal.description}</p>}
+                  <div className="space-y-4">
+                    {/* Awaiting Review — pinned section for admins */}
+                    {isAdmin && (() => {
+                      const awaitingInFilter = filteredProposals.filter(p => p.status === "submitted");
+                      if (awaitingInFilter.length === 0) return null;
+                      return (
+                        <div className="space-y-2" data-testid="section-awaiting-review">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">Awaiting Review</span>
+                            <span className="text-xs bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded-full font-semibold">{awaitingInFilter.length}</span>
                           </div>
-                          <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
-                            {isAdmin && proposal.status === "submitted" && (
-                              <>
-                                <Button size="sm" variant="ghost" className="h-8 px-2 text-green-600 text-xs" onClick={() => proposalActionMutation.mutate({ id: proposal.id, action: "accept" })} data-testid={`btn-accept-proposal-${proposal.id}`}>
-                                  <CheckCircle className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Approve</span>
+                          {awaitingInFilter.map(proposal => (
+                            <div
+                              key={proposal.id}
+                              className="border-2 border-amber-300 dark:border-amber-700 rounded-lg p-4 bg-amber-50/50 dark:bg-amber-950/20 hover:bg-amber-50 dark:hover:bg-amber-950/30 transition-colors cursor-pointer group"
+                              onClick={() => setSelectedProposal(proposal)}
+                              data-testid={`row-awaiting-proposal-${proposal.id}`}
+                            >
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <p className="font-medium text-sm truncate">{proposal.title || "Untitled Proposal"}</p>
+                                    <ProposalBadge status={proposal.status} />
+                                    {proposal.isChangeOrder && <span className="text-xs bg-purple-100 text-purple-700 rounded px-1.5 py-0.5">Change Order</span>}
+                                    {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">v{proposal.version}</span>}
+                                  </div>
+                                  <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
+                                    <span>{proposal.proposalNumber}</span>
+                                    <span>·</span>
+                                    <span>Submitted {fmtDate(proposal.issueDate)}</span>
+                                    <span>·</span>
+                                    <span className="font-semibold text-foreground">{fmt(proposal.amount)}</span>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                                  <Button size="sm" variant="ghost" className="h-8 px-2 text-green-600 text-xs" onClick={() => proposalActionMutation.mutate({ id: proposal.id, action: "accept" })} disabled={proposalActionMutation.isPending} data-testid={`btn-accept-awaiting-${proposal.id}`}>
+                                    <CheckCircle className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Approve</span>
+                                  </Button>
+                                  <Button size="sm" variant="ghost" className="h-8 px-2 text-orange-600 text-xs" onClick={() => proposalActionMutation.mutate({ id: proposal.id, action: "request-revision" })} disabled={proposalActionMutation.isPending} data-testid={`btn-revision-awaiting-${proposal.id}`}>
+                                    <RotateCcw className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Revise</span>
+                                  </Button>
+                                  <Button size="sm" variant="ghost" className="h-8 px-2 text-red-500 text-xs" onClick={() => { if (confirm("Reject this proposal?")) proposalActionMutation.mutate({ id: proposal.id, action: "reject", body: { rejectionReason: "" } }); }} disabled={proposalActionMutation.isPending} data-testid={`btn-reject-awaiting-${proposal.id}`}>
+                                    <XCircle className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Reject</span>
+                                  </Button>
+                                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                          {filteredProposals.filter(p => p.status !== "submitted").length > 0 && (
+                            <div className="border-t pt-2 mt-2">
+                              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">All Proposals</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    {/* Main proposals list — submitted proposals shown above in Awaiting Review when no filter is applied */}
+                    <div className="space-y-2">
+                      {filteredProposals.filter(p => !(isAdmin && p.status === "submitted")).map(proposal => (
+                        <div
+                          key={proposal.id}
+                          className="border rounded-lg p-4 hover:bg-muted/30 transition-colors cursor-pointer group"
+                          onClick={() => setSelectedProposal(proposal)}
+                          data-testid={`row-proposal-${proposal.id}`}
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="font-medium text-sm truncate">{proposal.title || "Untitled Proposal"}</p>
+                                <ProposalBadge status={proposal.status} />
+                                {proposal.isChangeOrder && <span className="text-xs bg-purple-100 text-purple-700 rounded px-1.5 py-0.5">Change Order</span>}
+                                {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">v{proposal.version}</span>}
+                              </div>
+                              <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
+                                <span>{proposal.proposalNumber}</span>
+                                <span>·</span>
+                                <span>Issued {fmtDate(proposal.issueDate)}</span>
+                                {proposal.expirationDate && <><span>·</span><span>Expires {fmtDate(proposal.expirationDate)}</span></>}
+                                <span>·</span>
+                                <span className="font-semibold text-foreground">{fmt(proposal.amount)}</span>
+                              </div>
+                              {proposal.description && <p className="text-xs text-muted-foreground mt-1 truncate">{proposal.description}</p>}
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                              {isAdmin && proposal.status === "approved" && (
+                                <Button size="sm" variant="ghost" className="h-8 px-2 text-primary text-xs" onClick={() => proposalActionMutation.mutate({ id: proposal.id, action: "convert-to-invoice" })} data-testid={`btn-convert-invoice-${proposal.id}`}>
+                                  <FilePlus className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Invoice</span>
                                 </Button>
-                                <Button size="sm" variant="ghost" className="h-8 px-2 text-orange-600 text-xs" onClick={() => proposalActionMutation.mutate({ id: proposal.id, action: "request-revision" })} data-testid={`btn-revision-proposal-${proposal.id}`}>
-                                  <RotateCcw className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Revise</span>
+                              )}
+                              {["draft", "revision_requested"].includes(proposal.status) && (
+                                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100" onClick={() => openBuilderForEdit(proposal)} data-testid={`btn-edit-proposal-${proposal.id}`}>
+                                  <Edit className="h-4 w-4" />
                                 </Button>
-                              </>
-                            )}
-                            {isAdmin && proposal.status === "approved" && (
-                              <Button size="sm" variant="ghost" className="h-8 px-2 text-primary text-xs" onClick={() => proposalActionMutation.mutate({ id: proposal.id, action: "convert-to-invoice" })} data-testid={`btn-convert-invoice-${proposal.id}`}>
-                                <FilePlus className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Invoice</span>
-                              </Button>
-                            )}
-                            {["draft", "revision_requested"].includes(proposal.status) && (
-                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100" onClick={() => openBuilderForEdit(proposal)} data-testid={`btn-edit-proposal-${proposal.id}`}>
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                            )}
-                            {["draft", "rejected"].includes(proposal.status) && (
-                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-red-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100" onClick={() => { if (confirm("Delete this proposal?")) deleteMutation.mutate(proposal.id); }} data-testid={`btn-delete-proposal-${proposal.id}`}>
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            )}
-                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                              )}
+                              {["draft", "rejected"].includes(proposal.status) && (
+                                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-red-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100" onClick={() => { if (confirm("Delete this proposal?")) deleteMutation.mutate(proposal.id); }} data-testid={`btn-delete-proposal-${proposal.id}`}>
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
