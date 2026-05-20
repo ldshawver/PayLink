@@ -289,8 +289,11 @@ const TENANT_NAV: NavGroup[] = [
         featureKey: "tenant.finance.contractor-hub",
         items: [
           { title: "Overview", url: "/app/contractor-hub", icon: Briefcase },
-          { title: "Proposals", url: "/app/biz-docs?tab=proposals", icon: FilePlus2 },
-          { title: "Business Documents", url: "/app/biz-docs", icon: FileText },
+          { title: "Proposals", url: "/app/contractor-hub?section=proposals", icon: FilePlus2 },
+          { title: "Contracts", url: "/app/contractor-hub?section=contracts", icon: FileText },
+          { title: "Invoices", url: "/app/contractor-hub?section=invoices", icon: Receipt },
+          { title: "Documents", url: "/app/contractor-hub?section=documents", icon: FolderOpen },
+          { title: "Business Documents", url: "/app/biz-docs", icon: ClipboardList },
           { title: "Trade Compensation", url: "/app/trade-compensation", icon: ArrowLeftRight, featureKey: "tenant.finance.trade-compensation" },
         ],
       },

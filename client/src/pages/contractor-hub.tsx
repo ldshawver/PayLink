@@ -52,6 +52,8 @@ interface Proposal {
   siteNotes?: string; clientRequirements?: string; estimatedStartDate?: string; estimatedEndDate?: string;
   tradeCategory?: string;
   shareToken?: string;
+  convertedToInvoiceId?: string | null;
+  convertedToContractId?: string | null;
 }
 
 interface ContractorBranding {
@@ -957,7 +959,7 @@ function ProposalDetailPanel({
   const canAdminAction = isAdmin && ["submitted", "sent", "viewed", "countered"].includes(proposal.status);
   const canNegotiate = isAdmin && proposal.status === "countered";
   const canMarkNegotiated = isAdmin && ["countered", "negotiated"].includes(proposal.status);
-  const canConvertToContract = isAdmin && ["approved", "negotiated"].includes(proposal.status);
+  const canConvertToContract = isAdmin && ["approved", "negotiated"].includes(proposal.status) && !proposal.convertedToContractId;
   const canRevise = !isAdmin && ["draft", "revision_requested"].includes(proposal.status);
   const canCreateRevision = isAdmin && ["approved", "sent", "viewed"].includes(proposal.status);
 
@@ -1021,7 +1023,7 @@ function ProposalDetailPanel({
                   <FileSignature className="h-3.5 w-3.5 mr-1" /> Request Signature
                 </Button>
               )}
-              {proposal.status === "approved" && isAdmin && (
+              {proposal.status === "approved" && isAdmin && !proposal.convertedToInvoiceId && (
                 <Button size="sm" variant="outline" className="shrink-0" onClick={() => actionMutation.mutate({ action: "convert-to-invoice" })} disabled={actionMutation.isPending} data-testid="btn-convert-invoice">
                   <FilePlus className="h-3.5 w-3.5 mr-1" /> Create Invoice
                 </Button>
@@ -2342,17 +2344,26 @@ function ProposalBuilder({
                 templates={templates}
                 selectedTemplateId={form.templateId ?? current.templateId}
                 onSelect={t => {
+                  // Parse bodyJson to extract template line items for pre-population
+                  let templateLineItems: any[] = [];
+                  try {
+                    const body = typeof t.bodyJson === "string" ? JSON.parse(t.bodyJson) : (t.body_json ? (typeof t.body_json === "string" ? JSON.parse(t.body_json) : t.body_json) : null);
+                    if (Array.isArray(body?.lineItems)) templateLineItems = body.lineItems;
+                    else if (Array.isArray(body?.line_items)) templateLineItems = body.line_items;
+                  } catch {}
                   setForm(f => ({
                     ...f,
                     templateId: t.id,
                     title: f.title || t.name,
-                    scopeOfWork: f.scopeOfWork || t.scopeTemplate || t.scope_template,
-                    paymentTerms: f.paymentTerms || t.paymentTermsTemplate || t.payment_terms_template,
-                    assumptions: f.assumptions || t.assumptionsTemplate || t.assumptions_template,
-                    exclusions: f.exclusions || t.exclusionsTemplate || t.exclusions_template,
+                    // The API returns raw snake_case; support both camelCase (snakeToCamel) and snake_case
+                    scopeOfWork: f.scopeOfWork || t.defaultScopeTemplate || t.default_scope_template || t.scopeTemplate || t.scope_template,
+                    paymentTerms: f.paymentTerms || t.defaultPaymentTerms || t.default_payment_terms || t.paymentTermsTemplate || t.payment_terms_template,
+                    assumptions: f.assumptions || t.defaultAssumptions || t.default_assumptions || t.assumptionsTemplate || t.assumptions_template,
+                    exclusions: f.exclusions || t.defaultExclusions || t.default_exclusions || t.exclusionsTemplate || t.exclusions_template,
                     workType: f.workType || t.workType || t.work_type,
+                    ...(templateLineItems.length > 0 && { templateLineItems }),
                   }));
-                  toast({ title: `Template "${t.name}" applied` });
+                  toast({ title: `Template "${t.name}" applied${templateLineItems.length > 0 ? ` · ${templateLineItems.length} line item${templateLineItems.length !== 1 ? "s" : ""} pre-loaded` : ""}` });
                   setTab("details");
                 }}
               />
@@ -5965,6 +5976,18 @@ export default function ContractorHubPage() {
     } catch { return "dashboard"; }
   })();
   const [section, setSection] = useState<HubSection>(initialSection);
+
+  // Keep section in sync when the URL query param changes (e.g. sidebar navigation)
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const s = params.get("section") as HubSection | null;
+      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","payments","documents","messages","branding","settings"];
+      if (s && valid.includes(s)) setSection(s);
+      else if (!s) setSection("dashboard");
+    } catch {}
+  }, [location]);
+
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [companyFilter, setCompanyFilter] = useState("all");

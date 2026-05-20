@@ -9951,6 +9951,33 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         RETURNING *
       `);
       const proposal = (result.rows ?? (result as any))[0];
+
+      // Auto-create line items from template bodyJson when a templateId is supplied
+      if (safeTemplateId && proposal?.id) {
+        try {
+          const tplRes = await db.execute(sql`SELECT body_json FROM contractor_templates WHERE id = ${safeTemplateId}`);
+          const rawBodyJson = (tplRes.rows[0] as any)?.body_json;
+          if (rawBodyJson) {
+            const bodyParsed = typeof rawBodyJson === "string" ? JSON.parse(rawBodyJson) : rawBodyJson;
+            const tplLineItems: any[] = bodyParsed?.lineItems ?? bodyParsed?.line_items ?? [];
+            if (Array.isArray(tplLineItems) && tplLineItems.length > 0) {
+              for (let idx = 0; idx < tplLineItems.length; idx++) {
+                const li = tplLineItems[idx];
+                const name = li.name || li.description || "Item";
+                const qty = parseFloat(li.quantity ?? li.qty ?? "1") || 1;
+                const price = parseFloat(li.unitPrice ?? li.unit_price ?? li.price ?? "0") || 0;
+                const lineTotal = qty * price;
+                await db.execute(sql`
+                  INSERT INTO proposal_line_items (proposal_id, name, description, category, quantity, unit, unit_price, cost, markup_percent, taxable, optional, selected, sort_order, line_total, ai_generated)
+                  VALUES (${proposal.id}, ${name}, ${li.description ?? null}, ${li.category ?? null}, ${qty}, ${li.unit ?? null}, ${price}, ${li.cost ?? null}, ${li.markupPercent ?? li.markup_percent ?? null}, ${li.taxable ?? false}, ${li.optional ?? false}, ${li.selected ?? true}, ${idx}, ${lineTotal}, FALSE)
+                `).catch(() => {});
+              }
+              await recalcProposalTotals(proposal.id).catch(() => {});
+            }
+          }
+        } catch (tplErr) { console.warn("[ContractorProposals] Template line items auto-create failed:", tplErr); }
+      }
+
       res.status(201).json(proposal);
     } catch (e) { console.error("[ContractorProposals] POST error:", e); res.status(500).json({ message: "Failed to create proposal" }); }
   });
