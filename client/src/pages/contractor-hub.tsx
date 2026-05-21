@@ -2080,6 +2080,21 @@ function ProposalBuilder({
     onError: (e: any) => toast({ title: e?.message || "Failed to create revision", variant: "destructive" }),
   });
 
+  const resendEmailMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/contractor-proposals/${proposalId}/resend-email`, {}),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals", proposalId, "events"] });
+      if (data?.emailStatus === "sent") {
+        toast({ title: "Email resent", description: "The client notification was sent successfully." });
+      } else if (data?.emailStatus === "failed") {
+        toast({ title: "Resend failed", description: "Email delivery failed again. Check the client email address.", variant: "destructive" });
+      } else {
+        toast({ title: "No client email", description: "No client email is on file for this proposal.", variant: "destructive" });
+      }
+    },
+    onError: (e: any) => toast({ title: e?.message || "Resend failed", variant: "destructive" }),
+  });
+
   function handleMarkSent() {
     const existingEmail = form.clientEmail ?? current.clientEmail ?? "";
     setSendEmailDraft(existingEmail);
@@ -2867,48 +2882,69 @@ function ProposalBuilder({
             <TabsContent value="history" className="m-0 p-6">
               {events.length === 0 ? (
                 <p className="text-center text-muted-foreground text-sm py-8">No history yet.</p>
-              ) : (
-                <div className="space-y-3">
-                  {events.map((ev, i) => (
-                    <div key={ev.id} className="flex gap-3">
-                      <div className="flex flex-col items-center">
-                        <div className={cn("h-7 w-7 rounded-full flex items-center justify-center shrink-0", ev.eventType === "client_message" ? "bg-violet-100" : "bg-primary/10")}>
-                          {ev.eventType === "client_message"
-                            ? <MessageSquare className="h-3.5 w-3.5 text-violet-600" />
-                            : <History className="h-3.5 w-3.5 text-primary" />}
+              ) : (() => {
+                const lastSentIdx = events.map((e, i) => ({ e, i })).filter(({ e }) => e.eventType === "sent").at(-1)?.i ?? -1;
+                const lastSentNotes = lastSentIdx >= 0 ? events[lastSentIdx].notes ?? "" : "";
+                const showResend = isAdmin && lastSentIdx >= 0 && (lastSentNotes.includes("failed") || lastSentNotes.includes("skipped") || lastSentNotes.includes("No client email"));
+                return (
+                  <div className="space-y-3">
+                    {events.map((ev, i) => (
+                      <div key={ev.id} className="flex gap-3">
+                        <div className="flex flex-col items-center">
+                          <div className={cn("h-7 w-7 rounded-full flex items-center justify-center shrink-0", ev.eventType === "client_message" ? "bg-violet-100" : ev.eventType === "email_resent" ? "bg-blue-100" : "bg-primary/10")}>
+                            {ev.eventType === "client_message"
+                              ? <MessageSquare className="h-3.5 w-3.5 text-violet-600" />
+                              : ev.eventType === "email_resent"
+                              ? <Mail className="h-3.5 w-3.5 text-blue-600" />
+                              : <History className="h-3.5 w-3.5 text-primary" />}
+                          </div>
+                          {i < events.length - 1 && <div className="w-0.5 flex-1 bg-border mt-1" />}
                         </div>
-                        {i < events.length - 1 && <div className="w-0.5 flex-1 bg-border mt-1" />}
+                        <div className="pb-4 flex-1">
+                          <p className="text-sm font-medium capitalize">{ev.eventType === "client_message" ? "Client Message" : ev.eventType === "email_resent" ? "Email Resent" : ev.eventType.replace(/_/g, " ")}</p>
+                          <p className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} — {ev.actorName || "System"}{ev.actorEmail ? ` (${ev.actorEmail})` : ""}</p>
+                          {ev.notes && ev.eventType === "client_message" && (
+                            <p className="text-xs mt-1 px-2 py-1.5 rounded bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 text-violet-800 dark:text-violet-200 whitespace-pre-wrap">{ev.notes}</p>
+                          )}
+                          {ev.notes && (ev.eventType === "sent" || ev.eventType === "email_resent") && (() => {
+                            const parts = ev.notes.split(" | Portal: ");
+                            const label = parts[0];
+                            const link = parts[1];
+                            const isFailed = label.includes("failed") || label.includes("No client email");
+                            return (
+                              <div className="text-xs mt-1 space-y-0.5">
+                                <p className={isFailed ? "text-destructive" : "text-muted-foreground"}>{label}</p>
+                                {link && (
+                                  <p className="text-muted-foreground">
+                                    View link:{" "}
+                                    <a href={link} target="_blank" rel="noopener noreferrer" className="text-primary underline break-all" data-testid="link-sent-portal">
+                                      {link}
+                                    </a>
+                                  </p>
+                                )}
+                                {showResend && i === lastSentIdx && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="mt-2 h-7 text-xs"
+                                    disabled={resendEmailMutation.isPending}
+                                    onClick={() => resendEmailMutation.mutate()}
+                                    data-testid="btn-resend-email"
+                                  >
+                                    {resendEmailMutation.isPending ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <Mail className="h-3 w-3 mr-1.5" />}
+                                    Resend Email
+                                  </Button>
+                                )}
+                              </div>
+                            );
+                          })()}
+                          {ev.notes && ev.eventType !== "sent" && ev.eventType !== "email_resent" && ev.eventType !== "client_message" && <p className="text-xs text-muted-foreground mt-0.5">{ev.notes}</p>}
+                        </div>
                       </div>
-                      <div className="pb-4 flex-1">
-                        <p className="text-sm font-medium capitalize">{ev.eventType === "client_message" ? "Client Message" : ev.eventType.replace(/_/g, " ")}</p>
-                        <p className="text-xs text-muted-foreground">{fmtDate(ev.createdAt)} — {ev.actorName || "System"}{ev.actorEmail ? ` (${ev.actorEmail})` : ""}</p>
-                        {ev.notes && ev.eventType === "client_message" && (
-                          <p className="text-xs mt-1 px-2 py-1.5 rounded bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 text-violet-800 dark:text-violet-200 whitespace-pre-wrap">{ev.notes}</p>
-                        )}
-                        {ev.notes && ev.eventType === "sent" && (() => {
-                          const parts = ev.notes.split(" | Portal: ");
-                          const label = parts[0];
-                          const link = parts[1];
-                          return (
-                            <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
-                              <p>{label}</p>
-                              {link && (
-                                <p>
-                                  View link:{" "}
-                                  <a href={link} target="_blank" rel="noopener noreferrer" className="text-primary underline break-all" data-testid="link-sent-portal">
-                                    {link}
-                                  </a>
-                                </p>
-                              )}
-                            </div>
-                          );
-                        })()}
-                        {ev.notes && ev.eventType !== "sent" && ev.eventType !== "client_message" && <p className="text-xs text-muted-foreground mt-0.5">{ev.notes}</p>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+                    ))}
+                  </div>
+                );
+              })()}
             </TabsContent>
 
             {/* ── Preview Tab ── */}

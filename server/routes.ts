@@ -11078,6 +11078,75 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to send proposal" }); }
   });
 
+  // POST /api/contractor-proposals/:id/resend-email — resend client notification without changing proposal status
+  app.post("/api/contractor-proposals/:id/resend-email", requireAuth, async (req, res) => {
+    try {
+      const auth = await authorizeProposalAccess(req.params.id, (req.session as any).userId);
+      if (!auth.ok) return res.status(auth.status).json({ message: auth.message });
+      const proposal = auth.proposal;
+
+      // Admin-only action: resending client emails must be restricted to admin/manager roles
+      if (!isManagerRole(auth.user?.role)) {
+        return res.status(403).json({ message: "Admin or manager role required to resend emails." });
+      }
+
+      if (!proposal.share_token) {
+        return res.status(400).json({ message: "Proposal has no share token. Mark the proposal as sent first." });
+      }
+
+      let emailStatus: "sent" | "failed" | "skipped_no_client_email" = "skipped_no_client_email";
+      let eventNotes: string;
+      const baseUrl = getAppBaseUrl(req);
+      const portalUrl = `${baseUrl}/proposal/${req.params.id}?token=${proposal.share_token}`;
+
+      if (proposal.client_email) {
+        try {
+          const { sendGenericNotificationEmail } = await import("./notifications");
+          const recipientName = proposal.client_name || "Valued Client";
+          const proposalTitle = proposal.title || "Proposal";
+          const totalAmount = proposal.amount != null
+            ? new Intl.NumberFormat("en-US", { style: "currency", currency: proposal.currency || "USD" }).format(Number(proposal.amount))
+            : null;
+          const expirationDate = proposal.expiration_date
+            ? new Date(proposal.expiration_date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
+            : null;
+
+          let bodyLines = [`A proposal has been prepared for you: <strong>${proposalTitle}</strong>.`];
+          if (totalAmount) bodyLines.push(`Total Amount: <strong>${totalAmount}</strong>`);
+          if (expirationDate) bodyLines.push(`This proposal expires on <strong>${expirationDate}</strong>.`);
+          bodyLines.push(`Click the button below to review and approve it online.`);
+
+          const emailResult = await sendGenericNotificationEmail({
+            recipientName,
+            email: proposal.client_email,
+            title: `Proposal Ready: ${proposalTitle}`,
+            body: bodyLines.join("<br>"),
+            actionUrl: portalUrl,
+          });
+          if (emailResult.sent) {
+            console.log(`[Proposals] Resent client notification email to ${proposal.client_email} for proposal ${req.params.id}`);
+            emailStatus = "sent";
+            eventNotes = `Email resent to ${proposal.client_email} | Portal: ${portalUrl}`;
+          } else {
+            console.error(`[Proposals] Resend email to ${proposal.client_email} for proposal ${req.params.id} failed: ${emailResult.error}`);
+            emailStatus = "failed";
+            eventNotes = `Email resend failed for ${proposal.client_email} | Portal: ${portalUrl}`;
+          }
+        } catch (emailErr: any) {
+          console.error(`[Proposals] Failed to resend client email for proposal ${req.params.id}:`, emailErr.message);
+          emailStatus = "failed";
+          eventNotes = `Email resend failed for ${proposal.client_email} | Portal: ${portalUrl}`;
+        }
+      } else {
+        eventNotes = `No client email on file | Portal: ${portalUrl}`;
+      }
+
+      await logProposalEvent(req.params.id, "email_resent", proposal.status, proposal.status, req, undefined, undefined, eventNotes!);
+
+      res.json({ message: "Resend attempted", emailStatus });
+    } catch (e) { res.status(500).json({ message: "Failed to resend email" }); }
+  });
+
   // POST /api/contractor-proposals/:id/share-token — generate (or return existing) share token (admin only)
   app.post("/api/contractor-proposals/:id/share-token", requireAuth, async (req, res) => {
     try {
