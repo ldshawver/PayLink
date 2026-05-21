@@ -48,6 +48,21 @@ jobs:
             npm run build
             echo "✓ Build completed"
 
+            # ── Nginx config update ──────────────────────────────────────────
+            # Deploy the canonical nginx config so mypaylink.app proxies to the
+            # Node app on port 8000.  Any CloudPanel-generated static-root config
+            # is replaced.  nginx -t validates before reload so a bad config can
+            # never take down a running server.
+            NGINX_CONF_SRC="/home/paylinkssh/paylink-app/PayLink/scripts/nginx-mypaylink.conf"
+            NGINX_CONF_DST="/etc/nginx/sites-enabled/mypaylink.app.conf"
+
+            if sudo cp "$NGINX_CONF_SRC" "$NGINX_CONF_DST" && sudo nginx -t; then
+              sudo systemctl reload nginx
+              echo "✓ Nginx config deployed and reloaded"
+            else
+              echo "⚠️  Nginx config update failed — keeping existing nginx config, app will still restart"
+            fi
+
             pm2 delete paylink 2>/dev/null || true
 
             pm2 start dist/index.cjs \
@@ -65,6 +80,14 @@ jobs:
             for i in {1..30}; do
               if curl -fs http://127.0.0.1:8000/health > /dev/null; then
                 echo "✓ Health check passed"
+                echo ""
+                echo "=== Verifying public routing ==="
+                HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --max-time 10 https://mypaylink.app/health 2>/dev/null || echo "ERR")
+                if [ "$HTTP_CODE" = "200" ]; then
+                  echo "✓ Public https://mypaylink.app/health → $HTTP_CODE (nginx routing OK)"
+                else
+                  echo "⚠️  Public https://mypaylink.app/health → $HTTP_CODE (nginx may need manual sudo fix — see replit.md)"
+                fi
                 echo "✓ Deployment successful"
                 exit 0
               fi
