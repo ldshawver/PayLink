@@ -30189,6 +30189,106 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
     }
   });
 
+  // ── Tenant Data Retention Policy (contractor workflow) ──────────────────────
+
+  app.get("/api/tenant-retention-policy", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (!sessionCompanyId) return res.status(400).json({ message: "No company" });
+      const row = pgRow<any>(await db.execute(sql`
+        SELECT * FROM tenant_data_retention_policies WHERE tenant_id = ${sessionCompanyId} LIMIT 1
+      `));
+      if (!row) {
+        await db.execute(sql`
+          INSERT INTO tenant_data_retention_policies (tenant_id)
+          VALUES (${sessionCompanyId})
+          ON CONFLICT DO NOTHING
+        `);
+        const newRow = pgRow<any>(await db.execute(sql`
+          SELECT * FROM tenant_data_retention_policies WHERE tenant_id = ${sessionCompanyId} LIMIT 1
+        `));
+        return res.json(newRow);
+      }
+      res.json(row);
+    } catch (e: any) { res.status(500).json({ message: e.message || "Failed" }); }
+  });
+
+  app.put("/api/tenant-retention-policy", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (!sessionCompanyId) return res.status(400).json({ message: "No company" });
+      const {
+        draftProposalRetentionDays, rejectedProposalRetentionDays,
+        draftContractRetentionDays, rejectedContractRetentionDays,
+        draftInvoiceRetentionDays, rejectedInvoiceRetentionDays,
+        finalBusinessDocumentRetentionDays, auditLogRetentionDays,
+        autoArchiveEnabled, autoDeleteEnabled,
+      } = req.body || {};
+      await db.execute(sql`
+        INSERT INTO tenant_data_retention_policies (
+          tenant_id, draft_proposal_retention_days, rejected_proposal_retention_days,
+          draft_contract_retention_days, rejected_contract_retention_days,
+          draft_invoice_retention_days, rejected_invoice_retention_days,
+          final_business_document_retention_days, audit_log_retention_days,
+          auto_archive_enabled, auto_delete_enabled, updated_at
+        ) VALUES (
+          ${sessionCompanyId},
+          ${draftProposalRetentionDays ?? 365}, ${rejectedProposalRetentionDays ?? 365},
+          ${draftContractRetentionDays ?? 365}, ${rejectedContractRetentionDays ?? 365},
+          ${draftInvoiceRetentionDays ?? 365}, ${rejectedInvoiceRetentionDays ?? 365},
+          ${finalBusinessDocumentRetentionDays ?? null}, ${auditLogRetentionDays ?? null},
+          ${autoArchiveEnabled ?? true}, ${autoDeleteEnabled ?? false}, NOW()
+        )
+        ON CONFLICT (tenant_id) DO UPDATE SET
+          draft_proposal_retention_days = EXCLUDED.draft_proposal_retention_days,
+          rejected_proposal_retention_days = EXCLUDED.rejected_proposal_retention_days,
+          draft_contract_retention_days = EXCLUDED.draft_contract_retention_days,
+          rejected_contract_retention_days = EXCLUDED.rejected_contract_retention_days,
+          draft_invoice_retention_days = EXCLUDED.draft_invoice_retention_days,
+          rejected_invoice_retention_days = EXCLUDED.rejected_invoice_retention_days,
+          final_business_document_retention_days = EXCLUDED.final_business_document_retention_days,
+          audit_log_retention_days = EXCLUDED.audit_log_retention_days,
+          auto_archive_enabled = EXCLUDED.auto_archive_enabled,
+          auto_delete_enabled = EXCLUDED.auto_delete_enabled,
+          updated_at = NOW()
+      `);
+      const updated = pgRow<any>(await db.execute(sql`SELECT * FROM tenant_data_retention_policies WHERE tenant_id = ${sessionCompanyId} LIMIT 1`));
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: e.message || "Failed to save retention policy" }); }
+  });
+
+  app.post("/api/tenant-retention-policy/run-cleanup", requireAuth, requireRole("admin"), async (req, res) => {
+    try {
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (!sessionCompanyId) return res.status(400).json({ message: "No company" });
+      const policy = pgRow<any>(await db.execute(sql`
+        SELECT * FROM tenant_data_retention_policies WHERE tenant_id = ${sessionCompanyId} LIMIT 1
+      `));
+      if (!policy?.auto_archive_enabled) return res.json({ archived: 0, message: "Auto-archive is disabled" });
+
+      let archived = 0;
+      const cutoff = (days: number) => sql`NOW() - INTERVAL '${sql.raw(String(days))} days'`;
+      const archiveDam = async (linkedType: string, statusIn: string[], retentionDays: number) => {
+        const result = await db.execute(sql`
+          UPDATE dam_documents
+          SET status = 'archived', archived_at = NOW()
+          WHERE linked_entity_type = ${linkedType}
+            AND status = ANY(ARRAY[${sql.raw(statusIn.map(s => `'${s}'`).join(","))}]::text[])
+            AND legal_hold = FALSE
+            AND created_at < ${cutoff(retentionDays)}
+            AND company_id = ${sessionCompanyId}
+          RETURNING id
+        `);
+        return (result as any).rowCount ?? (result as any).rows?.length ?? 0;
+      };
+      archived += await archiveDam("proposal", ["draft", "rejected"], policy.draft_proposal_retention_days ?? 365);
+      archived += await archiveDam("contract", ["draft", "rejected"], policy.draft_contract_retention_days ?? 365);
+      archived += await archiveDam("invoice", ["draft", "rejected"], policy.draft_invoice_retention_days ?? 365);
+
+      res.json({ archived, message: `${archived} document(s) archived successfully.` });
+    } catch (e: any) { res.status(500).json({ message: e.message || "Cleanup failed" }); }
+  });
+
   // ── Feedback & Bug Reporting module ────────────────────────────────────────
   registerFeedbackRoutes(app, requireAuth, upload);
 

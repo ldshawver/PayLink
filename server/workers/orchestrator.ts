@@ -162,6 +162,55 @@ async function jobAiReportGeneration(): Promise<void> {
   // stub — implement when AI job queue table is wired
 }
 
+/**
+ * Document Retention Cleanup
+ * Runs daily: finds draft/rejected DAM documents older than each tenant's
+ * configured retention period and marks them as archived (unless legal_hold=true).
+ * Only operates when the tenant's auto_archive_enabled flag is true.
+ * Never physically deletes — sets status='archived' + archived_at timestamp.
+ */
+async function jobDocumentRetentionCleanup(): Promise<void> {
+  try {
+    const { db } = await import("../db.js");
+    const { sql } = await import("drizzle-orm");
+
+    const policies = await db.execute(sql`
+      SELECT * FROM tenant_data_retention_policies WHERE auto_archive_enabled = TRUE
+    `);
+    const rows = (policies as any).rows ?? policies;
+    let totalArchived = 0;
+
+    for (const policy of rows as any[]) {
+      const companyId = policy.tenant_id;
+      const cutoffFn = (days: number) => `NOW() - INTERVAL '${days} days'`;
+
+      const archiveGroup = async (linkedType: string, retentionDays: number) => {
+        const result = await db.execute(sql`
+          UPDATE dam_documents
+          SET status = 'archived', archived_at = NOW()
+          WHERE company_id = ${companyId}
+            AND linked_entity_type = ${linkedType}
+            AND status IN ('draft', 'rejected', 'superseded')
+            AND legal_hold = FALSE
+            AND created_at < ${sql.raw(cutoffFn(retentionDays))}
+          RETURNING id
+        `);
+        return ((result as any).rows ?? []).length;
+      };
+
+      totalArchived += await archiveGroup("proposal", policy.draft_proposal_retention_days ?? 365);
+      totalArchived += await archiveGroup("contract", policy.draft_contract_retention_days ?? 365);
+      totalArchived += await archiveGroup("invoice", policy.draft_invoice_retention_days ?? 365);
+    }
+
+    if (totalArchived > 0) {
+      console.log(`[DocumentRetentionCleanup] Archived ${totalArchived} document(s) across ${rows.length} tenant(s).`);
+    }
+  } catch (e) {
+    console.error("[DocumentRetentionCleanup] Error:", e);
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
@@ -184,8 +233,9 @@ export function startWorkerOrchestrator(): void {
   console.log("[Orchestrator] Starting worker orchestrator...");
 
   // ── Active jobs ────────────────────────────────────────────────────────────
-  scheduleJob("ContractorReminders", jobContractorReminders, DAY_MS,        10_000);
-  scheduleJob("DemoCleanup",         jobDemoCleanup,         DAY_MS,        15_000);
+  scheduleJob("ContractorReminders",      jobContractorReminders,      DAY_MS, 10_000);
+  scheduleJob("DemoCleanup",              jobDemoCleanup,              DAY_MS, 15_000);
+  scheduleJob("DocumentRetentionCleanup", jobDocumentRetentionCleanup, DAY_MS, 20_000);
 
   // ── Stub jobs (uncomment to activate) ─────────────────────────────────────
   // scheduleJob("PayrollReminders",     jobPayrollReminders,     DAY_MS,        30_000);

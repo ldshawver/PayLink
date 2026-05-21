@@ -2231,6 +2231,15 @@ export const damDocuments = pgTable("dam_documents", {
   linkedEntityType: text("linked_entity_type"), // proposal | contract | invoice
   linkedEntityId: varchar("linked_entity_id"),
   uploadedByUserId: varchar("uploaded_by_user_id"),
+  status: text("status").notNull().default("active"), // active | pending_review | approved | rejected | superseded | signed | finalized | archived | retention_queued | deleted_by_retention
+  legalHold: boolean("legal_hold").notNull().default(false),
+  retentionPolicyId: integer("retention_policy_id"),
+  versionNumber: integer("version_number").notNull().default(1),
+  supersededByDocumentId: varchar("superseded_by_document_id"),
+  retentionActionDate: timestamp("retention_action_date"),
+  archivedAt: timestamp("archived_at"),
+  deletedAt: timestamp("deleted_at"),
+  deletedReason: text("deleted_reason"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -3064,6 +3073,33 @@ export const documentRetentionPolicies = pgTable("document_retention_policies", 
 export const insertDocumentRetentionPolicySchema = createInsertSchema(documentRetentionPolicies).omit({ id: true, createdAt: true, updatedAt: true });
 export type DocumentRetentionPolicy = typeof documentRetentionPolicies.$inferSelect;
 export type InsertDocumentRetentionPolicy = z.infer<typeof insertDocumentRetentionPolicySchema>;
+
+// ── Tenant Data Retention Policies (contractor workflow) ─────────────────────
+export const tenantDataRetentionPolicies = pgTable("tenant_data_retention_policies", {
+  id: serial("id").primaryKey(),
+  tenantId: varchar("tenant_id").notNull().references(() => companies.id),
+  policyName: text("policy_name").notNull().default("Default Retention Policy"),
+
+  draftProposalRetentionDays: integer("draft_proposal_retention_days").notNull().default(365),
+  rejectedProposalRetentionDays: integer("rejected_proposal_retention_days").notNull().default(365),
+  draftContractRetentionDays: integer("draft_contract_retention_days").notNull().default(365),
+  rejectedContractRetentionDays: integer("rejected_contract_retention_days").notNull().default(365),
+  draftInvoiceRetentionDays: integer("draft_invoice_retention_days").notNull().default(365),
+  rejectedInvoiceRetentionDays: integer("rejected_invoice_retention_days").notNull().default(365),
+
+  finalBusinessDocumentRetentionDays: integer("final_business_document_retention_days"),
+  auditLogRetentionDays: integer("audit_log_retention_days"),
+
+  autoArchiveEnabled: boolean("auto_archive_enabled").notNull().default(true),
+  autoDeleteEnabled: boolean("auto_delete_enabled").notNull().default(false),
+
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertTenantDataRetentionPolicySchema = createInsertSchema(tenantDataRetentionPolicies).omit({ id: true, createdAt: true, updatedAt: true });
+export type TenantDataRetentionPolicy = typeof tenantDataRetentionPolicies.$inferSelect;
+export type InsertTenantDataRetentionPolicy = z.infer<typeof insertTenantDataRetentionPolicySchema>;
 
 // ── Onboarding Packets ──────────────────────────────────────────
 export const onboardingPackets = pgTable("onboarding_packets", {

@@ -2572,6 +2572,36 @@ Thank you,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
 
+    // ── dam_documents lifecycle columns ───────────────────────────────────────
+    await run("dam_documents.status", sql`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`);
+    await run("dam_documents.legal_hold", sql`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS legal_hold BOOLEAN NOT NULL DEFAULT FALSE`);
+    await run("dam_documents.retention_policy_id", sql`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS retention_policy_id INTEGER`);
+    await run("dam_documents.version_number", sql`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS version_number INTEGER NOT NULL DEFAULT 1`);
+    await run("dam_documents.superseded_by_document_id", sql`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS superseded_by_document_id VARCHAR`);
+    await run("dam_documents.retention_action_date", sql`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS retention_action_date TIMESTAMP`);
+    await run("dam_documents.archived_at", sql`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP`);
+    await run("dam_documents.deleted_at", sql`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`);
+    await run("dam_documents.deleted_reason", sql`ALTER TABLE dam_documents ADD COLUMN IF NOT EXISTS deleted_reason TEXT`);
+
+    // ── tenant_data_retention_policies table ──────────────────────────────────
+    await run("tenant_data_retention_policies table", sql`CREATE TABLE IF NOT EXISTS tenant_data_retention_policies (
+      id SERIAL PRIMARY KEY,
+      tenant_id VARCHAR NOT NULL UNIQUE,
+      policy_name TEXT NOT NULL DEFAULT 'Default Retention Policy',
+      draft_proposal_retention_days INTEGER NOT NULL DEFAULT 365,
+      rejected_proposal_retention_days INTEGER NOT NULL DEFAULT 365,
+      draft_contract_retention_days INTEGER NOT NULL DEFAULT 365,
+      rejected_contract_retention_days INTEGER NOT NULL DEFAULT 365,
+      draft_invoice_retention_days INTEGER NOT NULL DEFAULT 365,
+      rejected_invoice_retention_days INTEGER NOT NULL DEFAULT 365,
+      final_business_document_retention_days INTEGER,
+      audit_log_retention_days INTEGER,
+      auto_archive_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      auto_delete_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+
     // ── contractor_templates table ────────────────────────────────────────────
     await run("contractor_templates table", sql`CREATE TABLE IF NOT EXISTS contractor_templates (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

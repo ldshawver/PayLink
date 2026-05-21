@@ -32,7 +32,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type HubSection = "dashboard" | "proposals" | "contracts" | "invoices" | "payments" | "messages" | "branding" | "settings";
+type HubSection = "dashboard" | "proposals" | "contracts" | "invoices" | "documents" | "payments" | "messages" | "branding" | "settings";
 
 interface Proposal {
   id: string; proposalNumber: string; title: string; description: string;
@@ -5689,7 +5689,45 @@ function SettingsSection() {
     { id: "reminders", label: "Reminders", icon: Bell },
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "permissions", label: "Permissions", icon: Shield },
+    { id: "retention", label: "Retention", icon: Archive },
   ];
+
+  const { data: retentionPolicy, refetch: refetchRetention } = useQuery<any>({
+    queryKey: ["/api/tenant-retention-policy"],
+    enabled: isAdmin,
+    queryFn: async () => {
+      const r = await fetch("/api/tenant-retention-policy", { credentials: "include" });
+      return r.ok ? r.json() : null;
+    },
+  });
+  const [retForm, setRetForm] = useState<Record<string, any>>({});
+  const [retDirty, setRetDirty] = useState(false);
+  useEffect(() => {
+    if (retentionPolicy && !retDirty) {
+      setRetForm({
+        draftProposalRetentionDays: retentionPolicy.draft_proposal_retention_days ?? 365,
+        rejectedProposalRetentionDays: retentionPolicy.rejected_proposal_retention_days ?? 365,
+        draftContractRetentionDays: retentionPolicy.draft_contract_retention_days ?? 365,
+        rejectedContractRetentionDays: retentionPolicy.rejected_contract_retention_days ?? 365,
+        draftInvoiceRetentionDays: retentionPolicy.draft_invoice_retention_days ?? 365,
+        rejectedInvoiceRetentionDays: retentionPolicy.rejected_invoice_retention_days ?? 365,
+        finalBusinessDocumentRetentionDays: retentionPolicy.final_business_document_retention_days ?? "",
+        auditLogRetentionDays: retentionPolicy.audit_log_retention_days ?? "",
+        autoArchiveEnabled: retentionPolicy.auto_archive_enabled ?? true,
+        autoDeleteEnabled: retentionPolicy.auto_delete_enabled ?? false,
+      });
+    }
+  }, [retentionPolicy, retDirty]);
+  const saveRetentionMutation = useMutation({
+    mutationFn: () => apiRequest("PUT", "/api/tenant-retention-policy", retForm),
+    onSuccess: () => { refetchRetention(); setRetDirty(false); toast({ title: "Retention policy saved" }); },
+    onError: (e: any) => toast({ title: e?.message || "Failed to save retention policy", variant: "destructive" }),
+  });
+  const runRetentionMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/tenant-retention-policy/run-cleanup", {}),
+    onSuccess: (data: any) => toast({ title: "Cleanup complete", description: `${data?.archived ?? 0} document(s) archived.` }),
+    onError: (e: any) => toast({ title: e?.message || "Cleanup failed", variant: "destructive" }),
+  });
 
   const hasUnsaved = wfDirty || matrixDirty || notifDirty;
 
@@ -6045,6 +6083,80 @@ function SettingsSection() {
         </div>
       )}
 
+      {/* ── RETENTION TAB ── */}
+      {settingsTab === "retention" && (
+        <div className="space-y-5">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 p-3 text-xs text-amber-800 dark:text-amber-200" data-testid="retention-warning">
+            <strong>Warning:</strong> Deleting records may affect compliance, tax records, audit defense, and contractor dispute history. Archiving is recommended instead of deletion.
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            {[
+              { label: "Draft Proposals", key: "draftProposalRetentionDays" },
+              { label: "Rejected Proposals", key: "rejectedProposalRetentionDays" },
+              { label: "Draft Contracts", key: "draftContractRetentionDays" },
+              { label: "Rejected Contracts", key: "rejectedContractRetentionDays" },
+              { label: "Draft Invoices", key: "draftInvoiceRetentionDays" },
+              { label: "Rejected Invoices", key: "rejectedInvoiceRetentionDays" },
+              { label: "Final Business Documents", key: "finalBusinessDocumentRetentionDays" },
+              { label: "Audit Logs", key: "auditLogRetentionDays" },
+            ].map(({ label, key }) => (
+              <div key={key}>
+                <Label className="text-xs">{label} — retention days</Label>
+                <Input
+                  type="number" min="0"
+                  value={retForm[key] ?? ""}
+                  placeholder="e.g. 365"
+                  onChange={e => { setRetForm(f => ({ ...f, [key]: e.target.value === "" ? "" : parseInt(e.target.value) })); setRetDirty(true); }}
+                  className="h-8 mt-1"
+                  data-testid={`input-retention-${key}`}
+                />
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between p-3 border rounded-lg">
+              <div>
+                <p className="text-sm font-medium">Auto-Archive</p>
+                <p className="text-xs text-muted-foreground">Automatically move expired drafts/rejected items to archive</p>
+              </div>
+              <button
+                onClick={() => { setRetForm(f => ({ ...f, autoArchiveEnabled: !f.autoArchiveEnabled })); setRetDirty(true); }}
+                className={cn("relative inline-flex h-5 w-9 rounded-full transition-colors", retForm.autoArchiveEnabled ? "bg-primary" : "bg-muted-foreground/30")}
+                data-testid="toggle-auto-archive"
+              >
+                <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition-transform mt-0.5", retForm.autoArchiveEnabled ? "translate-x-4" : "translate-x-0.5")} />
+              </button>
+            </div>
+            <div className="flex items-center justify-between p-3 border rounded-lg border-red-200">
+              <div>
+                <p className="text-sm font-medium text-red-700 dark:text-red-400">Auto-Delete</p>
+                <p className="text-xs text-muted-foreground">Permanently delete after policy period — cannot be undone</p>
+              </div>
+              <button
+                onClick={() => { setRetForm(f => ({ ...f, autoDeleteEnabled: !f.autoDeleteEnabled })); setRetDirty(true); }}
+                className={cn("relative inline-flex h-5 w-9 rounded-full transition-colors", retForm.autoDeleteEnabled ? "bg-destructive" : "bg-muted-foreground/30")}
+                data-testid="toggle-auto-delete"
+              >
+                <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition-transform mt-0.5", retForm.autoDeleteEnabled ? "translate-x-4" : "translate-x-0.5")} />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 pt-2 border-t">
+            <Button onClick={() => saveRetentionMutation.mutate()} disabled={saveRetentionMutation.isPending || !retDirty} data-testid="btn-save-retention">
+              {saveRetentionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+              Save Policy
+            </Button>
+            <Button variant="outline" onClick={() => runRetentionMutation.mutate()} disabled={runRetentionMutation.isPending} data-testid="btn-run-retention-cleanup">
+              {runRetentionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Archive className="h-4 w-4 mr-1" />}
+              Run Cleanup Now
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Template create/edit dialog */}
       <Dialog open={tplDialog.open} onOpenChange={v => !v && setTplDialog({ open: false })}>
         <DialogContent className="max-w-md" data-testid="dialog-template-form">
@@ -6162,10 +6274,11 @@ function SettingsSection() {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 const NAV_ITEMS: { id: HubSection; label: string; icon: React.FC<{ className?: string }> }[] = [
-  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "dashboard", label: "Overview", icon: LayoutDashboard },
   { id: "proposals", label: "Proposals", icon: FileText },
   { id: "contracts", label: "Contracts", icon: FileSignature },
   { id: "invoices", label: "Invoices", icon: Receipt },
+  { id: "documents", label: "Working Documents", icon: FolderOpen },
   { id: "payments", label: "Payments", icon: CreditCard },
   { id: "messages", label: "Messages", icon: MessageSquare },
   { id: "branding", label: "Profile & Branding", icon: Palette },
@@ -6179,7 +6292,7 @@ export default function ContractorHubPage() {
     try {
       const params = new URLSearchParams(window.location.search);
       const s = params.get("section") as HubSection | null;
-      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","payments","messages","branding","settings"];
+      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","payments","messages","branding","settings"];
       return (s && valid.includes(s)) ? s : "dashboard";
     } catch { return "dashboard"; }
   })();
@@ -6190,7 +6303,7 @@ export default function ContractorHubPage() {
     try {
       const params = new URLSearchParams(window.location.search);
       const s = params.get("section") as HubSection | null;
-      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","payments","messages","branding","settings"];
+      const valid: HubSection[] = ["dashboard","proposals","contracts","invoices","documents","payments","messages","branding","settings"];
       if (s && valid.includes(s)) setSection(s);
       else if (!s) setSection("dashboard");
     } catch {}
@@ -6213,8 +6326,6 @@ export default function ContractorHubPage() {
   const [builderOpen, setBuilderOpen] = useState(false);
   const [editingProposal, setEditingProposal] = useState<Proposal | null>(null);
   const [newProposal, setNewProposal] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-
   const { data: user } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const isAdmin = user?.role === "admin" || user?.role === "manager" || user?.role === "supervisor" ||
     user?.role?.startsWith("tenant_") || user?.role?.startsWith("platform_");
@@ -6362,75 +6473,7 @@ export default function ContractorHubPage() {
   }
 
   return (
-    <div className="flex h-full bg-background overflow-hidden">
-      {/* ── Left Sidebar — hidden on mobile, icon or full on sm+ ── */}
-      <div className={cn(
-        "hidden sm:flex flex-col border-r bg-muted/20 shrink-0 transition-all duration-200",
-        sidebarCollapsed ? "w-14" : "w-52"
-      )}>
-        {/* Sidebar header */}
-        <div className="flex items-center justify-between px-3 py-3 border-b">
-          {!sidebarCollapsed && (
-            <div className="flex items-center gap-2 min-w-0">
-              <Package className="h-4 w-4 text-primary shrink-0" />
-              <span className="text-sm font-semibold truncate">Contractor Hub</span>
-            </div>
-          )}
-          <Button
-            size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0 ml-auto"
-            onClick={() => setSidebarCollapsed(v => !v)}
-            data-testid="btn-collapse-sidebar"
-          >
-            {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          </Button>
-        </div>
-
-        {/* Nav items */}
-        <ScrollArea className="flex-1">
-          <nav className="p-2 space-y-0.5">
-            {NAV_ITEMS.map(item => {
-              const badge =
-                item.id === "proposals" ? (isAdmin ? pendingProposals : revisionNeeded) :
-                item.id === "invoices" ? overdueInvoices :
-                item.id === "messages" ? unreadMessages :
-                0;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => handleSectionChange(item.id)}
-                  className={cn(
-                    "w-full flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors text-left",
-                    section === item.id
-                      ? "bg-primary text-primary-foreground font-medium"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  )}
-                  data-testid={`nav-${item.id}`}
-                  title={sidebarCollapsed ? item.label : undefined}
-                >
-                  <item.icon className="h-4 w-4 shrink-0" />
-                  {!sidebarCollapsed && (
-                    <>
-                      <span className="flex-1 truncate">{item.label}</span>
-                      {badge > 0 && (
-                        <span className={cn(
-                          "inline-flex items-center justify-center h-4 min-w-4 rounded-full text-xs font-bold px-1",
-                          section === item.id ? "bg-primary-foreground text-primary" : "bg-primary text-primary-foreground"
-                        )}>{badge}</span>
-                      )}
-                    </>
-                  )}
-                  {sidebarCollapsed && badge > 0 && (
-                    <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-primary" />
-                  )}
-                </button>
-              );
-            })}
-          </nav>
-        </ScrollArea>
-      </div>
-
-      {/* ── Main Content ── */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+    <div className="flex flex-col h-full bg-background overflow-hidden">
         {/* Content Header */}
         <div className="px-3 sm:px-6 py-3 sm:py-4 border-b shrink-0 flex items-center justify-between gap-2 sm:gap-4">
           <div className="min-w-0">
@@ -6442,6 +6485,7 @@ export default function ContractorHubPage() {
               {section === "proposals" && (isAdmin ? `${proposals.length} total · ${pendingProposals} awaiting review` : `${proposals.length} total · ${revisionNeeded} need revision`)}
               {section === "contracts" && `${contracts.length} contract${contracts.length !== 1 ? "s" : ""}`}
               {section === "invoices" && `${invoices.length} invoice${invoices.length !== 1 ? "s" : ""} · ${overdueInvoices} overdue`}
+              {section === "documents" && "Active working documents — drafts, pending review, and supporting files"}
               {section === "payments" && "Payment history and remittance"}
               {section === "messages" && "Activity notifications and workflow events"}
               {section === "branding" && "Profile and proposal templates"}
@@ -6460,8 +6504,8 @@ export default function ContractorHubPage() {
           </div>
         </div>
 
-        {/* Mobile section nav — horizontal scrollable tabs, hidden on sm+ */}
-        <div className="sm:hidden border-b shrink-0 flex overflow-x-auto scrollbar-none bg-background">
+        {/* Section nav — horizontal scrollable top tabs */}
+        <div className="border-b shrink-0 flex overflow-x-auto scrollbar-none bg-background">
           {NAV_ITEMS.map(item => {
             const badge =
               item.id === "proposals" ? (isAdmin ? pendingProposals : revisionNeeded) :
@@ -6472,12 +6516,12 @@ export default function ContractorHubPage() {
                 key={item.id}
                 onClick={() => handleSectionChange(item.id)}
                 className={cn(
-                  "flex items-center gap-1 px-3 py-2.5 text-xs font-medium whitespace-nowrap border-b-2 transition-colors shrink-0",
-                  section === item.id ? "border-primary text-primary" : "border-transparent text-muted-foreground"
+                  "flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors shrink-0",
+                  section === item.id ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
                 )}
-                data-testid={`mobile-nav-${item.id}`}
+                data-testid={`tab-nav-${item.id}`}
               >
-                <item.icon className="h-3.5 w-3.5" />
+                <item.icon className="h-4 w-4" />
                 <span>{item.label}</span>
                 {badge > 0 && (
                   <span className="ml-0.5 inline-flex items-center justify-center h-4 min-w-4 rounded-full text-xs font-bold px-1 bg-primary text-primary-foreground">{badge}</span>
@@ -6908,6 +6952,9 @@ export default function ContractorHubPage() {
               </DialogContent>
             </Dialog>
 
+            {/* Working Documents */}
+            {section === "documents" && <DocumentsSection />}
+
             {/* Payments */}
             {section === "payments" && <PaymentsSection invoices={invoices} />}
 
@@ -6921,7 +6968,6 @@ export default function ContractorHubPage() {
             {section === "settings" && <SettingsSection />}
           </div>
         </ScrollArea>
-      </div>
 
       {/* Proposal Detail Panel */}
       {selectedProposal && (
