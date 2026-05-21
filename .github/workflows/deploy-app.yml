@@ -61,11 +61,15 @@ jobs:
             NGINX_CONF_SRC="/home/paylinkssh/paylink-app/PayLink/scripts/nginx-mypaylink.conf"
             NGINX_CONF_DST="/etc/nginx/sites-enabled/mypaylink.app.conf"
 
-            if sudo cp "$NGINX_CONF_SRC" "$NGINX_CONF_DST" && sudo nginx -t; then
-              sudo systemctl reload nginx
-              echo "✓ Nginx config deployed and reloaded"
+            if sudo -n true 2>/dev/null; then
+              if sudo cp "$NGINX_CONF_SRC" "$NGINX_CONF_DST" && sudo nginx -t; then
+                sudo systemctl reload nginx
+                echo "✓ Nginx config deployed and reloaded"
+              else
+                echo "⚠️  Nginx config validation failed — keeping existing config"
+              fi
             else
-              echo "⚠️  Nginx config update failed — keeping existing nginx config, app will still restart"
+              echo "⚠️  Passwordless sudo unavailable — skipping nginx deployment"
             fi
 
             pm2 delete paylink 2>/dev/null || true
