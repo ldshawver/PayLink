@@ -42,7 +42,10 @@ jobs:
               exit 1
             }
 
-            npm install -g pnpm@10.33.0
+            if ! command -v pnpm >/dev/null 2>&1; then
+              sudo npm install -g pnpm@10.33.0
+            fi
+            pnpm -v
             pnpm install --frozen-lockfile=false
             echo "✓ Dependencies installed"
 
