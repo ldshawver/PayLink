@@ -84,6 +84,7 @@ const MyFeedbackPage = lazy(() => import("@/pages/MyFeedbackPage"));
 const BreachResponsePage = lazy(() => import("@/pages/breach-response"));
 const MfaSettingsPage = lazy(() => import("@/pages/mfa-settings"));
 const ProposalPortalPage = lazy(() => import("@/pages/proposal-portal"));
+const LandingPage = lazy(() => import("@/pages/landing"));
 
 // ─── Shared page-loading fallback ────────────────────────────────────────────
 function PageLoader() {
@@ -523,6 +524,13 @@ function AppContent() {
   }
 
   if (!user) {
+    if (location === "/" || location === "") {
+      return (
+        <Suspense fallback={<PageLoader />}>
+          <LandingPage />
+        </Suspense>
+      );
+    }
     return (
       <BiometricGate>
         <RedirectToLogin />
