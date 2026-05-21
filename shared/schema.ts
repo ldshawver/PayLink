@@ -1898,6 +1898,11 @@ export const contractorInvoices = pgTable("contractor_invoices", {
   // ── Branding/template selection (added via migration; mirror DB columns) ──
   templateId: varchar("template_id"),
   brandingId: varchar("branding_id"),
+  // ── Void / duplicate workflow (added via migration) ─────────────────────
+  voidedAt: timestamp("voided_at"),
+  voidedByUserId: varchar("voided_by_user_id"),
+  voidReason: text("void_reason"),
+  duplicateOfInvoiceId: varchar("duplicate_of_invoice_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

@@ -26,8 +26,9 @@ import {
   ExternalLink, Info, AlertCircle, ThumbsUp, ThumbsDown, MessageCircle,
   Briefcase, Layers, SlidersHorizontal, ArrowUpDown, Globe, Phone, Mail,
   Image, Paintbrush, CheckSquare, Search, Archive, X, Filter, BellOff,
-  FileCheck, Banknote, ShieldCheck, Link2, Copy
+  FileCheck, Banknote, ShieldCheck, Link2, Copy, MoreHorizontal, Ban
 } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -82,6 +83,8 @@ interface Invoice {
   proposalId?: string; description?: string; paymentTerms?: string;
   paidAt?: string; createdAt: string; reminderEnabled?: boolean;
   lastReminderSentAt?: string;
+  voidedAt?: string; voidReason?: string; duplicateOfInvoiceId?: string;
+  rejectedAt?: string; rejectionReason?: string;
 }
 
 interface Payment {
@@ -379,8 +382,11 @@ const INVOICE_STATUS_CONFIG: Record<string, { label: string; color: string; bg: 
   paid:             { label: "Paid",            color: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30" },
   overdue:          { label: "Overdue",         color: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30" },
   closed:           { label: "Closed",          color: "text-gray-500",   bg: "bg-gray-50 dark:bg-gray-900/30" },
-  void:             { label: "Void",            color: "text-gray-400",   bg: "bg-gray-50 dark:bg-gray-900/30" },
-  cancelled:        { label: "Cancelled",       color: "text-gray-400",   bg: "bg-gray-50 dark:bg-gray-900/30" },
+  void:               { label: "Void",             color: "text-gray-400",  bg: "bg-gray-50 dark:bg-gray-900/30" },
+  voided:             { label: "Voided",           color: "text-gray-400",  bg: "bg-gray-50 dark:bg-gray-900/30" },
+  cancelled:          { label: "Cancelled",        color: "text-gray-400",  bg: "bg-gray-50 dark:bg-gray-900/30" },
+  rejected_duplicate: { label: "Dup: Rejected",    color: "text-red-500",   bg: "bg-red-50 dark:bg-red-950/30" },
+  voided_duplicate:   { label: "Dup: Voided",      color: "text-gray-400",  bg: "bg-gray-50 dark:bg-gray-900/30" },
 };
 
 const CONTRACT_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
@@ -3256,6 +3262,15 @@ function InvoiceDetailPanel({
     enabled: isAdmin,
   });
 
+  const { data: auditActions = [] } = useQuery<any[]>({
+    queryKey: ["/api/contractor-invoices", invoice.id, "audit"],
+    queryFn: async () => {
+      const r = await fetch(`/api/contractor-invoices/${invoice.id}/audit`, { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+    enabled: isAdmin,
+  });
+
   const { data: invoiceAttachments = [], refetch: refetchInvoiceAttachments } = useQuery<any[]>({
     queryKey: ["/api/contractor-invoices", invoice.id, "attachments"],
     queryFn: async () => {
@@ -3340,7 +3355,7 @@ function InvoiceDetailPanel({
               { value: "payments", label: "Payments" },
               { value: "attachments", label: `Attachments${invoiceAttachments.length > 0 ? ` (${invoiceAttachments.length})` : ""}` },
               { value: "linked", label: "Linked Proposal" },
-              ...(isAdmin ? [{ value: "reminders", label: "Reminders" }] : []),
+              ...(isAdmin ? [{ value: "reminders", label: "Reminders" }, { value: "audit", label: "Audit Trail" }] : []),
             ].map(t => (
               <TabsTrigger key={t.value} value={t.value}
                 className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2.5 text-sm whitespace-nowrap"
@@ -3547,6 +3562,58 @@ function InvoiceDetailPanel({
                         <p className="text-xs text-muted-foreground">{fmtDate(r.sent_at)} → {r.recipient}</p>
                       </div>
                     ))}
+                  </div>
+                )}
+              </TabsContent>
+            )}
+
+            {isAdmin && (
+              <TabsContent value="audit" className="m-0 p-6 space-y-3" data-testid="tab-content-invoice-audit">
+                <p className="text-xs text-muted-foreground">Complete history of all actions on this invoice.</p>
+                {auditActions.length === 0 ? (
+                  <p className="text-center text-muted-foreground text-sm py-6">No audit events recorded yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {auditActions.map((a: any, idx: number) => {
+                      const actionLabel: Record<string, string> = {
+                        invoice_created: "Created",
+                        invoice_submitted: "Submitted",
+                        submitted: "Submitted",
+                        approved: "Approved",
+                        rejected: "Rejected",
+                        invoice_voided: "Voided",
+                        invoice_marked_duplicate: "Marked as Duplicate",
+                        paid: "Paid",
+                        override_requested: "Override Requested",
+                        override_approved: "Override Approved",
+                        deleted_draft: "Draft Deleted",
+                      };
+                      const label = actionLabel[a.action_type || a.actionType] || (a.action_type || a.actionType || "Action");
+                      const colorClass = ["rejected", "invoice_voided", "invoice_marked_duplicate"].includes(a.action_type || a.actionType)
+                        ? "border-red-200 bg-red-50 dark:bg-red-950/20"
+                        : ["approved", "paid"].includes(a.action_type || a.actionType)
+                        ? "border-green-200 bg-green-50 dark:bg-green-950/20"
+                        : "border-border bg-muted/20";
+                      return (
+                        <div key={a.id || idx} className={`p-3 border rounded-lg text-sm ${colorClass}`} data-testid={`audit-row-${a.id || idx}`}>
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <span className="font-medium">{label}</span>
+                            <span className="text-xs text-muted-foreground">{fmtDate(a.created_at || a.createdAt)}</span>
+                          </div>
+                          {(a.previous_status || a.previousStatus) && (a.new_status || a.newStatus) && (
+                            <p className="text-xs text-muted-foreground">
+                              Status: <span className="font-medium">{a.previous_status || a.previousStatus}</span> → <span className="font-medium">{a.new_status || a.newStatus}</span>
+                            </p>
+                          )}
+                          {(a.notes || a.note) && (
+                            <p className="text-xs text-muted-foreground mt-1 italic">"{a.notes || a.note}"</p>
+                          )}
+                          {(a.actor_user_id || a.actorUserId) && (
+                            <p className="text-xs text-muted-foreground mt-0.5">By user ID: {a.actor_user_id || a.actorUserId}</p>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </TabsContent>
@@ -6135,6 +6202,14 @@ export default function ContractorHubPage() {
   const [sortBy, setSortBy] = useState("date_desc");
   const [selectedProposal, setSelectedProposal] = useState<Proposal | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const [voidInvoiceTarget, setVoidInvoiceTarget] = useState<Invoice | null>(null);
+  const [voidInvoiceReason, setVoidInvoiceReason] = useState("");
+  const [voidInvoicePending, setVoidInvoicePending] = useState(false);
+  const [dupInvoiceTarget, setDupInvoiceTarget] = useState<Invoice | null>(null);
+  const [dupOriginalId, setDupOriginalId] = useState("");
+  const [dupReason, setDupReason] = useState("");
+  const [dupConfirmed, setDupConfirmed] = useState(false);
+  const [dupPending, setDupPending] = useState(false);
   const [builderOpen, setBuilderOpen] = useState(false);
   const [editingProposal, setEditingProposal] = useState<Proposal | null>(null);
   const [newProposal, setNewProposal] = useState(false);
@@ -6678,6 +6753,23 @@ export default function ContractorHubPage() {
                                   <Download className="h-3.5 w-3.5 text-muted-foreground" />
                                 </Button>
                               </a>
+                              {isAdmin && !["paid", "voided", "voided_duplicate", "rejected_duplicate"].includes(invoice.status) && (
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
+                                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Admin actions" data-testid={`btn-invoice-admin-actions-${invoice.id}`}>
+                                      <MoreHorizontal className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuItem onSelect={() => { setVoidInvoiceTarget(invoice); setVoidInvoiceReason(""); }} data-testid={`menu-void-invoice-${invoice.id}`}>
+                                      <Ban className="h-3.5 w-3.5 mr-2 text-red-500" /> Void Invoice
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onSelect={() => { setDupInvoiceTarget(invoice); setDupOriginalId(""); setDupReason(""); setDupConfirmed(false); }} data-testid={`menu-mark-dup-invoice-${invoice.id}`}>
+                                      <Copy className="h-3.5 w-3.5 mr-2 text-orange-500" /> Mark as Duplicate
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              )}
                               <ChevronRight className="h-4 w-4 text-muted-foreground mt-0.5 cursor-pointer" onClick={() => setSelectedInvoice(invoice)} />
                             </div>
                           </div>
@@ -6688,6 +6780,133 @@ export default function ContractorHubPage() {
                 )}
               </div>
             )}
+
+            {/* Invoice Admin Dialogs — portals, render regardless of section */}
+            {/* Void Invoice Dialog */}
+            <Dialog open={!!voidInvoiceTarget} onOpenChange={open => { if (!open) setVoidInvoiceTarget(null); }}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Void Invoice #{voidInvoiceTarget?.invoiceNumber || voidInvoiceTarget?.id?.slice(0, 8)}</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4 py-2">
+                  <p className="text-sm text-muted-foreground">
+                    Voiding an invoice locks it and removes it from payable totals. This action is logged in the audit trail and cannot be undone without support.
+                  </p>
+                  <div>
+                    <Label className="text-xs">Reason <span className="text-red-500">*</span></Label>
+                    <Textarea
+                      value={voidInvoiceReason}
+                      onChange={e => setVoidInvoiceReason(e.target.value)}
+                      placeholder="Explain why this invoice is being voided..."
+                      rows={3}
+                      data-testid="textarea-void-invoice-reason"
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setVoidInvoiceTarget(null)} disabled={voidInvoicePending}>Cancel</Button>
+                  <Button
+                    variant="destructive"
+                    disabled={!voidInvoiceReason.trim() || voidInvoicePending}
+                    data-testid="btn-confirm-void-invoice"
+                    onClick={async () => {
+                      if (!voidInvoiceTarget) return;
+                      setVoidInvoicePending(true);
+                      try {
+                        await apiRequest("POST", `/api/contractor-invoices/${voidInvoiceTarget.id}/void`, { reason: voidInvoiceReason });
+                        queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+                        toast({ title: "Invoice voided", description: `Invoice #${voidInvoiceTarget.invoiceNumber || voidInvoiceTarget.id.slice(0, 8)} has been voided.` });
+                        setVoidInvoiceTarget(null);
+                      } catch (e: any) {
+                        toast({ title: "Failed to void invoice", description: e?.message, variant: "destructive" });
+                      } finally { setVoidInvoicePending(false); }
+                    }}
+                  >
+                    {voidInvoicePending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Ban className="h-4 w-4 mr-2" />}
+                    Void Invoice
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* Mark as Duplicate Dialog */}
+            <Dialog open={!!dupInvoiceTarget} onOpenChange={open => { if (!open) setDupInvoiceTarget(null); }}>
+              <DialogContent className="max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Mark Invoice as Duplicate</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4 py-2">
+                  <p className="text-sm text-muted-foreground">
+                    Mark <strong>Invoice #{dupInvoiceTarget?.invoiceNumber || dupInvoiceTarget?.id?.slice(0, 8)}</strong> as a duplicate.
+                    It will be locked and excluded from payable totals. The original invoice remains active.
+                  </p>
+                  <div>
+                    <Label className="text-xs">Original Invoice <span className="text-red-500">*</span></Label>
+                    <Select value={dupOriginalId} onValueChange={setDupOriginalId}>
+                      <SelectTrigger data-testid="select-dup-original-invoice"><SelectValue placeholder="Select the original invoice..." /></SelectTrigger>
+                      <SelectContent>
+                        {invoices
+                          .filter(i => i.id !== dupInvoiceTarget?.id && !["voided", "voided_duplicate", "rejected_duplicate"].includes(i.status))
+                          .map(i => (
+                            <SelectItem key={i.id} value={i.id}>
+                              #{i.invoiceNumber || i.id.slice(0, 8)} — {fmt(i.amount)} ({i.status})
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Reason <span className="text-red-500">*</span></Label>
+                    <Textarea
+                      value={dupReason}
+                      onChange={e => setDupReason(e.target.value)}
+                      placeholder="e.g. Duplicate invoice created accidentally. Original is INV-XXXX."
+                      rows={3}
+                      data-testid="textarea-dup-reason"
+                    />
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      id="dup-confirm-cb"
+                      checked={dupConfirmed}
+                      onChange={e => setDupConfirmed(e.target.checked)}
+                      className="mt-0.5"
+                      data-testid="checkbox-dup-confirm"
+                    />
+                    <label htmlFor="dup-confirm-cb" className="text-xs text-muted-foreground cursor-pointer">
+                      I confirm this invoice is a duplicate. It will be locked and removed from payable totals.
+                    </label>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDupInvoiceTarget(null)} disabled={dupPending}>Cancel</Button>
+                  <Button
+                    variant="destructive"
+                    disabled={!dupOriginalId || !dupReason.trim() || !dupConfirmed || dupPending}
+                    data-testid="btn-confirm-mark-duplicate"
+                    onClick={async () => {
+                      if (!dupInvoiceTarget) return;
+                      setDupPending(true);
+                      try {
+                        await apiRequest("POST", `/api/contractor-invoices/${dupInvoiceTarget.id}/mark-duplicate`, {
+                          duplicateOfInvoiceId: dupOriginalId,
+                          reason: dupReason,
+                        });
+                        queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+                        toast({ title: "Marked as duplicate", description: `Invoice #${dupInvoiceTarget.invoiceNumber || dupInvoiceTarget.id.slice(0, 8)} has been locked as a duplicate.` });
+                        setDupInvoiceTarget(null);
+                      } catch (e: any) {
+                        toast({ title: "Failed to mark duplicate", description: e?.message, variant: "destructive" });
+                      } finally { setDupPending(false); }
+                    }}
+                  >
+                    {dupPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
+                    Mark as Duplicate
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             {/* Payments */}
             {section === "payments" && <PaymentsSection invoices={invoices} />}

@@ -9668,7 +9668,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     try {
       const inv = await storage.getContractorInvoice(req.params.id);
       if (!inv) return res.status(404).json({ message: "Not found" });
-      if (inv.status !== "submitted") return res.status(400).json({ message: "Only submitted invoices can be rejected" });
+      if (!["submitted", "draft"].includes(inv.status || "")) return res.status(400).json({ message: "Only submitted or draft invoices can be rejected" });
 
       const updated = await storage.updateContractorInvoice(req.params.id, {
         status: "rejected", rejectedBy: req.session.userId, rejectedAt: new Date(),
@@ -9698,6 +9698,88 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to reject invoice" }); }
+  });
+
+  // ── Void Invoice ──────────────────────────────────────────────────────────
+  app.post("/api/contractor-invoices/:id/void", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const inv = await storage.getContractorInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Not found" });
+      if (!req.body.reason || !String(req.body.reason).trim()) {
+        return res.status(400).json({ message: "A reason is required to void an invoice" });
+      }
+      const user = await storage.getUser(req.session.userId!);
+      if (inv.companyId && user?.companyId && inv.companyId !== user.companyId && !user.role?.startsWith("platform_")) {
+        return res.status(403).json({ message: "Not authorized for this company" });
+      }
+      if (inv.status === "paid") {
+        return res.status(400).json({ message: "Paid invoices cannot be voided. Use a payment reversal workflow." });
+      }
+      if (["voided", "voided_duplicate", "rejected_duplicate"].includes(inv.status || "")) {
+        return res.status(409).json({ message: "Invoice is already voided or rejected" });
+      }
+      const updated = await storage.updateContractorInvoice(req.params.id, {
+        status: "voided",
+        voidedAt: new Date(),
+        voidedByUserId: String(req.session.userId),
+        voidReason: String(req.body.reason).trim(),
+      });
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_invoice", objectId: req.params.id, actionType: "invoice_voided",
+        actorUserId: req.session.userId, companyId: inv.companyId,
+        previousStatus: inv.status, newStatus: "voided",
+        notes: String(req.body.reason).trim(),
+      });
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: "Failed to void invoice: " + e.message }); }
+  });
+
+  // ── Mark Invoice as Duplicate ─────────────────────────────────────────────
+  app.post("/api/contractor-invoices/:id/mark-duplicate", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const inv = await storage.getContractorInvoice(req.params.id);
+      if (!inv) return res.status(404).json({ message: "Not found" });
+      const { duplicateOfInvoiceId, reason } = req.body;
+      if (!duplicateOfInvoiceId) return res.status(400).json({ message: "duplicateOfInvoiceId is required" });
+      if (!reason || !String(reason).trim()) return res.status(400).json({ message: "A reason is required" });
+      if (duplicateOfInvoiceId === req.params.id) {
+        return res.status(400).json({ message: "An invoice cannot be marked as a duplicate of itself" });
+      }
+      if (inv.status === "paid") {
+        return res.status(400).json({ message: "Paid invoices cannot be marked as duplicates" });
+      }
+      if (["voided", "voided_duplicate", "rejected_duplicate"].includes(inv.status || "")) {
+        return res.status(409).json({ message: "Invoice is already voided or rejected" });
+      }
+      // Tenant isolation
+      const user = await storage.getUser(req.session.userId!);
+      if (inv.companyId && user?.companyId && inv.companyId !== user.companyId && !user.role?.startsWith("platform_")) {
+        return res.status(403).json({ message: "Not authorized for this company" });
+      }
+      // Verify original invoice exists and is valid
+      const original = await storage.getContractorInvoice(String(duplicateOfInvoiceId));
+      if (!original) return res.status(404).json({ message: "Original invoice not found" });
+      if (["voided", "voided_duplicate", "rejected_duplicate"].includes(original.status || "")) {
+        return res.status(400).json({ message: "Cannot link a duplicate to an invoice that is already voided or rejected" });
+      }
+      // Issued/approved invoices → voided_duplicate; draft/submitted → rejected_duplicate
+      const newStatus = ["approved", "sent", "viewed", "under_review", "partially_paid"].includes(inv.status || "")
+        ? "voided_duplicate" : "rejected_duplicate";
+      const updated = await storage.updateContractorInvoice(req.params.id, {
+        status: newStatus,
+        voidedAt: new Date(),
+        voidedByUserId: String(req.session.userId),
+        voidReason: String(reason).trim(),
+        duplicateOfInvoiceId: String(duplicateOfInvoiceId),
+      });
+      await storage.createExpenseApprovalAction({
+        objectType: "contractor_invoice", objectId: req.params.id, actionType: "invoice_marked_duplicate",
+        actorUserId: req.session.userId, companyId: inv.companyId,
+        previousStatus: inv.status, newStatus,
+        notes: `${String(reason).trim()} (Original: ${(original as any).invoiceNumber || duplicateOfInvoiceId})`,
+      });
+      res.json(updated);
+    } catch (e: any) { res.status(500).json({ message: "Failed to mark duplicate: " + e.message }); }
   });
 
   app.post("/api/contractor-invoices/:id/mark-paid", requireAuth, requireRole("admin", "manager"), async (req, res) => {

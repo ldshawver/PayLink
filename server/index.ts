@@ -2953,6 +2953,10 @@ Thank you,
     await run("contractor_contracts.archived_at", sql`ALTER TABLE contractor_contracts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
     await run("contractor_invoices.is_archived", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT FALSE`);
     await run("contractor_invoices.archived_at", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+    await run("contractor_invoices.voided_at", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ`);
+    await run("contractor_invoices.voided_by_user_id", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS voided_by_user_id VARCHAR`);
+    await run("contractor_invoices.void_reason", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS void_reason TEXT`);
+    await run("contractor_invoices.duplicate_of_invoice_id", sql`ALTER TABLE contractor_invoices ADD COLUMN IF NOT EXISTS duplicate_of_invoice_id VARCHAR`);
 
     await run("positions.is_volunteer", sql`ALTER TABLE positions ADD COLUMN IF NOT EXISTS is_volunteer BOOLEAN DEFAULT FALSE`);
     await run("positions.pay_type", sql`ALTER TABLE positions ADD COLUMN IF NOT EXISTS pay_type TEXT`);
