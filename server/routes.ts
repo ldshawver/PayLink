@@ -30274,6 +30274,54 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
         senderEmail || proposal.client_email || undefined,
         String(message).trim(),
       );
+
+      // Fire-and-forget: notify admin by email (best-effort, never blocks response)
+      ;(async () => {
+        try {
+          const baseUrl = process.env.APP_BASE_URL || "";
+          const { sendGenericNotificationEmail } = await import("./notifications.js");
+
+          // Find the admin email: prefer branding contact_email, fall back to company admin user
+          let adminEmail: string | null = proposal.contact_email || null;
+          let adminName: string = proposal.company_name_resolved || proposal.business_name || "Admin";
+          if (!adminEmail && proposal.company_id) {
+            const adminRes = await db.execute(sql`
+              SELECT u.email,
+                     COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '') AS full_name
+              FROM users u
+              WHERE u.company_id = ${proposal.company_id}
+                AND u.role IN ('admin', 'tenant_admin', 'tenant_owner')
+                AND u.email IS NOT NULL
+              ORDER BY u.created_at ASC
+              LIMIT 1
+            `);
+            const adminRow = firstRow<{ email: string; full_name: string }>(adminRes);
+            if (adminRow?.email) {
+              adminEmail = adminRow.email;
+              if (adminRow.full_name?.trim()) adminName = adminRow.full_name.trim();
+            }
+          }
+
+          if (adminEmail) {
+            const clientDisplay = String(senderName || proposal.client_name || "Client").trim();
+            const clientEmailDisplay = String(senderEmail || proposal.client_email || "").trim();
+            const msgText = String(message).trim().replace(/\n/g, "<br>");
+            await sendGenericNotificationEmail({
+              recipientName: adminName,
+              email: adminEmail,
+              title: `New client message on proposal`,
+              body: `<strong>${clientDisplay}</strong>${clientEmailDisplay ? ` (${clientEmailDisplay})` : ""} has sent a message on their proposal:<br><br><blockquote style="border-left:3px solid #0d9488;padding:8px 12px;margin:0;background:#f0fdfa;border-radius:0 4px 4px 0;color:#374151;">${msgText}</blockquote>`,
+              actionUrl: `${baseUrl}/app/contractor-hub?section=proposals&id=${req.params.id}`,
+            });
+            console.log(`[Portal] Admin message notification sent to ${adminEmail} for proposal ${req.params.id}`);
+          } else {
+            console.warn(`[Portal] No admin email found for proposal ${req.params.id} (company: ${proposal.company_id})`);
+          }
+        } catch (notifErr) {
+          console.error("[Portal] Admin message notification error:", notifErr instanceof Error ? notifErr.message : String(notifErr));
+        }
+      })();
+
       res.json({ message: "Message sent" });
     } catch (e: any) { res.status(500).json({ message: "Failed to send message: " + e.message }); }
   });
