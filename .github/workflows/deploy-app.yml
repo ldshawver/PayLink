@@ -46,7 +46,7 @@ jobs:
               sudo npm install -g pnpm@10.33.0
             fi
             pnpm -v
-            pnpm install --frozen-lockfile=false
+            pnpm install --frozen-lockfile=false --reporter=append-only
             echo "✓ Dependencies installed"
 
             rm -rf dist/
