@@ -3346,6 +3346,26 @@ Thank you,
     console.log("Auto-migration skipped (payroll tax tables):", (e as Error).message);
   }
 
+  // ── Expense payment/check workflow columns ──────────────────────────────
+  {
+    const { db: dbExp } = await import("./db");
+    const { sql: sqlExp } = await import("drizzle-orm");
+    const runExp = async (label: string, stmt: any) => {
+      try { await dbExp.execute(stmt); console.log(`Auto-migration OK: ${label}`); }
+      catch (e: any) { console.log(`Auto-migration skipped (${label}):`, e.message); }
+    };
+    await runExp("expenses.payment_status",        sqlExp`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'unpaid'`);
+    await runExp("expenses.check_number",          sqlExp`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS check_number TEXT`);
+    await runExp("expenses.memo",                  sqlExp`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS memo TEXT`);
+    await runExp("expenses.paid_by_user_id",       sqlExp`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS paid_by_user_id VARCHAR`);
+    await runExp("expenses.paid_at",               sqlExp`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP`);
+    await runExp("expenses.payee_name",            sqlExp`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS payee_name TEXT`);
+    await runExp("expenses.payee_address",         sqlExp`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS payee_address TEXT`);
+    await runExp("expenses.payee_city_state_zip",  sqlExp`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS payee_city_state_zip TEXT`);
+    await runExp("expenses.related_invoice_id",    sqlExp`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS related_invoice_id VARCHAR`);
+    await runExp("expenses.contractor_invoice_id", sqlExp`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS contractor_invoice_id VARCHAR`);
+  }
+
   const { seedDatabase } = await import("./seed");
   try {
     await seedDatabase();

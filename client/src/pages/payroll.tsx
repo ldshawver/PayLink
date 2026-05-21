@@ -6245,7 +6245,7 @@ function CheckLayoutTab() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {templates.map(t => {
-            let config: Record<string, boolean>;
+            let config: Record<string, boolean | number>;
             try { config = JSON.parse(t.layoutConfig || "{}"); } catch { config = { ...DEFAULT_LAYOUT_CONFIG }; }
             const tCompany = companies.find(c => c.id === t.companyId);
             return (

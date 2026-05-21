@@ -55,6 +55,10 @@ type CheckCalibration = {
   amountWordsTop: number;
   memoTop: number;
   signatureTop: number;
+  returnAddrOffsetX: number;
+  returnAddrOffsetY: number;
+  toAddrOffsetX: number;
+  toAddrOffsetY: number;
 };
 
 const DEFAULT_CALIBRATION: CheckCalibration = {
@@ -64,6 +68,10 @@ const DEFAULT_CALIBRATION: CheckCalibration = {
   amountWordsTop: 0,
   memoTop: 0,
   signatureTop: 0,
+  returnAddrOffsetX: 0,
+  returnAddrOffsetY: 0,
+  toAddrOffsetX: 0,
+  toAddrOffsetY: 0,
 };
 
 function CompanyHeader({ company, config }: { company: Company; config: Record<string, boolean> }) {
@@ -2015,6 +2023,30 @@ function CalibrationPanel({
               description="Authorized signature line (bottom-right)" />
           </div>
 
+          <div className="pt-3 border-t border-indigo-200 dark:border-indigo-700 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">Address Window Alignment</p>
+              <button
+                className="text-xs text-blue-600 hover:text-blue-800 underline"
+                onClick={() => onChange({ ...calibration, returnAddrOffsetX: 0, returnAddrOffsetY: 0, toAddrOffsetX: 0, toAddrOffsetY: 0 })}
+                data-testid="button-calibration-reset-addr"
+              >Reset address defaults</button>
+            </div>
+            <p className="text-xs text-indigo-600 dark:text-indigo-400">
+              Fine-tune envelope window alignment. Positive = right/down, negative = left/up.
+            </p>
+            <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+              <Field label="Return addr: horizontal" field="returnAddrOffsetX" color="#0891b2"
+                description="Sender address left/right (Zone 2 upper-left)" />
+              <Field label="Return addr: vertical" field="returnAddrOffsetY" color="#0891b2"
+                description="Sender address up/down" />
+              <Field label="To addr: horizontal" field="toAddrOffsetX" color="#9333ea"
+                description="Recipient address left/right (Zone 2 lower-left)" />
+              <Field label="To addr: vertical" field="toAddrOffsetY" color="#9333ea"
+                description="Recipient address up/down" />
+            </div>
+          </div>
+
           <div className="flex flex-wrap gap-2 pt-2 border-t border-indigo-200 dark:border-indigo-700">
             <Button
               size="sm"
@@ -2050,7 +2082,9 @@ function CalibrationPanel({
                <strong style={{ color: "#dc2626" }}>■ Red</strong> = date/check# block &nbsp;
                <strong style={{ color: "#2563eb" }}>■ Blue</strong> = amount in words &nbsp;
                <strong style={{ color: "#16a34a" }}>■ Green</strong> = memo &nbsp;
-               <strong style={{ color: "#d97706" }}>■ Orange</strong> = signature</p>
+               <strong style={{ color: "#d97706" }}>■ Orange</strong> = signature &nbsp;
+               <strong style={{ color: "#0891b2" }}>■ Cyan</strong> = return addr &nbsp;
+               <strong style={{ color: "#9333ea" }}>■ Violet</strong> = to addr</p>
           </div>
         </div>
       )}
@@ -2285,6 +2319,10 @@ export default function PrintCheckPage() {
         amountWordsTop: Number(stored.amountWordsTop ?? 0),
         memoTop: Number(stored.memoTop ?? 0),
         signatureTop: Number(stored.signatureTop ?? 0),
+        returnAddrOffsetX: Number(stored.returnAddrOffsetX ?? 0),
+        returnAddrOffsetY: Number(stored.returnAddrOffsetY ?? 0),
+        toAddrOffsetX: Number(stored.toAddrOffsetX ?? 0),
+        toAddrOffsetY: Number(stored.toAddrOffsetY ?? 0),
       });
     } else {
       // Fall back to legacy alignment fields

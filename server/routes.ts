@@ -9343,6 +9343,118 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     catch (e) { res.status(500).json({ message: "Failed to fetch audit trail" }); }
   });
 
+  // POST /api/expenses/:id/mark-paid — mark an approved expense as paid (non-check)
+  app.post("/api/expenses/:id/mark-paid", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const { checkNumber, memo, payeeName, paymentDate } = req.body || {};
+      await db.execute(sql`
+        UPDATE expenses
+        SET payment_status   = 'paid',
+            check_number     = ${checkNumber || null},
+            memo             = ${memo || null},
+            payee_name       = ${payeeName || null},
+            paid_by_user_id  = ${user?.id || null},
+            paid_at          = ${paymentDate ? new Date(paymentDate) : new Date()},
+            updated_at       = NOW()
+        WHERE id = ${req.params.id}
+      `);
+      const [updated] = pgRows<any>(await db.execute(sql`SELECT * FROM expenses WHERE id = ${req.params.id}`));
+      res.json(updated);
+    } catch (e: any) {
+      console.error("mark-expense-paid error:", e);
+      res.status(500).json({ message: "Failed to mark expense as paid" });
+    }
+  });
+
+  // POST /api/expenses/:id/print-check — generate vendor check PDF + mark expense as paid
+  app.post("/api/expenses/:id/print-check", requireAuth, requireRole("admin", "manager"), requireActiveSubscription, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const expRow = pgRow<any>(await db.execute(sql`SELECT * FROM expenses WHERE id = ${req.params.id}`));
+      if (!expRow) return res.status(404).json({ message: "Expense not found" });
+
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && expRow.company_id && sessionCompanyId !== expRow.company_id) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const compId = expRow.company_id || sessionCompanyId;
+      const coRow = pgRow<any>(compId ? await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`) : { rows: [] });
+
+      // Find the enabled remittance source for this company
+      const rsRow = pgRow<CheckRsRow>(await db.execute(sql`
+        SELECT * FROM remittance_sources
+        WHERE company_id = ${compId} AND status = 'enabled'
+        LIMIT 1
+      `));
+
+      const {
+        payeeName = expRow.payee_name || expRow.vendor || "Unknown Payee",
+        payeeAddress = expRow.payee_address || "",
+        payeeCityStateZip = expRow.payee_city_state_zip || "",
+        amount = expRow.amount,
+        checkNumber,
+        memo = expRow.memo || expRow.description || "",
+      } = req.body || {};
+
+      if (!rsRow?.routing_number || !rsRow?.account_number) {
+        return res.status(400).json({ message: "No enabled bank account found for this company. Configure a remittance source first." });
+      }
+
+      const calTplRow = pgRow<CheckTplRow>(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`));
+      const layoutConfig = calTplRow ? parseLayoutConfig(calTplRow.layout_config) : undefined;
+      const calibrationOffsets = rsRow.calibration_config ? parseCalibrationOffsets(rsRow.calibration_config) : undefined;
+
+      const coNorm = coRow ? {
+        name: coRow.name || "", address: coRow.address || "", city: coRow.city || "",
+        state: coRow.state || "", zip: coRow.zip || "", phone: coRow.phone || "",
+        ein: coRow.ein || "", dba: coRow.dba || "", logoUrl: coRow.logo_url || ""
+      } : null;
+
+      const pdfBytes = await renderCheckPdf({
+        item: null, worker: null, run: null,
+        company: coNorm,
+        remittanceSource: { routingNumber: rsRow.routing_number, accountNumber: rsRow.account_number },
+        isCalibration: false,
+        layoutConfig,
+        calibrationOffsets,
+        vendorCheck: {
+          payeeName: String(payeeName),
+          payeeAddress: String(payeeAddress),
+          payeeCityStateZip: String(payeeCityStateZip),
+          amount: parseFloat(String(amount || 0)),
+          checkNumber: checkNumber ? String(checkNumber) : undefined,
+          memo: String(memo),
+        },
+      });
+
+      // Mark expense as paid
+      const resolvedCheckNum = checkNumber ? String(checkNumber) : null;
+      await db.execute(sql`
+        UPDATE expenses
+        SET payment_status  = 'paid',
+            check_number    = ${resolvedCheckNum},
+            memo            = ${memo || null},
+            payee_name      = ${payeeName || null},
+            payee_address   = ${payeeAddress || null},
+            payee_city_state_zip = ${payeeCityStateZip || null},
+            paid_by_user_id = ${user?.id || null},
+            paid_at         = NOW(),
+            updated_at      = NOW()
+        WHERE id = ${req.params.id}
+      `);
+
+      res.set("Content-Type", "application/pdf");
+      res.set("Content-Disposition", `attachment; filename="expense-check-${req.params.id}.pdf"`);
+      res.set("Content-Length", String(pdfBytes.length));
+      return res.send(Buffer.from(pdfBytes));
+    } catch (e: any) {
+      console.error("expense-print-check error:", e);
+      res.status(500).json({ message: e.message || "Failed to generate check PDF" });
+    }
+  });
+
   // ══════════════════════════════════════════════════════════════════════════
   // CONTRACTOR INVOICE MODULE
   // ══════════════════════════════════════════════════════════════════════════
@@ -15969,7 +16081,15 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     item: any; worker: any; run: any; company: any; remittanceSource: any;
     isCalibration?: boolean; isVoid?: boolean; isReprint?: boolean;
     layoutConfig?: Record<string, any>;
-    calibrationOffsets?: { globalTop?: number; globalLeft?: number };
+    calibrationOffsets?: {
+      globalTop?: number; globalLeft?: number;
+      returnAddrOffsetX?: number; returnAddrOffsetY?: number;
+      toAddrOffsetX?: number; toAddrOffsetY?: number;
+    };
+    vendorCheck?: {
+      payeeName: string; payeeAddress?: string; payeeCityStateZip?: string;
+      amount: number; checkNumber?: string; memo?: string;
+    };
   }): Promise<Uint8Array> {
     const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
     const fontkit = (await import("@pdf-lib/fontkit")).default;
@@ -16026,11 +16146,12 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const positions: Record<string, { x?: number; y?: number }> = cfg.positions || {};
 
     // Admin-adjustable address/paystub position offsets (stored in layoutConfig, in points)
+    // Calibration per-source address offsets are added on top of layout-config offsets.
     // Positive X = right, positive Y = up (PDF coordinate direction)
-    const senderAddrOffX   = Number(cfg.senderAddrOffsetX   ?? 0);
-    const senderAddrOffY   = Number(cfg.senderAddrOffsetY   ?? 0);
-    const employeeAddrOffX = Number(cfg.employeeAddrOffsetX ?? 0);
-    const employeeAddrOffY = Number(cfg.employeeAddrOffsetY ?? 0);
+    const senderAddrOffX   = Number(cfg.senderAddrOffsetX   ?? 0) + (params.calibrationOffsets?.returnAddrOffsetX ?? 0);
+    const senderAddrOffY   = Number(cfg.senderAddrOffsetY   ?? 0) + (params.calibrationOffsets?.returnAddrOffsetY ?? 0);
+    const employeeAddrOffX = Number(cfg.employeeAddrOffsetX ?? 0) + (params.calibrationOffsets?.toAddrOffsetX     ?? 0);
+    const employeeAddrOffY = Number(cfg.employeeAddrOffsetY ?? 0) + (params.calibrationOffsets?.toAddrOffsetY     ?? 0);
     const paystubOffX      = Number(cfg.paystubOffsetX      ?? 72);  // default +1in right (envelope window safety)
     const paystubOffY      = Number(cfg.paystubOffsetY      ?? -18); // default -0.25in (down, envelope window safety)
 
@@ -16062,10 +16183,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const micrSepY  = checkBot + micrBandH; // top of MICR band = 585
 
     // ── Data values ─────────────────────────────────────────────────────────
-    const netPay   = isCalibration ? 1234.56 : Number(item?.netPay   || 0);
+    const netPay   = isCalibration ? 1234.56 : params.vendorCheck ? params.vendorCheck.amount : Number(item?.netPay   || 0);
     const grossPay = isCalibration ? 1380.23 : Number(item?.grossPay || 0);
     const totalDed = isCalibration ? 145.67  : Number(item?.deductions || 0);
-    const checkNum    = isCalibration ? "0001"  : String(item?.checkNumber || "0000");
+    const checkNum    = isCalibration ? "0001"  : params.vendorCheck?.checkNumber ? params.vendorCheck.checkNumber : String(item?.checkNumber || "0000");
     const fmtCheckNum = formatCheckNumber(checkNum); // zero-padded to 4 digits, e.g. "0011"
     const routing  = isCalibration ? "123456789"  : (remittanceSource?.routingNumber  || "").replace(/\D/g, "");
     const account  = isCalibration ? "1234567890" : (remittanceSource?.accountNumber  || "").replace(/\D/g, "");
@@ -16083,10 +16204,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const ytdDed   = isCalibration ? 1167.65 : Number(item?.ytdDeductions || 0);
     const ytdNet   = isCalibration ? 8708.89 : Number(item?.ytdNet        || 0);
 
-    // Worker fields
-    const wName         = isCalibration ? "John Q Employee"    : `${worker?.firstName || ""} ${worker?.lastName || ""}`.trim();
-    const wStreet       = isCalibration ? "123 Employee Street": (worker?.address || "");
-    const wCityStateZip = isCalibration ? "Anytown, CA 90210"  :
+    // Worker fields (overridden by vendorCheck for AP/vendor checks)
+    const wName         = isCalibration ? "John Q Employee"    : params.vendorCheck ? params.vendorCheck.payeeName : `${worker?.firstName || ""} ${worker?.lastName || ""}`.trim();
+    const wStreet       = isCalibration ? "123 Employee Street": params.vendorCheck ? (params.vendorCheck.payeeAddress || "") : (worker?.address || "");
+    const wCityStateZip = isCalibration ? "Anytown, CA 90210"  : params.vendorCheck ? (params.vendorCheck.payeeCityStateZip || "") :
       [[worker?.city, worker?.state].filter(Boolean).join(", "), worker?.zip].filter(Boolean).join(" ");
     const wSsnRaw       = worker?.ssn ? String(worker.ssn).replace(/\D/g, "") : "";
     const wSsnLine      = isCalibration ? "SSN: ***-**-1234" : (wSsnRaw.length >= 4 ? `SSN: ***-**-${wSsnRaw.slice(-4)}` : "");
@@ -16280,7 +16401,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     //    Must not enter MICR clear band (starts y 2.875in from check top)
     const memoLabelY = z1y(2.65);
     const memoLineY  = z1y(2.72);
-    const memoText   = pStart !== "—" && pEnd !== "—" ? `Pay period ${pStart} – ${pEnd}` : "";
+    const memoText   = params.vendorCheck?.memo ? params.vendorCheck.memo : (pStart !== "—" && pEnd !== "—" ? `Pay period ${pStart} – ${pEnd}` : "");
     drawGuide(z1x(0.30), memoLineY - 2, Math.round(3.75*72), Math.round(0.24*72), "MEMO+SIG");
     page.drawText("MEMO:",   { x: z1x(0.30), y: memoLabelY, size: 8,   font: hvB, color: rgb(0.35, 0.35, 0.35) });
     page.drawText(memoText,  { x: z1x(0.80), y: memoLabelY, size: 8.5, font: hv,  color: rgb(0,   0,   0  ) });
@@ -16337,7 +16458,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     if (wStreet)       page.drawText(wStreet,       { x: lm + employeeAddrOffX, y: recipBaseY - 24 + employeeAddrOffY, size: 8, font: hv, color: rgb(0, 0, 0) });
     if (wCityStateZip) page.drawText(wCityStateZip, { x: lm + employeeAddrOffX, y: recipBaseY - 36 + employeeAddrOffY, size: 8, font: hv, color: rgb(0, 0, 0) });
 
-    // ── Paystub summary (right column of Zone 2) ─────────────────────────────
+    // ── Paystub / vendor-check info (right column of Zone 2) ────────────────
+    // vcMemo declared here so it is accessible in both Zone 2 and Zone 3 sections
+    const vcMemo = params.vendorCheck?.memo || "";
+    if (!params.vendorCheck) {
     // "PAYSTUB" header bar — "Check No. XX" right-aligned in same bar
     // paystubOffY shifts all content vertically (default -18pt = 0.25in down for envelope window safety)
     page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.15, 0.2, 0.5), opacity: 0.9 });
@@ -16458,9 +16582,44 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       if (psY >= mailBot + 8) { page.drawText("Medicare 2.9%",              { x: psC1, y: psY, size: 6.5, font: hv, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(medSEcur)}`, { x: psC4, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(medSEytd)}`, { x: psC5, y: psY, size: 6.5, font: cour, color: rgb(0,0,0) }); psY -= 10; }
       if (psY >= mailBot + 8) { page.drawText("Total SE Tax 15.3%",         { x: psC1, y: psY, size: 6.5, font: hvB, color: rgb(0,0,0) }); page.drawText(`$${fmtMoney(totSEcur)}`, { x: psC4, y: psY, size: 6.5, font: hvB,  color: rgb(0,0,0) }); if (showYtdTotals) page.drawText(`$${fmtMoney(totSEytd)}`, { x: psC5, y: psY, size: 6.5, font: hvB,  color: rgb(0,0,0) }); }
     }
+    } else {
+      // Vendor check info panel — right column of Zone 2
+      page.drawRectangle({ x: psX - 4, y: checkBot - 18 + paystubOffY, width: psW + 4, height: 15, color: rgb(0.08, 0.38, 0.14), opacity: 0.9 });
+      page.drawText("VENDOR CHECK", { x: psX + psW / 2 - 28, y: checkBot - 14 + paystubOffY, size: 10, font: hvB, color: rgb(1, 1, 1) });
+      const vcChkLabel = `Check No. ${fmtCheckNum}`;
+      page.drawText(vcChkLabel, { x: rm - Math.round(vcChkLabel.length * 5.0), y: checkBot - 14 + paystubOffY, size: 8.5, font: hvB, color: rgb(1, 1, 1) });
+      let vcY = checkBot - 36 + paystubOffY;
+      page.drawText(`Amount: $${fmtMoney(netPay)}`, { x: psX, y: vcY, size: 9, font: hvB, color: rgb(0.05, 0.3, 0.08) });
+      vcY -= 14;
+      if (vcMemo) {
+        const vcMemoTrunc = vcMemo.length > 52 ? vcMemo.slice(0, 49) + "…" : vcMemo;
+        page.drawText(`Memo: ${vcMemoTrunc}`, { x: psX, y: vcY, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) });
+        vcY -= 12;
+      }
+      page.drawText(`Date: ${payDate}`, { x: psX, y: vcY, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) });
+    }
 
     // Zone 2 / Zone 3 separator — REMOVED: check stock has physical perforations; software lines are redundant.
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // ZONE 3 — DETAILED EARNINGS STATEMENT  (Y: 0..mailBot = 0..288)
+    // Skipped for vendor/AP checks — no payroll detail to show.
+    // ═══════════════════════════════════════════════════════════════════════
+    if (params.vendorCheck) {
+      // For vendor checks: Zone 3 shows a simple remittance detail instead of payroll data.
+      const z3BannerYv = mailBot - 14;
+      page.drawRectangle({ x: lm - 4, y: z3BannerYv - 4, width: rm - lm + 8, height: 13, color: rgb(0.93, 0.93, 0.93) });
+      page.drawText("REMITTANCE ADVICE — DETACH AND RETAIN FOR YOUR RECORDS", { x: lm, y: z3BannerYv, size: 7, font: hvB, color: rgb(0.2, 0.2, 0.2) });
+      const vcZ3Label = `Check No. ${fmtCheckNum}`;
+      page.drawText(vcZ3Label, { x: rm - Math.round(vcZ3Label.length * 4.2), y: z3BannerYv, size: 7, font: hvB, color: rgb(0.3, 0.3, 0.3) });
+      let vcZ3Y = z3BannerYv - 18;
+      page.drawText(`Payee:  ${params.vendorCheck.payeeName}`, { x: lm, y: vcZ3Y, size: 9, font: hvB, color: rgb(0, 0, 0) }); vcZ3Y -= 12;
+      if (params.vendorCheck.payeeAddress) { page.drawText(params.vendorCheck.payeeAddress, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) }); vcZ3Y -= 12; }
+      if (params.vendorCheck.payeeCityStateZip) { page.drawText(params.vendorCheck.payeeCityStateZip, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.2, 0.2, 0.2) }); vcZ3Y -= 14; }
+      page.drawText(`Amount:  $${fmtMoney(netPay)}`, { x: lm, y: vcZ3Y, size: 9, font: hvB, color: rgb(0, 0, 0.5) }); vcZ3Y -= 12;
+      page.drawText(`Date:    ${payDate}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) }); vcZ3Y -= 12;
+      if (vcMemo) { page.drawText(`Memo:    ${vcMemo.length > 60 ? vcMemo.slice(0, 57) + "…" : vcMemo}`, { x: lm, y: vcZ3Y, size: 8, font: hv, color: rgb(0.3, 0.3, 0.3) }); }
+    } else {
     // ═══════════════════════════════════════════════════════════════════════
     // ZONE 3 — DETAILED EARNINGS STATEMENT  (Y: 0..mailBot = 0..288)
     // ═══════════════════════════════════════════════════════════════════════
@@ -16583,6 +16742,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         page.drawText("As an independent contractor, you are responsible for self-employment tax (SSI 12.4% + Medicare 2.9% = 15.3%) directly to the IRS. SS applies to first $168,600 of earnings.",
           { x: lm, y: z3Y, size: 5.5, font: hv, color: rgb(0.4, 0.4, 0.4) });
     }
+    } // end Zone 3 else block (regular payroll earnings statement)
 
     // Footer
     const footerText = coEin ? `This is a computer-generated document. ${coName} - EIN: ${coEin}` : "This is a computer-generated document.";
@@ -16616,10 +16776,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     return Array.isArray(r) ? r : ((r as { rows?: T[] }).rows ?? []);
   }
   function pgRow<T>(result: unknown): T | undefined { return pgRows<T>(result)[0]; }
-  function parseCalibrationOffsets(calConfig: unknown): { globalTop?: number; globalLeft?: number } | undefined {
+  function parseCalibrationOffsets(calConfig: unknown): {
+    globalTop?: number; globalLeft?: number;
+    returnAddrOffsetX?: number; returnAddrOffsetY?: number;
+    toAddrOffsetX?: number; toAddrOffsetY?: number;
+  } | undefined {
     try {
       const c = typeof calConfig === "string" ? JSON.parse(calConfig) : calConfig as Record<string, unknown>;
-      return { globalTop: Number(c?.globalTop || 0), globalLeft: Number(c?.globalLeft || 0) };
+      return {
+        globalTop:         Number(c?.globalTop         || 0),
+        globalLeft:        Number(c?.globalLeft        || 0),
+        returnAddrOffsetX: Number(c?.returnAddrOffsetX || 0),
+        returnAddrOffsetY: Number(c?.returnAddrOffsetY || 0),
+        toAddrOffsetX:     Number(c?.toAddrOffsetX     || 0),
+        toAddrOffsetY:     Number(c?.toAddrOffsetY     || 0),
+      };
     } catch { return undefined; }
   }
   function parseLayoutConfig(raw: unknown): Record<string, unknown> | undefined {

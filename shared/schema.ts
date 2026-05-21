@@ -630,6 +630,10 @@ export const remittanceSources = pgTable("remittance_sources", {
     amountWordsTop?: number;
     memoTop?: number;
     signatureTop?: number;
+    returnAddrOffsetX?: number;
+    returnAddrOffsetY?: number;
+    toAddrOffsetX?: number;
+    toAddrOffsetY?: number;
   } | null>().default(null),
   signatureUrl: text("signature_url"),
   businessNumber: text("business_number"),
@@ -1807,6 +1811,16 @@ export const expenses = pgTable("expenses", {
   duplicateHash: text("duplicate_hash"),
   recurringTemplateId: varchar("recurring_template_id"),
   notes: text("notes"),
+  paymentStatus: text("payment_status").default("unpaid"),
+  checkNumber: text("check_number"),
+  memo: text("memo"),
+  paidByUserId: varchar("paid_by_user_id"),
+  paidAt: timestamp("paid_at"),
+  payeeName: text("payee_name"),
+  payeeAddress: text("payee_address"),
+  payeeCityStateZip: text("payee_city_state_zip"),
+  relatedInvoiceId: varchar("related_invoice_id"),
+  contractorInvoiceId: varchar("contractor_invoice_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

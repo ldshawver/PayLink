@@ -16,7 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Receipt as ReceiptIcon, Plus, Trash2, Upload, FileText, DollarSign, Download,
   Camera, Loader2, CheckCircle2, XCircle, Clock, AlertTriangle, Send,
-  CreditCard, BarChart3, RefreshCw, Eye, Building2,
+  CreditCard, BarChart3, RefreshCw, Eye, Building2, Printer, BanknoteIcon,
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -29,6 +29,14 @@ function statusBadge(status: string) {
     paid: "default", queued: "secondary", exported: "default", closed: "default",
   };
   return <Badge variant={map[status] || "outline"}>{status}</Badge>;
+}
+
+function paymentStatusBadge(ps: string | null | undefined) {
+  if (!ps || ps === "unpaid") return <Badge variant="outline" className="text-amber-600 border-amber-400">unpaid</Badge>;
+  if (ps === "paid") return <Badge variant="default" className="bg-green-600">paid</Badge>;
+  if (ps === "voided") return <Badge variant="destructive">voided</Badge>;
+  if (ps === "scheduled") return <Badge variant="secondary">scheduled</Badge>;
+  return <Badge variant="outline">{ps}</Badge>;
 }
 
 function formatCurrency(v: string | number | null | undefined) {
@@ -407,6 +415,9 @@ export default function ExpensesPage() {
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<{ type: string; id: string } | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+  const [printCheckTarget, setPrintCheckTarget] = useState<any | null>(null);
+  const [printCheckForm, setPrintCheckForm] = useState({ payeeName: "", payeeAddress: "", payeeCityStateZip: "", checkNumber: "", memo: "", amount: "" });
+  const [markPaidExpenseId, setMarkPaidExpenseId] = useState<string | null>(null);
 
   const { data: currentUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
   const { data: allExpenses = [], isLoading: loadingExpenses } = useQuery<any[]>({ queryKey: ["/api/expenses"], queryFn: async () => { const r = await fetch("/api/expenses", { credentials: "include" }); return r.ok ? r.json() : []; } });
@@ -486,6 +497,58 @@ export default function ExpensesPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
     },
   });
+
+  const markExpensePaidMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/expenses/${id}/mark-paid`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ paymentDate: new Date().toISOString() }) });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.message); }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Expense marked as paid" });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      setMarkPaidExpenseId(null);
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const printCheckMutation = useMutation({
+    mutationFn: async ({ id, form }: { id: string; form: typeof printCheckForm }) => {
+      const res = await fetch(`/api/expenses/${id}/print-check`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify({
+          payeeName: form.payeeName,
+          payeeAddress: form.payeeAddress,
+          payeeCityStateZip: form.payeeCityStateZip,
+          checkNumber: form.checkNumber || undefined,
+          memo: form.memo,
+          amount: parseFloat(form.amount),
+        }),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.message); }
+      return res.blob();
+    },
+    onSuccess: (blob) => {
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      toast({ title: "Check printed", description: "Expense marked as paid." });
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      setPrintCheckTarget(null);
+    },
+    onError: (e: any) => toast({ title: "Print check failed", description: e.message, variant: "destructive" }),
+  });
+
+  function openPrintCheck(expense: any) {
+    setPrintCheckForm({
+      payeeName: expense.payeeName || expense.vendor || "",
+      payeeAddress: expense.payeeAddress || "",
+      payeeCityStateZip: expense.payeeCityStateZip || "",
+      checkNumber: expense.checkNumber || "",
+      memo: expense.memo || expense.description || "",
+      amount: expense.amount || "",
+    });
+    setPrintCheckTarget(expense);
+  }
 
   const totalExpenses = allExpenses.reduce((s: number, e: any) => s + parseFloat(e.amount || "0"), 0);
   const totalPendingReimb = reimbursements.filter((r: any) => r.status === "pending").reduce((s: number, r: any) => s + parseFloat(r.amount || "0"), 0);
@@ -657,7 +720,7 @@ export default function ExpensesPage() {
             </div>
             <div className="hidden sm:block overflow-x-auto">
               <Table data-testid="table-all-expenses">
-                <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Submitter</TableHead><TableHead>Vendor</TableHead><TableHead>Category</TableHead><TableHead>Company</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Submitter</TableHead><TableHead>Vendor</TableHead><TableHead>Category</TableHead><TableHead>Company</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead><TableHead>Payment</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {allExpenses.map((e: any) => (
                     <TableRow key={e.id} data-testid={`row-all-expense-${e.id}`}>
@@ -668,6 +731,19 @@ export default function ExpensesPage() {
                       <TableCell>{companies.find((c: any) => c.id === e.companyId)?.name || "—"}</TableCell>
                       <TableCell className="font-mono">{formatCurrency(e.amount)}</TableCell>
                       <TableCell>{statusBadge(e.status)}</TableCell>
+                      <TableCell>{paymentStatusBadge(e.paymentStatus)}{e.checkNumber && <span className="text-xs text-muted-foreground ml-1">#{e.checkNumber}</span>}</TableCell>
+                      <TableCell>
+                        {isAdmin && e.status === "approved" && e.paymentStatus !== "paid" && (
+                          <div className="flex gap-1">
+                            <Button size="sm" variant="outline" onClick={() => openPrintCheck(e)} data-testid={`button-print-check-${e.id}`}>
+                              <Printer className="h-3 w-3 mr-1" /> Print Check
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setMarkPaidExpenseId(e.id)} data-testid={`button-mark-paid-expense-${e.id}`}>
+                              <BanknoteIcon className="h-3 w-3 mr-1" /> Mark Paid
+                            </Button>
+                          </div>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -927,6 +1003,109 @@ export default function ExpensesPage() {
             <Button variant="outline" onClick={() => setRejectDialogOpen(false)}>Cancel</Button>
             <Button variant="destructive" onClick={() => { if (rejectTarget) rejectMutation.mutate({ ...rejectTarget, reason: rejectReason }); }} data-testid="button-confirm-reject">
               {rejectMutation.isPending ? "Rejecting..." : "Reject"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Mark Expense Paid (quick confirm) ─────────────────────────────── */}
+      <Dialog open={!!markPaidExpenseId} onOpenChange={(v) => { if (!v) setMarkPaidExpenseId(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Mark Expense as Paid</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This records the expense as paid without printing a check. Use <strong>Print Check</strong> instead if you want to generate a vendor check PDF at the same time.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMarkPaidExpenseId(null)} data-testid="button-cancel-mark-paid">Cancel</Button>
+            <Button
+              onClick={() => { if (markPaidExpenseId) markExpensePaidMutation.mutate(markPaidExpenseId); }}
+              disabled={markExpensePaidMutation.isPending}
+              data-testid="button-confirm-mark-paid"
+            >
+              {markExpensePaidMutation.isPending ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Saving…</> : <><BanknoteIcon className="h-4 w-4 mr-1" />Mark Paid</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Print Check for Expense ────────────────────────────────────────── */}
+      <Dialog open={!!printCheckTarget} onOpenChange={(v) => { if (!v) setPrintCheckTarget(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Printer className="h-5 w-5" /> Print Vendor Check</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <p className="text-sm text-muted-foreground">
+              Generates a check PDF and marks the expense as paid. Payee details are printed on the check — ensure they match the pre-printed check stock.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2 space-y-1">
+                <Label>Payee Name <span className="text-destructive">*</span></Label>
+                <Input
+                  value={printCheckForm.payeeName}
+                  onChange={e => setPrintCheckForm(f => ({ ...f, payeeName: e.target.value }))}
+                  placeholder="Acme Supplies LLC"
+                  data-testid="input-check-payee-name"
+                />
+              </div>
+              <div className="col-span-2 space-y-1">
+                <Label>Street Address</Label>
+                <Input
+                  value={printCheckForm.payeeAddress}
+                  onChange={e => setPrintCheckForm(f => ({ ...f, payeeAddress: e.target.value }))}
+                  placeholder="123 Main St"
+                  data-testid="input-check-payee-address"
+                />
+              </div>
+              <div className="col-span-2 space-y-1">
+                <Label>City, State, ZIP</Label>
+                <Input
+                  value={printCheckForm.payeeCityStateZip}
+                  onChange={e => setPrintCheckForm(f => ({ ...f, payeeCityStateZip: e.target.value }))}
+                  placeholder="Springfield, IL 62701"
+                  data-testid="input-check-payee-csz"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Check Amount ($) <span className="text-destructive">*</span></Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={printCheckForm.amount}
+                  onChange={e => setPrintCheckForm(f => ({ ...f, amount: e.target.value }))}
+                  data-testid="input-check-amount"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Check Number <span className="text-xs text-muted-foreground">(optional)</span></Label>
+                <Input
+                  value={printCheckForm.checkNumber}
+                  onChange={e => setPrintCheckForm(f => ({ ...f, checkNumber: e.target.value }))}
+                  placeholder="auto"
+                  data-testid="input-check-number"
+                />
+              </div>
+              <div className="col-span-2 space-y-1">
+                <Label>Memo</Label>
+                <Input
+                  value={printCheckForm.memo}
+                  onChange={e => setPrintCheckForm(f => ({ ...f, memo: e.target.value }))}
+                  placeholder="Invoice / purpose description"
+                  data-testid="input-check-memo"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPrintCheckTarget(null)} data-testid="button-cancel-print-check">Cancel</Button>
+            <Button
+              onClick={() => { if (printCheckTarget) printCheckMutation.mutate({ id: String(printCheckTarget.id), form: printCheckForm }); }}
+              disabled={printCheckMutation.isPending || !printCheckForm.payeeName || !printCheckForm.amount}
+              data-testid="button-confirm-print-check"
+            >
+              {printCheckMutation.isPending
+                ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Generating…</>
+                : <><Printer className="h-4 w-4 mr-1" />Print Check &amp; Mark Paid</>}
             </Button>
           </DialogFooter>
         </DialogContent>
