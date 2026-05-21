@@ -9819,6 +9819,96 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     } catch (e) { res.status(500).json({ message: "Failed to mark invoice paid" }); }
   });
 
+  // POST /api/contractor-invoices/:id/print-check — generate vendor check PDF
+  app.post("/api/contractor-invoices/:id/print-check", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const inv = pgRow<any>(await db.execute(sql`SELECT * FROM contractor_invoices WHERE id = ${req.params.id}`));
+      if (!inv) return res.status(404).json({ message: "Invoice not found" });
+
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && inv.company_id && sessionCompanyId !== inv.company_id) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const compId = inv.company_id || sessionCompanyId;
+      const coRow = pgRow<any>(compId ? await db.execute(sql`SELECT * FROM companies WHERE id = ${compId}`) : { rows: [] });
+
+      const rsRow = pgRow<CheckRsRow>(await db.execute(sql`
+        SELECT * FROM remittance_sources
+        WHERE company_id = ${compId} AND status = 'enabled'
+        LIMIT 1
+      `));
+
+      if (!rsRow?.routing_number || !rsRow?.account_number) {
+        return res.status(400).json({ message: "No enabled bank account found for this company. Configure a remittance source first." });
+      }
+
+      // Resolve payee name from worker if not supplied
+      const workerRow = pgRow<any>(await db.execute(sql`
+        SELECT u.username, u.first_name, u.last_name FROM workers w
+        LEFT JOIN users u ON u.worker_id = w.id
+        WHERE w.id = ${inv.contractor_id} LIMIT 1
+      `));
+      const defaultPayeeName = workerRow
+        ? [workerRow.first_name, workerRow.last_name].filter(Boolean).join(" ") || workerRow.username || "Contractor"
+        : "Contractor";
+
+      const {
+        payeeName = defaultPayeeName,
+        payeeAddress = "",
+        payeeCityStateZip = "",
+        amount = inv.amount,
+        checkNumber,
+        memo = inv.description || inv.invoice_number || "",
+      } = req.body || {};
+
+      const calTplRow = pgRow<CheckTplRow>(await db.execute(sql`SELECT layout_config FROM check_templates WHERE company_id = ${compId} AND is_default = true LIMIT 1`));
+      const layoutConfig = calTplRow ? parseLayoutConfig(calTplRow.layout_config) : undefined;
+      const calibrationOffsets = rsRow.calibration_config ? parseCalibrationOffsets(rsRow.calibration_config) : undefined;
+
+      const coNorm = coRow ? {
+        name: coRow.name || "", address: coRow.address || "", city: coRow.city || "",
+        state: coRow.state || "", zip: coRow.zip || "", phone: coRow.phone || "",
+        ein: coRow.ein || "", dba: coRow.dba || "", logoUrl: coRow.logo_url || "",
+      } : null;
+
+      const pdfBytes = await renderCheckPdf({
+        item: null, worker: null, run: null,
+        company: coNorm,
+        remittanceSource: { routingNumber: rsRow.routing_number, accountNumber: rsRow.account_number },
+        isCalibration: false,
+        layoutConfig,
+        calibrationOffsets,
+        vendorCheck: {
+          payeeName: String(payeeName),
+          payeeAddress: String(payeeAddress),
+          payeeCityStateZip: String(payeeCityStateZip),
+          amount: parseFloat(String(amount || 0)),
+          checkNumber: checkNumber ? String(checkNumber) : undefined,
+          memo: String(memo),
+        },
+      });
+
+      // Record payment reference on invoice (allow reprinting — no paid guard)
+      await db.execute(sql`
+        UPDATE contractor_invoices
+        SET payment_method    = 'check',
+            payment_reference = ${checkNumber ? String(checkNumber) : null},
+            updated_at        = NOW()
+        WHERE id = ${req.params.id}
+      `);
+
+      res.set("Content-Type", "application/pdf");
+      res.set("Content-Disposition", `attachment; filename="invoice-check-${req.params.id}.pdf"`);
+      res.set("Content-Length", String(pdfBytes.length));
+      return res.send(Buffer.from(pdfBytes));
+    } catch (e: any) {
+      console.error("invoice-print-check error:", e);
+      res.status(500).json({ message: e.message || "Failed to generate check PDF" });
+    }
+  });
+
   // ── Contractor Invoice Attachments ────────────────────────────────────
   app.get("/api/contractor-invoices/:id/attachments", requireAuth, async (req, res) => {
     try {

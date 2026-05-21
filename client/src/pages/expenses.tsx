@@ -417,6 +417,8 @@ export default function ExpensesPage() {
   const [rejectReason, setRejectReason] = useState("");
   const [printCheckTarget, setPrintCheckTarget] = useState<any | null>(null);
   const [printCheckForm, setPrintCheckForm] = useState({ payeeName: "", payeeAddress: "", payeeCityStateZip: "", checkNumber: "", memo: "", amount: "" });
+  const [invoicePrintTarget, setInvoicePrintTarget] = useState<any | null>(null);
+  const [invoicePrintForm, setInvoicePrintForm] = useState({ payeeName: "", payeeAddress: "", payeeCityStateZip: "", checkNumber: "", memo: "", amount: "" });
   const [markPaidExpenseId, setMarkPaidExpenseId] = useState<string | null>(null);
 
   const { data: currentUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
@@ -548,6 +550,44 @@ export default function ExpensesPage() {
       amount: expense.amount || "",
     });
     setPrintCheckTarget(expense);
+  }
+
+  const invoicePrintMutation = useMutation({
+    mutationFn: async ({ id, form }: { id: string; form: typeof invoicePrintForm }) => {
+      const res = await fetch(`/api/contractor-invoices/${id}/print-check`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify({
+          payeeName: form.payeeName,
+          payeeAddress: form.payeeAddress,
+          payeeCityStateZip: form.payeeCityStateZip,
+          checkNumber: form.checkNumber || undefined,
+          memo: form.memo,
+          amount: parseFloat(form.amount),
+        }),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.message); }
+      return res.blob();
+    },
+    onSuccess: (blob) => {
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      toast({ title: "Check printed", description: "Invoice check generated." });
+      queryClient.invalidateQueries({ queryKey: ["/api/contractor-invoices"] });
+      setInvoicePrintTarget(null);
+    },
+    onError: (e: any) => toast({ title: "Print check failed", description: e.message, variant: "destructive" }),
+  });
+
+  function openInvoicePrintCheck(inv: any) {
+    setInvoicePrintForm({
+      payeeName: inv.payeeName || inv.contractorName || "",
+      payeeAddress: "",
+      payeeCityStateZip: "",
+      checkNumber: inv.paymentReference || "",
+      memo: inv.description || inv.invoiceNumber || "",
+      amount: inv.amount || "",
+    });
+    setInvoicePrintTarget(inv);
   }
 
   const totalExpenses = allExpenses.reduce((s: number, e: any) => s + parseFloat(e.amount || "0"), 0);
@@ -857,8 +897,13 @@ export default function ExpensesPage() {
                           <Send className="h-3 w-3 mr-1" /> Submit
                         </Button>
                       )}
+                      {isAdmin && (inv.status === "approved" || inv.status === "paid") && (
+                        <Button size="sm" variant="outline" onClick={() => openInvoicePrintCheck(inv)} data-testid={`button-print-check-invoice-${inv.id}`}>
+                          <Printer className="h-3 w-3 mr-1" /> Print Check
+                        </Button>
+                      )}
                       {inv.status === "approved" && isAdmin && (
-                        <Button size="sm" variant="outline" onClick={() => markPaidMutation.mutate(inv.id)} data-testid={`button-mark-paid-${inv.id}`}>
+                        <Button size="sm" variant="ghost" onClick={() => markPaidMutation.mutate(inv.id)} data-testid={`button-mark-paid-${inv.id}`}>
                           <DollarSign className="h-3 w-3 mr-1" /> Mark Paid
                         </Button>
                       )}
@@ -1106,6 +1151,93 @@ export default function ExpensesPage() {
               {printCheckMutation.isPending
                 ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Generating…</>
                 : <><Printer className="h-4 w-4 mr-1" />Print Check &amp; Mark Paid</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Print Check for Contractor Invoice ───────────────────────────────── */}
+      <Dialog open={!!invoicePrintTarget} onOpenChange={(v) => { if (!v) setInvoicePrintTarget(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Printer className="h-5 w-5" /> Print Invoice Check</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <p className="text-sm text-muted-foreground">
+              Generates a check PDF for this contractor invoice. You can reprint at any time — this does not change the payment status.
+            </p>
+            {invoicePrintTarget?.status === "paid" && (
+              <div className="rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                This invoice is already marked <strong>paid</strong>. Printing will generate a duplicate check — ensure you void the original if reissuing.
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2 space-y-1">
+                <Label>Payee Name <span className="text-destructive">*</span></Label>
+                <Input
+                  value={invoicePrintForm.payeeName}
+                  onChange={e => setInvoicePrintForm(f => ({ ...f, payeeName: e.target.value }))}
+                  placeholder="Contractor full name or company"
+                  data-testid="input-inv-check-payee-name"
+                />
+              </div>
+              <div className="col-span-2 space-y-1">
+                <Label>Street Address</Label>
+                <Input
+                  value={invoicePrintForm.payeeAddress}
+                  onChange={e => setInvoicePrintForm(f => ({ ...f, payeeAddress: e.target.value }))}
+                  placeholder="123 Main St"
+                  data-testid="input-inv-check-payee-address"
+                />
+              </div>
+              <div className="col-span-2 space-y-1">
+                <Label>City, State, ZIP</Label>
+                <Input
+                  value={invoicePrintForm.payeeCityStateZip}
+                  onChange={e => setInvoicePrintForm(f => ({ ...f, payeeCityStateZip: e.target.value }))}
+                  placeholder="Springfield, IL 62701"
+                  data-testid="input-inv-check-payee-csz"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Check Amount ($) <span className="text-destructive">*</span></Label>
+                <Input
+                  type="number" step="0.01"
+                  value={invoicePrintForm.amount}
+                  onChange={e => setInvoicePrintForm(f => ({ ...f, amount: e.target.value }))}
+                  data-testid="input-inv-check-amount"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Check Number <span className="text-xs text-muted-foreground">(optional)</span></Label>
+                <Input
+                  value={invoicePrintForm.checkNumber}
+                  onChange={e => setInvoicePrintForm(f => ({ ...f, checkNumber: e.target.value }))}
+                  placeholder="auto"
+                  data-testid="input-inv-check-number"
+                />
+              </div>
+              <div className="col-span-2 space-y-1">
+                <Label>Memo</Label>
+                <Input
+                  value={invoicePrintForm.memo}
+                  onChange={e => setInvoicePrintForm(f => ({ ...f, memo: e.target.value }))}
+                  placeholder="Invoice number / purpose"
+                  data-testid="input-inv-check-memo"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setInvoicePrintTarget(null)} data-testid="button-cancel-inv-print-check">Cancel</Button>
+            <Button
+              onClick={() => { if (invoicePrintTarget) invoicePrintMutation.mutate({ id: String(invoicePrintTarget.id), form: invoicePrintForm }); }}
+              disabled={invoicePrintMutation.isPending || !invoicePrintForm.payeeName || !invoicePrintForm.amount}
+              data-testid="button-confirm-inv-print-check"
+            >
+              {invoicePrintMutation.isPending
+                ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Generating…</>
+                : <><Printer className="h-4 w-4 mr-1" />Print Check</>}
             </Button>
           </DialogFooter>
         </DialogContent>
