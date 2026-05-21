@@ -23,7 +23,7 @@ import {
   Clock, CalendarDays, AlertTriangle, Download, Printer, BarChart3,
   Shield, Star, Award, Receipt, Building, Calculator, ExternalLink,
   Save, Trash2, Eye, Search, Briefcase, ChevronDown, ChevronRight,
-  XCircle, CheckCircle2
+  XCircle, CheckCircle2, Tag, Banknote, ListChecks, FileCheck2,
 } from "lucide-react";
 import { PayrollSummaryReportDialog } from "@/components/reports/payroll-summary-report";
 import { PayrollRegisterReportDialog } from "@/components/reports/payroll-register-report";
@@ -3500,11 +3500,433 @@ function JobCostReportSection() {
   );
 }
 
-function ExpenseReportSection() {
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper shared across expense report sub-components
+// ─────────────────────────────────────────────────────────────────────────────
+function fmt$(v: any) { return `$${parseFloat(String(v || 0)).toFixed(2)}`; }
+
+function ExpenseFilterBar({
+  companies, companyId, setCompanyId,
+  startDate, setStartDate, endDate, setEndDate,
+  children,
+}: {
+  companies: Company[]; companyId: string; setCompanyId: (v: string) => void;
+  startDate: string; setStartDate: (v: string) => void; endDate: string; setEndDate: (v: string) => void;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap gap-3 items-end mb-4">
+      <div className="flex flex-col gap-1">
+        <Label className="text-xs">Company</Label>
+        <Select value={companyId} onValueChange={setCompanyId}>
+          <SelectTrigger className="w-44" data-testid="select-exp-report-company"><SelectValue placeholder="All companies" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All companies</SelectItem>
+            {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label className="text-xs">From</Label>
+        <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-9 w-38" data-testid="input-exp-report-start" />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label className="text-xs">To</Label>
+        <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-9 w-38" data-testid="input-exp-report-end" />
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ── 1. Expense by Category ────────────────────────────────────────────────
+function ExpenseByCategoryReport({ companies }: { companies: Company[] }) {
+  const [companyId, setCompanyId] = useState("all");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+
+  const params = new URLSearchParams();
+  if (companyId !== "all") params.set("companyId", companyId);
+  if (startDate) params.set("startDate", startDate);
+  if (endDate) params.set("endDate", endDate);
+
+  const { data: rows = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/reports/expense-by-category", companyId, startDate, endDate],
+    queryFn: async () => {
+      const r = await fetch(`/api/reports/expense-by-category?${params}`, { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+    enabled: true,
+  });
+
+  function exportCsv() {
+    const header = "Category,Count,Total,Approved Total,Paid,Unpaid Approved\n";
+    const body = rows.map(r =>
+      `"${r.category}",${r.count},${Number(r.total).toFixed(2)},${Number(r.approved_total).toFixed(2)},${Number(r.paid_total).toFixed(2)},${Number(r.unpaid_approved_total).toFixed(2)}`
+    ).join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([header + body], { type: "text/csv" }));
+    a.download = `expense-by-category-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+  }
+
+  const grandTotal = rows.reduce((s, r) => s + Number(r.total || 0), 0);
+  const grandPaid  = rows.reduce((s, r) => s + Number(r.paid_total || 0), 0);
+  const grandUnpaid = rows.reduce((s, r) => s + Number(r.unpaid_approved_total || 0), 0);
+
+  return (
+    <div className="space-y-4">
+      <ExpenseFilterBar companies={companies} companyId={companyId} setCompanyId={setCompanyId} startDate={startDate} setStartDate={setStartDate} endDate={endDate} setEndDate={setEndDate}>
+        <Button size="sm" variant="outline" onClick={exportCsv} disabled={rows.length === 0} data-testid="button-cat-export">
+          <Download className="h-3.5 w-3.5 mr-1" />CSV
+        </Button>
+      </ExpenseFilterBar>
+      <div className="grid grid-cols-3 gap-4 mb-4">
+        <Card><CardContent className="pt-4"><p className="text-xs text-muted-foreground">Grand Total</p><p className="text-2xl font-bold">{fmt$(grandTotal)}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-muted-foreground">Paid</p><p className="text-2xl font-bold text-green-600">{fmt$(grandPaid)}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-muted-foreground">Approved / Unpaid</p><p className="text-2xl font-bold text-amber-600">{fmt$(grandUnpaid)}</p></CardContent></Card>
+      </div>
+      {isLoading ? <div className="space-y-2">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div> : rows.length === 0 ? (
+        <Card><CardContent className="py-12 text-center text-muted-foreground"><Tag className="h-8 w-8 mx-auto mb-2 opacity-30" /><p>No expenses found for the selected filters</p></CardContent></Card>
+      ) : (
+        <div className="overflow-x-auto">
+          <Table data-testid="table-expense-by-category">
+            <TableHeader><TableRow>
+              <TableHead>Category</TableHead>
+              <TableHead className="text-right">Count</TableHead>
+              <TableHead className="text-right">Total</TableHead>
+              <TableHead className="text-right">Approved</TableHead>
+              <TableHead className="text-right">Paid</TableHead>
+              <TableHead className="text-right">Unpaid / Approved</TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {rows.map(r => (
+                <TableRow key={r.category} data-testid={`row-cat-${r.category}`}>
+                  <TableCell className="font-medium"><Badge variant="outline">{r.category}</Badge></TableCell>
+                  <TableCell className="text-right">{r.count}</TableCell>
+                  <TableCell className="text-right font-mono">{fmt$(r.total)}</TableCell>
+                  <TableCell className="text-right font-mono">{fmt$(r.approved_total)}</TableCell>
+                  <TableCell className="text-right font-mono text-green-700">{fmt$(r.paid_total)}</TableCell>
+                  <TableCell className="text-right font-mono text-amber-700">{fmt$(r.unpaid_approved_total)}</TableCell>
+                </TableRow>
+              ))}
+              <TableRow className="font-bold border-t-2">
+                <TableCell>TOTAL</TableCell>
+                <TableCell className="text-right">{rows.reduce((s, r) => s + r.count, 0)}</TableCell>
+                <TableCell className="text-right font-mono">{fmt$(grandTotal)}</TableCell>
+                <TableCell className="text-right font-mono">{fmt$(rows.reduce((s, r) => s + Number(r.approved_total || 0), 0))}</TableCell>
+                <TableCell className="text-right font-mono text-green-700">{fmt$(grandPaid)}</TableCell>
+                <TableCell className="text-right font-mono text-amber-700">{fmt$(grandUnpaid)}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 2. Vendor Payment Summary ─────────────────────────────────────────────
+function VendorPaymentReport({ companies }: { companies: Company[] }) {
+  const [companyId, setCompanyId] = useState("all");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [minAmount, setMinAmount] = useState("");
+
+  const params = new URLSearchParams();
+  if (companyId !== "all") params.set("companyId", companyId);
+  if (startDate) params.set("startDate", startDate);
+  if (endDate) params.set("endDate", endDate);
+  if (minAmount) params.set("minAmount", minAmount);
+
+  const { data: rows = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/reports/vendor-payments", companyId, startDate, endDate, minAmount],
+    queryFn: async () => {
+      const r = await fetch(`/api/reports/vendor-payments?${params}`, { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+  });
+
+  function exportCsv() {
+    const header = "Payee,Payments,Total Paid,First Payment,Last Payment,Check Numbers\n";
+    const body = rows.map(r =>
+      `"${r.payee}",${r.payment_count},${Number(r.total_paid).toFixed(2)},"${r.first_payment ? new Date(r.first_payment).toLocaleDateString() : ""}","${r.last_payment ? new Date(r.last_payment).toLocaleDateString() : ""}","${r.check_numbers || ""}"`
+    ).join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([header + body], { type: "text/csv" }));
+    a.download = `vendor-payments-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+  }
+
+  const grandTotal = rows.reduce((s, r) => s + Number(r.total_paid || 0), 0);
+  const vendors1099 = rows.filter(r => Number(r.total_paid) >= 600);
+
+  return (
+    <div className="space-y-4">
+      <ExpenseFilterBar companies={companies} companyId={companyId} setCompanyId={setCompanyId} startDate={startDate} setStartDate={setStartDate} endDate={endDate} setEndDate={setEndDate}>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Min Amount ($)</Label>
+          <Input type="number" value={minAmount} onChange={e => setMinAmount(e.target.value)} placeholder="0" className="h-9 w-28" data-testid="input-vendor-min" />
+        </div>
+        <Button size="sm" variant="outline" onClick={exportCsv} disabled={rows.length === 0} data-testid="button-vendor-export">
+          <Download className="h-3.5 w-3.5 mr-1" />CSV
+        </Button>
+      </ExpenseFilterBar>
+      {vendors1099.length > 0 && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-sm flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+          <span className="text-amber-800 dark:text-amber-300">
+            <strong>{vendors1099.length} vendor{vendors1099.length !== 1 ? "s" : ""}</strong> at or above the $600 1099-NEC threshold.
+          </span>
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-4">
+        <Card><CardContent className="pt-4"><p className="text-xs text-muted-foreground">Total Paid to Vendors</p><p className="text-2xl font-bold">{fmt$(grandTotal)}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-muted-foreground">Unique Vendors</p><p className="text-2xl font-bold">{rows.length}</p></CardContent></Card>
+      </div>
+      {isLoading ? <div className="space-y-2">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div> : rows.length === 0 ? (
+        <Card><CardContent className="py-12 text-center text-muted-foreground"><Banknote className="h-8 w-8 mx-auto mb-2 opacity-30" /><p>No vendor payments found</p></CardContent></Card>
+      ) : (
+        <div className="overflow-x-auto">
+          <Table data-testid="table-vendor-payments">
+            <TableHeader><TableRow>
+              <TableHead>Payee / Vendor</TableHead>
+              <TableHead className="text-right">Payments</TableHead>
+              <TableHead className="text-right">Total Paid</TableHead>
+              <TableHead>First Payment</TableHead>
+              <TableHead>Last Payment</TableHead>
+              <TableHead>Check #s</TableHead>
+              <TableHead>1099?</TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {rows.map(r => (
+                <TableRow key={r.payee} data-testid={`row-vendor-${r.payee}`}>
+                  <TableCell className="font-medium">{r.payee}</TableCell>
+                  <TableCell className="text-right">{r.payment_count}</TableCell>
+                  <TableCell className="text-right font-mono">{fmt$(r.total_paid)}</TableCell>
+                  <TableCell className="text-sm">{r.first_payment ? new Date(r.first_payment).toLocaleDateString() : "—"}</TableCell>
+                  <TableCell className="text-sm">{r.last_payment ? new Date(r.last_payment).toLocaleDateString() : "—"}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{r.check_numbers || "—"}</TableCell>
+                  <TableCell>
+                    {Number(r.total_paid) >= 600
+                      ? <Badge variant="destructive" className="text-xs">≥$600</Badge>
+                      : <span className="text-xs text-muted-foreground">No</span>}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 3. Paid vs Unpaid Expenses ────────────────────────────────────────────
+function PaidUnpaidExpenseReport({ companies }: { companies: Company[] }) {
+  const [companyId, setCompanyId] = useState("all");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [filterPayment, setFilterPayment] = useState("all");
+
+  const params = new URLSearchParams();
+  if (companyId !== "all") params.set("companyId", companyId);
+  if (startDate) params.set("startDate", startDate);
+  if (endDate) params.set("endDate", endDate);
+
+  const { data: all = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/reports/expense-payment-status", companyId, startDate, endDate],
+    queryFn: async () => {
+      const r = await fetch(`/api/reports/expense-payment-status?${params}`, { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+  });
+
+  const rows = all.filter(r => filterPayment === "all" || (r.payment_status || "unpaid") === filterPayment);
+  const paidRows = all.filter(r => r.payment_status === "paid");
+  const unpaidRows = all.filter(r => (r.payment_status || "unpaid") !== "paid" && r.status === "approved");
+  const paidTotal = paidRows.reduce((s, r) => s + Number(r.amount || 0), 0);
+  const unpaidTotal = unpaidRows.reduce((s, r) => s + Number(r.amount || 0), 0);
+
+  function exportCsv() {
+    const header = "Date,Vendor,Category,Amount,Status,Payment Status,Check #,Paid Date,Payee,Memo\n";
+    const body = rows.map(r =>
+      `${r.expense_date},"${r.vendor || ""}","${r.category_name || ""}",${Number(r.amount).toFixed(2)},${r.status},${r.payment_status || "unpaid"},"${r.check_number || ""}","${r.paid_at ? new Date(r.paid_at).toLocaleDateString() : ""}","${r.payee_name || ""}","${r.memo || ""}"`
+    ).join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([header + body], { type: "text/csv" }));
+    a.download = `paid-unpaid-expenses-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+  }
+
+  return (
+    <div className="space-y-4">
+      <ExpenseFilterBar companies={companies} companyId={companyId} setCompanyId={setCompanyId} startDate={startDate} setStartDate={setStartDate} endDate={endDate} setEndDate={setEndDate}>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Payment Status</Label>
+          <Select value={filterPayment} onValueChange={setFilterPayment}>
+            <SelectTrigger className="w-36" data-testid="select-payment-filter"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="paid">Paid</SelectItem>
+              <SelectItem value="unpaid">Unpaid</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <Button size="sm" variant="outline" onClick={exportCsv} disabled={rows.length === 0} data-testid="button-paid-unpaid-export">
+          <Download className="h-3.5 w-3.5 mr-1" />CSV
+        </Button>
+      </ExpenseFilterBar>
+      <div className="grid grid-cols-3 gap-4">
+        <Card><CardContent className="pt-4"><p className="text-xs text-muted-foreground">Total Paid</p><p className="text-2xl font-bold text-green-600">{fmt$(paidTotal)}</p><p className="text-xs text-muted-foreground">{paidRows.length} expenses</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-muted-foreground">Approved / Unpaid</p><p className="text-2xl font-bold text-amber-600">{fmt$(unpaidTotal)}</p><p className="text-xs text-muted-foreground">{unpaidRows.length} expenses</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-muted-foreground">Showing</p><p className="text-2xl font-bold">{rows.length}</p><p className="text-xs text-muted-foreground">expenses</p></CardContent></Card>
+      </div>
+      {isLoading ? <div className="space-y-2">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div> : rows.length === 0 ? (
+        <Card><CardContent className="py-12 text-center text-muted-foreground"><ListChecks className="h-8 w-8 mx-auto mb-2 opacity-30" /><p>No expenses found</p></CardContent></Card>
+      ) : (
+        <div className="overflow-x-auto">
+          <Table data-testid="table-paid-unpaid">
+            <TableHeader><TableRow>
+              <TableHead>Date</TableHead><TableHead>Vendor</TableHead><TableHead>Category</TableHead>
+              <TableHead className="text-right">Amount</TableHead>
+              <TableHead>Approval</TableHead><TableHead>Payment</TableHead>
+              <TableHead>Check #</TableHead><TableHead>Paid Date</TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {rows.map(r => (
+                <TableRow key={r.id} data-testid={`row-paidunpaid-${r.id}`}>
+                  <TableCell className="text-sm">{r.expense_date}</TableCell>
+                  <TableCell className="text-sm font-medium">{r.vendor || r.payee_name || "—"}</TableCell>
+                  <TableCell><Badge variant="outline" className="text-xs">{r.category_name || "—"}</Badge></TableCell>
+                  <TableCell className="text-right font-mono">{fmt$(r.amount)}</TableCell>
+                  <TableCell><Badge variant={r.status === "approved" ? "default" : r.status === "rejected" ? "destructive" : "secondary"} className="text-xs">{r.status}</Badge></TableCell>
+                  <TableCell>
+                    {(r.payment_status || "unpaid") === "paid"
+                      ? <Badge variant="default" className="bg-green-600 text-xs">paid</Badge>
+                      : <Badge variant="outline" className="text-amber-600 border-amber-400 text-xs">unpaid</Badge>}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{r.check_number || "—"}</TableCell>
+                  <TableCell className="text-sm">{r.paid_at ? new Date(r.paid_at).toLocaleDateString() : "—"}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 4. Contractor Invoice Payments ────────────────────────────────────────
+function ContractorInvoicePaymentReport({ companies }: { companies: Company[] }) {
+  const [companyId, setCompanyId] = useState("all");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+
+  const params = new URLSearchParams();
+  if (companyId !== "all") params.set("companyId", companyId);
+  if (startDate) params.set("startDate", startDate);
+  if (endDate) params.set("endDate", endDate);
+  if (statusFilter !== "all") params.set("status", statusFilter);
+
+  const { data: rows = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/reports/contractor-invoice-payments", companyId, startDate, endDate, statusFilter],
+    queryFn: async () => {
+      const r = await fetch(`/api/reports/contractor-invoice-payments?${params}`, { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+  });
+
+  const totalInvoiced = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
+  const totalPaid = rows.reduce((s, r) => s + Number(r.amount_paid || 0), 0);
+  const totalOutstanding = rows.reduce((s, r) => s + Number(r.balance_due || 0), 0);
+  const threshold1099 = rows.filter(r => r.is_1099_reportable || Number(r.amount_paid || 0) >= 600);
+
+  function exportCsv() {
+    const header = "Date,Invoice #,Contractor,Amount,Amount Paid,Balance,Status,Paid Date,Payment Ref,1099\n";
+    const body = rows.map(r =>
+      `${r.invoice_date},"${r.invoice_number || ""}","${r.first_name || ""} ${r.last_name || ""}",${Number(r.amount).toFixed(2)},${Number(r.amount_paid || 0).toFixed(2)},${Number(r.balance_due || 0).toFixed(2)},${r.status},"${r.paid_at ? new Date(r.paid_at).toLocaleDateString() : ""}","${r.payment_reference || ""}",${r.is_1099_reportable ? "Yes" : "No"}`
+    ).join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([header + body], { type: "text/csv" }));
+    a.download = `contractor-invoice-payments-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+  }
+
+  return (
+    <div className="space-y-4">
+      <ExpenseFilterBar companies={companies} companyId={companyId} setCompanyId={setCompanyId} startDate={startDate} setStartDate={setStartDate} endDate={endDate} setEndDate={setEndDate}>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Status</Label>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-36" data-testid="select-invoice-status"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="draft">Draft</SelectItem>
+              <SelectItem value="submitted">Submitted</SelectItem>
+              <SelectItem value="approved">Approved</SelectItem>
+              <SelectItem value="paid">Paid</SelectItem>
+              <SelectItem value="rejected">Rejected</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <Button size="sm" variant="outline" onClick={exportCsv} disabled={rows.length === 0} data-testid="button-ci-export">
+          <Download className="h-3.5 w-3.5 mr-1" />CSV
+        </Button>
+      </ExpenseFilterBar>
+      {threshold1099.length > 0 && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-sm flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+          <span className="text-amber-800 dark:text-amber-300">
+            <strong>{threshold1099.length} contractor invoice{threshold1099.length !== 1 ? "s" : ""}</strong> at or above the $600 1099-NEC threshold.
+          </span>
+        </div>
+      )}
+      <div className="grid grid-cols-3 gap-4">
+        <Card><CardContent className="pt-4"><p className="text-xs text-muted-foreground">Total Invoiced</p><p className="text-2xl font-bold">{fmt$(totalInvoiced)}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-muted-foreground">Total Paid</p><p className="text-2xl font-bold text-green-600">{fmt$(totalPaid)}</p></CardContent></Card>
+        <Card><CardContent className="pt-4"><p className="text-xs text-muted-foreground">Outstanding Balance</p><p className="text-2xl font-bold text-amber-600">{fmt$(totalOutstanding)}</p></CardContent></Card>
+      </div>
+      {isLoading ? <div className="space-y-2">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div> : rows.length === 0 ? (
+        <Card><CardContent className="py-12 text-center text-muted-foreground"><FileCheck2 className="h-8 w-8 mx-auto mb-2 opacity-30" /><p>No invoices found</p></CardContent></Card>
+      ) : (
+        <div className="overflow-x-auto">
+          <Table data-testid="table-ci-payments">
+            <TableHeader><TableRow>
+              <TableHead>Date</TableHead><TableHead>Invoice #</TableHead><TableHead>Contractor</TableHead>
+              <TableHead className="text-right">Invoiced</TableHead>
+              <TableHead className="text-right">Paid</TableHead>
+              <TableHead className="text-right">Balance</TableHead>
+              <TableHead>Status</TableHead><TableHead>Paid Date</TableHead><TableHead>1099</TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {rows.map(r => (
+                <TableRow key={r.id} data-testid={`row-ci-${r.id}`}>
+                  <TableCell className="text-sm">{r.invoice_date}</TableCell>
+                  <TableCell className="text-sm font-medium">{r.invoice_number || "—"}</TableCell>
+                  <TableCell className="text-sm">{`${r.first_name || ""} ${r.last_name || ""}`.trim() || "—"}</TableCell>
+                  <TableCell className="text-right font-mono">{fmt$(r.amount)}</TableCell>
+                  <TableCell className="text-right font-mono text-green-700">{fmt$(r.amount_paid)}</TableCell>
+                  <TableCell className="text-right font-mono text-amber-700">{fmt$(r.balance_due)}</TableCell>
+                  <TableCell><Badge variant={r.status === "paid" ? "default" : r.status === "rejected" ? "destructive" : "secondary"} className="text-xs">{r.status}</Badge></TableCell>
+                  <TableCell className="text-sm">{r.paid_at ? new Date(r.paid_at).toLocaleDateString() : "—"}</TableCell>
+                  <TableCell>{r.is_1099_reportable || Number(r.amount_paid || 0) >= 600 ? <Badge variant="destructive" className="text-xs">1099</Badge> : <span className="text-xs text-muted-foreground">No</span>}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 5. Company Expense Summary (preserved from original) ──────────────────
+function CompanyExpenseSummaryReport({ companies }: { companies: Company[] }) {
   const { data: receipts = [], isLoading } = useQuery<ExpenseReceipt[]>({ queryKey: ["/api/receipts"] });
-  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: workers = [] } = useQuery<Worker[]>({ queryKey: ["/api/workers"] });
-  const { data: costCenters = [] } = useQuery<any[]>({ queryKey: ["/api/cost-centers"] });
   const { data: jobs = [] } = useQuery<any[]>({ queryKey: ["/api/jobs"] });
   const [reportView, setReportView] = useState<"company" | "reimbursement">("company");
   const [filterStatus, setFilterStatus] = useState("all");
@@ -3726,6 +4148,46 @@ function ExpenseReportSection() {
   );
 }
 
+// ── Main ExpenseReportSection — 5-tab container ───────────────────────────
+function ExpenseReportSection() {
+  const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
+  const [subTab, setSubTab] = useState("category");
+
+  const subTabs = [
+    { id: "category",   label: "By Category",      icon: <Tag className="h-3.5 w-3.5" /> },
+    { id: "vendor",     label: "Vendor Payments",   icon: <Banknote className="h-3.5 w-3.5" /> },
+    { id: "paidunpaid", label: "Paid vs Unpaid",    icon: <ListChecks className="h-3.5 w-3.5" /> },
+    { id: "invoices",   label: "Invoice Payments",  icon: <FileCheck2 className="h-3.5 w-3.5" /> },
+    { id: "summary",    label: "Company Summary",   icon: <Building className="h-3.5 w-3.5" /> },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-2 border-b pb-3">
+        {subTabs.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setSubTab(t.id)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              subTab === t.id
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground hover:bg-muted/80"
+            }`}
+            data-testid={`tab-exp-report-${t.id}`}
+          >
+            {t.icon}{t.label}
+          </button>
+        ))}
+      </div>
+      {subTab === "category"   && <ExpenseByCategoryReport companies={companies} />}
+      {subTab === "vendor"     && <VendorPaymentReport companies={companies} />}
+      {subTab === "paidunpaid" && <PaidUnpaidExpenseReport companies={companies} />}
+      {subTab === "invoices"   && <ContractorInvoicePaymentReport companies={companies} />}
+      {subTab === "summary"    && <CompanyExpenseSummaryReport companies={companies} />}
+    </div>
+  );
+}
+
 // ── Check Register Dialog ──────────────────────────────────────────────────
 
 interface CheckAuditLog {
@@ -3749,10 +4211,13 @@ interface CheckAuditLog {
 function CheckRegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
   const { data: runs = [] } = useQuery<PayrollRun[]>({ queryKey: ["/api/payroll-runs"] });
+  const [registerTab, setRegisterTab] = useState<"payroll" | "vendor">("payroll");
   const [companyId, setCompanyId] = useState("all");
   const [eventType, setEventType] = useState("all");
   const [limit, setLimit] = useState("100");
   const [search, setSearch] = useState("");
+  const [vendorStart, setVendorStart] = useState("");
+  const [vendorEnd, setVendorEnd] = useState("");
 
   const { data: logs = [], isLoading } = useQuery<CheckAuditLog[]>({
     queryKey: ["/api/check-print-audit", companyId, limit],
@@ -3763,7 +4228,21 @@ function CheckRegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChan
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
-    enabled: open,
+    enabled: open && registerTab === "payroll",
+  });
+
+  const vendorParams = new URLSearchParams();
+  if (companyId !== "all") vendorParams.set("companyId", companyId);
+  if (vendorStart) vendorParams.set("startDate", vendorStart);
+  if (vendorEnd) vendorParams.set("endDate", vendorEnd);
+
+  const { data: vendorChecks = [], isLoading: vendorLoading } = useQuery<any[]>({
+    queryKey: ["/api/reports/vendor-checks", companyId, vendorStart, vendorEnd],
+    queryFn: async () => {
+      const res = await fetch(`/api/reports/vendor-checks?${vendorParams}`, { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+    enabled: open && registerTab === "vendor",
   });
 
   const filtered = logs.filter(l => {
@@ -3783,7 +4262,7 @@ function CheckRegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     return r ? `${r.periodStart || ""} – ${r.periodEnd || ""}` : id;
   };
 
-  function exportCsv() {
+  function exportPayrollCsv() {
     const header = ["Date", "Company", "Pay Run", "Event", "Checks", "Total Amount", "MICR OK", "Check Number", "Notes"].join(",");
     const rows = filtered.map(l => [
       new Date(l.created_at).toLocaleString(),
@@ -3799,137 +4278,246 @@ function CheckRegisterDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     const blob = new Blob([header + "\n" + rows.join("\n")], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `check_register_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `payroll_check_register_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+  }
+
+  function exportVendorCsv() {
+    const header = ["Check Date", "Payee", "Check #", "Amount", "Memo", "Paid At"].join(",");
+    const rows = vendorChecks.map(v => [
+      v.check_date,
+      `"${v.payee}"`,
+      v.check_number || "",
+      Number(v.amount || 0).toFixed(2),
+      `"${(v.memo || "").replace(/"/g, "'")}"`,
+      v.paid_at ? new Date(v.paid_at).toLocaleDateString() : "",
+    ].join(","));
+    const blob = new Blob([header + "\n" + rows.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `vendor_check_register_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
   }
 
   const totalChecks = filtered.reduce((s, l) => s + Number(l.check_count || 0), 0);
   const totalAmount = filtered.reduce((s, l) => s + Number(l.total_amount || 0), 0);
+  const vendorTotal = vendorChecks.reduce((s, v) => s + Number(v.amount || 0), 0);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col" data-testid="dialog-check-register">
+      <DialogContent className="max-w-5xl max-h-[85vh] flex flex-col" data-testid="dialog-check-register">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Printer className="h-5 w-5 text-primary" />
-            Printed Check Register
+            Check Register
           </DialogTitle>
         </DialogHeader>
 
-        <div className="flex flex-wrap gap-3 items-end mb-3">
-          <div className="flex flex-col gap-1">
-            <Label className="text-xs">Company</Label>
-            <Select value={companyId} onValueChange={setCompanyId}>
-              <SelectTrigger className="w-44" data-testid="select-check-reg-company">
-                <SelectValue placeholder="All companies" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All companies</SelectItem>
-                {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex flex-col gap-1">
-            <Label className="text-xs">Event type</Label>
-            <Select value={eventType} onValueChange={setEventType}>
-              <SelectTrigger className="w-36" data-testid="select-check-reg-event">
-                <SelectValue placeholder="All events" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All events</SelectItem>
-                <SelectItem value="print">Print</SelectItem>
-                <SelectItem value="calibration_test">Calibration test</SelectItem>
-                <SelectItem value="reprint">Reprint</SelectItem>
-                <SelectItem value="void">Void</SelectItem>
-                <SelectItem value="reissue">Reissue</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex flex-col gap-1">
-            <Label className="text-xs">Max rows</Label>
-            <Select value={limit} onValueChange={setLimit}>
-              <SelectTrigger className="w-24" data-testid="select-check-reg-limit">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="50">50</SelectItem>
-                <SelectItem value="100">100</SelectItem>
-                <SelectItem value="250">250</SelectItem>
-                <SelectItem value="500">500</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex flex-col gap-1 flex-1 min-w-32">
-            <Label className="text-xs">Search</Label>
-            <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Run ID, check #…" className="h-9" data-testid="input-check-reg-search" />
-          </div>
-          <Button size="sm" variant="outline" onClick={exportCsv} disabled={filtered.length === 0} data-testid="button-check-reg-export">
-            <Download className="h-3.5 w-3.5 mr-1.5" />CSV
-          </Button>
+        {/* Register type tabs */}
+        <div className="flex gap-2 border-b pb-3">
+          <button
+            onClick={() => setRegisterTab("payroll")}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${registerTab === "payroll" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}
+            data-testid="tab-check-register-payroll"
+          >
+            <DollarSign className="h-3.5 w-3.5" />Payroll Checks
+          </button>
+          <button
+            onClick={() => setRegisterTab("vendor")}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${registerTab === "vendor" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}
+            data-testid="tab-check-register-vendor"
+          >
+            <Banknote className="h-3.5 w-3.5" />Vendor AP Checks
+          </button>
         </div>
 
-        {/* Summary bar */}
-        <div className="flex gap-6 px-1 py-2 bg-muted/40 rounded-md text-sm mb-2">
-          <span><strong>{filtered.length}</strong> events</span>
-          <span><strong>{totalChecks}</strong> checks printed</span>
-          <span><strong>${totalAmount.toLocaleString("en-US", { minimumFractionDigits: 2 })}</strong> total</span>
-        </div>
+        {registerTab === "payroll" ? (
+          <>
+            <div className="flex flex-wrap gap-3 items-end mb-3">
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs">Company</Label>
+                <Select value={companyId} onValueChange={setCompanyId}>
+                  <SelectTrigger className="w-44" data-testid="select-check-reg-company">
+                    <SelectValue placeholder="All companies" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All companies</SelectItem>
+                    {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs">Event type</Label>
+                <Select value={eventType} onValueChange={setEventType}>
+                  <SelectTrigger className="w-36" data-testid="select-check-reg-event">
+                    <SelectValue placeholder="All events" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All events</SelectItem>
+                    <SelectItem value="print">Print</SelectItem>
+                    <SelectItem value="calibration_test">Calibration test</SelectItem>
+                    <SelectItem value="reprint">Reprint</SelectItem>
+                    <SelectItem value="void">Void</SelectItem>
+                    <SelectItem value="reissue">Reissue</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs">Max rows</Label>
+                <Select value={limit} onValueChange={setLimit}>
+                  <SelectTrigger className="w-24" data-testid="select-check-reg-limit">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="50">50</SelectItem>
+                    <SelectItem value="100">100</SelectItem>
+                    <SelectItem value="250">250</SelectItem>
+                    <SelectItem value="500">500</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1 flex-1 min-w-32">
+                <Label className="text-xs">Search</Label>
+                <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Run ID, check #…" className="h-9" data-testid="input-check-reg-search" />
+              </div>
+              <Button size="sm" variant="outline" onClick={exportPayrollCsv} disabled={filtered.length === 0} data-testid="button-check-reg-export">
+                <Download className="h-3.5 w-3.5 mr-1.5" />CSV
+              </Button>
+            </div>
 
-        <div className="overflow-auto flex-1">
-          {isLoading ? (
-            <div className="space-y-2">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-9 w-full" />)}</div>
-          ) : filtered.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-8">No check print events found.</p>
-          ) : (
-            <Table data-testid="table-check-register">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Company</TableHead>
-                  <TableHead>Pay Run</TableHead>
-                  <TableHead>Event</TableHead>
-                  <TableHead className="text-right">Checks</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
-                  <TableHead>MICR</TableHead>
-                  <TableHead>Check #</TableHead>
-                  <TableHead>By</TableHead>
-                  <TableHead>Notes</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map(l => (
-                  <TableRow key={l.id} data-testid={`row-check-reg-${l.id}`}>
-                    <TableCell className="text-xs whitespace-nowrap">{new Date(l.created_at).toLocaleString()}</TableCell>
-                    <TableCell className="text-xs">{companyName(l.company_id)}</TableCell>
-                    <TableCell className="text-xs">{runLabel(l.payroll_run_id)}</TableCell>
-                    <TableCell>
-                      <Badge variant={
-                        (l.event_type || "print") === "print" ? "default" :
-                        l.event_type === "reprint" ? "secondary" :
-                        l.event_type === "calibration_test" ? "secondary" :
-                        l.event_type === "void" ? "destructive" : "outline"
-                      } className="text-xs capitalize">
-                        {l.event_type || "print"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right text-xs">{l.check_count || 0}</TableCell>
-                    <TableCell className="text-right text-xs">${Number(l.total_amount || 0).toFixed(2)}</TableCell>
-                    <TableCell>
-                      <Badge variant={(l.micr_validation === "ok" || l.micr_validation === "calibration_test") ? "secondary" : (l.micr_validation === "fail" ? "destructive" : "outline")} className="text-xs">
-                        {l.micr_validation || "—"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-xs font-mono">{l.check_number || "—"}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground" data-testid={`text-reg-by-${l.id}`}>
-                      {l.initiated_by_user_id ? l.initiated_by_user_id.slice(0, 8) + "…" : "—"}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{l.notes || "—"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </div>
+            <div className="flex gap-6 px-1 py-2 bg-muted/40 rounded-md text-sm mb-2">
+              <span><strong>{filtered.length}</strong> events</span>
+              <span><strong>{totalChecks}</strong> checks printed</span>
+              <span><strong>${totalAmount.toLocaleString("en-US", { minimumFractionDigits: 2 })}</strong> total</span>
+            </div>
+
+            <div className="overflow-auto flex-1">
+              {isLoading ? (
+                <div className="space-y-2">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-9 w-full" />)}</div>
+              ) : filtered.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-8">No check print events found.</p>
+              ) : (
+                <Table data-testid="table-check-register">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Company</TableHead>
+                      <TableHead>Pay Run</TableHead>
+                      <TableHead>Event</TableHead>
+                      <TableHead className="text-right">Checks</TableHead>
+                      <TableHead className="text-right">Total</TableHead>
+                      <TableHead>MICR</TableHead>
+                      <TableHead>Check #</TableHead>
+                      <TableHead>By</TableHead>
+                      <TableHead>Notes</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filtered.map(l => (
+                      <TableRow key={l.id} data-testid={`row-check-reg-${l.id}`}>
+                        <TableCell className="text-xs whitespace-nowrap">{new Date(l.created_at).toLocaleString()}</TableCell>
+                        <TableCell className="text-xs">{companyName(l.company_id)}</TableCell>
+                        <TableCell className="text-xs">{runLabel(l.payroll_run_id)}</TableCell>
+                        <TableCell>
+                          <Badge variant={
+                            (l.event_type || "print") === "print" ? "default" :
+                            l.event_type === "reprint" ? "secondary" :
+                            l.event_type === "calibration_test" ? "secondary" :
+                            l.event_type === "void" ? "destructive" : "outline"
+                          } className="text-xs capitalize">
+                            {l.event_type || "print"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right text-xs">{l.check_count || 0}</TableCell>
+                        <TableCell className="text-right text-xs">${Number(l.total_amount || 0).toFixed(2)}</TableCell>
+                        <TableCell>
+                          <Badge variant={(l.micr_validation === "ok" || l.micr_validation === "calibration_test") ? "secondary" : (l.micr_validation === "fail" ? "destructive" : "outline")} className="text-xs">
+                            {l.micr_validation || "—"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs font-mono">{l.check_number || "—"}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground" data-testid={`text-reg-by-${l.id}`}>
+                          {l.initiated_by_user_id ? l.initiated_by_user_id.slice(0, 8) + "…" : "—"}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{l.notes || "—"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-3 items-end mb-3">
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs">Company</Label>
+                <Select value={companyId} onValueChange={setCompanyId}>
+                  <SelectTrigger className="w-44" data-testid="select-vendor-check-company">
+                    <SelectValue placeholder="All companies" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All companies</SelectItem>
+                    {companies.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs">From</Label>
+                <Input type="date" value={vendorStart} onChange={e => setVendorStart(e.target.value)} className="h-9 w-36" data-testid="input-vendor-check-start" />
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs">To</Label>
+                <Input type="date" value={vendorEnd} onChange={e => setVendorEnd(e.target.value)} className="h-9 w-36" data-testid="input-vendor-check-end" />
+              </div>
+              <Button size="sm" variant="outline" onClick={exportVendorCsv} disabled={vendorChecks.length === 0} data-testid="button-vendor-check-export">
+                <Download className="h-3.5 w-3.5 mr-1.5" />CSV
+              </Button>
+            </div>
+
+            <div className="flex gap-6 px-1 py-2 bg-muted/40 rounded-md text-sm mb-2">
+              <span><strong>{vendorChecks.length}</strong> vendor checks</span>
+              <span><strong>${vendorTotal.toLocaleString("en-US", { minimumFractionDigits: 2 })}</strong> total paid</span>
+            </div>
+
+            <div className="overflow-auto flex-1">
+              {vendorLoading ? (
+                <div className="space-y-2">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-9 w-full" />)}</div>
+              ) : vendorChecks.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  <Banknote className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                  <p className="text-sm">No vendor AP checks found.</p>
+                  <p className="text-xs mt-1">Vendor checks are created when you print a check for an approved expense.</p>
+                </div>
+              ) : (
+                <Table data-testid="table-vendor-check-register">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Check Date</TableHead>
+                      <TableHead>Payee</TableHead>
+                      <TableHead>Check #</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead>Memo</TableHead>
+                      <TableHead>Paid At</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {vendorChecks.map(v => (
+                      <TableRow key={v.id} data-testid={`row-vendor-check-${v.id}`}>
+                        <TableCell className="text-xs whitespace-nowrap">{v.check_date}</TableCell>
+                        <TableCell className="text-sm font-medium">{v.payee}</TableCell>
+                        <TableCell className="text-xs font-mono">{v.check_number}</TableCell>
+                        <TableCell className="text-right text-sm font-mono">${Number(v.amount || 0).toFixed(2)}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{v.memo || "—"}</TableCell>
+                        <TableCell className="text-xs">{v.paid_at ? new Date(v.paid_at).toLocaleDateString() : "—"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

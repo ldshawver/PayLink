@@ -9347,6 +9347,24 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.post("/api/expenses/:id/mark-paid", requireAuth, requireRole("admin", "manager"), async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
+      const expRow = pgRow<any>(await db.execute(sql`SELECT * FROM expenses WHERE id = ${req.params.id}`));
+      if (!expRow) return res.status(404).json({ message: "Expense not found" });
+
+      // Tenant scope check
+      const sessionCompanyId = await getSessionCompanyId(req);
+      if (sessionCompanyId && expRow.company_id && sessionCompanyId !== expRow.company_id) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Duplicate payment guard
+      if (expRow.payment_status === "paid") {
+        return res.status(409).json({
+          message: "This expense has already been marked as paid.",
+          checkNumber: expRow.check_number,
+          paidAt: expRow.paid_at,
+        });
+      }
+
       const { checkNumber, memo, payeeName, paymentDate } = req.body || {};
       await db.execute(sql`
         UPDATE expenses
@@ -9377,6 +9395,16 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const sessionCompanyId = await getSessionCompanyId(req);
       if (sessionCompanyId && expRow.company_id && sessionCompanyId !== expRow.company_id) {
         return res.status(403).json({ message: "Access denied" });
+      }
+
+      // Duplicate payment guard
+      if (expRow.payment_status === "paid") {
+        return res.status(409).json({
+          message: "This expense has already been paid.",
+          checkNumber: expRow.check_number,
+          paidAt: expRow.paid_at,
+          hint: "To reissue, void the original payment first.",
+        });
       }
 
       const compId = expRow.company_id || sessionCompanyId;
@@ -9881,15 +9909,21 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const rows = allExpenses.map(e => {
         const w = allWorkers.find(w => w.id === e.submitterId);
         const c = allCompanies.find(c => c.id === e.companyId);
+        const payeeName = (e as any).payeeName || (e as any).payee_name || e.vendor || "";
+        const paymentStatus = (e as any).paymentStatus || (e as any).payment_status || "unpaid";
+        const checkNumber = (e as any).checkNumber || (e as any).check_number || "";
+        const paidAt = (e as any).paidAt || (e as any).paid_at || "";
+        const memo = (e as any).memo || "";
         return [
-          c?.legalName || c?.name || "", c?.name || "", e.expenseDate, e.categoryName || "",
-          e.vendor || "", e.amount, e.jobId || "", e.costCenterId || "",
-          w ? `${w.firstName} ${w.lastName}` : "", e.reimbursementRequested ? "Reimbursement" : "Company",
-          e.status, "", "", e.id,
+          `"${c?.legalName || c?.name || ""}"`, `"${c?.name || ""}"`, e.expenseDate, `"${e.categoryName || ""}"`,
+          `"${e.vendor || ""}"`, e.amount, e.jobId || "", e.costCenterId || "",
+          `"${w ? `${w.firstName} ${w.lastName}` : ""}"`, e.reimbursementRequested ? "Reimbursement" : "Company",
+          e.status, paymentStatus, checkNumber, paidAt ? new Date(paidAt).toISOString().split("T")[0] : "",
+          `"${payeeName}"`, `"${memo}"`, e.id,
         ].join(",");
       });
 
-      const csv = "Legal Entity,Company,Date,Category,Vendor,Amount,Job,Cost Center,Employee,Type,Status,Accounting Code,Reference,ID\n" + rows.join("\n");
+      const csv = "Legal Entity,Company,Date,Category,Vendor,Amount,Job,Cost Center,Employee,Type,Status,Payment Status,Check #,Paid Date,Payee,Memo,ID\n" + rows.join("\n");
       res.setHeader("Content-Type", "text/csv");
       res.setHeader("Content-Disposition", `attachment; filename="expenses-export-${new Date().toISOString().split("T")[0]}.csv"`);
       res.send(csv);
@@ -9917,6 +9951,136 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.setHeader("Content-Disposition", `attachment; filename="invoices-export-${new Date().toISOString().split("T")[0]}.csv"`);
       res.send(csv);
     } catch (e) { res.status(500).json({ message: "Failed to export" }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ACCOUNTING REPORTS — expense-centric financial reports
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // GET /api/reports/expense-by-category
+  app.get("/api/reports/expense-by-category", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { companyId, startDate, endDate } = req.query as Record<string, string>;
+      const sessionCompanyId = await getSessionCompanyId(req);
+      const effectiveCompanyId = companyId || sessionCompanyId;
+      let q = sql`
+        SELECT
+          COALESCE(category_name, 'Uncategorized') AS category,
+          COUNT(*)::int                              AS count,
+          SUM(amount::numeric)                       AS total,
+          SUM(CASE WHEN status IN ('approved','paid') THEN amount::numeric ELSE 0 END) AS approved_total,
+          SUM(CASE WHEN payment_status = 'paid' THEN amount::numeric ELSE 0 END)       AS paid_total,
+          SUM(CASE WHEN payment_status != 'paid' AND status = 'approved' THEN amount::numeric ELSE 0 END) AS unpaid_approved_total
+        FROM expenses
+        WHERE 1=1
+      `;
+      if (effectiveCompanyId) q = sql`${q} AND company_id = ${effectiveCompanyId}`;
+      if (startDate) q = sql`${q} AND expense_date >= ${startDate}::date`;
+      if (endDate)   q = sql`${q} AND expense_date <= ${endDate}::date`;
+      q = sql`${q} GROUP BY category_name ORDER BY total DESC`;
+      const rows = pgRows<any>(await db.execute(q));
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: "Failed to generate expense-by-category report" }); }
+  });
+
+  // GET /api/reports/vendor-payments
+  app.get("/api/reports/vendor-payments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { companyId, startDate, endDate, minAmount } = req.query as Record<string, string>;
+      const sessionCompanyId = await getSessionCompanyId(req);
+      const effectiveCompanyId = companyId || sessionCompanyId;
+      let q = sql`
+        SELECT
+          COALESCE(payee_name, vendor, 'Unknown Payee')  AS payee,
+          COUNT(*)::int                                   AS payment_count,
+          SUM(amount::numeric)                            AS total_paid,
+          MIN(paid_at)                                    AS first_payment,
+          MAX(paid_at)                                    AS last_payment,
+          STRING_AGG(DISTINCT COALESCE(check_number,''), ', ') AS check_numbers
+        FROM expenses
+        WHERE payment_status = 'paid'
+      `;
+      if (effectiveCompanyId) q = sql`${q} AND company_id = ${effectiveCompanyId}`;
+      if (startDate) q = sql`${q} AND paid_at >= ${startDate}::date`;
+      if (endDate)   q = sql`${q} AND paid_at <= ${endDate}::date`;
+      q = sql`${q} GROUP BY COALESCE(payee_name, vendor, 'Unknown Payee') ORDER BY total_paid DESC`;
+      if (minAmount) q = sql`SELECT * FROM (${q}) sub WHERE total_paid >= ${parseFloat(minAmount)}`;
+      const rows = pgRows<any>(await db.execute(q));
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: "Failed to generate vendor-payments report" }); }
+  });
+
+  // GET /api/reports/expense-payment-status
+  app.get("/api/reports/expense-payment-status", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { companyId, startDate, endDate } = req.query as Record<string, string>;
+      const sessionCompanyId = await getSessionCompanyId(req);
+      const effectiveCompanyId = companyId || sessionCompanyId;
+      let q = sql`
+        SELECT
+          id, expense_date, vendor, category_name, amount,
+          status, payment_status, check_number,
+          paid_at, payee_name, memo,
+          company_id
+        FROM expenses
+        WHERE 1=1
+      `;
+      if (effectiveCompanyId) q = sql`${q} AND company_id = ${effectiveCompanyId}`;
+      if (startDate) q = sql`${q} AND expense_date >= ${startDate}::date`;
+      if (endDate)   q = sql`${q} AND expense_date <= ${endDate}::date`;
+      q = sql`${q} ORDER BY expense_date DESC`;
+      const rows = pgRows<any>(await db.execute(q));
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: "Failed to generate expense payment status report" }); }
+  });
+
+  // GET /api/reports/contractor-invoice-payments
+  app.get("/api/reports/contractor-invoice-payments", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { companyId, startDate, endDate, status } = req.query as Record<string, string>;
+      const sessionCompanyId = await getSessionCompanyId(req);
+      const effectiveCompanyId = companyId || sessionCompanyId;
+      let q = sql`
+        SELECT
+          ci.id, ci.invoice_date, ci.invoice_number, ci.amount,
+          ci.amount_paid, ci.balance_due, ci.status,
+          ci.paid_at, ci.payment_reference, ci.company_id,
+          ci.is_1099_reportable,
+          w.first_name, w.last_name
+        FROM contractor_invoices ci
+        LEFT JOIN workers w ON w.id = ci.contractor_id
+        WHERE 1=1
+      `;
+      if (effectiveCompanyId) q = sql`${q} AND ci.company_id = ${effectiveCompanyId}`;
+      if (startDate) q = sql`${q} AND ci.invoice_date >= ${startDate}::date`;
+      if (endDate)   q = sql`${q} AND ci.invoice_date <= ${endDate}::date`;
+      if (status && status !== "all") q = sql`${q} AND ci.status = ${status}`;
+      q = sql`${q} ORDER BY ci.invoice_date DESC`;
+      const rows = pgRows<any>(await db.execute(q));
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: "Failed to generate contractor-invoice-payments report" }); }
+  });
+
+  // GET /api/reports/vendor-checks — expense checks for the AP check register tab
+  app.get("/api/reports/vendor-checks", requireAuth, requireRole("admin", "manager"), async (req, res) => {
+    try {
+      const { companyId, startDate, endDate } = req.query as Record<string, string>;
+      const sessionCompanyId = await getSessionCompanyId(req);
+      const effectiveCompanyId = companyId || sessionCompanyId;
+      let q = sql`
+        SELECT
+          id, expense_date AS check_date, COALESCE(payee_name, vendor, 'Unknown') AS payee,
+          check_number, amount, memo, paid_at, company_id, 'vendor' AS check_type
+        FROM expenses
+        WHERE payment_status = 'paid' AND check_number IS NOT NULL
+      `;
+      if (effectiveCompanyId) q = sql`${q} AND company_id = ${effectiveCompanyId}`;
+      if (startDate) q = sql`${q} AND paid_at >= ${startDate}::date`;
+      if (endDate)   q = sql`${q} AND paid_at <= ${endDate}::date`;
+      q = sql`${q} ORDER BY paid_at DESC`;
+      const rows = pgRows<any>(await db.execute(q));
+      res.json(rows);
+    } catch (e) { res.status(500).json({ message: "Failed to fetch vendor checks" }); }
   });
 
   // ── CONTRACTOR PROPOSALS ──────────────────────────────────────────────────
