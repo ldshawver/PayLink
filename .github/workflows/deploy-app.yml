@@ -72,13 +72,26 @@ jobs:
               echo "⚠️  Passwordless sudo unavailable — skipping nginx deployment"
             fi
 
+            # ── Pre-flight: verify env loads and PORT is configured ────────
+            echo "--- Pre-flight env check ---"
+            node -e "
+              process.argv[2]='dotenv_config_path=/etc/paylink/.env';
+              require('dotenv/config');
+              const r={PORT:process.env.PORT||'NOT SET',NODE_ENV:process.env.NODE_ENV||'NOT SET',HAS_DB:!!process.env.DATABASE_URL,HAS_SECRET:!!process.env.SESSION_SECRET};
+              console.log(JSON.stringify(r));
+              if(!process.env.DATABASE_URL){process.stderr.write('ERROR: DATABASE_URL missing\n');process.exit(1);}
+              if(!process.env.SESSION_SECRET){process.stderr.write('ERROR: SESSION_SECRET missing\n');process.exit(1);}
+              if(!process.env.PORT){process.stderr.write('WARN: PORT not set, defaulting to 5000 — health check expects 8000\n');}
+            " 2>&1
+
             pm2 delete paylink 2>/dev/null || true
 
-            pm2 start dist/index.cjs \
+            APP_PATH="/home/paylinkssh/paylink-app/PayLink"
+            pm2 start "$APP_PATH/dist/index.cjs" \
               --name paylink \
-              --cwd /home/paylinkssh/paylink-app/PayLink \
+              --cwd "$APP_PATH" \
               --interpreter node \
-              --node-args="-r dotenv/config" \
+              --node-args="--require dotenv/config" \
               -- dotenv_config_path=/etc/paylink/.env
 
             pm2 save --force

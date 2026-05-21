@@ -75,14 +75,18 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes("node_modules")) {
-            if (id.includes("react-dom") || id.includes("react/")) {
+            // Keep React + Radix in the same chunk to prevent the circular
+            // "vendor-radix → vendor-react → vendor-radix" dependency that
+            // causes React to be undefined when the radix chunk loads first.
+            if (
+              id.includes("react-dom") ||
+              id.includes("react/") ||
+              id.includes("@radix-ui/")
+            ) {
               return "vendor-react";
             }
             if (id.includes("@tanstack/react-query")) {
               return "vendor-query";
-            }
-            if (id.includes("@radix-ui/")) {
-              return "vendor-radix";
             }
             if (id.includes("react-hook-form") || id.includes("@hookform/")) {
               return "vendor-form";

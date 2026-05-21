@@ -248,8 +248,8 @@ app.use((_req, res, next) => {
     // In production Vite outputs <script src="..."> with no inline scripts → no unsafe-inline needed.
     // In development Vite HMR injects inline scripts so unsafe-inline is required there.
     // https://js.stripe.com is required for Stripe.js (payment UI); *.stripe.com covers Stripe Elements iframes
-    isProduction ? "script-src 'self' https://js.stripe.com https://*.stripe.com https://www.bugherd.com" : "script-src 'self' 'unsafe-inline'",
-    isProduction ? "script-src-elem 'self' https://js.stripe.com https://*.stripe.com https://www.bugherd.com" : "script-src-elem 'self' 'unsafe-inline'",
+    isProduction ? "script-src 'self' https://js.stripe.com https://*.stripe.com https://www.bugherd.com" : "script-src 'self' 'unsafe-inline' https://www.bugherd.com",
+    isProduction ? "script-src-elem 'self' https://js.stripe.com https://*.stripe.com https://www.bugherd.com" : "script-src-elem 'self' 'unsafe-inline' https://www.bugherd.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://www.bugherd.com",
     "img-src 'self' data: blob: https:",                                   // allow remote images (avatars)
     "font-src 'self' data: https://fonts.gstatic.com",                     // Google Fonts files
