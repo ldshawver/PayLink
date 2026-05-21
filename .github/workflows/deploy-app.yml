@@ -44,6 +44,14 @@ jobs:
             npm ci --legacy-peer-deps
             echo "✓ Dependencies installed"
 
+            echo "==> Clean install state"
+            chmod -R u+w node_modules 2>/dev/null || true
+            rm -rf node_modules
+
+            echo "==> Install dependencies"
+            npm install --include=dev
+
+            echo "==> Build app"
             rm -rf dist/
             npm run build
             echo "✓ Build completed"

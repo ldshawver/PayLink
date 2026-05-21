@@ -55,6 +55,7 @@ interface Proposal {
   convertedToInvoiceId?: string | null;
   convertedToContractId?: string | null;
   rejectionReason?: string | null;
+  lastSentEventNotes?: string;
 }
 
 interface ContractorBranding {
@@ -402,6 +403,35 @@ const CONTRACT_STATUS_CONFIG: Record<string, { label: string; color: string; bg:
 function ProposalBadge({ status }: { status: string }) {
   const cfg = PROPOSAL_STATUS_CONFIG[status] || { label: status, color: "text-gray-600", bg: "bg-gray-100" };
   return <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${cfg.color} ${cfg.bg}`}>{cfg.label}</span>;
+}
+
+function EmailStatusBadge({ notes }: { notes?: string | null }) {
+  if (notes?.startsWith("Email sent to")) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-green-700 bg-green-50 dark:bg-green-950/30" data-testid="badge-email-delivered">
+        <Mail className="h-3 w-3" /> Email delivered
+      </span>
+    );
+  }
+  if (notes?.startsWith("Email delivery failed")) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-red-700 bg-red-50 dark:bg-red-950/30" data-testid="badge-email-failed">
+        <XCircle className="h-3 w-3" /> Email failed
+      </span>
+    );
+  }
+  if (notes?.startsWith("No client email")) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-gray-500 bg-gray-100 dark:bg-gray-800" data-testid="badge-email-no-address">
+        <Mail className="h-3 w-3" /> No email on file
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-gray-400 bg-gray-50 dark:bg-gray-900/30" data-testid="badge-email-unknown">
+      <Mail className="h-3 w-3" /> Email status unknown
+    </span>
+  );
 }
 
 function InvoiceBadge({ status }: { status: string }) {
@@ -838,6 +868,8 @@ function ProposalDetailPanel({
   const [counterNotes, setCounterNotes] = useState("");
   const [commentText, setCommentText] = useState("");
   const [convertToContractOpen, setConvertToContractOpen] = useState(false);
+  const [showSendDialog, setShowSendDialog] = useState(false);
+  const [sendEmailDraft, setSendEmailDraft] = useState("");
 
   const { data: lineItems = [] } = useQuery<LineItem[]>({
     queryKey: ["/api/contractor-proposals", proposal.id, "line-items"],
@@ -932,6 +964,7 @@ function ProposalDetailPanel({
         vars.action === "request-revision" ? "Revision requested" :
         vars.action === "counter" ? "Counter offer sent" :
         vars.action === "submit" ? "Proposal submitted" :
+        vars.action === "send" ? "Proposal marked as sent" :
         vars.action === "request-signature" ? "Signature request sent" :
         "Done"
       });
@@ -963,8 +996,65 @@ function ProposalDetailPanel({
   const canConvertToContract = isAdmin && ["approved", "negotiated"].includes(proposal.status) && !proposal.convertedToContractId;
   const canRevise = !isAdmin && ["draft", "revision_requested"].includes(proposal.status);
   const canCreateRevision = isAdmin && ["approved", "sent", "viewed"].includes(proposal.status);
+  const canMarkSent = isAdmin && ["draft", "internal_review", "submitted"].includes(proposal.status);
+
+  function handleMarkSent() {
+    setSendEmailDraft(proposal.clientEmail ?? "");
+    setShowSendDialog(true);
+  }
+
+  async function confirmSend() {
+    const persistedEmail = proposal.clientEmail ?? "";
+    if (sendEmailDraft && sendEmailDraft !== persistedEmail) {
+      try {
+        await apiRequest("PATCH", `/api/contractor-proposals/${proposal.id}`, { clientEmail: sendEmailDraft });
+        queryClient.invalidateQueries({ queryKey: ["/api/contractor-proposals"] });
+      } catch (e: any) {
+        toast({ title: "Failed to save email", description: e?.message || undefined, variant: "destructive" });
+        return;
+      }
+    }
+    setShowSendDialog(false);
+    actionMutation.mutate({ action: "send" });
+  }
 
   return (
+    <>
+    <Dialog open={showSendDialog} onOpenChange={setShowSendDialog}>
+      <DialogContent data-testid="dialog-mark-sent-detail">
+        <DialogHeader>
+          <DialogTitle>Mark Proposal as Sent</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-3">
+            {!sendEmailDraft && (
+              <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 p-3 text-sm text-amber-800 dark:text-amber-300">
+                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>No client email is set. The proposal status will be updated, but <strong>no notification email will be sent</strong> to the client.</span>
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label className="text-sm">{sendEmailDraft ? "Client email" : "Add a client email (optional)"}</Label>
+              <Input
+                type="email"
+                placeholder="client@example.com"
+                value={sendEmailDraft}
+                onChange={e => setSendEmailDraft(e.target.value)}
+                data-testid="input-send-email-override-detail"
+              />
+              <p className="text-xs text-muted-foreground">{sendEmailDraft ? "Edit to update the client email before sending." : "If provided, it will be saved and a notification will be sent."}</p>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setShowSendDialog(false)} data-testid="btn-cancel-mark-sent-detail">Cancel</Button>
+          <Button onClick={confirmSend} disabled={actionMutation.isPending} data-testid="btn-confirm-mark-sent-detail">
+            {actionMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+            Mark as Sent
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     <Sheet open onOpenChange={() => onClose()}>
       <SheetContent side="right" className="w-screen sm:w-full sm:max-w-3xl p-0 flex flex-col overflow-hidden">
         <SheetHeader className="px-5 pt-4 pb-0 border-b shrink-0">
@@ -975,13 +1065,14 @@ function ProposalDetailPanel({
               <div className="flex items-center gap-2 mt-1 flex-wrap">
                 <span className="text-xs text-muted-foreground">{proposal.proposalNumber}</span>
                 <ProposalBadge status={proposal.status} />
+                {proposal.status === "sent" && <EmailStatusBadge notes={proposal.lastSentEventNotes} />}
                 {proposal.isChangeOrder && <span className="text-xs bg-purple-100 text-purple-700 rounded px-1.5 py-0.5">Change Order</span>}
                 {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">v{proposal.version}</span>}
               </div>
             </div>
           </div>
           {/* Row 2: action buttons — horizontally scrollable so nothing gets clipped */}
-          {(canEdit || canSubmit || canAdminAction || canMarkNegotiated || canConvertToContract || (proposal.status === "approved" && isAdmin) || canCreateRevision) && (
+          {(canEdit || canSubmit || canMarkSent || canAdminAction || canMarkNegotiated || canConvertToContract || (proposal.status === "approved" && isAdmin) || canCreateRevision) && (
             <div className="flex items-center gap-2 overflow-x-auto pb-3 pt-1 scrollbar-none" style={{ scrollbarWidth: "none" }}>
               {canEdit && (
                 <Button size="sm" variant="outline" className="shrink-0" onClick={onEdit} data-testid="btn-edit-from-detail">
@@ -991,6 +1082,11 @@ function ProposalDetailPanel({
               {canSubmit && (
                 <Button size="sm" className="shrink-0" onClick={() => actionMutation.mutate({ action: "submit" })} disabled={actionMutation.isPending} data-testid="btn-submit-from-detail">
                   <Send className="h-3.5 w-3.5 mr-1" /> Submit
+                </Button>
+              )}
+              {canMarkSent && (
+                <Button size="sm" variant="outline" className="shrink-0" onClick={handleMarkSent} disabled={actionMutation.isPending} data-testid="btn-mark-sent-from-detail">
+                  <Send className="h-3.5 w-3.5 mr-1" /> Mark Sent
                 </Button>
               )}
               {canAdminAction && (
@@ -1732,6 +1828,7 @@ function ProposalDetailPanel({
         }}
       />
     </Sheet>
+    </>
   );
 }
 
@@ -2117,8 +2214,6 @@ function ProposalBuilder({
   const discount = parseFloat(current.discountAmount ?? "0");
   const total = subtotal + tax - discount;
 
-  const resolvedClientEmail = current.clientEmail ?? "";
-
   return (
     <>
     <Dialog open={showSendDialog} onOpenChange={setShowSendDialog}>
@@ -2127,37 +2222,25 @@ function ProposalBuilder({
           <DialogTitle>Mark Proposal as Sent</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-2">
-          {resolvedClientEmail ? (
-            <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-3 text-sm text-blue-800 dark:text-blue-300">
-              <Mail className="h-4 w-4 mt-0.5 shrink-0" />
-              <span>Email will be sent to: <strong>{resolvedClientEmail}</strong></span>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {sendEmailDraft ? (
-                <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-3 text-sm text-blue-800 dark:text-blue-300">
-                  <Mail className="h-4 w-4 mt-0.5 shrink-0" />
-                  <span>Email will be sent to: <strong>{sendEmailDraft}</strong></span>
-                </div>
-              ) : (
-                <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 p-3 text-sm text-amber-800 dark:text-amber-300">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                  <span>No client email is set. The proposal status will be updated, but <strong>no notification email will be sent</strong> to the client.</span>
-                </div>
-              )}
-              <div className="space-y-1">
-                <Label className="text-sm">Add a client email (optional)</Label>
-                <Input
-                  type="email"
-                  placeholder="client@example.com"
-                  value={sendEmailDraft}
-                  onChange={e => setSendEmailDraft(e.target.value)}
-                  data-testid="input-send-email-override"
-                />
-                <p className="text-xs text-muted-foreground">If provided, it will be saved and a notification will be sent.</p>
+          <div className="space-y-3">
+            {!sendEmailDraft && (
+              <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 p-3 text-sm text-amber-800 dark:text-amber-300">
+                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>No client email is set. The proposal status will be updated, but <strong>no notification email will be sent</strong> to the client.</span>
               </div>
+            )}
+            <div className="space-y-1">
+              <Label className="text-sm">{sendEmailDraft ? "Client email" : "Add a client email (optional)"}</Label>
+              <Input
+                type="email"
+                placeholder="client@example.com"
+                value={sendEmailDraft}
+                onChange={e => setSendEmailDraft(e.target.value)}
+                data-testid="input-send-email-override"
+              />
+              <p className="text-xs text-muted-foreground">{sendEmailDraft ? "Edit to update the client email before sending." : "If provided, it will be saved and a notification will be sent."}</p>
             </div>
-          )}
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setShowSendDialog(false)} data-testid="btn-cancel-mark-sent">Cancel</Button>
@@ -2176,7 +2259,7 @@ function ProposalBuilder({
               <SheetTitle className="text-base truncate">
                 {isNew ? "New Proposal" : proposal?.proposalNumber || "Proposal"}
               </SheetTitle>
-              {proposal && <ProposalBadge status={proposal.status} />}
+              {proposal && <><ProposalBadge status={proposal.status} />{proposal.status === "sent" && <EmailStatusBadge notes={proposal.lastSentEventNotes} />}</>}
             </div>
             <div className="flex items-center gap-2 shrink-0">
               {canEdit && (() => {
@@ -6376,6 +6459,7 @@ export default function ContractorHubPage() {
                                   <div className="flex items-center gap-2 flex-wrap">
                                     <p className="font-medium text-sm truncate">{proposal.title || "Untitled Proposal"}</p>
                                     <ProposalBadge status={proposal.status} />
+                                    {proposal.status === "sent" && <EmailStatusBadge notes={proposal.lastSentEventNotes} />}
                                     {proposal.isChangeOrder && <span className="text-xs bg-purple-100 text-purple-700 rounded px-1.5 py-0.5">Change Order</span>}
                                     {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">v{proposal.version}</span>}
                                   </div>
@@ -6425,6 +6509,7 @@ export default function ContractorHubPage() {
                               <div className="flex items-center gap-2 flex-wrap">
                                 <p className="font-medium text-sm truncate">{proposal.title || "Untitled Proposal"}</p>
                                 <ProposalBadge status={proposal.status} />
+                                {proposal.status === "sent" && <EmailStatusBadge notes={proposal.lastSentEventNotes} />}
                                 {proposal.isChangeOrder && <span className="text-xs bg-purple-100 text-purple-700 rounded px-1.5 py-0.5">Change Order</span>}
                                 {(proposal.version || 1) > 1 && <span className="text-xs text-muted-foreground">v{proposal.version}</span>}
                               </div>

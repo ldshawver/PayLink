@@ -2682,6 +2682,39 @@ Thank you,
         ADD COLUMN IF NOT EXISTS screenshot_paths TEXT[]
     `);
 
+    // ── Performance indexes — core tenant-scoped tables ───────────────────────
+    // These were missing at launch; all use IF NOT EXISTS so safe to re-run.
+    await run("perf indexes: workers", sql`
+      CREATE INDEX IF NOT EXISTS idx_workers_company_id  ON workers(company_id);
+      CREATE INDEX IF NOT EXISTS idx_workers_is_active   ON workers(is_active);
+    `);
+    await run("perf indexes: time_entries", sql`
+      CREATE INDEX IF NOT EXISTS idx_time_entries_company_id ON time_entries(company_id);
+      CREATE INDEX IF NOT EXISTS idx_time_entries_worker_id  ON time_entries(worker_id);
+      CREATE INDEX IF NOT EXISTS idx_time_entries_date       ON time_entries(date);
+    `);
+    await run("perf indexes: time_punches", sql`
+      CREATE INDEX IF NOT EXISTS idx_time_punches_company_id ON time_punches(company_id);
+      CREATE INDEX IF NOT EXISTS idx_time_punches_worker_id  ON time_punches(worker_id);
+    `);
+    await run("perf indexes: payroll_runs", sql`
+      CREATE INDEX IF NOT EXISTS idx_payroll_runs_company_id ON payroll_runs(company_id);
+      CREATE INDEX IF NOT EXISTS idx_payroll_runs_status     ON payroll_runs(status);
+    `);
+    await run("perf indexes: payroll_items", sql`
+      CREATE INDEX IF NOT EXISTS idx_payroll_items_run_id    ON payroll_items(payroll_run_id);
+      CREATE INDEX IF NOT EXISTS idx_payroll_items_worker_id ON payroll_items(worker_id);
+    `);
+    await run("perf indexes: schedules", sql`
+      CREATE INDEX IF NOT EXISTS idx_schedules_company_id ON schedules(company_id);
+      CREATE INDEX IF NOT EXISTS idx_schedules_worker_id  ON schedules(worker_id);
+      CREATE INDEX IF NOT EXISTS idx_schedules_date       ON schedules(date);
+    `);
+    await run("perf indexes: users", sql`
+      CREATE INDEX IF NOT EXISTS idx_users_company_id ON users(company_id);
+      CREATE INDEX IF NOT EXISTS idx_users_worker_id  ON users(worker_id) WHERE worker_id IS NOT NULL;
+    `);
+
     // ── contractor_reminders table ────────────────────────────────────────────
     await run("contractor_reminders table", sql`CREATE TABLE IF NOT EXISTS contractor_reminders (
       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

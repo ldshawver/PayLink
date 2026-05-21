@@ -1205,8 +1205,7 @@ export async function registerRoutes(
       if (!worker.isActive) {
         return res.status(403).json({ message: "This employee account is inactive" });
       }
-      const allUsers = await storage.getUsers();
-      let user = allUsers.find(u => u.workerId === worker.id);
+      let user = await storage.getUserByWorkerId(worker.id);
       if (!user) {
         const hashedPassword = await bcrypt.hash(pin, 10);
         user = await storage.createUser({
@@ -1688,8 +1687,7 @@ export async function registerRoutes(
       if (!worker.isActive) {
         return res.status(403).json({ message: "This employee account is inactive" });
       }
-      const allUsers = await storage.getUsers();
-      let user = allUsers.find(u => u.workerId === worker.id);
+      let user = await storage.getUserByWorkerId(worker.id);
       if (!user) {
         const hashedPassword = await bcrypt.hash(pin, 10);
         user = await storage.createUser({
@@ -1846,10 +1844,10 @@ export async function registerRoutes(
           (async () => {
             try {
               const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
-              const allUsers = await storage.getUsers();
+              const companyUsers = await storage.getUsersByCompany(companyId);
               const workerObj = await storage.getWorker(workerId);
               const workerName = workerObj ? `${workerObj.firstName} ${workerObj.lastName}` : workerId;
-              const managers = allUsers.filter(u => (u.role === "admin" || u.role === "manager") && u.isActive && (!u.companyId || u.companyId === companyId));
+              const managers = companyUsers.filter(u => (u.role === "admin" || u.role === "manager") && u.isActive);
               const appUrl = getAppBaseUrl(req);
               const subject = `Clock-In Approval Required — ${workerName}`;
               const bodyText = `${workerName} is ${lateMin} minutes late and needs manager approval to clock in.\n\nApprove at ${appUrl}/app/attendance?tab=clock-in-approvals`;
@@ -1896,9 +1894,9 @@ export async function registerRoutes(
       });
 
       if (punchType === "clock_in") {
-        const allEntries = await storage.getTimeEntries();
+        const allEntries = await storage.getTimeEntriesByWorkerId(workerId);
         const staleOpenEntries = allEntries.filter(
-          (e) => e.workerId === workerId && e.clockIn && !e.clockOut && e.date !== today
+          (e) => e.clockIn && !e.clockOut && e.date !== today
         );
         for (const stale of staleOpenEntries) {
           const staleClockIn = new Date(stale.clockIn!);
@@ -1921,11 +1919,11 @@ export async function registerRoutes(
           note: isUnscheduled ? "No matching schedule — unscheduled shift" : undefined,
         });
       } else if (punchType === "clock_out") {
-        const entries = await storage.getTimeEntries();
+        const entries = await storage.getTimeEntriesByWorkerId(workerId);
         // Sort by clockIn descending so we always close the MOST RECENT open entry,
         // not a stale one from an earlier failed or pending clock-in attempt.
         const openEntry = entries
-          .filter(e => e.workerId === workerId && e.clockIn && !e.clockOut)
+          .filter(e => e.clockIn && !e.clockOut)
           .sort((a, b) => new Date(b.clockIn!).getTime() - new Date(a.clockIn!).getTime())[0];
         if (openEntry) {
           const clockIn = new Date(openEntry.clockIn!);
@@ -1962,8 +1960,7 @@ export async function registerRoutes(
       const worker = await storage.getWorkerByEmployeeNumberAndPin(employeeNumber, pin);
       if (worker) {
         if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
-        const allUsers = await storage.getUsers();
-        let user = allUsers.find(u => u.workerId === worker.id);
+        let user = await storage.getUserByWorkerId(worker.id);
         if (!user) {
           const hashedPassword = await bcrypt.hash(pin, 10);
           user = await storage.createUser({ username: employeeNumber, password: hashedPassword, role: "employee", companyId: worker.companyId, workerId: worker.id, isActive: true });
@@ -1979,8 +1976,8 @@ export async function registerRoutes(
       }
 
       // ── Path 2: Username + password fallback for admin/manager users ──────
-      const allUsers = await storage.getUsers();
-      const matchUser = allUsers.find(u => u.username === employeeNumber && u.isActive !== false);
+      const matchUserRaw = await storage.getUserByUsername(employeeNumber);
+      const matchUser = (matchUserRaw && matchUserRaw.isActive !== false) ? matchUserRaw : undefined;
       if (matchUser) {
         const passwordMatch = await bcrypt.compare(pin, matchUser.password);
         if (passwordMatch) {
@@ -2022,8 +2019,7 @@ export async function registerRoutes(
       }
 
       // ── Create / restore session so the employee lands on their dashboard ──
-      const clockInUsers = await storage.getUsers();
-      let clockInUser = clockInUsers.find(u => u.workerId === worker.id);
+      let clockInUser = await storage.getUserByWorkerId(worker.id);
       if (!clockInUser) {
         const hashedPassword = await bcrypt.hash(pin, 10);
         clockInUser = await storage.createUser({ username: employeeNumber, password: hashedPassword, role: "employee", companyId: worker.companyId, workerId: worker.id, isActive: true });
@@ -2119,12 +2115,8 @@ export async function registerRoutes(
         (async () => {
           try {
             const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
-            const allUsers = await storage.getUsers();
-            const managers = allUsers.filter(u =>
-              isManagerRole(u.role) &&
-              u.isActive &&
-              (u.companyId === effectiveCompanyId || (!u.companyId && isAdminRole(u.role)))
-            );
+            const companyMgrs = await storage.getUsersByCompany(effectiveCompanyId);
+            const managers = companyMgrs.filter(u => isManagerRole(u.role) && u.isActive);
             const workerName = `${worker.firstName} ${worker.lastName}`;
             const appUrl = getAppBaseUrl(req);
             const reasonLabel = requestType === "early_clockin"
@@ -2185,8 +2177,8 @@ export async function registerRoutes(
       // stamped against the company that owns the shift (not their home company).
       const punch = await storage.createTimePunch({ workerId: worker.id, companyId: effectiveCompanyId, punchType: "clock_in", punchTime: new Date(), approvalStatus: "approved", stationId: null, scheduleId: matchingSchedule?.id || null });
       // Close any stale open entries from previous days
-      const allEntries = await storage.getTimeEntries();
-      const staleOpenEntries = allEntries.filter(e => e.workerId === worker.id && e.clockIn && !e.clockOut && e.date !== today);
+      const staleEntriesRaw = await storage.getTimeEntriesByWorkerId(worker.id);
+      const staleOpenEntries = staleEntriesRaw.filter(e => e.clockIn && !e.clockOut && e.date !== today);
       for (const stale of staleOpenEntries) {
         const staleClockIn = new Date(stale.clockIn!);
         const elapsed = (Date.now() - staleClockIn.getTime()) / (1000 * 60 * 60);
@@ -2222,9 +2214,9 @@ export async function registerRoutes(
       if (!worker.isActive) return res.status(403).json({ message: "This employee account is inactive" });
 
       // Find the worker's open time entry to get their schedule's positionId
-      const allEntries = await storage.getTimeEntries();
-      const openEntry = allEntries
-        .filter(e => e.workerId === worker.id && e.clockIn && !e.clockOut)
+      const sessionEntries = await storage.getTimeEntriesByWorkerId(worker.id);
+      const openEntry = sessionEntries
+        .filter(e => e.clockIn && !e.clockOut)
         .sort((a, b) => new Date(b.clockIn!).getTime() - new Date(a.clockIn!).getTime())[0];
 
       let positionPayType: string | null = null;
@@ -2284,9 +2276,9 @@ export async function registerRoutes(
       const punch = await storage.createTimePunch({ workerId: worker.id, companyId: worker.companyId, punchType: "clock_out", punchTime: new Date(), approvalStatus: "approved", stationId: null });
       // Close open time entry — sort by clockIn DESC to always close the most recent open entry
       const now = new Date();
-      const allEntries = await storage.getTimeEntries();
-      const openEntry = allEntries
-        .filter(e => e.workerId === worker.id && e.clockIn && !e.clockOut)
+      const workerEntries2 = await storage.getTimeEntriesByWorkerId(worker.id);
+      const openEntry = workerEntries2
+        .filter(e => e.clockIn && !e.clockOut)
         .sort((a, b) => new Date(b.clockIn!).getTime() - new Date(a.clockIn!).getTime())[0];
       if (openEntry) {
         const clockIn = new Date(openEntry.clockIn!);
@@ -2382,10 +2374,9 @@ export async function registerRoutes(
             (async () => {
               try {
                 const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
-                const allUsers = await storage.getUsers();
-                const managers = allUsers.filter(u =>
-                  (u.role === "admin" || u.role === "manager") && u.isActive &&
-                  (!u.companyId || u.companyId === worker.companyId)
+                const lateCoUsers = await storage.getUsersByCompany(worker.companyId ?? "");
+                const managers = lateCoUsers.filter(u =>
+                  (u.role === "admin" || u.role === "manager") && u.isActive
                 );
                 const workerName = `${worker.firstName} ${worker.lastName}`;
                 const appUrl = getAppBaseUrl(req);
@@ -2452,8 +2443,8 @@ export async function registerRoutes(
       }
       const punch = await storage.createTimePunch({ workerId: worker.id, companyId: worker.companyId, punchType: "break_end", punchTime: new Date(), approvalStatus: "approved", stationId: null });
       // Update open time entry break minutes
-      const allEntries = await storage.getTimeEntries();
-      const openEntry = allEntries.find(e => e.workerId === worker.id && e.clockIn && !e.clockOut);
+      const breakEntries = await storage.getTimeEntriesByWorkerId(worker.id);
+      const openEntry = breakEntries.find(e => e.clockIn && !e.clockOut);
       if (openEntry) {
         const breakStart = new Date(lastPunch.punchTime);
         const breakMinutesThisBreak = (Date.now() - breakStart.getTime()) / (1000 * 60);
@@ -3576,8 +3567,7 @@ export async function registerRoutes(
       const finalItems = await storage.getPayrollItems(run.id);
 
       try {
-        const users = await storage.getUsers();
-        const companyUsers = users.filter(u => u.companyId === run.companyId && u.isActive !== false);
+        const companyUsers = (await storage.getUsersByCompany(run.companyId)).filter(u => u.isActive !== false);
         for (const u of companyUsers) {
           await storage.createNotification({
             companyId: run.companyId,
@@ -3978,7 +3968,7 @@ export async function registerRoutes(
       try {
         const { sendPayrollSubmittedNotification } = await import("./notifications.js");
         const company = await storage.getCompany(run.companyId);
-        const adminUsers = (await storage.getUsers()).filter(u => u.companyId === run.companyId && (u.role === "admin" || u.role === "owner"));
+        const adminUsers = (await storage.getUsersByCompany(run.companyId)).filter(u => u.role === "admin" || u.role === "owner");
         for (const admin of adminUsers) {
           if (admin.email) {
             await sendPayrollSubmittedNotification({
@@ -4191,7 +4181,7 @@ export async function registerRoutes(
       try {
         const { sendPaymentFailedNotification } = await import("./notifications.js");
         const company = await storage.getCompany(run.companyId);
-        const adminUsers = (await storage.getUsers()).filter(u => u.companyId === run.companyId && (u.role === "admin" || u.role === "owner"));
+        const adminUsers = (await storage.getUsersByCompany(run.companyId)).filter(u => u.role === "admin" || u.role === "owner");
         for (const admin of adminUsers) {
           if (admin.email) {
             await sendPaymentFailedNotification({
@@ -5052,7 +5042,7 @@ export async function registerRoutes(
       if (run.achStatus === "submitted" || run.achStatus === "settled") {
         return res.status(409).json({ message: "Cannot delete a payroll run with submitted or settled ACH payments. Contact your bank to reverse the transaction." });
       }
-      // Allow deletion of locked check-only runs — no ACH submitted so no real money at risk
+      // Allow deletion of locked check-only runs — lock is lifted since no ACH was submitted
       // Cascade-delete all dependent records in the correct FK order
       const { inArray } = await import("drizzle-orm");
       const { payStubTransactions: pstTable, payrollTransactionRuns: ptrTable, payrollPaymentRecords: pprTable, payrollSummaries: psTable, achBatches: abTable, payrollItems: piTable } = await import("../shared/schema.js");
@@ -5449,27 +5439,26 @@ export async function registerRoutes(
   app.get("/api/time-punches", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      let punches = await storage.getTimePunches();
-      // Non-manager tenant users (employees, contractors, etc.): only their own punches
+      // Resolve effective scope and push filter to the DB — never load all tenants' punches.
+      const { companyId: qCompanyId, workerId: qWorkerId } = req.query;
+      let punches: any[];
       if (user && user.workerId && !isManagerRole(user.role)) {
-        punches = punches.filter(p => p.workerId === user.workerId);
+        // Employee/contractor: only their own punches — hits idx_time_punches_worker_id
+        punches = await storage.getTimePunchesByWorkerId(user.workerId);
       } else if (!isPlatformUser(user?.role)) {
-        // Resolve companyId — fall back to worker record if user.companyId is null
         let effectiveCompanyId = user?.companyId ?? null;
         if (!effectiveCompanyId && user?.workerId) {
           const workerRec = await storage.getWorker(user.workerId);
           effectiveCompanyId = workerRec?.companyId ?? null;
         }
-        if (effectiveCompanyId) {
-          punches = punches.filter(p => p.companyId === effectiveCompanyId);
-        } else if (!user?.workerId) {
-          punches = [];
-        }
+        // Hits idx_time_punches_company_id — no JS post-filter needed
+        punches = effectiveCompanyId ? await storage.getTimePunches(effectiveCompanyId) : [];
+      } else {
+        // Platform user: may pass ?companyId to scope
+        const scopeCompanyId = qCompanyId ? String(qCompanyId) : undefined;
+        punches = await storage.getTimePunches(scopeCompanyId);
       }
-      // Platform users (or managers with explicit scope): can filter by query param
-      const { companyId: qCompanyId, workerId: qWorkerId } = req.query;
-      if (qCompanyId && (isPlatformUser(user?.role) || !user?.companyId)) punches = punches.filter(p => p.companyId === String(qCompanyId));
-      if (qWorkerId) punches = punches.filter(p => p.workerId === String(qWorkerId));
+      if (qWorkerId) punches = punches.filter((p: any) => p.workerId === String(qWorkerId));
       res.json(punches);
     } catch (error) {
       console.error(error);
@@ -5591,8 +5580,8 @@ export async function registerRoutes(
             (async () => {
               try {
                 const { sendShiftMarketplaceEmail, sendShiftMarketplaceSms } = await import("./notifications.js");
-                const allUsers = await storage.getUsers();
-                const managers = allUsers.filter((u) => isManagerRole(u.role) && u.isActive && u.companyId === clkEffectiveCompanyId);
+                const clkCoUsers = await storage.getUsersByCompany(clkEffectiveCompanyId);
+                const managers = clkCoUsers.filter((u) => isManagerRole(u.role) && u.isActive);
                 const workerNameForClk = `${worker.firstName} ${worker.lastName}`;
                 const appUrlForClk = getAppBaseUrl(req);
                 const reasonLabelForClk = clkRequestType === "early_clockin" ? `Early clock-in (${Math.abs(clkMinutesDiff)} min early)` : clkRequestType === "late_clockin" ? `Late clock-in (${clkMinutesDiff} min late)` : "Unscheduled clock-in";
@@ -5642,9 +5631,9 @@ export async function registerRoutes(
       if (punch.punchType === "clock_in") {
         const now2 = new Date();
         const today = getLocalDateStr(now2, punchCompanyTz2); // company local date, not UTC
-        const allEntries = await storage.getTimeEntries();
+        const allEntries = await storage.getTimeEntriesByWorkerId(punch.workerId);
         const staleOpenEntries = allEntries.filter(
-          (e) => e.workerId === punch.workerId && e.clockIn && !e.clockOut && e.date !== today
+          (e) => e.clockIn && !e.clockOut && e.date !== today
         );
         for (const stale of staleOpenEntries) {
           const staleClockIn = new Date(stale.clockIn!);
@@ -5679,8 +5668,8 @@ export async function registerRoutes(
         const lastBreakStart = [...workerPunches].reverse().find(p => p.punchType === "break_start" && p.id !== punch.id);
         if (lastBreakStart) {
           const breakDuration = Math.round((new Date(punch.punchTime).getTime() - new Date(lastBreakStart.punchTime).getTime()) / (1000 * 60));
-          const entries = await storage.getTimeEntries();
-          const openEntry = entries.find(e => e.workerId === punch.workerId && e.clockIn && !e.clockOut);
+          const entries = await storage.getTimeEntriesByWorkerId(punch.workerId);
+          const openEntry = entries.find(e => e.clockIn && !e.clockOut);
           if (openEntry) {
             const currentBreak = openEntry.breakMinutes || 0;
             await storage.updateTimeEntry(openEntry.id, {
@@ -5689,9 +5678,9 @@ export async function registerRoutes(
           }
         }
       } else if (punch.punchType === "clock_out") {
-        const entries = await storage.getTimeEntries();
+        const entries = await storage.getTimeEntriesByWorkerId(punch.workerId);
         const openEntry = entries.find(
-          (e) => e.workerId === punch.workerId && e.clockIn && !e.clockOut
+          (e) => e.clockIn && !e.clockOut
         );
         if (openEntry) {
           const company = await storage.getCompany(punch.companyId);
@@ -5731,12 +5720,11 @@ export async function registerRoutes(
 
   app.patch("/api/time-punches/:id", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
-      // Company ownership guard
+      // Company ownership guard — single-record lookup, no full-table scan.
       const punchUser = await storage.getUser(req.session.userId!);
       const isTenantPunch = !isPlatformUser(punchUser?.role) && !!punchUser?.companyId;
       if (isTenantPunch) {
-        const allPunches = await storage.getTimePunches();
-        const existing = allPunches.find(p => p.id === req.params.id);
+        const existing = await storage.getTimePunch(req.params.id);
         if (!existing) return res.status(404).json({ message: "Time punch not found" });
         if (existing.companyId !== punchUser!.companyId) {
           return res.status(403).json({ message: "Forbidden: time punch belongs to a different company" });
@@ -5757,12 +5745,11 @@ export async function registerRoutes(
 
   app.delete("/api/time-punches/:id", requireAuth, requireRole("admin", "manager", "supervisor"), async (req, res) => {
     try {
-      // Company ownership guard
+      // Company ownership guard — single-record lookup, no full-table scan.
       const punchDelUser = await storage.getUser(req.session.userId!);
       const isTenantPunchDel = !isPlatformUser(punchDelUser?.role) && !!punchDelUser?.companyId;
       if (isTenantPunchDel) {
-        const allPunches = await storage.getTimePunches();
-        const existing = allPunches.find(p => p.id === req.params.id);
+        const existing = await storage.getTimePunch(req.params.id);
         if (existing && existing.companyId !== punchDelUser!.companyId) {
           return res.status(403).json({ message: "Forbidden: time punch belongs to a different company" });
         }
@@ -6108,38 +6095,29 @@ export async function registerRoutes(
   app.get("/api/time-entries", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      let entries = await storage.getTimeEntries();
-      // Non-manager tenant users (employees, contractors, etc.) only see their own entries
+      // Push scope filter to DB — never load all tenants' entries into memory.
+      const { startDate, endDate, companyId, workerId } = req.query;
+      let entries: any[];
       if (user && user.workerId && !isManagerRole(user.role)) {
-        entries = entries.filter(e => e.workerId === user.workerId);
+        // Employee/contractor: only their own entries — hits idx_time_entries_worker_id
+        entries = await storage.getTimeEntriesByWorkerId(user.workerId);
       } else if (!isPlatformUser(user?.role)) {
-        // Resolve companyId — fall back to worker record if user.companyId is null
         let effectiveCompanyId = user?.companyId ?? null;
         if (!effectiveCompanyId && user?.workerId) {
           const workerRec = await storage.getWorker(user.workerId);
           effectiveCompanyId = workerRec?.companyId ?? null;
         }
-        if (effectiveCompanyId) {
-          entries = entries.filter(e => e.companyId === effectiveCompanyId);
-        } else if (!user?.workerId) {
-          entries = [];
-        }
+        // Hits idx_time_entries_company_id
+        entries = effectiveCompanyId ? await storage.getTimeEntries(effectiveCompanyId) : [];
+      } else {
+        // Platform user: may pass ?companyId
+        const scopeCompanyId = companyId ? String(companyId) : undefined;
+        entries = await storage.getTimeEntries(scopeCompanyId);
       }
-      // Optional query filters (platform users or unscoped users may pass companyId to scope)
-      const { startDate, endDate, companyId, workerId } = req.query;
-      if (startDate) {
-        entries = entries.filter(e => e.date >= String(startDate));
-      }
-      if (endDate) {
-        entries = entries.filter(e => e.date <= String(endDate));
-      }
-      if (companyId && (isPlatformUser(user?.role) || !user?.companyId)) {
-        // Allow platform users to filter by companyId param
-        entries = entries.filter(e => e.companyId === String(companyId));
-      }
-      if (workerId) {
-        entries = entries.filter(e => e.workerId === String(workerId));
-      }
+      // Remaining JS filters apply only within the already-scoped result set
+      if (startDate) entries = entries.filter((e: any) => e.date >= String(startDate));
+      if (endDate)   entries = entries.filter((e: any) => e.date <= String(endDate));
+      if (workerId)  entries = entries.filter((e: any) => e.workerId === String(workerId));
       res.json(entries);
     } catch (error) {
       console.error(error);
@@ -6421,33 +6399,32 @@ export async function registerRoutes(
   app.get("/api/schedules", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
-      let allSchedules = await storage.getSchedules();
-
+      // Push scope filter to DB — never load all tenants' schedules into memory.
+      const { companyId: qCompanyId, workerId: qWorkerId, date: qDate } = req.query;
+      let allSchedules: any[];
       if (!isPlatformUser(user?.role)) {
         if (user?.workerId && !isManagerRole(user.role)) {
           // Non-manager employees/contractors: see ALL of their own shifts across every company
-          // they are scheduled at — the workerId is the only meaningful scope here.
-          allSchedules = allSchedules.filter((s: any) => s.workerId === user!.workerId);
+          // (cross-company scheduling is a documented feature — scope by workerId, not companyId).
+          allSchedules = await storage.getSchedulesByWorkerId(user.workerId);
         } else {
-          // Managers/admins: scope to their company's schedule (they manage their company's shifts)
           let effectiveCompanyId = user?.companyId ?? null;
           if (!effectiveCompanyId && user?.workerId) {
             const workerRec = await storage.getWorker(user.workerId);
             effectiveCompanyId = workerRec?.companyId ?? null;
           }
-          if (effectiveCompanyId) {
-            allSchedules = allSchedules.filter((s: any) => s.companyId === effectiveCompanyId);
-          } else if (!user?.workerId) {
-            allSchedules = [];
-          }
+          // Hits idx_schedules_company_id
+          allSchedules = effectiveCompanyId ? await storage.getSchedules(effectiveCompanyId) : [];
         }
+      } else {
+        // Platform user: may pass ?companyId to scope
+        const scopeCompanyId = qCompanyId ? String(qCompanyId) : undefined;
+        allSchedules = await storage.getSchedules(scopeCompanyId);
       }
-
-      // Support optional query filters (for platform users or managers with explicit scope)
-      const { companyId: qCompanyId, workerId: qWorkerId, date: qDate } = req.query;
-      if (qCompanyId && (isPlatformUser(user?.role) || !user?.companyId)) allSchedules = allSchedules.filter((s: any) => s.companyId === String(qCompanyId));
+      // Remaining JS filters apply only within the already-scoped result set
+      if (qCompanyId && isPlatformUser(user?.role)) allSchedules = allSchedules.filter((s: any) => s.companyId === String(qCompanyId));
       if (qWorkerId) allSchedules = allSchedules.filter((s: any) => s.workerId === String(qWorkerId));
-      if (qDate) allSchedules = allSchedules.filter((s: any) => s.date === String(qDate));
+      if (qDate)     allSchedules = allSchedules.filter((s: any) => s.date === String(qDate));
       res.json(allSchedules);
     } catch (error) {
       console.error(error);
@@ -6492,14 +6469,13 @@ export async function registerRoutes(
 
   app.patch("/api/schedules/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      // Company ownership guard
+      // Company ownership guard — single-record lookup, no full-table scan.
       const schedUser = await storage.getUser(req.session.userId!);
       const isTenantSched = !isPlatformUser(schedUser?.role) && !!schedUser?.companyId;
       if (isTenantSched) {
-        const allSchedules = await storage.getSchedules();
-        const existing = allSchedules.find((s: any) => s.id === req.params.id);
+        const existing = await storage.getSchedule(req.params.id);
         if (!existing) return res.status(404).json({ message: "Schedule not found" });
-        if ((existing as any).companyId !== schedUser!.companyId) {
+        if (existing.companyId !== schedUser!.companyId) {
           return res.status(403).json({ message: "Forbidden: schedule belongs to a different company" });
         }
       }
@@ -6526,13 +6502,12 @@ export async function registerRoutes(
 
   app.delete("/api/schedules/:id", requireRole("admin", "manager"), async (req, res) => {
     try {
-      // Company ownership guard
+      // Company ownership guard — single-record lookup, no full-table scan.
       const schedDelUser = await storage.getUser(req.session.userId!);
       const isTenantSchedDel = !isPlatformUser(schedDelUser?.role) && !!schedDelUser?.companyId;
       if (isTenantSchedDel) {
-        const allSchedules = await storage.getSchedules();
-        const existing = allSchedules.find((s: any) => s.id === req.params.id);
-        if (existing && (existing as any).companyId !== schedDelUser!.companyId) {
+        const existing = await storage.getSchedule(req.params.id);
+        if (existing && existing.companyId !== schedDelUser!.companyId) {
           return res.status(403).json({ message: "Forbidden: schedule belongs to a different company" });
         }
       }
@@ -6565,12 +6540,10 @@ export async function registerRoutes(
       // wrong company when a worker's default company differed from their recurring schedule's company.
       const activeRecurring = allRecurring.filter(r => r.isActive && r.companyId === companyId);
 
-      // Pre-load all existing schedules in the date range for duplicate checking (company-agnostic)
-      const allExisting = await storage.getSchedules();
+      // Pre-load existing schedules in the date range for duplicate checking — scoped to company.
+      const rangeExisting = await storage.getSchedulesByDateRange(companyId, startDate, endDate);
       const existingSet = new Set(
-        allExisting
-          .filter(s => s.date >= startDate && s.date <= endDate)
-          .map(s => `${s.workerId}::${s.companyId}::${s.date}::${s.startTime}::${s.endTime}`)
+        rangeExisting.map(s => `${s.workerId}::${s.companyId}::${s.date}::${s.startTime}::${s.endTime}`)
       );
 
       // Build a set of valid job IDs so we don't pass a deleted job_id into the new schedule
@@ -6641,9 +6614,9 @@ export async function registerRoutes(
       let targetSchedules: any[] = [];
 
       if (scheduleIds && Array.isArray(scheduleIds) && scheduleIds.length > 0) {
-        // Publish specific schedule IDs
-        const all = await storage.getSchedules();
-        targetSchedules = all.filter((s: any) => scheduleIds.includes(s.id) && s.status === "draft");
+        // Publish specific schedule IDs — single-record lookup per ID, no full-table scan.
+        const resolved = await Promise.all((scheduleIds as string[]).map((id: string) => storage.getSchedule(id)));
+        targetSchedules = resolved.filter((s): s is NonNullable<typeof s> => !!s && s.status === "draft");
       } else if (companyId && startDate && endDate) {
         // Publish all drafts for a company in date range
         const all = await storage.getSchedulesByDateRange(companyId, startDate, endDate);
@@ -6728,11 +6701,12 @@ export async function registerRoutes(
       }
 
       try {
-        const users = await storage.getUsers();
         const workerIds = Object.keys(byWorker);
-        const workerUserMap = users.filter(u => u.workerId && workerIds.includes(u.workerId));
+        const schedCoId = targetSchedules[0]?.companyId;
+        const schedCoUsers = schedCoId ? await storage.getUsersByCompany(schedCoId) : await storage.getUsers();
+        const workerUserMap = schedCoUsers.filter(u => u.workerId && workerIds.includes(u.workerId));
         for (const u of workerUserMap) {
-          const companyId = targetSchedules[0]?.companyId;
+          const companyId = schedCoId;
           if (companyId) {
             await storage.createNotification({
               companyId,
@@ -8905,8 +8879,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const { sendApprovalReminderEmail, sendApprovalReminderSms } = await import("./notifications.js");
       const { companyId } = req.body;
 
-      const punches = await storage.getTimePunches();
-      const pendingPunches = punches.filter(p => p.approvalStatus === "pending" && (!companyId || p.companyId === companyId));
+      const punchList = await storage.getTimePunches(companyId || undefined);
+      const pendingPunches = punchList.filter(p => p.approvalStatus === "pending");
 
       const amendments = await storage.getPayStubAmendments();
       const pendingAmendments = amendments.filter((a: any) => (a.approvalStatus === "pending") && (!companyId || a.companyId === companyId));
@@ -8914,8 +8888,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const allReceipts = await storage.getReceipts();
       const pendingExpenses = allReceipts.filter(r => r.status === "pending" && (!companyId || r.companyId === companyId));
 
-      const users = await storage.getUsers();
-      const managers = users.filter(u => (u.role === "admin" || u.role === "manager") && u.isActive);
+      const reminderUsers = companyId
+        ? await storage.getUsersByCompany(companyId)
+        : await storage.getUsers();
+      const managers = reminderUsers.filter(u => (u.role === "admin" || u.role === "manager") && u.isActive);
 
       const results: any[] = [];
       for (const mgr of managers) {
@@ -10106,7 +10082,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const result = showArchived
           ? await db.execute(sql`
               SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email,
-                     co.name as company_name
+                     co.name as company_name,
+                     (SELECT notes FROM proposal_approval_events WHERE proposal_id = cp.id AND event_type = 'sent' ORDER BY created_at DESC LIMIT 1) AS last_sent_event_notes
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
               LEFT JOIN companies co ON co.id = cp.company_id
@@ -10115,7 +10092,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             `)
           : await db.execute(sql`
               SELECT cp.*, w.first_name, w.last_name, w.worker_type, w.email as contractor_email,
-                     co.name as company_name
+                     co.name as company_name,
+                     (SELECT notes FROM proposal_approval_events WHERE proposal_id = cp.id AND event_type = 'sent' ORDER BY created_at DESC LIMIT 1) AS last_sent_event_notes
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
               LEFT JOIN companies co ON co.id = cp.company_id
@@ -10130,7 +10108,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const result = showArchived
           ? await db.execute(sql`
               SELECT cp.*, w.first_name, w.last_name, w.worker_type,
-                     co.name as company_name
+                     co.name as company_name,
+                     (SELECT notes FROM proposal_approval_events WHERE proposal_id = cp.id AND event_type = 'sent' ORDER BY created_at DESC LIMIT 1) AS last_sent_event_notes
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
               LEFT JOIN companies co ON co.id = cp.company_id
@@ -10139,7 +10118,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
             `)
           : await db.execute(sql`
               SELECT cp.*, w.first_name, w.last_name, w.worker_type,
-                     co.name as company_name
+                     co.name as company_name,
+                     (SELECT notes FROM proposal_approval_events WHERE proposal_id = cp.id AND event_type = 'sent' ORDER BY created_at DESC LIMIT 1) AS last_sent_event_notes
               FROM contractor_proposals cp
               LEFT JOIN workers w ON w.id = cp.contractor_id
               LEFT JOIN companies co ON co.id = cp.company_id
@@ -12996,7 +12976,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       const parsed = insertShiftOfferSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ message: "Invalid data", errors: parsed.error.errors });
 
-      const schedule = (await storage.getSchedules()).find(s => s.id === parsed.data.scheduleId);
+      const schedule = await storage.getSchedule(parsed.data.scheduleId);
       if (!schedule) return res.status(404).json({ message: "Schedule not found" });
       const callerUser = await storage.getUser(req.session.userId!);
       const isAdminOrManager = callerUser?.role === "admin" || callerUser?.role === "manager";
@@ -13053,12 +13033,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       if (newStatus === "claimed" && prevOffer && prevOffer.status !== "claimed") {
         // Notify all managers/admins for the company about this claim request
-        const schedule = (await storage.getSchedules()).find(s => s.id === item.scheduleId);
+        const schedule = item.scheduleId ? await storage.getSchedule(item.scheduleId) : null;
         const offeringWorker = await storage.getWorker(item.offeredByWorkerId);
         const claimingWorker = item.claimedByWorkerId ? await storage.getWorker(item.claimedByWorkerId) : null;
-        const allUsers = await storage.getUsers();
-        const managers = allUsers.filter(u => (u.role === "admin" || u.role === "manager") &&
-          (!u.companyId || u.companyId === offeringWorker?.companyId));
+        const offerCoUsers = offeringWorker?.companyId ? await storage.getUsersByCompany(offeringWorker.companyId) : [];
+        const managers = offerCoUsers.filter(u => u.role === "admin" || u.role === "manager");
         const offeringName = offeringWorker ? `${offeringWorker.firstName} ${offeringWorker.lastName}` : "An employee";
         const claimingName = claimingWorker ? `${claimingWorker.firstName} ${claimingWorker.lastName}` : "Another employee";
         const shiftDate = schedule?.date || "unknown date";
@@ -13079,7 +13058,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
 
       if (newStatus === "approved" && prevOffer && prevOffer.status !== "approved") {
         // Reassign the schedule to the claiming worker
-        const schedule = (await storage.getSchedules()).find(s => s.id === item.scheduleId);
+        const schedule = item.scheduleId ? await storage.getSchedule(item.scheduleId) : null;
         if (schedule && item.claimedByWorkerId) {
           await storage.updateSchedule(schedule.id, { workerId: item.claimedByWorkerId });
         }
@@ -13112,7 +13091,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       if (newStatus === "rejected" && prevOffer && prevOffer.status !== "rejected") {
-        const schedule = (await storage.getSchedules()).find(s => s.id === item.scheduleId);
+        const schedule = item.scheduleId ? await storage.getSchedule(item.scheduleId) : null;
         const offeringWorker = await storage.getWorker(item.offeredByWorkerId);
         const claimingWorker = item.claimedByWorkerId ? await storage.getWorker(item.claimedByWorkerId) : null;
         const shiftDate = schedule?.date || "unknown date";
@@ -15782,11 +15761,10 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
   app.get("/api/users", requireRole("admin", "manager"), async (req, res) => {
     try {
       const requestor = await storage.getUser(req.session.userId!);
-      let allUsers = await storage.getUsers();
-      // Tenant-scoped users see only their own company; platform admins see all
-      if (!isPlatformUser(requestor?.role)) {
-        allUsers = allUsers.filter(u => u.companyId === requestor?.companyId);
-      }
+      // Push company scope to DB — hits idx_users_company_id for tenant users.
+      const allUsers = (!isPlatformUser(requestor?.role) && requestor?.companyId)
+        ? await storage.getUsersByCompany(requestor.companyId)
+        : await storage.getUsers();
       res.json(allUsers.map(u => ({ id: u.id, username: u.username, role: u.role, companyId: u.companyId, workerId: u.workerId, isActive: u.isActive, createdAt: u.createdAt })));
     } catch (error) {
       console.error(error);
@@ -17964,8 +17942,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       }
 
       try {
-        const users = await storage.getUsers();
-        const workerUser = users.find(u => u.workerId === item.workerId);
+        const workerUser = await storage.getUserByWorkerId(item.workerId);
         if (workerUser) {
           const statusText = decision === "approved" ? "approved" : "denied";
           await storage.createNotification({
@@ -18303,10 +18280,9 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
         const approvalUrl = `${appUrl}/app/schedule?tab=marketplace`;
 
         // Notify managers/admins for approval
-        const allUsers = await storage.getUsers();
-        const managers = allUsers.filter(u =>
-          (u.role === "admin" || u.role === "manager" || u.role === "tenant_admin" || u.role === "tenant_manager") &&
-          (!u.companyId || u.companyId === listing.companyId)
+        const listingCoUsers = listing.companyId ? await storage.getUsersByCompany(listing.companyId) : [];
+        const managers = listingCoUsers.filter(u =>
+          u.role === "admin" || u.role === "manager" || u.role === "tenant_admin" || u.role === "tenant_manager"
         );
         const mgrSubject = `Shift Exchange Request — Approval Needed`;
         for (const mgr of managers) {
@@ -22585,8 +22561,7 @@ ${dueDate ? `<p style="margin:8px 0;font-size:13px;color:#dc2626;font-weight:600
       const dispatched: any[] = [];
       const userIds = targetUserIds || [];
 
-      const allUsers = await storage.getUsers();
-      const companyUserIds = new Set(allUsers.filter(u => u.companyId === companyId).map(u => u.id));
+      const companyUserIds = new Set((await storage.getUsersByCompany(companyId)).map(u => u.id));
       const validUserIds = userIds.filter((id: string) => companyUserIds.has(id));
 
       for (const userId of validUserIds) {

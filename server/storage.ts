@@ -248,6 +248,8 @@ export interface IStorage {
   deleteWorker(id: string): Promise<void>;
 
   getTimePunches(companyId?: string): Promise<TimePunch[]>;
+  getTimePunch(id: string): Promise<TimePunch | undefined>;
+  getTimePunchesByWorkerId(workerId: string): Promise<TimePunch[]>;
   getPendingPunches(companyId?: string): Promise<TimePunch[]>;
   convertPunchesToTimeEntries(companyId: string, startDate: string, endDate: string): Promise<{ created: number; skipped: number; entries: TimeEntry[] }>;
   getScheduleLaborSummary(companyId: string, startDate: string, endDate: string): Promise<any[]>;
@@ -256,6 +258,7 @@ export interface IStorage {
   deleteTimePunch(id: string): Promise<void>;
 
   getTimeEntries(companyId?: string): Promise<TimeEntry[]>;
+  getTimeEntriesByWorkerId(workerId: string): Promise<TimeEntry[]>;
   getTimeEntriesByDateRange(companyId: string, startDate: string, endDate: string): Promise<TimeEntry[]>;
   getTimeEntry(id: string): Promise<TimeEntry | undefined>;
   createTimeEntry(data: InsertTimeEntry): Promise<TimeEntry>;
@@ -263,6 +266,7 @@ export interface IStorage {
   deleteTimeEntry(id: string): Promise<void>;
 
   getSchedules(companyId?: string): Promise<Schedule[]>;
+  getSchedulesByWorkerId(workerId: string): Promise<Schedule[]>;
   getSchedulesByDateRange(companyId: string, startDate: string, endDate: string): Promise<Schedule[]>;
   createSchedule(data: InsertSchedule): Promise<Schedule>;
   updateSchedule(id: string, data: Partial<Schedule>): Promise<Schedule | undefined>;
@@ -502,6 +506,8 @@ export interface IStorage {
   deleteJob(id: string): Promise<void>;
 
   getUsers(): Promise<User[]>;
+  getUsersByCompany(companyId: string): Promise<User[]>;
+  getUserByWorkerId(workerId: string): Promise<User | undefined>;
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
@@ -1168,6 +1174,13 @@ export class DatabaseStorage implements IStorage {
     }
     return db.select().from(timePunches).orderBy(desc(timePunches.punchTime));
   }
+  async getTimePunch(id: string): Promise<TimePunch | undefined> {
+    const [punch] = await db.select().from(timePunches).where(eq(timePunches.id, id));
+    return punch;
+  }
+  async getTimePunchesByWorkerId(workerId: string): Promise<TimePunch[]> {
+    return db.select().from(timePunches).where(eq(timePunches.workerId, workerId)).orderBy(desc(timePunches.punchTime));
+  }
   async createTimePunch(data: InsertTimePunch): Promise<TimePunch> {
     const [punch] = await db.insert(timePunches).values(data).returning();
     return punch;
@@ -1338,6 +1351,9 @@ export class DatabaseStorage implements IStorage {
     }
     return db.select().from(timeEntries).orderBy(desc(timeEntries.date));
   }
+  async getTimeEntriesByWorkerId(workerId: string): Promise<TimeEntry[]> {
+    return db.select().from(timeEntries).where(eq(timeEntries.workerId, workerId)).orderBy(desc(timeEntries.date));
+  }
   async getTimeEntriesByDateRange(companyId: string, startDate: string, endDate: string): Promise<TimeEntry[]> {
     return db.select().from(timeEntries)
       .where(and(eq(timeEntries.companyId, companyId), gte(timeEntries.date, startDate), lte(timeEntries.date, endDate), ne(timeEntries.status, "rejected")))
@@ -1421,6 +1437,14 @@ export class DatabaseStorage implements IStorage {
     await db.delete(timeEntries).where(eq(timeEntries.id, id));
   }
 
+  async getSchedulesByWorkerId(workerId: string): Promise<Schedule[]> {
+    try {
+      return await db.select().from(schedules).where(eq(schedules.workerId, workerId)).orderBy(desc(schedules.date));
+    } catch (e: any) {
+      if (e.code === "42703" || String(e.message).includes("does not exist")) return [];
+      throw e;
+    }
+  }
   async getSchedules(companyId?: string): Promise<Schedule[]> {
     try {
       if (companyId) {
@@ -1948,6 +1972,13 @@ export class DatabaseStorage implements IStorage {
 
   async getUsers(): Promise<User[]> {
     return db.select().from(users);
+  }
+  async getUsersByCompany(companyId: string): Promise<User[]> {
+    return db.select().from(users).where(eq(users.companyId, companyId));
+  }
+  async getUserByWorkerId(workerId: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.workerId, workerId));
+    return user;
   }
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
