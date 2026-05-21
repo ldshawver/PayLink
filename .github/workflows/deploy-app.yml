@@ -32,7 +32,7 @@ jobs:
             echo "✓ Repository updated"
 
             # Take ownership of any root-owned build artifacts from prior sudo runs.
-            # This must happen before rm or npm, otherwise both will fail with EACCES.
+            # This must happen before rm or pnpm, otherwise both will fail with EACCES.
             sudo chown -R paylinkssh:paylinkssh . 2>/dev/null || true
 
             rm -rf node_modules || {
@@ -41,11 +41,13 @@ jobs:
               echo "   sudo chown -R paylinkssh:paylinkssh /home/paylinkssh/paylink-app/PayLink"
               exit 1
             }
-            npm ci --legacy-peer-deps
+
+            npm install -g pnpm@10.33.0
+            pnpm install --frozen-lockfile=false
             echo "✓ Dependencies installed"
 
             rm -rf dist/
-            npm run build
+            pnpm build
             echo "✓ Build completed"
 
             # ── Nginx config update ──────────────────────────────────────────
