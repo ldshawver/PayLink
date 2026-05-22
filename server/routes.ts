@@ -9454,8 +9454,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.set("Content-Length", String(pdfBytes.length));
       return res.send(Buffer.from(pdfBytes));
     } catch (e: any) {
-      console.error("expense-print-check error:", e);
-      res.status(500).json({ message: e.message || "Failed to generate check PDF" });
+      console.error("expense-print-check error:", e?.message || e, e?.stack);
+      res.status(500).json({ message: e?.message || "Failed to generate check PDF" });
     }
   });
 
@@ -9904,8 +9904,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.set("Content-Length", String(pdfBytes.length));
       return res.send(Buffer.from(pdfBytes));
     } catch (e: any) {
-      console.error("invoice-print-check error:", e);
-      res.status(500).json({ message: e.message || "Failed to generate check PDF" });
+      console.error("invoice-print-check error:", e?.message || e, e?.stack);
+      res.status(500).json({ message: e?.message || "Failed to generate check PDF" });
     }
   });
 
@@ -16490,7 +16490,11 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const MICR_FONT_SIZE = 12;                         // 12pt — reduced to match standard payroll check MICR sizing
     let micrFontName = "(none)";
     try {
-      const micrPath = path.join(process.cwd(), "client", "public", "fonts", MICR_FONT_FILE);
+      // Try __dirname-relative first (reliable in both dev and production PM2 regardless of cwd)
+      // then fall back to process.cwd() for local dev
+      const micrPathAlt1 = path.join(__dirname, "public", "fonts", MICR_FONT_FILE);
+      const micrPathAlt2 = path.join(process.cwd(), "client", "public", "fonts", MICR_FONT_FILE);
+      const micrPath = fs.existsSync(micrPathAlt1) ? micrPathAlt1 : micrPathAlt2;
       const micrBytes = fs.readFileSync(micrPath);
       micrFont = await doc.embedFont(micrBytes);
       micrFontLoaded = true;
@@ -16566,7 +16570,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const micrSepY  = checkBot + micrBandH; // top of MICR band = 585
 
     // ── Data values ─────────────────────────────────────────────────────────
-    const netPay   = isCalibration ? 1234.56 : params.vendorCheck ? params.vendorCheck.amount : Number(item?.netPay   || 0);
+    const netPayRaw = isCalibration ? 1234.56 : params.vendorCheck ? params.vendorCheck.amount : Number(item?.netPay || 0);
+    const netPay   = isNaN(netPayRaw) ? 0 : netPayRaw;
     const grossPay = isCalibration ? 1380.23 : Number(item?.grossPay || 0);
     const totalDed = isCalibration ? 145.67  : Number(item?.deductions || 0);
     const checkNum    = isCalibration ? "0001"  : params.vendorCheck?.checkNumber ? params.vendorCheck.checkNumber : String(item?.checkNumber || "0000");
@@ -16574,7 +16579,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const routing  = isCalibration ? "123456789"  : (remittanceSource?.routingNumber  || "").replace(/\D/g, "");
     const account  = isCalibration ? "1234567890" : (remittanceSource?.accountNumber  || "").replace(/\D/g, "");
     const fmtDate  = (d: string | null | undefined) =>
-      d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "—";
+      d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }) : "N/A";
     const payDate  = isCalibration
       ? new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })
       : fmtDate(run?.payDate);
@@ -16768,7 +16773,7 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
     const legalLineY  = z1y(1.84);
     const writtenX    = z1x(1.30);
     const writtenEndX = z1x(7.20);
-    const writtenStr  = amtWords.length > 58 ? amtWords.slice(0, 55) + "…" : amtWords;
+    const writtenStr  = amtWords.length > 58 ? amtWords.slice(0, 55) + "..." : amtWords;
     drawGuide(z1x(0.30), legalLineY - 2, writtenEndX - z1x(0.30), Math.round(0.15*72), "LEGAL AMT");
     page.drawText("The Sum of", { x: z1x(0.30), y: legalY, size: 9,   font: hvB, color: rgb(0, 0, 0) });
     page.drawText(writtenStr,   { x: writtenX,   y: legalY, size: 10.5, font: hv,  color: rgb(0, 0, 0) });
