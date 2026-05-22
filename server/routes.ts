@@ -17312,8 +17312,8 @@ If a field cannot be determined, use null. Always return valid JSON only, no mar
       res.setHeader("Content-Disposition", `inline; filename="check-${String(itemRow.checkNumber || payrollItemId.slice(0,8))}.pdf"`);
       res.send(Buffer.from(pdfBytes));
     } catch (err: any) {
-      console.error("[checkPDF]", err);
-      res.status(500).json({ message: safeErrorMessage(err, "Failed to generate check PDF") });
+      console.error("[checkPDF] ERROR:", err?.message || err, err?.stack);
+      res.status(500).json({ message: err?.message || "Failed to generate check PDF" });
     }
   });
 
